@@ -62,6 +62,9 @@ require_reason = false
 [profiles.default]
 GITHUB_TOKEN = { description = "GitHub token", default = "token=value", providers = ["null"] }
 ORG_TOKEN = { description = "Organization token", default = "org-token", providers = ["null"] }
+
+[profiles.production]
+GITHUB_TOKEN = { description = "GitHub token", default = "production-token", providers = ["null"] }
 "#,
         )
         .unwrap();
@@ -141,6 +144,17 @@ ORG_TOKEN = { description = "Organization token", default = "org-token", provide
         let output = self.git(args);
         assert_success("git", &output);
         String::from_utf8(output.stdout).unwrap()
+    }
+
+    fn local_managed_path(&self) -> PathBuf {
+        let git_dir = self.git_ok(&["rev-parse", "--git-common-dir"]);
+        let git_dir = PathBuf::from(git_dir.trim());
+        let git_dir = if git_dir.is_absolute() {
+            git_dir
+        } else {
+            self.repository.join(git_dir)
+        };
+        git_dir.join("secretspec-credentials")
     }
 
     fn credential_fill(&self, request: &[u8]) -> Output {
@@ -228,7 +242,8 @@ fn local_configuration_can_be_removed_from_a_linked_worktree() {
         .unwrap();
     assert_success("local configure", &output);
     let includes = fixture.git_ok(&["config", "--local", "--get-all", "include.path"]);
-    let managed_path = PathBuf::from(includes.lines().next().unwrap());
+    assert_eq!(includes.trim(), "secretspec-credentials");
+    let managed_path = fixture.local_managed_path();
     assert!(managed_path.exists());
 
     let output = fixture
@@ -285,14 +300,12 @@ fn local_configure_works_and_unconfigure_restores_existing_config() {
 
     let includes = fixture.git_ok(&["config", "--local", "--get-all", "include.path"]);
     assert!(includes.contains("/tmp/unrelated-git-config"));
-    let managed_path = includes
-        .lines()
-        .map(PathBuf::from)
-        .find(|path| {
-            path.file_name()
-                .is_some_and(|name| name == "secretspec-credentials")
-        })
-        .unwrap();
+    assert!(
+        includes
+            .lines()
+            .any(|line| line == "secretspec-credentials")
+    );
+    let managed_path = fixture.local_managed_path();
     assert!(managed_path.exists());
 
     let output = fixture
@@ -305,7 +318,7 @@ fn local_configure_works_and_unconfigure_restores_existing_config() {
     assert_eq!(
         includes
             .lines()
-            .filter(|line| Path::new(line) == managed_path)
+            .filter(|line| *line == "secretspec-credentials")
             .count(),
         1
     );
@@ -386,6 +399,53 @@ fn more_specific_credential_helper_wins_over_host_wide_helper() {
     let filled = String::from_utf8(fill.stdout).unwrap();
     assert!(filled.contains("password=org-token\n"), "{filled}");
     assert!(!filled.contains("password=token=value\n"), "{filled}");
+}
+
+#[test]
+fn encoded_reserved_path_registers_a_distinct_credential() {
+    let fixture = Fixture::new();
+    for (target, secret) in [
+        ("https://github.com/foo/bar", "GITHUB_TOKEN"),
+        ("https://github.com/foo%2Fbar", "ORG_TOKEN"),
+    ] {
+        let output = fixture
+            .command()
+            .args([
+                "git",
+                "configure",
+                "--url",
+                target,
+                "--token-secret",
+                secret,
+                "--username",
+                "vimjoyer",
+            ])
+            .output()
+            .unwrap();
+        assert_success("reserved-path credential configure", &output);
+    }
+
+    let encoded = fixture.git_ok(&[
+        "config",
+        "--get-urlmatch",
+        "credential.helper",
+        "https://github.com/foo%2Fbar/repository",
+    ]);
+    assert!(
+        encoded.contains("--password-secret 'ORG_TOKEN'"),
+        "{encoded}"
+    );
+
+    let decoded = fixture.git_ok(&[
+        "config",
+        "--get-urlmatch",
+        "credential.helper",
+        "https://github.com/foo/bar/repository",
+    ]);
+    assert!(
+        decoded.contains("--password-secret 'GITHUB_TOKEN'"),
+        "{decoded}"
+    );
 }
 
 #[cfg(unix)]
@@ -480,7 +540,8 @@ fn embedded_credentials_ignore_the_cwd_manifest_and_isolate_each_target() {
     assert!(!stdout.contains("SecretSpec manifest:"));
 
     let includes = fixture.git_ok(&["config", "--local", "--get-all", "include.path"]);
-    let managed_path = PathBuf::from(includes.lines().next().unwrap());
+    assert_eq!(includes.trim(), "secretspec-credentials");
+    let managed_path = fixture.local_managed_path();
     let managed = fs::read_to_string(&managed_path).unwrap();
     assert!(!managed.contains("--file"));
     assert!(!managed.contains(&fixture.manifest.to_string_lossy().to_string()));
@@ -652,6 +713,8 @@ fn unconfigure_clears_a_duplicated_include_without_losing_credentials() {
         .next()
         .unwrap()
         .to_string();
+    assert_eq!(managed_path, "secretspec-credentials");
+    let managed_file = fixture.local_managed_path();
     // A second registration of the same include, as a crashed or concurrent
     // run can leave behind.
     fixture.git_ok(&["config", "--local", "--add", "include.path", &managed_path]);
@@ -662,7 +725,7 @@ fn unconfigure_clears_a_duplicated_include_without_losing_credentials() {
         .output()
         .unwrap();
     assert_success("unconfigure with a duplicated include", &output);
-    assert!(!Path::new(&managed_path).exists());
+    assert!(!managed_file.exists());
     let includes = fixture.git(&["config", "--local", "--get-all", "include.path"]);
     assert!(!String::from_utf8_lossy(&includes.stdout).contains(&managed_path));
 }
@@ -763,6 +826,54 @@ fn typed_provider_and_reason_are_recorded_in_the_helper() {
 }
 
 #[test]
+fn ambient_profile_with_an_explicit_manifest_is_not_recorded() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .command()
+        .env("SECRETSPEC_PROFILE", "production")
+        .args([
+            "git",
+            "configure",
+            "--url",
+            "https://profile.example.com",
+            "--token-secret",
+            "GITHUB_TOKEN",
+        ])
+        .output()
+        .unwrap();
+    assert_success("configure with ambient profile", &output);
+
+    let helper = fixture.git_ok(&[
+        "config",
+        "--get",
+        "credential.https://profile.example.com.helper",
+    ]);
+    assert!(!helper.contains("--profile"), "{helper}");
+
+    let output = fixture
+        .command()
+        .args([
+            "git",
+            "configure",
+            "--url",
+            "https://typed-profile.example.com",
+            "--token-secret",
+            "GITHUB_TOKEN",
+            "--profile",
+            "production",
+        ])
+        .output()
+        .unwrap();
+    assert_success("configure with typed profile", &output);
+    let helper = fixture.git_ok(&[
+        "config",
+        "--get",
+        "credential.https://typed-profile.example.com.helper",
+    ]);
+    assert!(helper.contains("--profile 'production'"), "{helper}");
+}
+
+#[test]
 fn typed_profile_is_still_rejected_for_the_embedded_store() {
     let fixture = Fixture::new();
     let output = fixture
@@ -858,7 +969,8 @@ fn smtp_credentials_are_scoped_to_the_exact_account() {
     let output = configure("first@example.com");
     assert_success("first SMTP configure", &output);
     let includes = fixture.git_ok(&["config", "--local", "--get-all", "include.path"]);
-    let managed = fs::read_to_string(includes.lines().next().unwrap()).unwrap();
+    assert_eq!(includes.trim(), "secretspec-credentials");
+    let managed = fs::read_to_string(fixture.local_managed_path()).unwrap();
     assert!(managed.contains("--username 'first@example.com'"));
 
     let output = command_with_stdin(

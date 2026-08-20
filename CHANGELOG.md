@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing convention names case-insensitively while retaining legacy items'
   native references for migration.
 
+- Git credential configuration now works on Windows, keeps repository-local
+  includes valid when repositories move, distinguishes percent-encoded reserved
+  path bytes, avoids persisting an ambient profile, and exits quietly when its
+  output pipe closes on Unix.
 - Dotenv parsing and rendering now use dotenv-ng throughout the dotenv
   provider, age-encrypted dotenv blobs, and `secretspec export --format
   dotenv`. Values containing `$` remain literal, output uses only the quoting
@@ -71,14 +75,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interactively, matching `Secrets::ensure_secrets` on the untyped SDK.
   Disabled by default (`RequiredSecretMissing` still fails fast, exactly as
   before), and only prompts when stdin is a real terminal.
+
 - A read-only `git-credential-secretspec` helper lets Git retrieve HTTPS
   usernames and tokens through SecretSpec providers without duplicating them in
   Git's credential store. Its built-in manifest keeps the default independent
   of the current directory and isolates values by protocol, host, and configured
-  path; equivalent URL encodings select one canonical credential, including for
-  flat-key providers. `secretspec git login` and `logout` manage those values
-  explicitly, and manually registered embedded helpers can use the stable
-  `PASSWORD` and `USERNAME` aliases.
+  path; equivalent unreserved URL encodings select one canonical credential,
+  including for flat-key providers. `secretspec git login` and `logout` manage
+  those values explicitly, and manually registered embedded helpers can use the
+  stable `PASSWORD` and `USERNAME` aliases.
   SMTP credential contexts support `git send-email` without writing
   `sendemail.smtpPass`, with passwords isolated by case-insensitive server,
   port, and username. Path-scoped HTTP(S) credentials take precedence over
@@ -90,6 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or repeated include removal leaves recoverable state. Only explicitly passed
   provider and reason options are persisted, while `--file` retains the
   custom-manifest workflow (0.20+).
+
 - **Azure App Configuration provider** (`aac://`, 0.20+): select direct
   values and Azure Key Vault references by label, prefix, and tags, with Entra
   ID or connection-string authentication and guarded writes, deletion, and

@@ -202,12 +202,58 @@ pub(crate) fn canonical_target(url: &Url) -> String {
     if let Some(port) = url.port() {
         target.push_str(&format!(":{port}"));
     }
-    let path = decoded_target_path(url);
+    let path = canonical_target_path(url.path());
     let path = path.trim_end_matches('/');
     if !path.is_empty() {
-        target.extend(utf8_percent_encode(path, CANONICAL_PATH_ENCODE_SET));
+        target.push_str(path);
     }
     target
+}
+
+fn canonical_target_path(path: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+    let mut canonical = String::with_capacity(path.len());
+    let mut index = 0;
+    while index < path.len() {
+        let remaining = &path[index..];
+        let bytes = remaining.as_bytes();
+        if bytes[0] == b'%'
+            && bytes.len() >= 3
+            && let (Some(high), Some(low)) = (hex_value(bytes[1]), hex_value(bytes[2]))
+        {
+            let byte = (high << 4) | low;
+            if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+                canonical.push(char::from(byte));
+            } else {
+                canonical.push('%');
+                canonical.push(char::from(HEX[usize::from(byte >> 4)]));
+                canonical.push(char::from(HEX[usize::from(byte & 0x0f)]));
+            }
+            index += 3;
+            continue;
+        }
+
+        let character = remaining
+            .chars()
+            .next()
+            .expect("index always points to a character boundary");
+        canonical.extend(utf8_percent_encode(
+            character.encode_utf8(&mut [0; 4]),
+            CANONICAL_PATH_ENCODE_SET,
+        ));
+        index += character.len_utf8();
+    }
+    canonical
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn decoded_target_path(url: &Url) -> std::borrow::Cow<'_, str> {
@@ -781,6 +827,30 @@ GITHUB_TOKEN = { description = "GitHub token", providers = ["null"] }
         };
         assert!(target_matches(&plain, None, &request));
         assert!(target_matches(&encoded, None, &request));
+    }
+
+    #[test]
+    fn percent_encoded_reserved_bytes_remain_distinct() {
+        let encoded_slash = Url::parse("https://github.com/foo%2fbar").unwrap();
+        let literal_slash = Url::parse("https://github.com/foo/bar").unwrap();
+        let encoded_question = Url::parse("https://github.com/foo%3fbar").unwrap();
+
+        assert_eq!(
+            canonical_target(&encoded_slash),
+            "https://github.com/foo%2Fbar"
+        );
+        assert_ne!(
+            canonical_target(&encoded_slash),
+            canonical_target(&literal_slash)
+        );
+        assert_eq!(
+            canonical_target(&encoded_question),
+            "https://github.com/foo%3Fbar"
+        );
+        assert_ne!(
+            embedded_identity(&encoded_slash, None).unwrap(),
+            embedded_identity(&literal_slash, None).unwrap()
+        );
     }
 
     #[test]

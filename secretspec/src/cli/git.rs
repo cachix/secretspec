@@ -283,9 +283,14 @@ fn configure(options: ConfigureOptions<'_>) -> Result<()> {
     // The helper command is written into Git configuration and replayed on
     // every future fetch and push, so only options the user typed belong in
     // it. Recording an ambient SECRETSPEC_REASON would attribute every later
-    // credential access to one unrelated session, and an ambient
-    // SECRETSPEC_PROVIDER would pin the helper to a provider the user meant to
-    // use once.
+    // credential access to one unrelated session, while ambient profile and
+    // provider values would pin the helper to selections the user meant to use
+    // only for the current shell.
+    let persisted_profile = options
+        .typed
+        .profile
+        .then_some(profile.as_deref())
+        .flatten();
     let persisted_provider = options
         .typed
         .provider
@@ -299,7 +304,7 @@ fn configure(options: ConfigureOptions<'_>) -> Result<()> {
     let helper = helper_command(
         &target,
         manifest.as_deref(),
-        profile.as_deref(),
+        persisted_profile,
         persisted_provider,
         persisted_reason,
         &token_secret,
@@ -314,6 +319,7 @@ fn configure(options: ConfigureOptions<'_>) -> Result<()> {
     };
     let scope = Scope::from_global(options.global);
     let managed_path = managed_path(scope)?;
+    let include_path = include_path(scope, &managed_path);
     let existing = load_managed(&managed_path)?;
     let previous = read_optional(&managed_path)?;
     let mut credentials = existing.clone();
@@ -336,7 +342,7 @@ fn configure(options: ConfigureOptions<'_>) -> Result<()> {
         }
     };
     let includes = include_paths(scope)?;
-    let include_present = includes.iter().any(|path| path == &managed_path);
+    let include_present = includes.iter().any(|path| path == &include_path);
 
     if !changed && include_present {
         println!(
@@ -362,7 +368,7 @@ fn configure(options: ConfigureOptions<'_>) -> Result<()> {
         &includes,
     )?;
     write_managed(&managed_path, &credentials)?;
-    if !include_present && let Err(error) = add_include(scope, &managed_path) {
+    if !include_present && let Err(error) = add_include(scope, &include_path) {
         restore_managed(&managed_path, previous.as_deref())?;
         return Err(error);
     }
@@ -514,6 +520,7 @@ fn unconfigure(url: Option<Url>, all: bool, scope: Scope, yes: bool) -> Result<(
         None => None,
     };
     let managed_path = managed_path(scope)?;
+    let include_path = include_path(scope, &managed_path);
     let existing = load_managed(&managed_path)?;
     let previous = read_optional(&managed_path)?;
     let managed_exists = previous.is_some();
@@ -521,7 +528,7 @@ fn unconfigure(url: Option<Url>, all: bool, scope: Scope, yes: bool) -> Result<(
     let includes = include_paths(scope)?;
     let include_count = includes
         .iter()
-        .filter(|path| *path == &managed_path)
+        .filter(|path| *path == &include_path)
         .count();
 
     if all {
@@ -577,7 +584,7 @@ fn unconfigure(url: Option<Url>, all: bool, scope: Scope, yes: bool) -> Result<(
         // Unregister before deleting anything. If this fails the managed file
         // is still intact and still included, so rerunning the command is
         // enough to recover.
-        remove_includes(scope, &managed_path)?;
+        remove_includes(scope, &include_path)?;
         if path_exists(&managed_path)? {
             fs::remove_file(&managed_path)
                 .into_diagnostic()
@@ -766,6 +773,16 @@ fn include_paths(scope: Scope) -> Result<Vec<PathBuf>> {
     }
 }
 
+fn include_path(scope: Scope, managed_path: &Path) -> PathBuf {
+    match scope {
+        // Git resolves a relative include against the configuration file that
+        // contains it. The managed file is a sibling of .git/config, so this
+        // remains valid when the repository is moved or renamed.
+        Scope::Local => PathBuf::from("secretspec-credentials"),
+        Scope::Global => managed_path.to_path_buf(),
+    }
+}
+
 fn ensure_unchanged(
     scope: Scope,
     path: &Path,
@@ -912,7 +929,10 @@ fn write_managed(path: &Path, credentials: &[ManagedCredential]) -> Result<()> {
     let temporary = NamedTempFile::new_in(directory)
         .into_diagnostic()
         .wrap_err_with(|| format!("Failed to create temporary file in {}", directory.display()))?;
-    config_add(temporary.path(), MARKER_KEY, &FORMAT_VERSION.to_string())?;
+    // `git config --file` rewrites its target through a lock file and rename.
+    // Close the NamedTempFile handle first so Windows permits that replacement.
+    let temporary = temporary.into_temp_path();
+    config_add(&temporary, MARKER_KEY, &FORMAT_VERSION.to_string())?;
     let mut credentials = credentials.to_vec();
     credentials.sort_by(|left, right| {
         target_path_length(&right.url)
@@ -920,31 +940,26 @@ fn write_managed(path: &Path, credentials: &[ManagedCredential]) -> Result<()> {
             .then_with(|| left.url.cmp(&right.url))
     });
     for credential in credentials {
-        config_add(
-            temporary.path(),
-            &helper_key(&credential.url),
-            &credential.helper,
-        )?;
+        config_add(&temporary, &helper_key(&credential.url), &credential.helper)?;
         if let Some(username) = &credential.username {
-            config_add(temporary.path(), &username_key(&credential.url), username)?;
+            config_add(&temporary, &username_key(&credential.url), username)?;
         }
         if target_has_path(&credential.url) {
-            config_add(
-                temporary.path(),
-                &use_http_path_key(&credential.url),
-                "true",
-            )?;
+            config_add(&temporary, &use_http_path_key(&credential.url), "true")?;
         }
         let state = serde_json::to_string(&credential).into_diagnostic()?;
-        config_add(temporary.path(), STATE_KEY, &state)?;
+        config_add(&temporary, STATE_KEY, &state)?;
     }
-    // `git config --file` rewrites through a lock file and a rename, so the
-    // handle NamedTempFile still holds refers to an inode that has already
-    // been replaced. Harden and flush by path, or the mode and the fsync would
-    // land on a file that is about to be discarded.
+    // Each `git config --file` call replaces the file through a lock and
+    // rename. Harden and flush by path so these operations reach the final
+    // replacement created by Git.
     #[cfg(unix)]
-    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o600)).into_diagnostic()?;
-    fs::File::open(temporary.path())
+    fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600)).into_diagnostic()?;
+    // Windows requires a writable handle for FlushFileBuffers, which backs
+    // `sync_all`; a read-only `File::open` fails with access denied.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&temporary)
         .into_diagnostic()?
         .sync_all()
         .into_diagnostic()?;

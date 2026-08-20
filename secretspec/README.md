@@ -131,6 +131,9 @@ See the [Quick Start Guide](https://secretspec.dev/quick-start) for detailed ins
 curl -sSL https://install.secretspec.dev | sh
 ```
 
+SecretSpec 0.20+ provides static musl CLI binaries for x64 and arm64 Linux, so
+the installer works directly on Alpine without a glibc compatibility layer.
+
 See the [installation guide](https://secretspec.dev/quick-start#installation) for more options including Nix and Devenv.
 
 ## Configuration

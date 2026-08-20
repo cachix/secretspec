@@ -121,6 +121,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   [#369]: https://github.com/cachix/secretspec/issues/369
 
+- On Unix, `secretspec run` now forwards `SIGTERM`, `SIGINT`, and `SIGHUP` to
+  the command it started, allowing graceful container shutdown even when
+  SecretSpec is PID 1. Commands terminated by a signal now produce the
+  conventional `128 + signal` exit status instead of always exiting 1
+  ([#382]).
+
+  [#382]: https://github.com/cachix/secretspec/issues/382
+
 - Format-preserving `Spec` edits now keep inherited declarations separate after
   semantic builder changes, resolve parent specs independently of later working
   directory changes, remove synthesized profile tables when additions are

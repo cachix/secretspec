@@ -76,6 +76,23 @@ Publisher configured (GitHub Actions, repo `cachix/secretspec`, workflow
 `node-addon.yml`, no environment), and the bootstrap token has been revoked.
 Nothing left to do — every release from here publishes via OIDC.
 
+### npm musl packages (0.20+) — bootstrap pending
+
+`secretspec-linux-x64-musl` and `secretspec-linux-arm64-musl` are new package
+names, so each needs the same manual first publish the four older platform
+packages had:
+
+1. Publish both once with a temporary granular access token, scope "All
+   Packages" / "Read and write". A "select packages" scope cannot name a
+   package that does not exist yet.
+2. Attach a Trusted Publisher to each (GitHub Actions, repo
+   `cachix/secretspec`, workflow `node-addon.yml`, no environment).
+3. Revoke the token.
+
+`napi pre-publish` publishes every platform package in one step, so until this
+is done the publish job in `node-addon.yml` fails and takes the main
+`secretspec` package with it.
+
 ### Hackage — token set, done
 
 Hackage doesn't support OIDC yet (tracked upstream:
@@ -264,8 +281,12 @@ self-contained, vendored build — not a module-proxy install).
   main `secretspec` package references via `optionalDependencies` and loads at
   runtime — the layout `@napi-rs/cli` automates (`napi create-npm-dirs` /
   `napi pre-publish`). Authenticated via **npm Trusted Publishing** (OIDC); no
-  token stored in CI.
-- **One-time setup:** already done — see "Before your first release" above.
+  token stored in CI. `napi.targets` in `secretspec-node/package.json` is the
+  source of truth for the platform list; `napi pre-publish` derives
+  `optionalDependencies` from it at publish time.
+- **One-time setup:** done for the four glibc, macOS, and Windows packages. The
+  two musl packages added in 0.20 still need it — see "Before your first
+  release" above.
 
 ## PHP (Packagist + extension) — `php-ext.yml`
 

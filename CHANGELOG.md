@@ -43,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Inherited declarations remain in their parent files and are revalidated after
   every edit.
 
+- The Node.js SDK publishes musl builds of the native addon in 0.20+, so
+  `require("secretspec")` works on Alpine images such as `node:alpine`
+  ([#383]). npm picks the build that matches the host libc, on both x64 and
+  arm64.
+
+  [#383]: https://github.com/cachix/secretspec/issues/383
+
 - `extract` supports INI documents in SecretSpec 0.20+, selecting an
   unsectioned key with `/key` or a named-section key with `/section/key`.
 

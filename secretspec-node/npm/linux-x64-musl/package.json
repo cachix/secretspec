@@ -1,0 +1,20 @@
+{
+  "name": "secretspec-linux-x64-musl",
+  "version": "0.12.2",
+  "cpu": [
+    "x64"
+  ],
+  "main": "secretspec.linux-x64-musl.node",
+  "files": [
+    "secretspec.linux-x64-musl.node"
+  ],
+  "description": "A declarative interface for every secret provider. Node.js SDK.",
+  "homepage": "https://secretspec.dev/",
+  "license": "Apache-2.0",
+  "os": [
+    "linux"
+  ],
+  "libc": [
+    "musl"
+  ]
+}

@@ -90,7 +90,7 @@ akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secr
 aac = ["akv", "dep:reqwest", "azure_core/hmac_rust"]
 age = ["dep:age"]
 sops = []
-kubernetes = ["dep:kube", "dep:k8s-openapi"]
+kubernetes = ["dep:kube", "dep:k8s-openapi", "dep:base64"]
 
 [dev-dependencies]
 # Validates serialized resolution reports against the committed JSON Schema.

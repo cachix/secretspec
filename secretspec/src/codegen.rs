@@ -184,7 +184,6 @@ pub(crate) fn build_ir_from_manifest(manifest: &CompiledSpec) -> CodegenIr {
 /// drop the converter or rename the type). By default it describes the union
 /// `SecretSpec` (safe for any profile); with a profile it describes that
 /// profile's exact fields. Pair it with `quicktype --top-level <Name>`.
-#[cfg(any(feature = "cli", test))]
 pub(crate) mod schema {
     use super::{CodegenIr, IrField, capitalize};
     use serde_json::{Map, Value, json};

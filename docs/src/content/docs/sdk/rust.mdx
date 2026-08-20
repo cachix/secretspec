@@ -71,6 +71,17 @@ A spec loaded from a file retains that file's directory for relative provider
 paths. A Rust-built declaration resolves them from the current working directory
 by default; `Secrets::from_spec_at` selects another logical base directory.
 
+Use `schema_json(None)` to emit the value-free JSON Schema for the union shape,
+or pass a profile name for that profile's effective fields:
+
+```rust
+let union_schema = spec.schema_json(None)?;
+let production_schema = spec.schema_json(Some("production"))?;
+```
+
+Schema generation reads declarations only. It does not resolve secret values or
+contact providers.
+
 `Spec` is immutable so its declarations and compiled view cannot drift apart.
 Use `to_builder()` to edit a copy, or `into_builder()` to consume the original,
 then rebuild to validate the result:

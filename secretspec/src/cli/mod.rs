@@ -3,7 +3,7 @@ use crate::provider::{Provider, providers, spec_names_known_provider};
 use crate::spec_edit::{
     add_description as add_secret_to_spec, validate_secret_name as validate_add_secret_name,
 };
-use crate::{CallerContext, ExportFormat, Secrets};
+use crate::{CallerContext, ExportFormat, Secrets, Spec};
 use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use std::collections::{HashMap, HashSet};
@@ -705,6 +705,19 @@ fn load_secrets(
         Some(caller) => secrets.with_caller(caller.clone()),
         None => secrets,
     })
+}
+
+/// Loads only the validated declaration model used by value-free commands.
+///
+/// Unlike [`load_secrets`], this does not initialize global configuration,
+/// auditing, or provider state.
+fn load_spec(file: &Option<PathBuf>) -> miette::Result<Spec> {
+    match file {
+        Some(path) => Spec::try_from(path.as_path()),
+        None => crate::secrets::find_config_file().and_then(|path| Spec::try_from(path.as_path())),
+    }
+    .into_diagnostic()
+    .wrap_err("Failed to load secretspec configuration")
 }
 
 /// Applies a `--scope` selection to `app`. Clap resolves the flag and its
@@ -1471,10 +1484,8 @@ pub fn main() -> Result<()> {
         }
         // Generate typed accessors for another language (value-free)
         Commands::Schema { profile, output } => {
-            let app = load_secrets(&cli.file, &cli.reason, &caller)?;
-            let ir = crate::codegen::build_ir_from_manifest(&app.manifest);
-            let schema = crate::codegen::schema::emit(&ir, profile.as_deref())
-                .map_err(|e| miette!("{e}"))?;
+            let spec = load_spec(&cli.file)?;
+            let schema = spec.schema_json(profile.as_deref()).into_diagnostic()?;
             match output {
                 Some(path) => fs::write(&path, schema)
                     .into_diagnostic()

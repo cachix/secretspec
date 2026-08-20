@@ -53,6 +53,7 @@ pub(crate) mod generator;
 pub(crate) mod ini_field;
 pub(crate) mod json_field;
 mod manifest;
+mod manifest_edit;
 mod plan;
 mod report;
 mod resolve;

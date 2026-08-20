@@ -90,8 +90,16 @@ let edited = spec
 can reveal the declaration inherited from `default`; removing it from `default`
 also removes it from profiles that only inherited it. `build()` rejects dangling
 scope membership, invalid compositions, empty profiles, and other semantic
-errors introduced by an edit. These operations edit the in-memory specification;
-they do not rewrite or preserve the formatting of a TOML document.
+errors introduced by an edit.
+
+For a spec loaded from TOML, `secret`, `add_secret`, `replace_secret`, and
+`remove_secret` preserve comments, ordering, quoting, and unrelated syntax in
+the root document. Read the edited document with `edited.preserved_text()`.
+Adding and then removing the same declaration restores the original bytes, and
+inherited declarations are never inlined into a child manifest. Other builder
+operations are semantic edits and clear the retained text; use `to_toml()` when
+freshly formatted output is acceptable. A spec constructed with
+`Spec::builder()` has no original document to preserve.
 
 The Rust-first API complements `declare_secrets!`: `Spec` describes and
 resolves names dynamically, while the macro continues to generate statically

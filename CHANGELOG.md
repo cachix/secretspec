@@ -30,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `SpecBuilder` preserves comments, key order, quoting, and unrelated syntax
+  when adding, replacing, or removing declarations from a `Spec` loaded from
+  TOML. `preserved_text` exposes the exact edited root document, while `to_toml`
+  renders freshly formatted TOML when no preserved document is available.
+  Inherited declarations remain in their parent files and are revalidated after
+  every edit.
+
 - `extract` supports INI documents in SecretSpec 0.20+, selecting an
   unsectioned key with `/key` or a named-section key with `/section/key`.
 

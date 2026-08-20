@@ -82,6 +82,10 @@ $ secretspec init --from 'bw://dev-secrets?type=login'
 ✓ Created secretspec.toml with 8 secrets
 ```
 
+For Bitwarden in SecretSpec 0.20+, items under the selected
+`secretspec/{project}/{profile}/` title prefix become convention declarations;
+bare existing items are emitted with explicit `ref.item` coordinates.
+
 ### config global init
 Initialize user-global configuration. The explicit `global` namespace is
 available in SecretSpec 0.17+; without options, the command prompts for the

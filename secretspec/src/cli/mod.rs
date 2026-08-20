@@ -551,6 +551,15 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
             if let Some(composed) = &secret_config.composed {
                 inline.insert("composed", Value::from(composed.as_str()));
             }
+            if let Some(reference) = &secret_config.reference {
+                let mut native_address = InlineTable::new();
+                for (coordinate, value) in reference.coordinates() {
+                    if let Some(value) = value {
+                        native_address.insert(coordinate, Value::from(value));
+                    }
+                }
+                inline.insert("ref", Value::InlineTable(native_address));
+            }
             profile_table.insert(&secret_name, toml_edit::value(inline));
         }
 
@@ -2048,6 +2057,32 @@ mod tests {
         assert!(
             out.contains(", composed = \"postgres://${USER}@${HOST}/db\""),
             "got: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_toml_preserves_native_references() {
+        let out = generate_toml_with_comments(&config_with_secret(Secret {
+            description: Some("legacy".to_string()),
+            reference: Some(crate::config::NativeAddress {
+                item: "LEGACY_TOKEN".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
+        .unwrap();
+
+        assert!(
+            out.contains(", ref = { item = \"LEGACY_TOKEN\" }"),
+            "got: {out}"
+        );
+        let parsed: Config = toml::from_str(&out).expect("must round-trip");
+        assert_eq!(
+            parsed.profiles["default"].secrets["S"]
+                .reference
+                .as_ref()
+                .map(|reference| reference.item.as_str()),
+            Some("LEGACY_TOKEN")
         );
     }
 

@@ -15,6 +15,7 @@
 #   organizations.json - `bw list organizations` output (default: [])
 #   collections.json   - `bw list collections` output (default: [])
 #   items.json         - `bw list items` / `bw get item` source (default: [])
+#   stateful            - when present, persist create/edit calls to items.json
 #
 # Every invocation is appended to $BW_SHIM_DIR/invocations.log as:
 #   argv: <--nointeraction> <status> ...     (one per call)
@@ -152,13 +153,33 @@ case "$sub" in
   create)
     # create item [--organizationid X]; the item arrives base64 on stdin.
     [ "${1:-}" = "item" ] || { printf 'shim: unsupported create: %s\n' "$1" >&2; exit 1; }
-    log_and_decode_stdin | jq -c '. + {id: "shim-created"}'
+    if [ -f "$DIR/stateful" ]; then
+      current="$(read_fixture items.json)"
+      next_id="shim-created-$(printf '%s' "$current" | jq 'length')"
+      created="$(log_and_decode_stdin | jq -c --arg id "$next_id" '. + {id: $id}')"
+      tmp="$DIR/items.json.tmp"
+      printf '%s' "$current" | jq -c --argjson item "$created" '. + [$item]' > "$tmp"
+      mv "$tmp" "$DIR/items.json"
+      printf '%s\n' "$created"
+    else
+      log_and_decode_stdin | jq -c '. + {id: "shim-created"}'
+    fi
     ;;
 
   edit)
     # edit item <id> [--organizationid X]; the item arrives base64 on stdin.
     [ "${1:-}" = "item" ] || { printf 'shim: unsupported edit: %s\n' "$1" >&2; exit 1; }
-    log_and_decode_stdin | jq -c --arg id "${2:-shim-edited}" '. + {id: $id}'
+    if [ -f "$DIR/stateful" ]; then
+      id="${2:-shim-edited}"
+      edited="$(log_and_decode_stdin | jq -c --arg id "$id" '. + {id: $id}')"
+      tmp="$DIR/items.json.tmp"
+      read_fixture items.json | jq -c --arg id "$id" --argjson item "$edited" \
+        'map(if .id == $id then $item else . end)' > "$tmp"
+      mv "$tmp" "$DIR/items.json"
+      printf '%s\n' "$edited"
+    else
+      log_and_decode_stdin | jq -c --arg id "${2:-shim-edited}" '. + {id: $id}'
+    fi
     ;;
 
   *)

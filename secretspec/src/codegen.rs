@@ -19,7 +19,7 @@
 //! optional secret is nullable, while required, defaulted, and generated secrets
 //! are guaranteed to have a value when resolution succeeds.
 
-use crate::manifest::{CompiledSecret, CompiledSpec};
+use crate::compiled_spec::{CompiledSecret, CompiledSpec};
 use crate::spec::Spec;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

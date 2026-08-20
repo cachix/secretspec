@@ -95,6 +95,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Format-preserving `Spec` edits now keep inherited declarations separate after
+  semantic builder changes, resolve parent specs independently of later working
+  directory changes, remove synthesized profile tables when additions are
+  undone, and apply description validation consistently across builder origins.
 - Closing the output pipe now ends the CLI quietly on Unix, so
   `secretspec export | head` and `secretspec check --json | head` behave like
   any other Unix tool. Previously `export` reported `IO error: Broken pipe`

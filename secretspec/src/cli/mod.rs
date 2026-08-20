@@ -1,8 +1,8 @@
 use crate::config::{Config, GlobalConfig, GlobalDefaults, Profile as ConfigProfile, Project};
-use crate::manifest_edit::{
-    add_description as add_secret_to_manifest, validate_secret_name as validate_add_secret_name,
-};
 use crate::provider::{Provider, providers, spec_names_known_provider};
+use crate::spec_edit::{
+    add_description as add_secret_to_spec, validate_secret_name as validate_add_secret_name,
+};
 use crate::{CallerContext, ExportFormat, Secrets};
 use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
@@ -998,7 +998,7 @@ pub fn main() -> Result<()> {
             let source = fs::read_to_string(&manifest_path)
                 .into_diagnostic()
                 .wrap_err_with(|| format!("Failed to read {}", manifest_path.display()))?;
-            let updated = add_secret_to_manifest(&source, &profile, &name, description)?;
+            let updated = add_secret_to_spec(&source, &profile, &name, description)?;
             write_manifest_atomically(&manifest_path, &updated)?;
 
             println!(
@@ -2222,7 +2222,7 @@ mod tests {
     }
 
     #[test]
-    fn add_secret_to_manifest_preserves_comments_and_other_tables() {
+    fn add_secret_to_spec_preserves_comments_and_other_tables() {
         let source = r#"# Project documentation
 [project]
 name = "demo"
@@ -2236,8 +2236,7 @@ DATABASE_URL = { description = "Database connection string" }
 local = "dotenv://.env"
 "#;
 
-        let updated =
-            add_secret_to_manifest(source, "default", "API_KEY", "API access token").unwrap();
+        let updated = add_secret_to_spec(source, "default", "API_KEY", "API access token").unwrap();
 
         assert!(updated.contains("# Project documentation"));
         assert!(updated.contains("# Keep this explanation attached to the existing secret."));
@@ -2255,7 +2254,7 @@ local = "dotenv://.env"
     }
 
     #[test]
-    fn add_secret_to_manifest_can_overlay_an_inherited_profile() {
+    fn add_secret_to_spec_can_overlay_an_inherited_profile() {
         let source = r#"[project]
 name = "demo"
 revision = "1.0"
@@ -2266,7 +2265,7 @@ LOCAL = { description = "Local secret" }
 "#;
 
         let updated =
-            add_secret_to_manifest(source, "production", "API_KEY", "API access token").unwrap();
+            add_secret_to_spec(source, "production", "API_KEY", "API access token").unwrap();
 
         assert!(updated.contains("[profiles.production]"));
         assert!(updated.contains("API_KEY = { description = \"API access token\" }"));
@@ -2302,27 +2301,27 @@ API_KEY = { description = "API access token" }
     }
 
     #[test]
-    fn add_secret_to_manifest_rejects_invalid_or_duplicate_declarations() {
+    fn add_secret_to_spec_rejects_invalid_or_duplicate_declarations() {
         let source = r#"[profiles.default]
 API_KEY = { description = "Existing" }
 "#;
 
-        let invalid = add_secret_to_manifest(source, "default", "1BAD", "Description")
+        let invalid = add_secret_to_spec(source, "default", "1BAD", "Description")
             .unwrap_err()
             .to_string();
         assert!(invalid.contains("Invalid secret name"));
 
-        let reserved = add_secret_to_manifest(source, "default", "defaults", "Description")
+        let reserved = add_secret_to_spec(source, "default", "defaults", "Description")
             .unwrap_err()
             .to_string();
         assert!(reserved.contains("reserved for profile defaults"));
 
-        let duplicate = add_secret_to_manifest(source, "default", "API_KEY", "Description")
+        let duplicate = add_secret_to_spec(source, "default", "API_KEY", "Description")
             .unwrap_err()
             .to_string();
         assert!(duplicate.contains("already declared"));
 
-        let empty = add_secret_to_manifest(source, "default", "NEW_KEY", "   ")
+        let empty = add_secret_to_spec(source, "default", "NEW_KEY", "   ")
             .unwrap_err()
             .to_string();
         assert!(empty.contains("description cannot be empty"));

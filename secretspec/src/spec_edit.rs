@@ -1,4 +1,4 @@
-//! Format-preserving edits to a `secretspec.toml` root document.
+//! Format-preserving edits to a `secretspec.toml` root specification.
 
 use crate::config::Secret;
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
@@ -80,16 +80,36 @@ pub(crate) fn replace_secret(
 }
 
 /// Remove one declaration without reformatting the rest of the document.
-pub(crate) fn remove_secret(source: &str, profile: &str, name: &str) -> Result<String> {
+pub(crate) fn remove_secret(
+    source: &str,
+    profile: &str,
+    name: &str,
+    remove_empty_profile: bool,
+) -> Result<String> {
     validate_secret_name(name)?;
     let mut doc = parse(source)?;
-    let table = profile_table_mut(&mut doc, profile)?;
-    if table.remove(name).is_none() {
-        return Err(miette!(
-            "Secret '{}' is not declared in profile '{}'",
-            name,
-            profile
-        ));
+    {
+        let table = profile_table_mut(&mut doc, profile)?;
+        if table.remove(name).is_none() {
+            return Err(miette!(
+                "Secret '{}' is not declared in profile '{}'",
+                name,
+                profile
+            ));
+        }
+    }
+    if remove_empty_profile {
+        let profiles = doc
+            .get_mut("profiles")
+            .and_then(Item::as_table_like_mut)
+            .expect("profile lookup above verified the profiles table");
+        let is_empty = profiles
+            .get(profile)
+            .and_then(Item::as_table_like)
+            .is_some_and(toml_edit::TableLike::is_empty);
+        if is_empty {
+            profiles.remove(profile);
+        }
     }
     Ok(doc.to_string())
 }
@@ -134,17 +154,13 @@ fn profile_table_mut<'a>(
         .and_then(Item::as_table_like_mut)
         .and_then(|profiles| profiles.get_mut(profile))
         .and_then(Item::as_table_like_mut)
-        .ok_or_else(|| miette!("Profile '{}' is not declared in this manifest", profile))
+        .ok_or_else(|| miette!("Profile '{}' is not declared in this spec", profile))
 }
 
 fn secret_inline_table(secret: &Secret) -> Result<InlineTable> {
-    if secret
-        .description
-        .as_deref()
-        .is_none_or(|description| description.trim().is_empty())
-    {
-        return Err(miette!("Secret description cannot be empty"));
-    }
+    secret
+        .validate_description()
+        .map_err(|error| miette!(error))?;
 
     // The value serializer rejects nested tables, which `ref`, `refs`,
     // `extract`, `generate`, and presence-group requiredness can contain.
@@ -160,4 +176,93 @@ fn secret_inline_table(secret: &Secret) -> Result<InlineTable> {
         inline.insert(key, value);
     }
     Ok(inline)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SPEC_TEXT: &str = r#"[project]
+name = "demo"
+revision = "1.0"
+
+# Keep this comment and declaration order.
+[profiles.default]
+FIRST = { description = "first" }
+LAST = { description = "last" }
+
+[profiles.default.TABLE]
+description = "full table"
+required = false
+"#;
+
+    fn secret(description: &str) -> Secret {
+        Secret {
+            description: Some(description.to_string()),
+            required: Some(true),
+            ..Secret::default()
+        }
+    }
+
+    #[test]
+    fn add_replace_and_remove_restore_the_exact_spec_text() {
+        let added = add_secret(SPEC_TEXT, "default", "SCRATCH", &secret("temporary")).unwrap();
+        assert!(added.contains("# Keep this comment"));
+        assert!(added.find("FIRST").unwrap() < added.find("LAST").unwrap());
+        assert!(added.contains("[profiles.default.TABLE]"));
+
+        let replaced =
+            replace_secret(&added, "default", "SCRATCH", &secret("replacement")).unwrap();
+        assert!(replaced.contains("replacement"));
+
+        let restored = remove_secret(&replaced, "default", "SCRATCH", false).unwrap();
+        assert_eq!(restored, SPEC_TEXT);
+    }
+
+    #[test]
+    fn remove_cleans_up_only_profiles_marked_as_synthesized() {
+        let added = add_secret(SPEC_TEXT, "production", "SCRATCH", &secret("temporary")).unwrap();
+        let restored = remove_secret(&added, "production", "SCRATCH", true).unwrap();
+        assert_eq!(restored, SPEC_TEXT);
+
+        let with_empty_profile = format!("{SPEC_TEXT}\n[profiles.production]\n");
+        let added = add_secret(
+            &with_empty_profile,
+            "production",
+            "SCRATCH",
+            &secret("temporary"),
+        )
+        .unwrap();
+        let restored = remove_secret(&added, "production", "SCRATCH", false).unwrap();
+        assert_eq!(restored, with_empty_profile);
+    }
+
+    #[test]
+    fn complete_secret_edits_use_the_shared_description_rule() {
+        let whitespace = add_secret(SPEC_TEXT, "default", "SPACE", &secret(" "));
+        assert!(whitespace.is_ok());
+
+        let empty = add_secret(SPEC_TEXT, "default", "EMPTY", &secret(""))
+            .unwrap_err()
+            .to_string();
+        assert!(empty.contains("description cannot be empty"), "{empty}");
+    }
+
+    #[test]
+    fn invalid_edit_targets_are_rejected_without_changing_source() {
+        let duplicate = add_secret(SPEC_TEXT, "default", "FIRST", &secret("duplicate"))
+            .unwrap_err()
+            .to_string();
+        assert!(duplicate.contains("already declared"), "{duplicate}");
+
+        let missing = replace_secret(SPEC_TEXT, "default", "MISSING", &secret("replacement"))
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("not declared"), "{missing}");
+
+        let missing = remove_secret(SPEC_TEXT, "missing", "FIRST", false)
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("not declared in this spec"), "{missing}");
+    }
 }

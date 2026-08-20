@@ -33,8 +33,8 @@
 //! DATABASE_URL = { description = "Production database", required = true }
 //! ```
 
+use crate::compiled_spec::CompiledSpec;
 use crate::composition::Template;
-use crate::manifest::CompiledSpec;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
 use std::fs;
@@ -888,12 +888,12 @@ fn validate_compiled_profile(
 
 fn validate_profile_constraints(
     profile_name: &str,
-    profile: &crate::manifest::CompiledProfile,
+    profile: &crate::compiled_spec::CompiledProfile,
 ) -> Result<(), ParseError> {
     fn validate_groups(
         profile_name: &str,
         kind: &str,
-        groups: &[crate::manifest::CompiledConstraintGroup],
+        groups: &[crate::compiled_spec::CompiledConstraintGroup],
     ) -> Result<(), ParseError> {
         for group in groups {
             if group.members.len() < 2 {
@@ -940,7 +940,7 @@ fn validate_profile_constraints(
 
 fn validate_composition_graph(
     profile_name: &str,
-    profile: &crate::manifest::CompiledProfile,
+    profile: &crate::compiled_spec::CompiledProfile,
 ) -> Result<(), ParseError> {
     // Templates were parsed during manifest compilation; a malformed one was
     // already rejected by `validate_semantics` before this runs.
@@ -1031,28 +1031,6 @@ impl ConfigGraphLoader {
         Ok(merged)
     }
 
-    /// Load an in-memory root document while resolving its parents from
-    /// `base_dir`. The root is overlaid last, matching [`Self::load`].
-    fn load_text(source: &str, base_dir: &Path) -> Result<Config, ParseError> {
-        let root = Config::parse_document(source)?;
-        let mut loader = Self {
-            active: HashSet::new(),
-            emitted: HashSet::new(),
-            documents: Vec::new(),
-        };
-        loader.visit_extends(&root, base_dir)?;
-
-        let mut documents = loader.documents.into_iter();
-        let Some(mut merged) = documents.next() else {
-            return Ok(root);
-        };
-        for document in documents {
-            merged.overlay_with(document);
-        }
-        merged.overlay_with(root);
-        Ok(merged)
-    }
-
     fn visit_extends(&mut self, config: &Config, base_dir: &Path) -> Result<(), ParseError> {
         for extend_path in config.project.extends.iter().flatten() {
             let joined_path = base_dir.join(extend_path);
@@ -1129,9 +1107,24 @@ impl TryFrom<&Path> for Config {
 }
 
 impl Config {
-    /// Parse an edited root document and merge its `extends` from `base_dir`.
-    pub(crate) fn from_text_in(source: &str, base_dir: &Path) -> Result<Self, ParseError> {
-        ConfigGraphLoader::load_text(source, base_dir)
+    /// Merge an already parsed root document with its `extends` from `base_dir`.
+    pub(crate) fn from_root_in(root: Self, base_dir: &Path) -> Result<Self, ParseError> {
+        let mut loader = ConfigGraphLoader {
+            active: HashSet::new(),
+            emitted: HashSet::new(),
+            documents: Vec::new(),
+        };
+        loader.visit_extends(&root, base_dir)?;
+
+        let mut documents = loader.documents.into_iter();
+        let Some(mut merged) = documents.next() else {
+            return Ok(root);
+        };
+        for document in documents {
+            merged.overlay_with(document);
+        }
+        merged.overlay_with(root);
+        Ok(merged)
     }
 }
 
@@ -2286,7 +2279,7 @@ impl Secret {
         self.validate_semantics()
     }
 
-    fn validate_description(&self) -> Result<(), String> {
+    pub(crate) fn validate_description(&self) -> Result<(), String> {
         match self.description.as_deref() {
             Some("") => Err("description cannot be empty".into()),
             None => Err("missing description".into()),

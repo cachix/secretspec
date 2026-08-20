@@ -466,6 +466,7 @@ bw://dev-secrets                        # Collection, by name or ID
 bw://myorg@dev-secrets                  # Organization and collection
 bw://?server=https://vault.company.com  # Expected self-hosted server (guard)
 bw://?type=login&field=username         # Default item type and field
+bw://?folder=team/{project}/{profile}   # Convention title prefix (0.20+)
 ```
 
 Organizations and collections may be named or given as IDs; SecretSpec resolves
@@ -484,6 +485,14 @@ narrows both reads and writes to that item type, keeping a Card and a same-named
 Login separately addressable. An unsupported `?type=`, or an unknown query
 parameter, is rejected when the address is parsed rather than ignored.
 
+SecretSpec 0.20+ convention items use the title
+`secretspec/{project}/{profile}/{key}`. `?folder=` replaces the prefix before
+the key; it is an item-title namespace, not a Bitwarden folder. Explicit
+`ref.item` values remain complete, unprefixed item titles. Releases through
+0.19 wrote bare convention titles, which must be renamed to the 0.20 layout or
+kept with an explicit `ref = { item = "OLD_TITLE" }`; there is no automatic
+bare-name fallback because a bare item carries no project/profile ownership.
+
 `?server=` does not configure the CLI. The `bw` CLI takes its server only from
 `bw config server`, which must be run while logged out, so self-hosted users
 configure the CLI themselves and SecretSpec verifies the setting matches before
@@ -491,7 +500,7 @@ each operation. See the [provider guide](/providers/bw/#self-hosted-servers).
 
 **Features**: Read/write, all vault item types (logins, cards, identities, SSH keys, secure notes), organization/collection addressing by name or ID, field selection, `ref = { item, field }` mapping in `secretspec.toml`, declaration discovery through `init --from` (0.18+)
 **Prerequisites**: Bitwarden CLI (`bw`), signed in and unlocked (`BW_SESSION` env var), self-hosted servers set with `bw config server` before login, build with `--features bw`
-**Storage**: One vault item per secret; reads use per-type default fields unless `?field=` or a `ref` mapping selects one
+**Storage**: One vault item per secret; convention title `secretspec/{project}/{profile}/{key}` (0.20+, customizable with `?folder=`), with per-type default fields unless `?field=` or a `ref` mapping selects one
 
 ## Bitwarden Secrets Manager Provider
 

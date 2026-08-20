@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Bitwarden convention item names now preserve project and profile isolation
+  when either contains `/`, and `secretspec init --from bw://` recognizes
+  existing convention names case-insensitively while retaining legacy items'
+  native references for migration.
+
 - Dotenv parsing and rendering now use dotenv-ng throughout the dotenv
   provider, age-encrypted dotenv blobs, and `secretspec export --format
   dotenv`. Values containing `$` remain literal, output uses only the quoting
@@ -105,6 +110,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   diagnostics are omitted as missing instead of aborting batch resolution.
 
 ### Fixed
+
+- Bitwarden Password Manager convention secrets now use
+  `secretspec/{project}/{profile}/{key}` item titles, preventing a same-named
+  secret in another project or profile from being read or overwritten. The
+  existing `?folder=` option customizes that title prefix. Bare items created
+  by releases through 0.19 can be renamed to the namespaced title or retained
+  with an explicit `ref`; declaration discovery emits those legacy bare items
+  as refs automatically. ([#369])
+
+  [#369]: https://github.com/cachix/secretspec/issues/369
 
 - Format-preserving `Spec` edits now keep inherited declarations separate after
   semantic builder changes, resolve parent specs independently of later working

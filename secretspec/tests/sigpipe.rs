@@ -103,3 +103,21 @@ fn check_json_dies_on_sigpipe_instead_of_panicking() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn check_human_report_dies_on_sigpipe_without_a_diagnostic() {
+    let output = run_with_closed_stdout(&["check", "--provider", "env", "--no-prompt"]);
+
+    assert_eq!(
+        output.status.signal(),
+        Some(SIGPIPE),
+        "expected termination by SIGPIPE, got {}:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "a closed pipe should be silent, got:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

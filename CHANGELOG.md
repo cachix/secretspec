@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Rust `secretspec-derive` macro now uses the support crates re-exported by
   `secretspec`, so applications no longer need explicit `serde` or `secrecy`
   dependencies just to compile generated types.
+- `secretspec check` writes its human-readable report to stdout, consistently
+  with `check --json` and `check --explain`, so it can be piped and redirected
+  without mixing the report with diagnostics. Scripts that captured the report
+  from stderr must capture stdout instead; `2>&1` continues to work. Rust SDK
+  callers can select a report sink with `Secrets::check_with_writer`, while
+  the existing `Secrets::check` API and its stderr behavior remain unchanged.
 
 ### Added
 

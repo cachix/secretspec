@@ -27,7 +27,7 @@ use data_encoding::{
 use secrecy::{ExposeSecret, SecretSlice, SecretString};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
-use std::io::{self, IsTerminal, Read};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -3675,25 +3675,40 @@ impl Secrets {
     /// let validated = spec.check(false).unwrap();
     /// ```
     pub fn check(&self, no_prompt: bool) -> Result<ValidatedSecrets> {
+        self.check_with_writer(no_prompt, &mut io::stderr())
+    }
+
+    /// Checks the status of all secrets, writing the human-readable report to `out`.
+    ///
+    /// This is the writer-based counterpart to [`Self::check`]. Prompts and
+    /// diagnostics still use their standard streams; only the report containing
+    /// the header, per-secret statuses, constraint violations, and summary is
+    /// written to `out`.
+    pub fn check_with_writer(
+        &self,
+        no_prompt: bool,
+        out: &mut dyn Write,
+    ) -> Result<ValidatedSecrets> {
         self.ensure_reason_for(AuditAction::Check, None)?;
         let profile_display = self.resolve_profile_name(None);
 
-        eprintln!(
+        writeln!(
+            out,
             "Checking secrets in {} (profile: {})...\n",
             self.config.project.name.bold(),
             profile_display.cyan()
-        );
+        )?;
 
         // Validate and display results
         // The read is audited inside `validate()`, so no bulk event here.
         match self.validate()? {
             Ok(valid) => {
-                self.display_validation_success(&valid)?;
+                self.display_validation_success(out, &valid)?;
                 // All secrets present - return early without re-validating
                 Ok(valid)
             }
             Err(errors) => {
-                self.display_validation_errors(&errors)?;
+                self.display_validation_errors(out, &errors)?;
                 // Missing secrets - prompt if interactive (and not no_prompt) and re-validate
                 self.ensure_secrets(None, None, !no_prompt)
             }
@@ -3701,7 +3716,11 @@ impl Secrets {
     }
 
     /// Display validation success results
-    fn display_validation_success(&self, valid: &ValidatedSecrets) -> Result<()> {
+    fn display_validation_success(
+        &self,
+        out: &mut dyn Write,
+        valid: &ValidatedSecrets,
+    ) -> Result<()> {
         let mut found_count = 0;
         let mut optional_count = 0;
         let default_names = valid
@@ -3715,23 +3734,37 @@ impl Secrets {
             let label = format_secret_label(name, config.description.as_deref());
             if missing_optional.contains(&name) {
                 optional_count += 1;
-                eprintln!("{} {} {}", "○".blue(), label, "(optional)".blue());
+                writeln!(out, "{} {} {}", "○".blue(), label, "(optional)".blue())?;
             } else if config.default.is_some() && default_names.contains(&name) {
                 found_count += 1;
-                eprintln!("{} {} {}", "○".yellow(), label, "(has default)".yellow());
+                writeln!(
+                    out,
+                    "{} {} {}",
+                    "○".yellow(),
+                    label,
+                    "(has default)".yellow()
+                )?;
             } else {
                 found_count += 1;
-                eprintln!("{} {}", "✓".green(), label);
+                writeln!(out, "{} {}", "✓".green(), label)?;
             }
         }
 
-        eprintln!("\n{}", Self::format_summary(found_count, 0, optional_count));
+        writeln!(
+            out,
+            "\n{}",
+            Self::format_summary(found_count, 0, optional_count)
+        )?;
 
         Ok(())
     }
 
     /// Display validation error results
-    fn display_validation_errors(&self, errors: &ValidationErrors) -> Result<()> {
+    fn display_validation_errors(
+        &self,
+        out: &mut dyn Write,
+        errors: &ValidationErrors,
+    ) -> Result<()> {
         let mut found_count = 0;
         let mut missing_count = 0;
         let mut optional_count = 0;
@@ -3745,26 +3778,33 @@ impl Secrets {
             let label = format_secret_label(name, config.description.as_deref());
             if errors.missing_required.contains(name) {
                 missing_count += 1;
-                eprintln!("{} {} {}", "✗".red(), label, "(required)".red());
+                writeln!(out, "{} {} {}", "✗".red(), label, "(required)".red())?;
             } else if errors.missing_optional.contains(name) {
                 optional_count += 1;
-                eprintln!("{} {} {}", "○".blue(), label, "(optional)".blue());
+                writeln!(out, "{} {} {}", "○".blue(), label, "(optional)".blue())?;
             } else {
                 found_count += 1;
                 if default_names.contains(name) {
-                    eprintln!("{} {} {}", "○".yellow(), label, "(has default)".yellow());
+                    writeln!(
+                        out,
+                        "{} {} {}",
+                        "○".yellow(),
+                        label,
+                        "(has default)".yellow()
+                    )?;
                 } else {
-                    eprintln!("{} {}", "✓".green(), label);
+                    writeln!(out, "{} {}", "✓".green(), label)?;
                 }
             }
         }
 
-        eprintln!(
+        writeln!(
+            out,
             "\n{}",
             Self::format_summary(found_count, missing_count, optional_count)
-        );
+        )?;
         for violation in &errors.constraint_violations {
-            eprintln!("{} {}", "Constraint failed:".red().bold(), violation);
+            writeln!(out, "{} {}", "Constraint failed:".red().bold(), violation)?;
         }
 
         Ok(())

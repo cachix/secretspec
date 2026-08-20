@@ -7760,6 +7760,27 @@ fn test_check_returns_ok_when_required_present() {
 }
 
 #[test]
+fn test_check_with_writer_captures_the_report() {
+    let temp_dir = TempDir::new().unwrap();
+    let spec = dotenv_spec(
+        "REQUIRED=value\n",
+        required_secret_profile("REQUIRED"),
+        &temp_dir,
+    );
+    let mut report = Vec::new();
+
+    let validated = spec
+        .check_with_writer(true, &mut report)
+        .expect("check should succeed");
+
+    assert!(validated.resolved.secrets.contains_key("REQUIRED"));
+    let report = String::from_utf8(report).unwrap();
+    assert!(report.contains("Checking secrets in test"));
+    assert!(report.contains("REQUIRED"));
+    assert!(report.contains("Summary:"));
+}
+
+#[test]
 fn test_check_no_prompt_errors_when_required_missing() {
     let temp_dir = TempDir::new().unwrap();
     // Empty .env -> the required secret is missing.

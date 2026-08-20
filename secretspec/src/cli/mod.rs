@@ -1448,8 +1448,9 @@ pub fn main() -> Result<()> {
                 return Ok(());
             }
 
+            let mut out = std::io::stdout();
             let mut validated = app
-                .check(no_prompt)
+                .check_with_writer(no_prompt, &mut out)
                 .into_diagnostic()
                 .wrap_err("Failed to check secrets")?;
             // Persist temp files so they outlive the command

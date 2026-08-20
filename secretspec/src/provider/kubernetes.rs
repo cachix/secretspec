@@ -57,6 +57,15 @@ pub enum KubernetesKind {
     Secret,
 }
 
+impl KubernetesKind {
+    fn plural(&self) -> &'static str {
+        match self {
+            KubernetesKind::ConfigMap => "configmaps",
+            KubernetesKind::Secret => "secret",
+        }
+    }
+}
+
 enum StringRepresentation {
     Plain(String),
     Base64(ByteString),
@@ -284,7 +293,7 @@ impl KubernetesProvider {
             resource_attributes: Some(ResourceAttributes {
                 namespace: Some(namespace.into()),
                 verb: Some("patch".to_string()),
-                resource: Some(self.config.kind.to_string()),
+                resource: Some(self.config.kind.plural().to_string()),
                 group: Some(String::new()),
                 version: Some("v1".to_string()),
                 name: Some(self.config.name.clone()),

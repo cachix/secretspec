@@ -897,6 +897,7 @@ entry declares neither, it inherits whichever form `[profiles.default]` uses.
 | [Azure Key Vault (0.15+)](/providers/akv/#use-existing-secrets) | Secret name; `version` pins a version (0.20+) | Rejected | Reads latest or the pinned version (0.20+) | — (read-only) |
 | [Azure App Configuration (0.20+)](/providers/aac/#use-existing-key-values) | App Configuration key | Rejected | Reads the direct value or resolves its canonical Key Vault reference | — (read-only) |
 | [Infisical (0.16+)](/providers/infisical/#use-existing-secrets) | Folder and key; `version` also applies | Rejected | Reads the latest version | ✅ unless a version is pinned |
+| [Kubernetes (0.20+)](/providers/kubernetes/#use-existing-secrets) | Secret key | Rejected | Reads entry | ✅ |
 
 A provider rejects coordinates it has no equivalent for, with an error naming
 the coordinate (for example, `field` on the env provider).

@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `extract` supports INI documents in SecretSpec 0.20+, selecting an
   unsectioned key with `/key` or a named-section key with `/section/key`.
 
+- **Kubernetes provider** (`k8s+<configmap|secret>://`, 0.20+): store and read
+  values from a Kubernetes ConfigMap or Secret using the current cluster.
 - **Azure App Configuration provider** (`aac://`, 0.20+): select direct
   values and Azure Key Vault references by label, prefix, and tags, with Entra
   ID or connection-string authentication and guarded writes, deletion, and

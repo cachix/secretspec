@@ -60,6 +60,7 @@ detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
 kube = { workspace = true, optional = true }
 k8s-openapi = { workspace = true, optional = true }
+json-patch = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
@@ -90,7 +91,7 @@ akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secr
 aac = ["akv", "dep:reqwest", "azure_core/hmac_rust"]
 age = ["dep:age"]
 sops = []
-kubernetes = ["dep:kube", "dep:k8s-openapi", "dep:base64"]
+kubernetes = ["dep:kube", "dep:k8s-openapi", "dep:base64", "dep:json-patch"]
 
 [dev-dependencies]
 # Validates serialized resolution reports against the committed JSON Schema.

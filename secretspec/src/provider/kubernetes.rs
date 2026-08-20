@@ -3,6 +3,7 @@ use crate::{Result, SecretSpecError};
 
 use super::{Address, Provider, ProviderUrl};
 use base64::{Engine, engine::general_purpose::STANDARD};
+use json_patch::jsonptr::Token;
 use k8s_openapi::{
     ByteString,
     api::{
@@ -15,6 +16,7 @@ use k8s_openapi::{
 use kube::{
     Api, Client,
     api::{Patch, PatchParams, PostParams},
+    core::Status,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -299,6 +301,46 @@ impl KubernetesProvider {
         })
     }
 
+    async fn delete_secret_async(&self, key: &str) -> Result<bool> {
+        let client = self.client().await?;
+        let namespace = match &self.config.namespace {
+            Some(ns) => ns.as_str(),
+            None => client.default_namespace(),
+        };
+        let name = self.config.name.as_str();
+        let params = PatchParams::default();
+        let patch = Patch::Json::<()>(json_patch::Patch(vec![json_patch::PatchOperation::Remove(
+            json_patch::RemoveOperation {
+                path: json_patch::jsonptr::PointerBuf::from_tokens(&[
+                    Token::new("data"),
+                    Token::new(key),
+                ]),
+            },
+        )]));
+        let patched = match self.config.kind {
+            KubernetesKind::ConfigMap => {
+                let api: Api<ConfigMap> = Api::namespaced(client.clone(), &namespace);
+                api.patch(name, &params, &patch).await.map(|_| ())
+            }
+            KubernetesKind::Secret => {
+                let api: Api<Secret> = Api::namespaced(client.clone(), &namespace);
+                api.patch(name, &params, &patch).await.map(|_| ())
+            }
+        };
+        match patched {
+            Ok(_) => Ok(true),
+            // This happens when we try to remove a path that doesn't exist
+            Err(kube::Error::Api(status)) if status.code == 422 && status.reason == "Invalid" => {
+                Ok(false)
+            }
+            Err(e) => Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to patch {}: {}",
+                self.config.kind,
+                crate::error::display_error_chain(&e)
+            ))),
+        }
+    }
+
     async fn can_i_patch(&self) -> Result<bool> {
         let client = self.client().await?;
         let namespace = match &self.config.namespace {
@@ -373,6 +415,11 @@ impl Provider for KubernetesProvider {
         block_on(self.set_secret_async(&coords.item, value))
     }
 
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        let coords = self.resolve_coords(addr)?;
+        block_on(self.delete_secret_async(&coords.item))
+    }
+
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         self.resolve_coords(addr)?;
         let can_i_patch = block_on(self.can_i_patch())?;
@@ -388,6 +435,10 @@ impl Provider for KubernetesProvider {
             return Err(SecretSpecError::ProviderOperationFailed(err_msg));
         }
         Ok(())
+    }
+
+    fn supports_delete(&self) -> bool {
+        true
     }
 }
 

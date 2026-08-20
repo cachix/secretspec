@@ -9,6 +9,7 @@ import profilesExample from '../../../../../secretspec-derive/examples/profiles.
 import scopesExample from '../../../../../secretspec-derive/examples/scopes.rs?raw';
 import asPathExample from '../../../../../secretspec-derive/examples/as_path.rs?raw';
 import namedExample from '../../../../../secretspec-derive/examples/named.rs?raw';
+import promptMissingExample from '../../../../../secretspec-derive/examples/prompt_missing.rs?raw';
 import rustFirstExample from '../../../../../secretspec/examples/rust_first.rs?raw';
 import exampleManifest from '../../../../../secretspec-derive/secretspec.toml?raw';
 
@@ -172,6 +173,17 @@ let spec = Secrets::load()?.with_caller(
 Generated builders expose the same `with_caller()` method. Caller context is
 caller-asserted audit metadata, not an authenticated identity, and never
 satisfies `require_reason`. Do not put credentials or secret values in it.
+
+## Interactive prompting (0.20+)
+
+`Secrets::ensure_secrets` prompts for and stores any missing required secret
+when stdin is a real terminal. Generated builders opt into the same behavior
+with `prompt_missing()`:
+
+<Code code={promptMissingExample} lang="rust" meta='title="prompt_missing.rs"' />
+
+Left unset (the default), a missing required secret still fails fast with
+`RequiredSecretMissing`, exactly as without `prompt_missing()`.
 
 ## Secrets as file paths
 

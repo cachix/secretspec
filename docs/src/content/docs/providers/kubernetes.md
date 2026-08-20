@@ -18,7 +18,7 @@ The `kubernetes` provider is added in SecretSpec 0.20.
 | Access | Read and write |
 | Best for | Accessing values stores in Kubernetes |
 | Authentication | Current cluster set in kubectl configuration |
-| Default storage | `secretspec-{project}-{profile}-{key}` |
+| Default storage | `secretspec--{project}--{profile}--{key}` |
 
 ## Quick start
 
@@ -84,9 +84,14 @@ DATABASE_URL = { description = "Database URL", providers = ["kube"] }
 ## Storage model
 
 Each secret is stored as a key in the Kubernetes ConfigMap or Secret. Each
-secret is stored as `secretspec-{project}-{profile}-{key}` under `.data`. A key
-cannot exceed 253 characters and can only contain alphanumeric characters,
-hypens, underscores, or periods.
+secret is stored as `secretspec--{project}--{profile}--{key}` under `.data`. A
+key cannot exceed 253 characters. Each component can only contain alphanumeric
+characters, underscores, periods, and internal hyphens. SecretSpec joins the
+project, profile, and key with validated `--` boundaries. Distinct logical
+addresses therefore cannot collapse onto one GCSM secret when a project or
+profile contains a single internal hyphen. As a consequence, a component cannot
+start or end with `-` or contain `--`, because those forms could overlap a
+boundary.
 
 ## Use existing secrets
 

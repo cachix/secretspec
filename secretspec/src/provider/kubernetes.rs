@@ -166,35 +166,51 @@ impl KubernetesProvider {
         }
     }
 
-    fn validate_key(key: &String) -> Result<()> {
-        if key.is_empty() {
+    /// Validates a secret name component for Kubernetes.
+    ///
+    /// Components contain only alphanumeric characters, underscores, periods,
+    /// and internal hyphens: A component may not contain `--` or begin or
+    /// end with `-`: either shape could consume or overlap a `--` boundary.
+    fn validate_name_component(name: &str, component: &str) -> Result<()> {
+        if component.is_empty() {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
-                "key cannot be empty"
+                "{} cannot be empty",
+                name
             )));
         }
 
-        if key.len() > 253 {
-            return Err(SecretSpecError::ProviderOperationFailed(format!(
-                "Key cannot be longer than 253 characters"
-            )));
-        }
-
-        for c in key.chars() {
-            if !c.is_ascii_alphanumeric() && c != '-' && c != '_' && c != '.' {
+        for c in component.chars() {
+            if !c.is_ascii_alphanumeric() && c != '_' && c != '-' && c != '.' {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
-                    "Name contains invalid character '{}'. \
-                    Only alphanumeric characters, hypens, underscores, and periods are allowed.",
-                    c
+                    "{} contains invalid character '{}'. \
+                    Only alphanumeric characters, underscores, periods, and hyphens are allowed",
+                    name, c
                 )));
             }
+        }
+
+        if component.starts_with('-') || component.ends_with('-') || component.contains("--") {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "{name} '{component}' cannot start or end with a hyphen or contain `--`: the \
+                 Kubernetes convention separates project, profile, and key with `--`, so only
+                 single internal hyphens stay unambiguous. Rename it and run `secretspec set` to |
+                 store the value under the new name, or address the secret with a `ref` entry."
+            )));
         }
 
         Ok(())
     }
 
     fn format_secret_name(project: &str, profile: &str, key: &str) -> Result<String> {
-        let secret_name = format!("secretspec-{}-{}-{}", project, profile, key);
-        Self::validate_key(&secret_name)?;
+        Self::validate_name_component("project", project)?;
+        Self::validate_name_component("profile", profile)?;
+        Self::validate_name_component("key", key)?;
+        let secret_name = format!("secretspec--{}--{}--{}", project, profile, key);
+        if secret_name.len() > 253 {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Key cannot be longer than 253 characters"
+            )));
+        }
         Ok(secret_name)
     }
 
@@ -419,7 +435,7 @@ mod tests {
     #[test]
     fn test_format_secret_name() {
         let name = KubernetesProvider::format_secret_name("myapp", "prod", "DB_URL").unwrap();
-        assert_eq!(name, "secretspec-myapp-prod-DB_URL");
+        assert_eq!(name, "secretspec--myapp--prod--DB_URL");
     }
 
     #[test]
@@ -432,6 +448,21 @@ mod tests {
     fn test_format_secret_name_too_long() {
         let long_key = "A".repeat(254);
         let result = KubernetesProvider::format_secret_name("myapp", "prod", &long_key);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_format_secret_name_rejects_component_with_surrounding_hyphens() {
+        let result = KubernetesProvider::format_secret_name("myapp", "prod-", "DB_URL");
+        assert!(result.is_err());
+
+        let result = KubernetesProvider::format_secret_name("myapp", "prod", "-DB_URL");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_format_secret_name_rejects_component_with_double_hyphens() {
+        let result = KubernetesProvider::format_secret_name("my--app", "prod", "DB_URL");
         assert!(result.is_err());
     }
 }

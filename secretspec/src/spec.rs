@@ -5,14 +5,14 @@
 //! an implementation detail in `config`; callers construct the same model with
 //! [`SpecBuilder`], [`Profile`], and [`Secret`].
 
+use crate::compiled_spec::CompiledSpec;
 use crate::config::{
     Config, GenerateConfig, GenerateOptions, NativeAddress, Profile as ConfigProfile,
     ProfileDefaults, Project, ProviderAlias, RequireReason, Scope, Secret as ConfigSecret,
     SecretEncoding, SecretExtract,
 };
 use crate::error::{Result, SecretSpecError};
-use crate::manifest::CompiledSpec;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -25,9 +25,16 @@ use std::str::FromStr;
 /// Available starting with SecretSpec 0.20.
 #[derive(Debug, Clone)]
 pub struct Spec {
+    /// Effective configuration after applying inheritance.
     pub(crate) config: Config,
     pub(crate) compiled: CompiledSpec,
     pub(crate) base_dir: Option<PathBuf>,
+    /// Unmerged declarations from the root spec.
+    pub(crate) root_config: Option<Config>,
+    /// Exact root document text when builder edits can preserve it.
+    pub(crate) source: Option<String>,
+    /// Root profile tables created by builder edits and removable on undo.
+    pub(crate) synthesized_profiles: HashSet<String>,
 }
 
 impl Spec {
@@ -53,7 +60,10 @@ impl Spec {
                     .to_string(),
             ));
         }
-        Self::from_config_document(config)
+        let mut spec = Self::from_config_document(config.clone())?;
+        spec.root_config = Some(config);
+        spec.source = Some(source.to_string());
+        Ok(spec)
     }
 
     /// The project name used for provider namespacing.
@@ -77,14 +87,16 @@ impl Spec {
     ///
     /// [`SpecBuilder::build`] validates and compiles the edited declarations into a
     /// new `Spec`. The original `Spec` is consumed so its declarations and compiled
-    /// view can never drift apart. Use [`Self::to_builder`] to retain it.
+    /// view can never drift apart. Secret edits to a TOML-backed spec preserve its
+    /// comments and ordering. Use [`Self::to_builder`] to retain it.
     pub fn into_builder(self) -> SpecBuilder {
         self.into()
     }
 
     /// Copy this validated specification into a builder for editing.
     ///
-    /// The original `Spec` remains unchanged. Prefer [`Self::into_builder`] when it
+    /// The original `Spec` remains unchanged. Secret edits to a TOML-backed spec
+    /// preserve its comments and ordering. Prefer [`Self::into_builder`] when it
     /// is no longer needed.
     pub fn to_builder(&self) -> SpecBuilder {
         self.into()
@@ -101,11 +113,35 @@ impl Spec {
             config,
             compiled,
             base_dir: None,
+            root_config: None,
+            source: None,
+            synthesized_profiles: HashSet::new(),
         })
     }
 
     pub(crate) fn into_parts(self) -> (Config, CompiledSpec) {
         (self.config, self.compiled)
+    }
+
+    /// The exact root TOML retained from parsing and format-preserving edits.
+    ///
+    /// This is `None` for specs built directly in Rust or after a builder
+    /// operation without format-preserving behavior.
+    ///
+    /// Available starting with SecretSpec 0.20.
+    pub fn preserved_text(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
+
+    /// Render the root specification as freshly formatted TOML. Inherited
+    /// declarations remain in their parent specs rather than being inlined.
+    ///
+    /// Use [`Self::preserved_text`] when comments and original ordering matter.
+    ///
+    /// Available starting with SecretSpec 0.20.
+    pub fn to_toml(&self) -> Result<String> {
+        toml::to_string_pretty(self.root_config.as_ref().unwrap_or(&self.config))
+            .map_err(|error| SecretSpecError::InvalidSpec(error.to_string()))
     }
 }
 
@@ -132,12 +168,24 @@ impl TryFrom<&Path> for Spec {
     ///
     /// Relative `extends` paths are resolved from the file that declares them.
     fn try_from(path: &Path) -> Result<Self> {
-        let mut spec = Self::from_config_document(Config::try_from(path)?)?;
+        // Keep the caller's lexical path (including symlink location) while
+        // making it independent from subsequent working-directory changes.
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        let config = Config::try_from(path.as_path())?;
+        let source = std::fs::read_to_string(&path)?;
+        let root_config = Config::from_str(&source)?;
+        let mut spec = Self::from_config_document(config)?;
         spec.base_dir = Some(
             path.parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from(".")),
+                .expect("an absolute spec path always has a parent")
+                .to_path_buf(),
         );
+        spec.root_config = Some(root_config);
+        spec.source = Some(source);
         Ok(spec)
     }
 }
@@ -149,6 +197,9 @@ impl TryFrom<&Path> for Spec {
 pub struct SpecBuilder {
     config: Config,
     base_dir: Option<PathBuf>,
+    root_config: Option<Config>,
+    source: Option<String>,
+    synthesized_profiles: HashSet<String>,
     errors: Vec<String>,
 }
 
@@ -165,24 +216,44 @@ impl SpecBuilder {
                 scopes: None,
             },
             base_dir: None,
+            root_config: None,
+            source: None,
+            synthesized_profiles: HashSet::new(),
             errors: Vec::new(),
         }
     }
 
     /// Set the policy for requiring an access reason.
+    ///
+    /// This semantic edit clears any retained source document.
     pub fn require_reason(mut self, policy: RequireReason) -> Self {
-        self.config.project.require_reason = Some(policy);
+        self.source = None;
+        self.declarations_mut().project.require_reason = Some(policy);
+        self.refresh_effective_config();
         self
     }
 
     /// Add a secret to the `default` profile.
+    ///
+    /// When this builder came from parsed TOML, the declaration is added without
+    /// reformatting the rest of the document.
     pub fn secret(mut self, name: impl Into<String>, secret: Secret) -> Self {
+        let name = name.into();
+        if self.try_edit_source(|source| {
+            crate::spec_edit::add_secret(source, "default", &name, &secret.config)
+        }) {
+            return self;
+        }
+
+        let mut errors = Vec::new();
         let profile = self
-            .config
+            .declarations_mut()
             .profiles
             .entry("default".to_string())
             .or_default();
-        insert_secret(profile, name.into(), secret, &mut self.errors, "default");
+        insert_secret(profile, name, secret, &mut errors, "default");
+        self.errors.extend(errors);
+        self.refresh_effective_config();
         self
     }
 
@@ -191,7 +262,8 @@ impl SpecBuilder {
     /// This is the edit-oriented counterpart to [`Self::secret`], which creates
     /// the `default` profile when needed. A missing profile or an existing
     /// declaration is reported by [`Self::build`] rather than silently creating
-    /// or replacing it.
+    /// or replacing it. When editing parsed TOML, an inherited declaration can
+    /// be overridden locally without inlining its parent document.
     pub fn add_secret(
         mut self,
         profile: impl Into<String>,
@@ -200,12 +272,28 @@ impl SpecBuilder {
     ) -> Self {
         let profile = profile.into();
         let name = name.into();
-        let Some(declarations) = self.config.profiles.get_mut(&profile) else {
+        if !self.config.profiles.contains_key(&profile) {
             self.errors.push(format!(
                 "cannot add secret '{name}': profile '{profile}' does not exist"
             ));
             return self;
-        };
+        }
+        let synthesized_profile = !self.declarations().profiles.contains_key(&profile);
+        let error_count = self.errors.len();
+        if self.try_edit_source(|source| {
+            crate::spec_edit::add_secret(source, &profile, &name, &secret.config)
+        }) {
+            if synthesized_profile && self.errors.len() == error_count {
+                self.synthesized_profiles.insert(profile);
+            }
+            return self;
+        }
+
+        let declarations = self
+            .declarations_mut()
+            .profiles
+            .entry(profile.clone())
+            .or_default();
         if declarations.secrets.contains_key(&name) {
             self.errors.push(format!(
                 "cannot add secret '{name}': profile '{profile}' already contains that declaration"
@@ -213,13 +301,18 @@ impl SpecBuilder {
             return self;
         }
         declarations.secrets.insert(name, secret.config);
+        if synthesized_profile {
+            self.synthesized_profiles.insert(profile);
+        }
+        self.refresh_effective_config();
         self
     }
 
     /// Replace an existing declaration in one profile.
     ///
     /// The replacement is not applied when either the profile or declaration is
-    /// absent; [`Self::build`] reports the collected edit error.
+    /// absent; [`Self::build`] reports the collected edit error. In parsed TOML,
+    /// the declaration keeps its position and unrelated formatting is preserved.
     pub fn replace_secret(
         mut self,
         profile: impl Into<String>,
@@ -228,7 +321,13 @@ impl SpecBuilder {
     ) -> Self {
         let profile = profile.into();
         let name = name.into();
-        let Some(declarations) = self.config.profiles.get_mut(&profile) else {
+        if self.try_edit_source(|source| {
+            crate::spec_edit::replace_secret(source, &profile, &name, &secret.config)
+        }) {
+            return self;
+        }
+
+        let Some(declarations) = self.declarations_mut().profiles.get_mut(&profile) else {
             self.errors.push(format!(
                 "cannot replace secret '{name}': profile '{profile}' does not exist"
             ));
@@ -241,6 +340,7 @@ impl SpecBuilder {
             return self;
         };
         *existing = secret.config;
+        self.refresh_effective_config();
         self
     }
 
@@ -251,10 +351,25 @@ impl SpecBuilder {
     /// declaration inherited from `default`; removing a `default` declaration
     /// also removes it from profiles that only inherited it. References from
     /// scopes, compositions, or constraints are checked again by [`Self::build`].
+    /// In parsed TOML, unrelated comments and formatting are preserved.
     pub fn remove_secret(mut self, profile: impl Into<String>, name: impl Into<String>) -> Self {
         let profile = profile.into();
         let name = name.into();
-        let Some(declarations) = self.config.profiles.get_mut(&profile) else {
+        let remove_empty_profile = self.synthesized_profiles.contains(&profile);
+        let error_count = self.errors.len();
+        if self.try_edit_source(|source| {
+            crate::spec_edit::remove_secret(source, &profile, &name, remove_empty_profile)
+        }) {
+            if remove_empty_profile
+                && self.errors.len() == error_count
+                && !self.declarations().profiles.contains_key(&profile)
+            {
+                self.synthesized_profiles.remove(&profile);
+            }
+            return self;
+        }
+
+        let Some(declarations) = self.declarations_mut().profiles.get_mut(&profile) else {
             self.errors.push(format!(
                 "cannot remove secret '{name}': profile '{profile}' does not exist"
             ));
@@ -264,12 +379,19 @@ impl SpecBuilder {
             self.errors.push(format!(
                 "cannot remove secret '{name}': profile '{profile}' does not contain that declaration"
             ));
+        } else if remove_empty_profile && declarations.secrets.is_empty() {
+            self.declarations_mut().profiles.remove(&profile);
+            self.synthesized_profiles.remove(&profile);
         }
+        self.refresh_effective_config();
         self
     }
 
     /// Add a named profile.
+    ///
+    /// This semantic edit clears any retained source document.
     pub fn profile(mut self, name: impl Into<String>, profile: Profile) -> Self {
+        self.source = None;
         let name = name.into();
         self.errors.extend(
             profile
@@ -278,41 +400,56 @@ impl SpecBuilder {
                 .map(|error| format!("profile '{name}': {error}")),
         );
         if self
-            .config
+            .declarations_mut()
             .profiles
             .insert(name.clone(), profile.config)
             .is_some()
         {
             self.errors.push(format!("duplicate profile '{name}'"));
         }
+        self.refresh_effective_config();
         self
     }
 
     /// Define a project-local provider alias.
+    ///
+    /// This semantic edit clears any retained source document.
     pub fn provider(mut self, name: impl Into<String>, provider: impl Into<ProviderAlias>) -> Self {
+        self.source = None;
         let name = name.into();
-        let providers = self.config.providers.get_or_insert_with(HashMap::new);
+        let providers = self
+            .declarations_mut()
+            .providers
+            .get_or_insert_with(HashMap::new);
         if providers.insert(name.clone(), provider.into()).is_some() {
             self.errors
                 .push(format!("duplicate provider alias '{name}'"));
         }
+        self.refresh_effective_config();
         self
     }
 
     /// Define a named, membership-only subset of secrets.
+    ///
+    /// This semantic edit clears any retained source document.
     pub fn scope<I, S>(mut self, name: impl Into<String>, secrets: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
+        self.source = None;
         let name = name.into();
-        let scopes = self.config.scopes.get_or_insert_with(HashMap::new);
+        let scopes = self
+            .declarations_mut()
+            .scopes
+            .get_or_insert_with(HashMap::new);
         let scope = Scope {
             secrets: secrets.into_iter().map(Into::into).collect(),
         };
         if scopes.insert(name.clone(), scope).is_some() {
             self.errors.push(format!("duplicate scope '{name}'"));
         }
+        self.refresh_effective_config();
         self
     }
 
@@ -323,7 +460,71 @@ impl SpecBuilder {
         }
         let mut spec = Spec::from_config_document(self.config)?;
         spec.base_dir = self.base_dir;
+        spec.root_config = self.root_config;
+        spec.source = self.source;
+        spec.synthesized_profiles = self.synthesized_profiles;
         Ok(spec)
+    }
+
+    /// Apply an edit to retained TOML and refresh the merged semantic model.
+    /// `true` means a source-backed edit was attempted, including an error
+    /// deferred to [`Self::build`].
+    fn try_edit_source<F>(&mut self, edit: F) -> bool
+    where
+        F: FnOnce(&str) -> miette::Result<String>,
+    {
+        let Some(source) = self.source.as_deref() else {
+            return false;
+        };
+        let edited = match edit(source) {
+            Ok(edited) => edited,
+            Err(error) => {
+                self.errors.push(error.to_string());
+                return true;
+            }
+        };
+        let root_config = match Config::from_str(&edited) {
+            Ok(config) => config,
+            Err(error) => {
+                self.errors.push(error.to_string());
+                return true;
+            }
+        };
+        let config = match self.base_dir.as_deref() {
+            Some(base_dir) => Config::from_root_in(root_config.clone(), base_dir),
+            None => Ok(root_config.clone()),
+        };
+        match config {
+            Ok(config) => {
+                self.config = config;
+                self.root_config = Some(root_config);
+                self.source = Some(edited);
+            }
+            Err(error) => self.errors.push(error.to_string()),
+        }
+        true
+    }
+
+    fn declarations(&self) -> &Config {
+        self.root_config.as_ref().unwrap_or(&self.config)
+    }
+
+    fn declarations_mut(&mut self) -> &mut Config {
+        self.root_config.as_mut().unwrap_or(&mut self.config)
+    }
+
+    fn refresh_effective_config(&mut self) {
+        let Some(root_config) = self.root_config.clone() else {
+            return;
+        };
+        let config = match self.base_dir.as_deref() {
+            Some(base_dir) => Config::from_root_in(root_config, base_dir),
+            None => Ok(root_config),
+        };
+        match config {
+            Ok(config) => self.config = config,
+            Err(error) => self.errors.push(error.to_string()),
+        }
     }
 }
 
@@ -332,6 +533,9 @@ impl From<Spec> for SpecBuilder {
         Self {
             config: spec.config,
             base_dir: spec.base_dir,
+            root_config: spec.root_config,
+            source: spec.source,
+            synthesized_profiles: spec.synthesized_profiles,
             errors: Vec::new(),
         }
     }
@@ -342,6 +546,9 @@ impl From<&Spec> for SpecBuilder {
         Self {
             config: spec.config.clone(),
             base_dir: spec.base_dir.clone(),
+            root_config: spec.root_config.clone(),
+            source: spec.source.clone(),
+            synthesized_profiles: spec.synthesized_profiles.clone(),
             errors: Vec::new(),
         }
     }
@@ -959,6 +1166,30 @@ mod tests {
     }
 
     #[test]
+    fn whitespace_descriptions_have_the_same_semantics_for_every_builder_origin() {
+        let parsed = Spec::from_toml(
+            r#"
+                [project]
+                name = "parsed"
+                revision = "1.0"
+
+                [profiles.default]
+                TOKEN = { description = "token" }
+            "#,
+        )
+        .unwrap()
+        .into_builder()
+        .add_secret("default", "SPACE", Secret::required(" "))
+        .build();
+        let rust_built = Spec::builder("rust")
+            .secret("SPACE", Secret::required(" "))
+            .build();
+
+        assert!(parsed.is_ok());
+        assert!(rust_built.is_ok());
+    }
+
+    #[test]
     fn profile_required_default_applies_to_secrets_that_inherit_it() {
         let declaration = Secret::new("Deployment token");
         assert_eq!(declaration.required_setting(), None);
@@ -1023,5 +1254,416 @@ mod tests {
         };
         assert_eq!(options.length, Some(48));
         assert_eq!(options.charset.as_deref(), Some("ascii"));
+    }
+
+    mod format_preserving_edits {
+        use super::*;
+
+        const SPEC_TEXT: &str = r#"[project]
+name = "demo"
+revision = "1.0"
+
+# Team convention: transport secrets first.
+[profiles.default]
+ZULU = { description = "sorts last on purpose" }
+ALPHA = { description = "sorts first on purpose" } # Keep this explanation.
+
+[profiles.default.NESTED]
+description = "declared as a full table"
+required = false
+"#;
+
+        #[test]
+        fn parsed_specs_retain_their_exact_root_text() {
+            let spec = Spec::from_toml(SPEC_TEXT).unwrap();
+
+            assert_eq!(spec.preserved_text(), Some(SPEC_TEXT));
+        }
+
+        #[test]
+        fn chained_add_and_remove_restore_the_original_bytes() {
+            let restored = Spec::from_toml(SPEC_TEXT)
+                .unwrap()
+                .to_builder()
+                .add_secret("default", "SCRATCH", Secret::required("temporary"))
+                .replace_secret("default", "SCRATCH", Secret::optional("replacement"))
+                .remove_secret("default", "SCRATCH")
+                .build()
+                .unwrap();
+
+            assert_eq!(restored.preserved_text(), Some(SPEC_TEXT));
+        }
+
+        #[test]
+        fn edits_preserve_comments_ordering_and_unrelated_table_shapes() {
+            let original = Spec::from_toml(SPEC_TEXT).unwrap();
+            let edited = original
+                .to_builder()
+                .add_secret("default", "SCRATCH", Secret::required("temporary"))
+                .replace_secret("default", "ALPHA", Secret::optional("replacement"))
+                .build()
+                .unwrap();
+            let text = edited.preserved_text().unwrap();
+
+            assert!(text.contains("# Team convention:"), "{text}");
+            assert!(text.contains("# Keep this explanation."), "{text}");
+            assert!(
+                text.find("ZULU").unwrap() < text.find("ALPHA").unwrap(),
+                "replacement moved the declaration: {text}"
+            );
+            assert!(text.contains("[profiles.default.NESTED]"), "{text}");
+            assert!(text.contains("replacement"), "{text}");
+            assert!(
+                edited
+                    .secrets("default")
+                    .unwrap()
+                    .any(|name| name == "SCRATCH")
+            );
+            assert!(
+                !original
+                    .secrets("default")
+                    .unwrap()
+                    .any(|name| name == "SCRATCH")
+            );
+        }
+
+        #[test]
+        fn complete_secret_declarations_round_trip_through_the_editor() {
+            let added = Spec::from_toml(SPEC_TEXT)
+                .unwrap()
+                .to_builder()
+                .add_secret(
+                    "default",
+                    "RICH",
+                    Secret::required("fully specified")
+                        .providers(["env", "keyring"])
+                        .as_path(true)
+                        .reference(NativeAddress {
+                            item: "db".into(),
+                            field: Some("password".into()),
+                            ..NativeAddress::default()
+                        }),
+                )
+                .build()
+                .unwrap();
+            let text = added.preserved_text().unwrap();
+
+            assert!(text.contains(r#"providers = ["env", "keyring"]"#), "{text}");
+            assert!(text.contains("as_path = true"), "{text}");
+            assert!(text.contains(r#"item = "db""#), "{text}");
+            assert!(text.contains(r#"field = "password""#), "{text}");
+        }
+
+        #[test]
+        fn invalid_source_edits_are_reported_by_build() {
+            let spec = Spec::from_toml(SPEC_TEXT).unwrap();
+
+            let duplicate = spec
+                .to_builder()
+                .add_secret("default", "ALPHA", Secret::required("duplicate"))
+                .build()
+                .unwrap_err();
+            assert!(duplicate.to_string().contains("already declared"));
+
+            let absent = spec
+                .to_builder()
+                .remove_secret("default", "ABSENT")
+                .build()
+                .unwrap_err();
+            assert!(absent.to_string().contains("not declared"));
+
+            let invalid = spec
+                .to_builder()
+                .add_secret(
+                    "default",
+                    "COMPOSED",
+                    Secret::required("bad template").composed("${NO_SUCH_SECRET}"),
+                )
+                .build()
+                .unwrap_err();
+            assert!(invalid.to_string().contains("NO_SUCH_SECRET"));
+        }
+
+        #[test]
+        fn semantic_only_builder_operations_clear_preserved_text() {
+            let edited = Spec::from_toml(SPEC_TEXT)
+                .unwrap()
+                .to_builder()
+                .require_reason(RequireReason::Always)
+                .build()
+                .unwrap();
+
+            assert_eq!(edited.preserved_text(), None);
+            assert!(edited.to_toml().unwrap().contains("require_reason = true"));
+        }
+
+        #[test]
+        fn rust_built_specs_render_without_claiming_to_preserve_text() {
+            let spec = Spec::builder("embedded")
+                .secret("TOKEN", Secret::required("API token"))
+                .build()
+                .unwrap();
+
+            assert_eq!(spec.preserved_text(), None);
+            assert!(spec.to_toml().unwrap().contains("TOKEN"));
+        }
+    }
+
+    mod format_preserving_edits_with_inheritance {
+        use super::*;
+        use std::fs;
+
+        fn project_with_parent() -> tempfile::TempDir {
+            let dir = tempfile::tempdir().unwrap();
+            fs::write(
+                dir.path().join("base.toml"),
+                r#"[project]
+name = "demo"
+revision = "1.0"
+
+[profiles.default]
+INHERITED = { description = "declared by the parent" }
+"#,
+            )
+            .unwrap();
+            fs::write(
+                dir.path().join("secretspec.toml"),
+                r#"[project]
+name = "demo"
+revision = "1.0"
+extends = ["base.toml"]
+
+[profiles.default]
+OWN = { description = "declared by the child" }
+"#,
+            )
+            .unwrap();
+            dir
+        }
+
+        #[test]
+        fn edits_keep_the_root_document_separate_from_its_parents() {
+            let dir = project_with_parent();
+            let spec = Spec::try_from(dir.path().join("secretspec.toml").as_path()).unwrap();
+            let original = spec.preserved_text().unwrap().to_string();
+
+            assert!(!original.contains("INHERITED"));
+            assert!(
+                spec.secrets("default")
+                    .unwrap()
+                    .any(|name| name == "INHERITED")
+            );
+
+            let added = spec
+                .to_builder()
+                .add_secret("default", "SCRATCH", Secret::required("temporary"))
+                .build()
+                .unwrap();
+            assert!(!added.preserved_text().unwrap().contains("INHERITED"));
+            assert!(
+                added
+                    .secrets("default")
+                    .unwrap()
+                    .any(|name| name == "INHERITED")
+            );
+            assert!(
+                added
+                    .secrets("default")
+                    .unwrap()
+                    .any(|name| name == "SCRATCH")
+            );
+        }
+
+        #[test]
+        fn inherited_declarations_can_be_overridden_then_revealed_again() {
+            let dir = project_with_parent();
+            let spec = Spec::try_from(dir.path().join("secretspec.toml").as_path()).unwrap();
+            let original = spec.preserved_text().unwrap().to_string();
+
+            let overridden = spec
+                .to_builder()
+                .add_secret(
+                    "default",
+                    "INHERITED",
+                    Secret::required("declared by the child"),
+                )
+                .build()
+                .unwrap();
+            assert_eq!(
+                overridden.compiled.profiles["default"].secrets["INHERITED"]
+                    .config
+                    .description
+                    .as_deref(),
+                Some("declared by the child")
+            );
+
+            let restored = overridden
+                .into_builder()
+                .remove_secret("default", "INHERITED")
+                .build()
+                .unwrap();
+            assert_eq!(restored.preserved_text(), Some(original.as_str()));
+            assert_eq!(
+                restored.compiled.profiles["default"].secrets["INHERITED"]
+                    .config
+                    .description
+                    .as_deref(),
+                Some("declared by the parent")
+            );
+        }
+
+        #[test]
+        fn inherited_declarations_cannot_be_removed_from_the_child() {
+            let dir = project_with_parent();
+            let spec = Spec::try_from(dir.path().join("secretspec.toml").as_path()).unwrap();
+
+            let error = spec
+                .to_builder()
+                .remove_secret("default", "INHERITED")
+                .build()
+                .unwrap_err();
+
+            assert!(error.to_string().contains("not declared"));
+        }
+
+        #[test]
+        fn semantic_edits_keep_root_declaration_provenance() {
+            let dir = project_with_parent();
+            let spec = Spec::try_from(dir.path().join("secretspec.toml").as_path()).unwrap();
+
+            let overridden = spec
+                .to_builder()
+                .require_reason(RequireReason::Always)
+                .add_secret(
+                    "default",
+                    "INHERITED",
+                    Secret::required("declared by the child"),
+                )
+                .build()
+                .unwrap();
+            let rendered = overridden.to_toml().unwrap();
+            assert!(rendered.contains("extends = [\"base.toml\"]"), "{rendered}");
+            assert_eq!(rendered.matches("INHERITED").count(), 1, "{rendered}");
+
+            let revealed = overridden
+                .into_builder()
+                .remove_secret("default", "INHERITED")
+                .build()
+                .unwrap();
+            assert_eq!(
+                revealed.compiled.profiles["default"].secrets["INHERITED"]
+                    .config
+                    .description
+                    .as_deref(),
+                Some("declared by the parent")
+            );
+
+            let error = spec
+                .into_builder()
+                .require_reason(RequireReason::Always)
+                .remove_secret("default", "INHERITED")
+                .build()
+                .unwrap_err();
+            assert!(error.to_string().contains("not contain that declaration"));
+        }
+
+        #[test]
+        fn relative_loads_keep_resolving_extends_after_cwd_changes() {
+            let _cwd = crate::secrets::lock_cwd();
+            let workspace = tempfile::tempdir().unwrap();
+            let project = workspace.path().join("project");
+            let elsewhere = workspace.path().join("elsewhere");
+            fs::create_dir_all(&project).unwrap();
+            fs::create_dir_all(&elsewhere).unwrap();
+            fs::write(
+                project.join("base.toml"),
+                r#"[project]
+name = "demo"
+revision = "1.0"
+
+[profiles.default]
+INHERITED = { description = "parent" }
+"#,
+            )
+            .unwrap();
+            fs::write(
+                project.join("secretspec.toml"),
+                r#"[project]
+name = "demo"
+revision = "1.0"
+extends = ["base.toml"]
+
+[profiles.default]
+OWN = { description = "child" }
+"#,
+            )
+            .unwrap();
+
+            let original_cwd = std::env::current_dir().unwrap();
+            std::env::set_current_dir(workspace.path()).unwrap();
+            let spec = Spec::try_from(Path::new("project/secretspec.toml")).unwrap();
+            std::env::set_current_dir(&elsewhere).unwrap();
+            let edited = spec
+                .into_builder()
+                .add_secret("default", "ADDED", Secret::required("added"))
+                .build();
+            std::env::set_current_dir(original_cwd).unwrap();
+
+            let edited = edited.unwrap();
+            assert!(
+                edited
+                    .secrets("default")
+                    .unwrap()
+                    .any(|name| name == "INHERITED")
+            );
+        }
+
+        #[test]
+        fn undoing_an_add_removes_only_synthesized_profile_tables() {
+            let dir = project_with_parent();
+            fs::write(
+                dir.path().join("base.toml"),
+                r#"[project]
+name = "demo"
+revision = "1.0"
+
+[profiles.default]
+INHERITED = { description = "declared by the parent" }
+
+[profiles.production]
+PRODUCTION = { description = "parent-only profile" }
+"#,
+            )
+            .unwrap();
+            let spec = Spec::try_from(dir.path().join("secretspec.toml").as_path()).unwrap();
+            let original = spec.preserved_text().unwrap().to_string();
+
+            let restored = spec
+                .into_builder()
+                .add_secret("production", "SCRATCH", Secret::required("temporary"))
+                .add_secret("production", "SECOND", Secret::required("temporary"))
+                .build()
+                .unwrap()
+                .into_builder()
+                .remove_secret("production", "SCRATCH")
+                .remove_secret("production", "SECOND")
+                .build()
+                .unwrap();
+            assert_eq!(restored.preserved_text(), Some(original.as_str()));
+
+            let spec_with_empty_profile = original + "\n[profiles.production]\n";
+            fs::write(dir.path().join("secretspec.toml"), &spec_with_empty_profile).unwrap();
+            let restored = Spec::try_from(dir.path().join("secretspec.toml").as_path())
+                .unwrap()
+                .into_builder()
+                .add_secret("production", "SCRATCH", Secret::required("temporary"))
+                .remove_secret("production", "SCRATCH")
+                .build()
+                .unwrap();
+            assert_eq!(
+                restored.preserved_text(),
+                Some(spec_with_empty_profile.as_str())
+            );
+        }
     }
 }

@@ -33,8 +33,8 @@
 //! DATABASE_URL = { description = "Production database", required = true }
 //! ```
 
+use crate::compiled_spec::CompiledSpec;
 use crate::composition::Template;
-use crate::manifest::CompiledSpec;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
 use std::fs;
@@ -888,12 +888,12 @@ fn validate_compiled_profile(
 
 fn validate_profile_constraints(
     profile_name: &str,
-    profile: &crate::manifest::CompiledProfile,
+    profile: &crate::compiled_spec::CompiledProfile,
 ) -> Result<(), ParseError> {
     fn validate_groups(
         profile_name: &str,
         kind: &str,
-        groups: &[crate::manifest::CompiledConstraintGroup],
+        groups: &[crate::compiled_spec::CompiledConstraintGroup],
     ) -> Result<(), ParseError> {
         for group in groups {
             if group.members.len() < 2 {
@@ -940,7 +940,7 @@ fn validate_profile_constraints(
 
 fn validate_composition_graph(
     profile_name: &str,
-    profile: &crate::manifest::CompiledProfile,
+    profile: &crate::compiled_spec::CompiledProfile,
 ) -> Result<(), ParseError> {
     // Templates were parsed during manifest compilation; a malformed one was
     // already rejected by `validate_semantics` before this runs.
@@ -1031,6 +1031,24 @@ impl ConfigGraphLoader {
         Ok(merged)
     }
 
+    fn visit_extends(&mut self, config: &Config, base_dir: &Path) -> Result<(), ParseError> {
+        for extend_path in config.project.extends.iter().flatten() {
+            let joined_path = base_dir.join(extend_path);
+            let full_path = if extend_path.ends_with(".toml") {
+                joined_path
+            } else {
+                joined_path.join("secretspec.toml")
+            };
+            if !full_path.exists() {
+                return Err(ParseError::ExtendedConfigNotFound(
+                    full_path.display().to_string(),
+                ));
+            }
+            self.visit(&full_path)?;
+        }
+        Ok(())
+    }
+
     fn visit(&mut self, path: &Path) -> Result<(), ParseError> {
         let canonical_path = path.canonicalize().map_err(|e| {
             ParseError::Io(io::Error::new(
@@ -1056,20 +1074,7 @@ impl ConfigGraphLoader {
         // relative to the symlink, not to the file it points at. Cycle detection
         // and dedup still key on `canonical_path`.
         let base_dir = path.parent().unwrap_or(Path::new("."));
-        for extend_path in config.project.extends.iter().flatten() {
-            let joined_path = base_dir.join(extend_path);
-            let full_path = if extend_path.ends_with(".toml") {
-                joined_path
-            } else {
-                joined_path.join("secretspec.toml")
-            };
-            if !full_path.exists() {
-                return Err(ParseError::ExtendedConfigNotFound(
-                    full_path.display().to_string(),
-                ));
-            }
-            self.visit(&full_path)?;
-        }
+        self.visit_extends(&config, base_dir)?;
 
         self.active.remove(&canonical_path);
         self.emitted.insert(canonical_path);
@@ -1098,6 +1103,28 @@ impl TryFrom<&Path> for Config {
     /// This supports configuration inheritance via `extends` and circular dependency detection.
     fn try_from(path: &Path) -> Result<Self, Self::Error> {
         ConfigGraphLoader::load(path)
+    }
+}
+
+impl Config {
+    /// Merge an already parsed root document with its `extends` from `base_dir`.
+    pub(crate) fn from_root_in(root: Self, base_dir: &Path) -> Result<Self, ParseError> {
+        let mut loader = ConfigGraphLoader {
+            active: HashSet::new(),
+            emitted: HashSet::new(),
+            documents: Vec::new(),
+        };
+        loader.visit_extends(&root, base_dir)?;
+
+        let mut documents = loader.documents.into_iter();
+        let Some(mut merged) = documents.next() else {
+            return Ok(root);
+        };
+        for document in documents {
+            merged.overlay_with(document);
+        }
+        merged.overlay_with(root);
+        Ok(merged)
     }
 }
 
@@ -2252,7 +2279,7 @@ impl Secret {
         self.validate_semantics()
     }
 
-    fn validate_description(&self) -> Result<(), String> {
+    pub(crate) fn validate_description(&self) -> Result<(), String> {
         match self.description.as_deref() {
             Some("") => Err("description cannot be empty".into()),
             None => Err("missing description".into()),

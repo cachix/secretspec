@@ -24,7 +24,7 @@ keeper-secrets-manager-core = { version = "17.3.0", default-features = false, fe
 libc = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.9"
-toml_edit = "0.23"
+toml_edit = { version = "0.23", features = ["serde"] }
 thiserror = "2.0"
 etcetera = "0.11"
 colored = "3.0"

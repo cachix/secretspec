@@ -3,12 +3,12 @@
 use crate::CallerContext;
 use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
 use crate::cache::{self, CacheEntryStatus, CacheOwnership};
+use crate::compiled_spec::{CompiledSpec, MissingPolicy};
 use crate::config::{
     Config, CredentialSource, ExtractFormat, GlobalConfig, NativeAddress, Profile, ProviderAlias,
     RequireReason, Resolved, SecretEncoding, SecretExtract,
 };
 use crate::error::{Result, SecretSpecError};
-use crate::manifest::{CompiledSpec, MissingPolicy};
 use crate::plan::{PlannedSecret, ResolutionPlan, ResolvedCache, Route};
 use crate::provider::{
     Address, OwnedAddress, ProducedValuePersistence, Provider as ProviderTrait,
@@ -2140,7 +2140,7 @@ impl Secrets {
     fn accessed_names(&self, profile_name: &str, visible: &[String]) -> Vec<String> {
         fn visit(
             name: &str,
-            profile: &crate::manifest::CompiledProfile,
+            profile: &crate::compiled_spec::CompiledProfile,
             acc: &mut HashSet<String>,
         ) {
             if !acc.insert(name.to_string()) {
@@ -5111,7 +5111,7 @@ impl Secrets {
     fn composed_dependency_names(&self, target: &str, profile_name: &str) -> Vec<String> {
         fn visit(
             name: &str,
-            profile: &crate::manifest::CompiledProfile,
+            profile: &crate::compiled_spec::CompiledProfile,
             names: &mut HashSet<String>,
         ) {
             if !names.insert(name.to_string()) {
@@ -5155,7 +5155,7 @@ impl Secrets {
 
         fn visit(
             name: &str,
-            profile: &crate::manifest::CompiledProfile,
+            profile: &crate::compiled_spec::CompiledProfile,
             statuses: &HashMap<&str, &ResolutionStatus>,
             promptable: &mut HashSet<String>,
         ) {

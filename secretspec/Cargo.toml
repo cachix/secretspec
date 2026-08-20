@@ -25,7 +25,7 @@ keepass = { workspace = true, optional = true }
 keeper-secrets-manager-core = { workspace = true, optional = true }
 serde.workspace = true
 toml.workspace = true
-toml_edit = { workspace = true, optional = true }
+toml_edit.workspace = true
 thiserror.workspace = true
 etcetera.workspace = true
 colored.workspace = true
@@ -64,7 +64,7 @@ libc.workspace = true
 
 [features]
 default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "bw", "age", "scaleway", "sops"]
-cli = ["dep:toml_edit", "dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable"]
+cli = ["dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
 keeper = ["dep:keeper-secrets-manager-core"]

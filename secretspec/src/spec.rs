@@ -83,6 +83,21 @@ impl Spec {
             .map(|profile| profile.secrets.keys().map(String::as_str))
     }
 
+    /// Emit a JSON Schema for this specification's typed shape.
+    ///
+    /// `None` emits the union `SecretSpec`, which is safe for any profile.
+    /// `Some(profile)` emits that profile's effective fields, including fields
+    /// inherited from `default`.
+    ///
+    /// This reads declarations only and never resolves secret values or contacts
+    /// a provider.
+    ///
+    /// Available starting with SecretSpec 0.20.
+    pub fn schema_json(&self, profile: Option<&str>) -> Result<String> {
+        crate::codegen::schema::emit(&crate::codegen::build_ir(self), profile)
+            .map_err(SecretSpecError::InvalidProfile)
+    }
+
     /// Consume this validated specification and reopen its declarations for editing.
     ///
     /// [`SpecBuilder::build`] validates and compiles the edited declarations into a

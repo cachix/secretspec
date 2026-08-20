@@ -357,7 +357,8 @@ impl Provider for KubernetesProvider {
         block_on(self.set_secret_async(&coords.item, value))
     }
 
-    fn check_writable(&self, _addr: Address<'_>) -> Result<()> {
+    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+        self.resolve_coords(addr)?;
         let can_i_patch = block_on(self.can_i_patch())?;
         if !can_i_patch {
             let err_msg = if let Some(namespace) = &self.config.namespace {

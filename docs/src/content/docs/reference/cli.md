@@ -511,6 +511,12 @@ terminal exists, `run` fails before starting the child. Only declarations with
 `prompt = true` opt into this behavior; ordinary missing secrets still fail
 without a prompt.
 
+On Unix, SecretSpec 0.20+ forwards `SIGTERM`, `SIGINT`, and `SIGHUP` to the
+started command. This lets applications run their graceful-shutdown handlers
+when `secretspec run` is a container entrypoint, including when SecretSpec is
+PID 1. If the command is terminated by a signal, `run` exits with the
+conventional `128 + signal` status (for example, 143 for `SIGTERM`).
+
 The `--provider` override applies to every secret, including those with a
 [`ref`](/reference/configuration/#secret-references) field: refs are redirected
 to the overriding provider just like convention secrets. This makes it easy to

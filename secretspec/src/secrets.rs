@@ -25,13 +25,84 @@ use data_encoding::{
     BASE64, BASE64_NOPAD, BASE64URL, BASE64URL_NOPAD, Encoding, HEXLOWER, HEXLOWER_PERMISSIVE,
 };
 use secrecy::{ExposeSecret, SecretSlice, SecretString};
+#[cfg(unix)]
+use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
+#[cfg(unix)]
+use signal_hook::iterator::{Handle as SignalHandle, Signals};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use std::sync::{Arc, Mutex};
+#[cfg(unix)]
+use std::thread::JoinHandle;
 use std::time::Duration;
+
+#[cfg(unix)]
+struct ChildSignalForwarder {
+    signals: Option<Signals>,
+    handle: SignalHandle,
+    thread: Option<JoinHandle<()>>,
+}
+
+#[cfg(unix)]
+impl ChildSignalForwarder {
+    /// Install handlers before spawning the child so a signal cannot slip
+    /// through while SecretSpec is becoming the child's supervisor.
+    fn prepare() -> io::Result<Self> {
+        let signals = Signals::new([SIGTERM, SIGINT, SIGHUP])?;
+        let handle = signals.handle();
+        Ok(Self {
+            signals: Some(signals),
+            handle,
+            thread: None,
+        })
+    }
+
+    fn start(&mut self, child_pid: u32) {
+        let mut signals = self
+            .signals
+            .take()
+            .expect("signal forwarder can only be started once");
+        self.thread = Some(std::thread::spawn(move || {
+            for signal in signals.forever() {
+                // `kill` is async-signal-safe, and this call runs on an ordinary
+                // thread rather than inside the installed signal handler. The
+                // child may already have exited, in which case ESRCH is benign.
+                unsafe {
+                    libc::kill(child_pid as libc::pid_t, signal);
+                }
+            }
+        }));
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ChildSignalForwarder {
+    fn drop(&mut self) {
+        self.handle.close();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn command_exit_code(status: ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return 128 + signal;
+        }
+    }
+
+    1
+}
 
 /// Format the human-facing name and optional description used by status output.
 ///
@@ -6095,6 +6166,12 @@ impl Secrets {
             cmd.env_remove(key);
         }
 
+        // Set up Unix signal handling before `spawn`: when SecretSpec is PID 1,
+        // the kernel ignores terminating signals with their default disposition,
+        // and any signal received in a post-spawn setup window would be lost.
+        #[cfg(unix)]
+        let mut signal_forwarder = ChildSignalForwarder::prepare()?;
+
         // Spawn (rather than `status`) so the Run event is recorded the moment the
         // child starts, before the potentially long-running wait. A long-lived
         // command (e.g. a dev server) would otherwise not be logged until it exits,
@@ -6121,8 +6198,12 @@ impl Secrets {
             },
         );
 
-        let status = child?.wait()?;
-        Ok(status.code().unwrap_or(1))
+        let mut child = child?;
+        #[cfg(unix)]
+        signal_forwarder.start(child.id());
+
+        let status = child.wait()?;
+        Ok(command_exit_code(status))
     }
 
     /// Resolves every secret for the active profile and emits them in `format`,

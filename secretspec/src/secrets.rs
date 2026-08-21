@@ -532,9 +532,11 @@ enum Materialize {
     /// controlling-terminal input for declarations with `prompt = true`.
     Run,
     /// Value-free pass: never write a generated secret back to a provider and
-    /// never persist a secret to disk. A generatable-but-absent secret is still
-    /// reported as it *would* resolve, without minting it. Backs `report()` and
-    /// `resolve_without_values()`.
+    /// never persist a secret to disk. A generatable-but-absent secret is
+    /// reported as it *would* resolve, without minting it — unless it is
+    /// required and its store would keep the minted value, in which case the
+    /// value is simply not provisioned yet and is reported missing. Backs
+    /// `report()` and `resolve_without_values()`.
     None,
 }
 
@@ -4473,6 +4475,27 @@ impl Secrets {
         Ok(())
     }
 
+    /// Whether a generated value for this secret would outlive the resolution
+    /// that mints it, i.e. whether its write route actually stores it.
+    ///
+    /// Capability inspection only: `generated_value_persistence` is documented
+    /// as pure, so this asks the store nothing over the wire and mints nothing.
+    /// A store that cannot even be built cannot be shown to be ephemeral, so it
+    /// counts as storing — the answer that reports a required secret as missing
+    /// rather than promising a value that may never materialize.
+    fn generated_value_is_stored(&self, planned: &PlannedSecret, profile_name: &str) -> bool {
+        planned
+            .route
+            .as_ref()
+            .and_then(|route| {
+                self.write_provider_for_route(route, Some(profile_name))
+                    .ok()
+            })
+            .is_none_or(|backend| {
+                backend.generated_value_persistence() == ProducedValuePersistence::Persist
+            })
+    }
+
     /// Attempts to generate a secret if it has generation config.
     ///
     /// Returns `Ok(Some(value))` if generation succeeded,
@@ -5104,8 +5127,11 @@ impl Secrets {
     /// This pass is value-free and side-effect-free: it never mints or stores a
     /// generatable secret and never writes an `as_path` temp file. A secret that
     /// *would* be generated on a real resolve is reported as resolved
-    /// (`generated`), so the report still answers "would this resolve" without
-    /// mutating any provider or touching disk.
+    /// (`generated`) when generation is how its value is meant to appear — an
+    /// optional secret, or a store that never retains a generated value. A
+    /// required secret whose store keeps what it mints is reported
+    /// `MissingRequired` until a pass actually provisions it, so this preflight
+    /// never reports a value the store does not hold.
     pub fn report(&self) -> Result<ResolutionReport> {
         let mut report = match self.validate_audited(true, Materialize::None)? {
             Ok(validated) => validated.report(),
@@ -5760,11 +5786,21 @@ impl Secrets {
                                 }
                             }
                             MissingPolicy::Generate => {
-                                // A full pass mints and stores; a value-free pass
-                                // reports that generation would resolve without
-                                // performing that side effect.
-                                generated = true;
+                                // A full pass mints and stores.
+                                //
+                                // A value-free pass must not answer for a value
+                                // nobody has provisioned. A required secret whose
+                                // store keeps what it mints has no value until
+                                // some pass writes one, so the preflight reports
+                                // it missing instead of promising it resolves —
+                                // otherwise `check --no-prompt` passes while the
+                                // store is still empty. Where generation *is* how
+                                // the value is meant to appear — an optional
+                                // secret, or a store that never retains a
+                                // generated value — resolution genuinely succeeds
+                                // and the report says so.
                                 if materialize.values() {
+                                    generated = true;
                                     let generated_value = self
                                         .try_generate_secret(planned, profile)?
                                         .expect("compiled Generate policy has a generator");
@@ -5776,8 +5812,16 @@ impl Secrets {
                                         generated_value,
                                         ResolvedRepresentation::Logical,
                                     )?;
+                                    status = ResolutionStatus::Resolved;
+                                } else if required
+                                    && self.generated_value_is_stored(planned, profile)
+                                {
+                                    missing_required.push(name.clone());
+                                    status = ResolutionStatus::MissingRequired;
+                                } else {
+                                    generated = true;
+                                    status = ResolutionStatus::Resolved;
                                 }
-                                status = ResolutionStatus::Resolved;
                             }
                             MissingPolicy::UseDefault => {
                                 let default_value = planned

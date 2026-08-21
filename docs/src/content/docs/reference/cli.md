@@ -342,10 +342,23 @@ profile:  development
 provider: keyring://
   DATABASE_URL        ok        source keyring://
   DEV_SESSION_SECRET  ok        default value
-  JWT_SECRET          ok        generated
+  JWT_SECRET          ok        will generate
   SENTRY_DSN          missing   optional
   STRIPE_KEY          MISSING   required
 ```
+
+Both surfaces resolve without minting anything, so a `generate` secret that no
+provider holds yet reads as `will generate` rather than as an existing value.
+
+Since SecretSpec 0.20, a **required** `generate` secret is reported as
+`MISSING   required` while no provider holds it, and both surfaces exit
+non-zero. The value does not exist until a pass writes it, so a preflight that
+called it resolved would pass while the store is still empty. Run
+`secretspec check` (or `secretspec run`) once to mint and store it; afterwards
+the preflight reports it as resolved from its provider. `will generate` is
+reserved for the cases where nothing has to be provisioned: an optional
+`generate` secret, or a provider such as [`null`](/providers/null/) that never
+retains a generated value and therefore mints a fresh one every resolution.
 
 `--json` emits a versioned, machine-readable object for tooling and CI. Each
 entry reports the `status` (`resolved`, `missing_required`, `missing_optional`),

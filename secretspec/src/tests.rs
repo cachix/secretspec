@@ -1213,10 +1213,11 @@ fn test_report_lists_missing_required_without_failing() {
     assert_eq!(status("MISSING"), Some(ResolutionStatus::MissingRequired));
 }
 
-/// A generatable secret with no stored value must be reported by the value-free
-/// surfaces (`report()`, `resolve_without_values()`) as *would-generate* without
-/// actually minting and storing it — a read-only preflight must not mutate the
-/// provider. The full `resolve()` still generates and writes.
+/// An *optional* generatable secret with no stored value must be reported by the
+/// value-free surfaces (`report()`, `resolve_without_values()`) as
+/// *would-generate* without actually minting and storing it — a read-only
+/// preflight must not mutate the provider. The full `resolve()` still generates
+/// and writes.
 #[test]
 fn test_value_free_surfaces_do_not_generate_or_store() {
     use crate::config::GenerateConfig;
@@ -1232,7 +1233,7 @@ fn test_value_free_surfaces_do_not_generate_or_store() {
         "SESSION_KEY".to_string(),
         Secret {
             description: Some("generated".to_string()),
-            required: Some(true),
+            required: Some(false),
             secret_type: Some("hex".to_string()),
             generate: Some(GenerateConfig::Bool(true)),
             ..Default::default()
@@ -1280,10 +1281,9 @@ fn test_value_free_surfaces_do_not_generate_or_store() {
     );
 }
 
-/// The value-free `report()` over a read-only provider must succeed (a missing
-/// generatable secret is reported as would-generate) rather than failing because
-/// a generated value cannot be stored. Regression: the value-free path used to
-/// reach the provider write and error on `env://`.
+/// The value-free `report()` over a read-only provider must succeed rather than
+/// failing because a generated value cannot be stored. Regression: the value-free
+/// path used to reach the provider write and error on `env://`.
 #[test]
 fn test_value_free_report_tolerates_read_only_provider() {
     use crate::config::GenerateConfig;
@@ -1314,8 +1314,112 @@ fn test_value_free_report_tolerates_read_only_provider() {
         .iter()
         .find(|s| s.name == "SESSION_KEY")
         .expect("SESSION_KEY in report");
+    // `env://` stores nothing SecretSpec writes, so the required secret is not
+    // provisioned: the preflight reports the gap instead of minting an answer.
+    assert_eq!(entry.status, ResolutionStatus::MissingRequired);
+    assert!(!entry.generated);
+}
+
+/// A *required* generatable secret that no provider holds is not resolved: the
+/// value-free preflight must report it missing rather than promising a value the
+/// store does not have, so `check --no-prompt --explain` exits non-zero until
+/// something actually provisions it. The value-carrying `resolve()` still mints
+/// and stores it, and afterwards the preflight sees the stored value.
+#[test]
+fn test_value_free_report_marks_unprovisioned_required_generated_secret_missing() {
+    use crate::config::GenerateConfig;
+    use crate::report::ResolutionStatus;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_path = temp_dir.path().join(".env");
+    fs::write(&env_path, "").unwrap();
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "SESSION_KEY".to_string(),
+        Secret {
+            description: Some("generated".to_string()),
+            required: Some(true),
+            secret_type: Some("hex".to_string()),
+            generate: Some(GenerateConfig::Bool(true)),
+            ..Default::default()
+        },
+    );
+
+    let provider = format!("dotenv://{}", env_path.display());
+    let spec = Secrets::new(resolve_test_config(secrets), None, Some(provider), None);
+
+    let report = spec.report().unwrap();
+    let entry = report
+        .secrets
+        .iter()
+        .find(|s| s.name == "SESSION_KEY")
+        .expect("SESSION_KEY in report");
+    assert_eq!(entry.status, ResolutionStatus::MissingRequired);
+    assert!(!entry.generated);
+    assert!(
+        !report.all_required_present(),
+        "an unprovisioned required secret must fail the preflight gate"
+    );
+    assert!(
+        report
+            .to_explain_string()
+            .contains("SESSION_KEY  MISSING   required")
+    );
+    assert_eq!(
+        fs::read_to_string(&env_path).unwrap(),
+        "",
+        "the preflight must not store anything"
+    );
+
+    // The value-carrying pass provisions it, after which the preflight agrees.
+    assert!(spec.resolve().unwrap().is_ok());
+    let after = spec.report().unwrap();
+    let entry = after
+        .secrets
+        .iter()
+        .find(|s| s.name == "SESSION_KEY")
+        .expect("SESSION_KEY in report");
+    assert_eq!(entry.status, ResolutionStatus::Resolved);
+    assert!(after.all_required_present());
+}
+
+/// A store that never retains what it mints (`null://`) has nothing to
+/// provision: the value is generated fresh for every resolution, so even a
+/// required secret is reported as would-generate rather than missing.
+#[test]
+fn test_value_free_report_resolves_generated_secret_on_ephemeral_store() {
+    use crate::config::GenerateConfig;
+    use crate::report::ResolutionStatus;
+
+    let mut secrets = HashMap::new();
+    secrets.insert(
+        "SESSION_KEY".to_string(),
+        Secret {
+            description: Some("generated".to_string()),
+            required: Some(true),
+            secret_type: Some("hex".to_string()),
+            generate: Some(GenerateConfig::Bool(true)),
+            ..Default::default()
+        },
+    );
+
+    let spec = Secrets::new(
+        resolve_test_config(secrets),
+        None,
+        Some("null://".to_string()),
+        None,
+    );
+
+    let report = spec.report().unwrap();
+    let entry = report
+        .secrets
+        .iter()
+        .find(|s| s.name == "SESSION_KEY")
+        .expect("SESSION_KEY in report");
     assert_eq!(entry.status, ResolutionStatus::Resolved);
     assert!(entry.generated);
+    assert!(report.all_required_present());
 }
 
 /// When a per-secret provider chain's primary provider *errors* (not merely

@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secretspec.dev/schema/ipc/v1/common.schema.json",
+  "title": "SecretSpec IPC version 1 common types",
+  "$defs": {
+    "RequestId": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "DeadlineUnixMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "Methods": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+    },
+    "Capabilities": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
+    "Meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deadline_unix_ms"],
+      "properties": {
+        "deadline_unix_ms": { "$ref": "#/$defs/DeadlineUnixMs" },
+        "parent_request_id": { "$ref": "#/$defs/RequestId" }
+      }
+    },
+    "Product": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "Limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_frame_bytes", "max_in_flight"],
+      "properties": {
+        "max_frame_bytes": {
+          "type": "integer",
+          "minimum": 4096,
+          "maximum": 1048576
+        },
+        "max_in_flight": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        }
+      }
+    },
+    "ErrorKind": {
+      "description": "Kinds a conforming version 1 sender emits. Closed for senders, open for receivers: a receiver decodes a value outside this set as an unnamed failure rather than rejecting the frame, so a later revision can add one without a new protocol version.",
+      "type": "string",
+      "enum": [
+        "parse_error",
+        "invalid_request",
+        "method_not_found",
+        "invalid_params",
+        "internal",
+        "unsupported_version",
+        "capability_required",
+        "deadline_exceeded",
+        "cancelled",
+        "unavailable",
+        "permission_denied",
+        "interaction_required",
+        "conflict",
+        "operation_failed",
+        "message_too_large",
+        "representation_mismatch"
+      ]
+    },
+    "ErrorData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "retryable"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/ErrorKind" },
+        "retryable": { "type": "boolean" },
+        "retry_after_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        }
+      }
+    },
+    "RpcError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "data"],
+      "properties": {
+        "code": {
+          "type": "integer",
+          "enum": [
+            -32700,
+            -32600,
+            -32601,
+            -32602,
+            -32603,
+            -32000,
+            -32001,
+            -32002,
+            -32003,
+            -32004,
+            -32005,
+            -32006,
+            -32007,
+            -32008,
+            -32009,
+            -32010
+          ]
+        },
+        "message": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "data": { "$ref": "#/$defs/ErrorData" }
+      }
+    },
+    "RequestEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jsonrpc", "id", "method", "_meta", "params"],
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/RequestId" },
+        "method": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "_meta": { "$ref": "#/$defs/Meta" },
+        "params": { "type": "object" }
+      }
+    },
+    "NotificationEnvelope": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["jsonrpc", "method", "params"],
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "method": { "const": "rpc.cancel" },
+        "params": { "$ref": "#/$defs/CancelParams" }
+      }
+    },
+    "SuccessResponseEnvelope": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["jsonrpc", "id", "result"],
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "$ref": "#/$defs/RequestId" },
+        "result": {}
+      }
+    },
+    "ErrorResponseEnvelope": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["jsonrpc", "id", "error"],
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": {
+          "oneOf": [
+            { "$ref": "#/$defs/RequestId" },
+            { "type": "null" }
+          ]
+        },
+        "error": { "$ref": "#/$defs/RpcError" }
+      }
+    },
+    "CancelParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/RequestId" }
+      }
+    },
+    "EmptyParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 0
+    },
+    "EmptyResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 0
+    },
+    "Persistence": {
+      "type": "string",
+      "enum": ["persist", "ephemeral"]
+    },
+    "Coordinates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item"],
+      "properties": {
+        "item": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "field": { "type": ["string", "null"], "maxLength": 4096 },
+        "vault": { "type": ["string", "null"], "maxLength": 4096 },
+        "section": { "type": ["string", "null"], "maxLength": 4096 },
+        "version": { "type": ["string", "null"], "maxLength": 4096 }
+      }
+    },
+    "ConventionAddress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "project", "profile", "key"],
+      "properties": {
+        "kind": { "const": "convention" },
+        "project": { "type": "string", "maxLength": 4096 },
+        "profile": { "type": "string", "maxLength": 4096 },
+        "key": { "type": "string", "maxLength": 4096 }
+      }
+    },
+    "NativeAddress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "coordinates"],
+      "properties": {
+        "kind": { "const": "native" },
+        "coordinates": { "$ref": "#/$defs/Coordinates" }
+      }
+    },
+    "Address": {
+      "oneOf": [
+        { "$ref": "#/$defs/ConventionAddress" },
+        { "$ref": "#/$defs/NativeAddress" }
+      ]
+    }
+  }
+}

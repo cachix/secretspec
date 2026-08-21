@@ -118,6 +118,12 @@ jobs:
       uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       with:
         key: ${{ matrix.os }}
+    # libsecretspec-resolver takes yyjson from the system rather than vendoring
+    # it, and this job has no Nix to supply it. The Rust conformance package
+    # compiles the same C sources, so this has to precede every cargo step too.
+    - name: Install yyjson
+      shell: bash
+      run: bash scripts/install-yyjson.sh
 
     # Formatting and linting are platform-independent; run them once on Linux.
     # The PHP extension is checked in the SDK workflow, where PHP headers are
@@ -130,6 +136,28 @@ jobs:
       run: cargo clippy --workspace --exclude secretspec-php-native
     - name: Run tests
       run: cargo test --workspace --exclude secretspec-php-native
+    # The C client is standalone C11, so it is built with its own build systems
+    # rather than the devenv shell: this job installs Rust directly and has no
+    # Nix, and Windows runners cannot run devenv at all.
+    - name: Install Meson and Ninja
+      shell: bash
+      # pipx rather than pip: the macOS runner's Python is externally managed
+      # (PEP 668), so a plain --user install is refused there.
+      run: |
+        pipx install meson
+        pipx install ninja
+    - name: Build standalone C IPC client with Meson
+      shell: bash
+      run: |
+        meson setup libsecretspec-resolver/build-meson libsecretspec-resolver
+        meson compile -C libsecretspec-resolver/build-meson
+        meson test -C libsecretspec-resolver/build-meson --print-errorlogs
+    - name: Build standalone C IPC client with CMake
+      shell: bash
+      run: |
+        cmake -S libsecretspec-resolver -B libsecretspec-resolver/build-cmake
+        cmake --build libsecretspec-resolver/build-cmake
+        ctest --test-dir libsecretspec-resolver/build-cmake --output-on-failure
 
   # Each optional provider must compile on its own, not just in the default
   # feature set. `cargo test` above cannot catch a missing feature gate: it
@@ -207,9 +235,26 @@ jobs:
       run: rustup toolchain install stable --profile minimal
     - name: Cache Rust builds
       uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+    # This runner has no pkg-config, so the script also exports the explicit
+    # YYJSON_INCLUDE_DIR / YYJSON_LIB_DIR pair that the conformance build script
+    # falls back to.
+    - name: Install yyjson
+      shell: bash
+      run: bash scripts/install-yyjson.sh
     - name: cargo test
       # Exclude secretspec-php-native: it is an ext-php-rs extension that needs a
       # PHP dev toolchain (php-config/headers) this bare runner does not have, and
       # ext-php-rs rejects the runner's PHP version anyway. The PHP SDK is built
       # and tested by sdks.yml / php-ext.yml instead.
       run: cargo test --workspace --exclude secretspec-php-native
+    # The Rust conformance build compiles the Windows C launcher, but only the
+    # standalone suite executes its process/environment regressions. Keep this
+    # native CMake run on Windows so ACL-adjacent launch behavior cannot be
+    # "covered" solely by Linux and macOS tests of the POSIX implementation.
+    - name: Build and test standalone C IPC client
+      shell: pwsh
+      run: |
+        cmake -S libsecretspec-resolver -B libsecretspec-resolver/build-cmake
+        cmake --build libsecretspec-resolver/build-cmake --config Release
+        ctest --test-dir libsecretspec-resolver/build-cmake `
+          --build-config Release --output-on-failure

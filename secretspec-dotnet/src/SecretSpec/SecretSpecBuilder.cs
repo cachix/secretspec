@@ -135,7 +135,7 @@ public sealed class SecretSpecBuilder
             throw new SecretSpecException(
                 "version",
                 $"unsupported {kind} schema version {actual} (expected {expected}); " +
-                "the secretspec-ffi library and this SDK are out of sync");
+                "the libsecretspec library and this SDK are out of sync");
         }
     }
 }

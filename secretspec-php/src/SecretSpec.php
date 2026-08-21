@@ -8,7 +8,7 @@ namespace Secretspec;
  * Entry point for the SecretSpec PHP SDK, mirroring the Rust derive crate's
  * `SecretSpec::builder()`.
  *
- * The SDK is a thin client over the `secretspec-ffi` C ABI (loaded via PHP's
+ * The SDK is a thin client over the `libsecretspec` C ABI (loaded via PHP's
  * FFI extension): resolution — providers, fallback chains, profiles, generation,
  * `as_path` materialization — happens entirely in the Rust core, so every
  * provider works with no PHP-side logic.

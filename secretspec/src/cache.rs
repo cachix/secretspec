@@ -96,7 +96,10 @@ pub(crate) enum CacheOwnership {
 /// What a stored cache entry can do for the read that found it.
 pub(crate) enum CacheEntryStatus {
     /// Fresh, and written for the expected authoritative route.
-    Fresh(SecretString),
+    Fresh {
+        value: SecretString,
+        expires_at_unix_ms: Option<u64>,
+    },
     /// Expired (regardless of owner), or ours but no longer usable because its
     /// authoritative route or freshness policy changed.
     Stale,
@@ -221,9 +224,13 @@ fn inspect_entry_with_clock<E>(
             if envelope.cached_at > now || now.saturating_sub(envelope.cached_at) > max_age_secs {
                 return Ok(CacheEntryStatus::Stale);
             }
-            return Ok(CacheEntryStatus::Fresh(SecretString::new(
-                envelope.value.as_str().into(),
-            )));
+            return Ok(CacheEntryStatus::Fresh {
+                value: SecretString::new(envelope.value.as_str().into()),
+                expires_at_unix_ms: envelope
+                    .cached_at
+                    .checked_add(max_age_secs)
+                    .and_then(|expires_at| expires_at.checked_mul(1000)),
+            });
         }
         Err(_) => return Ok(CacheEntryStatus::OursUnreadable),
     };
@@ -250,9 +257,10 @@ fn inspect_entry_with_clock<E>(
     if envelope.route_fingerprint != route_fingerprint {
         return Ok(CacheEntryStatus::Stale);
     }
-    Ok(CacheEntryStatus::Fresh(SecretString::new(
-        envelope.value.as_str().into(),
-    )))
+    Ok(CacheEntryStatus::Fresh {
+        value: SecretString::new(envelope.value.as_str().into()),
+        expires_at_unix_ms: envelope.expires_at.checked_mul(1000),
+    })
 }
 
 #[cfg(test)]
@@ -358,11 +366,16 @@ mod tests {
             MAX_AGE,
             EXPIRES_AT - 1,
         );
-        let CacheEntryStatus::Fresh(value) = status else {
+        let CacheEntryStatus::Fresh {
+            value,
+            expires_at_unix_ms,
+        } = status
+        else {
             panic!("an entry is fresh before its expiration timestamp");
         };
         assert_eq!(envelope.expires_at, EXPIRES_AT);
         assert_eq!(envelope.max_age_secs, MAX_AGE);
+        assert_eq!(expires_at_unix_ms, Some(EXPIRES_AT * 1000));
         assert_eq!(value.expose_secret(), "sensitive");
     }
 
@@ -518,9 +531,14 @@ mod tests {
     fn fresh_legacy_entry_remains_usable_during_migration() {
         let legacy = legacy_entry();
         let status = inspect_entry_at(&legacy, PROJECT, PROFILE, FINGERPRINT, MAX_AGE, EXPIRES_AT);
-        let CacheEntryStatus::Fresh(value) = status else {
+        let CacheEntryStatus::Fresh {
+            value,
+            expires_at_unix_ms,
+        } = status
+        else {
             panic!("v2 preserves its original inclusive freshness boundary");
         };
+        assert_eq!(expires_at_unix_ms, Some(EXPIRES_AT * 1000));
         assert_eq!(value.expose_secret(), "sensitive");
     }
 

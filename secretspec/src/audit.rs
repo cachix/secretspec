@@ -144,6 +144,19 @@ pub(crate) struct AuditContext<'a> {
     pub error_kind: Option<&'a str>,
     pub reason: Option<&'a str>,
     pub caller: Option<&'a CallerContext>,
+    /// Structured caller context supplied by resolver-mode clients (0.20+).
+    /// It is audit attribution only, never identity or authorization input.
+    pub purpose: Option<AuditPurpose<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(crate) struct AuditPurpose<'a> {
+    pub consumer: &'a str,
+    pub operation: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<&'a str>,
 }
 
 /// One serialized audit record (one JSON Lines entry).
@@ -187,6 +200,9 @@ struct AuditEvent<'a> {
     /// Caller-asserted software integration metadata (SecretSpec 0.20+).
     #[serde(skip_serializing_if = "Option::is_none")]
     caller: Option<&'a CallerContext>,
+    /// Resolver caller context (SecretSpec 0.20+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    purpose: Option<AuditPurpose<'a>>,
     actor: &'a Actor,
     /// secretspec version that produced the event.
     version: &'static str,
@@ -414,6 +430,7 @@ impl AuditLogger {
             error_kind: ctx.error_kind,
             reason: ctx.reason,
             caller: ctx.caller,
+            purpose: ctx.purpose,
             actor: &self.actor,
             version: env!("CARGO_PKG_VERSION"),
         };
@@ -670,6 +687,12 @@ mod tests {
                         .with_operation("credential_get")
                         .with_resource("github.com"),
                 ),
+                purpose: Some(AuditPurpose {
+                    consumer: "python-sdk",
+                    operation: "resolve",
+                    host: None,
+                    path: Some("/service"),
+                }),
             },
         );
 
@@ -688,6 +711,9 @@ mod tests {
         assert_eq!(event["caller"]["version"], "2.51.0");
         assert_eq!(event["caller"]["operation"], "credential_get");
         assert_eq!(event["caller"]["resource"], "github.com");
+        assert_eq!(event["purpose"]["consumer"], "python-sdk");
+        assert_eq!(event["purpose"]["operation"], "resolve");
+        assert_eq!(event["purpose"]["path"], "/service");
         assert_eq!(event["session_id"], "test-session");
         assert_eq!(event["seq"], 0);
         // Provider credentials (the `:password`) are redacted; the username,
@@ -718,6 +744,7 @@ mod tests {
                 error_kind: None,
                 reason: None,
                 caller: None,
+                purpose: None,
             },
         );
 
@@ -752,6 +779,7 @@ mod tests {
                     error_kind: None,
                     reason: None,
                     caller: None,
+                    purpose: None,
                 },
             );
         }
@@ -911,6 +939,7 @@ mod tests {
                 error_kind: None,
                 reason: None,
                 caller: None,
+                purpose: None,
             },
         );
 

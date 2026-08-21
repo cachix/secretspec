@@ -86,6 +86,13 @@ I/O-free capability check. In particular, `prompt = true` selects how a missing
 value is acquired; `prompted_value_persistence` decides what the provider does
 with the answer.
 
+In SecretSpec 0.20+, out-of-tree providers use the
+[Secret Provider Protocol](/reference/provider-protocol) instead of linking an
+implementation into this crate. Its adapter maps the versioned IPC operations
+onto this trait; the [IPC implementation guide](/development/ipc-implementation)
+lists the required trait bridges, discovery rules, and conformance tests. The
+protocol is versioned independently from the endpoint's implementation.
+
 In SecretSpec 0.19+, override `describe_write_target` when the provider URI and
 native coordinates do not identify the physical destination clearly. The
 `secretspec set` and interactive `secretspec check` commands print this

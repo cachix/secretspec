@@ -109,15 +109,26 @@ pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
             file::MISSING_DIRECTORY_ERROR.to_string(),
         ));
     }
-    Ok(registration_for_scheme(scheme).is_some())
+    if registration_for_scheme(scheme).is_some() {
+        return Ok(true);
+    }
+    Ok(super::external::discover(scheme)?.is_some())
 }
 
 /// The semantic credential names accepted by the provider named by `spec`, or
 /// an empty slice for an unknown scheme. Lets alias validation reject a
 /// declaration the provider would silently ignore.
-pub(crate) fn credential_names_for_spec(spec: &str) -> &'static [&'static str] {
+pub(crate) fn credential_names_for_spec(spec: &str) -> Result<Vec<String>> {
     let (scheme, _) = split_spec(spec);
-    registration_for_scheme(scheme).map_or(&[], |reg| reg.credential_names)
+    if let Some(registration) = registration_for_scheme(scheme) {
+        return Ok(registration
+            .credential_names
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect());
+    }
+    super::external::discover(scheme)
+        .map(|endpoint| endpoint.map_or_else(Vec::new, |endpoint| endpoint.credential_names))
 }
 
 /// Whether the provider named by `spec` can return plaintext secret values.
@@ -134,9 +145,9 @@ pub(crate) fn spec_provider_reads(spec: &str) -> bool {
 ///
 /// Read from registration metadata so routing can validate an invalidatable
 /// store while planning, before a provider is constructed.
-pub(crate) fn spec_provider_deletes(spec: &str) -> bool {
+pub(crate) fn static_delete_capability(spec: &str) -> Option<bool> {
     let (scheme, _) = split_spec(spec);
-    registration_for_scheme(scheme).is_some_and(|reg| reg.deletes)
+    registration_for_scheme(scheme).map(|registration| registration.deletes)
 }
 
 /// The names of every provider that implements deletion, sorted. Used to say

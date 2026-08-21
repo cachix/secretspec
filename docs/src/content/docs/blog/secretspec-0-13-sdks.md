@@ -18,6 +18,9 @@ Node.js / TypeScript, Go, Ruby, and Haskell. Each resolves the exact secrets you
 manifest declares, through the same providers, profiles, fallback chains, and
 generators as the CLI, with no per-language configuration.
 
+> This article uses the original `secretspec-ffi` name. The embedded ABI is
+> named `libsecretspec` in SecretSpec 0.20+.
+
 ## Native bindings over one resolver
 
 Every SDK is a thin client over the same Rust core that powers the CLI. No

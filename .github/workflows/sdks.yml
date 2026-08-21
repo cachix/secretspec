@@ -66,12 +66,12 @@ jobs:
       - name: Build the native resolver
         env:
           MACOSX_DEPLOYMENT_TARGET: "12.0"
-        run: cargo build -p secretspec-ffi
+        run: cargo build -p libsecretspec
       - name: Build the local XCFramework
         run: >-
           bash scripts/build-swift-xcframework.sh
           secretspec-swift/Artifacts/CSecretSpec.xcframework
-          target/debug/libsecretspec_ffi.dylib
+          target/debug/libsecretspec.dylib
       - name: Run the Swift SDK and conformance tests
         run: |
           swift build --target SecretSpecExamples

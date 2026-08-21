@@ -1,6 +1,6 @@
 // Package secretspec is a Go SDK for SecretSpec, a declarative secrets manager.
 //
-// It is a thin client over the secretspec-ffi C ABI. Resolution (providers,
+// It is a thin client over the libsecretspec C ABI. Resolution (providers,
 // chains, profiles, generation, as_path) happens entirely in the Rust core; this
 // package marshals a JSON request to secretspec_resolve, parses the response
 // envelope, and exposes it with the same vocabulary as the Rust derive crate.
@@ -9,10 +9,10 @@
 //   - default (no build tag): purego (dlopen, no cgo). The library is located via
 //     the SECRETSPEC_FFI_LIB environment variable, an embedded copy, or a Cargo
 //     target directory. This keeps `go get` toolchain-free.
-//   - `-tags static`: cgo statically links libsecretspec_ffi.a, so the resolver
+//   - `-tags static`: cgo statically links libsecretspec.a, so the resolver
 //     is embedded in the Go binary (fully static on Linux/musl).
 //   - `-tags pkgconfig` (0.19+): cgo links the installed static or shared library
-//     described by secretspec_ffi.pc. See README.
+//     described by libsecretspec.pc. See README.
 //
 // All bindings implement the same hooks (ensureLoaded, nativeResolve,
 // nativeABIVersion); the code below is binding-agnostic.
@@ -26,7 +26,7 @@ import (
 )
 
 // resolveSchemaVersion is the response wire-format version this SDK understands.
-// It tracks secretspec-ffi's RESOLVE_SCHEMA_VERSION; a mismatch means the loaded
+// It tracks libsecretspec's RESOLVE_SCHEMA_VERSION; a mismatch means the loaded
 // library is incompatible with this SDK, so Load reports it rather than silently
 // misparsing.
 const resolveSchemaVersion = 2
@@ -254,7 +254,7 @@ func parseEnvelope[R any](raw, kind string, expected int, schemaOf func(*R) int)
 	}
 	if v := schemaOf(env.Response); v != expected {
 		return nil, &Error{Kind: "version", Message: fmt.Sprintf(
-			"unsupported %s schema version %d (expected %d); the secretspec-ffi library and this SDK are out of sync",
+			"unsupported %s schema version %d (expected %d); the libsecretspec library and this SDK are out of sync",
 			kind, v, expected,
 		)}
 	}

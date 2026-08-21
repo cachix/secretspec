@@ -2,7 +2,7 @@
 #
 # Aggregate cross-language conformance runner.
 #
-# Builds the secretspec-ffi cdylib once, then runs every SDK's conformance suite
+# Builds the libsecretspec cdylib once, then runs every SDK's conformance suite
 # against the shared fixtures and reports a combined result. Run inside the
 # project devenv shell (which provides cargo, python, go, ruby, node, dotnet):
 #
@@ -15,22 +15,22 @@ set -uo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-echo "==> Building secretspec-ffi cdylib"
-cargo build -p secretspec-ffi || exit 1
+echo "==> Building libsecretspec cdylib"
+cargo build -p libsecretspec || exit 1
 
 target_dir="$(cargo metadata --no-deps --format-version 1 \
   | grep -o '"target_directory":"[^"]*"' | head -1 | sed 's/.*:"\(.*\)"/\1/')"
 case "$(uname -s)" in
-  Darwin)                lib_name="libsecretspec_ffi.dylib" ;;
-  MINGW*|MSYS*|CYGWIN*)  lib_name="secretspec_ffi.dll" ;;
-  *)                     lib_name="libsecretspec_ffi.so" ;;
+  Darwin)                lib_name="libsecretspec.dylib" ;;
+  MINGW*|MSYS*|CYGWIN*)  lib_name="secretspec.dll" ;;
+  *)                     lib_name="libsecretspec.so" ;;
 esac
 export SECRETSPEC_FFI_LIB="$target_dir/debug/$lib_name"
 # Static-link contract (see scripts/ci-sdks.sh): the .a plus the archive's
 # transitive native deps, for SDKs that link statically instead of dlopening.
-export SECRETSPEC_FFI_STATICLIB="$target_dir/debug/libsecretspec_ffi.a"
-export SECRETSPEC_FFI_INCLUDE="$repo_root/secretspec-ffi/include"
-SECRETSPEC_FFI_NATIVE_LIBS="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \
+export SECRETSPEC_FFI_STATICLIB="$target_dir/debug/libsecretspec.a"
+export SECRETSPEC_FFI_INCLUDE="$repo_root/libsecretspec/include"
+SECRETSPEC_FFI_NATIVE_LIBS="$(cargo rustc -q -p libsecretspec --crate-type staticlib -- \
   --print native-static-libs 2>&1 | sed -n 's/^note: native-static-libs: //p' | tail -1)"
 export SECRETSPEC_FFI_NATIVE_LIBS
 echo "==> SECRETSPEC_FFI_LIB=$SECRETSPEC_FFI_LIB"
@@ -64,7 +64,7 @@ run_node()   { (
 ); }
 run_haskell() { (
   cd secretspec-hs
-  # The Haskell SDK statically links the secretspec-ffi archive at build time, so
+  # The Haskell SDK statically links the libsecretspec archive at build time, so
   # there is no runtime loader path. Stage the .a alone (target/debug also holds
   # the .so) and pass its transitive native deps as linker options.
   hs_lib_dir="$(mktemp -d)"

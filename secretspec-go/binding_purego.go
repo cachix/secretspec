@@ -29,11 +29,11 @@ var (
 func libNames() []string {
 	switch runtime.GOOS {
 	case "darwin":
-		return []string{"libsecretspec_ffi.dylib"}
+		return []string{"libsecretspec.dylib", "libsecretspec_ffi.dylib"}
 	case "windows":
-		return []string{"secretspec_ffi.dll"}
+		return []string{"libsecretspec.dll", "secretspec.dll", "secretspec_ffi.dll"}
 	default:
-		return []string{"libsecretspec_ffi.so"}
+		return []string{"libsecretspec.so", "libsecretspec_ffi.so"}
 	}
 }
 
@@ -77,7 +77,7 @@ func findLibrary() (string, error) {
 	}
 	return "", &Error{
 		Kind:    "load",
-		Message: "could not locate the secretspec-ffi library; set SECRETSPEC_FFI_LIB",
+		Message: "could not locate the libsecretspec library; set SECRETSPEC_FFI_LIB",
 	}
 }
 
@@ -92,7 +92,7 @@ func ensureLoaded() error {
 			if r := recover(); r != nil {
 				loadErr = &Error{
 					Kind:    "load",
-					Message: fmt.Sprintf("failed to bind secretspec-ffi symbols (incompatible library?): %v", r),
+					Message: fmt.Sprintf("failed to bind libsecretspec symbols (incompatible library?): %v", r),
 				}
 			}
 		}()

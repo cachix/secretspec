@@ -24,7 +24,7 @@ SENTRY_DSN = { description = "sentry", required = false }
 secrets = ["DATABASE_URL"]
 `
 
-// TestMain builds the secretspec-ffi cdylib and points the SDK at it, unless
+// TestMain builds the libsecretspec cdylib and points the SDK at it, unless
 // SECRETSPEC_FFI_LIB is already set.
 func TestMain(m *testing.M) {
 	if err := ensureLib(); err != nil {
@@ -43,7 +43,7 @@ func ensureLib() error {
 	}
 	repo := filepath.Dir(wd) // secretspec-go lives directly under the repo root
 
-	build := exec.Command("cargo", "build", "-p", "secretspec-ffi")
+	build := exec.Command("cargo", "build", "-p", "libsecretspec")
 	build.Dir = repo
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
@@ -62,9 +62,9 @@ func ensureLib() error {
 	if err := json.Unmarshal(out, &parsed); err != nil {
 		return err
 	}
-	name := "libsecretspec_ffi.so"
+	name := "libsecretspec.so"
 	if runtime.GOOS == "darwin" {
-		name = "libsecretspec_ffi.dylib"
+		name = "libsecretspec.dylib"
 	}
 	return os.Setenv("SECRETSPEC_FFI_LIB", filepath.Join(parsed.TargetDirectory, "debug", name))
 }

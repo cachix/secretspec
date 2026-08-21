@@ -342,6 +342,7 @@ fn test_validation_result_structure() {
         with_defaults: Vec::new(),
         resolution: Vec::new(),
         temp_files: Vec::new(),
+        expiries: HashMap::new(),
     };
     assert_eq!(valid_result.missing_optional.len(), 1);
     assert_eq!(valid_result.with_defaults.len(), 0);
@@ -10092,6 +10093,45 @@ fn cached_route_hits_cache_refreshes_after_clear_and_survives_source_loss() {
         "remote-2",
         "a fresh hit must not contact the now-broken authoritative provider"
     );
+}
+
+#[cfg(feature = "cli")]
+#[test]
+fn named_cached_resolution_reports_the_cache_envelopes_expiry() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote\n").unwrap();
+    let secrets = cached_dotenv_secrets(&[&source], &cache, "8h");
+
+    let first = secrets.resolve_named_owned("API_KEY").unwrap();
+    let crate::secrets::OwnedNamedResolution::Value {
+        expires_at_unix_ms, ..
+    } = first
+    else {
+        panic!("the authoritative read resolves an inline value");
+    };
+    assert_eq!(
+        expires_at_unix_ms, None,
+        "the legacy provider API does not report authoritative read expiry"
+    );
+
+    let (_, stored) = dotenv_values(&cache).into_iter().next().unwrap();
+    let payload = stored
+        .strip_prefix(crate::cache::CACHE_ENVELOPE_MARKER)
+        .unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(payload).unwrap();
+    let expected = envelope["expires_at"].as_u64().unwrap() * 1000;
+
+    let second = secrets.resolve_named_owned("API_KEY").unwrap();
+    let crate::secrets::OwnedNamedResolution::Value {
+        expires_at_unix_ms, ..
+    } = second
+    else {
+        panic!("the cache read resolves an inline value");
+    };
+    assert_eq!(expires_at_unix_ms, Some(expected));
 }
 
 #[test]

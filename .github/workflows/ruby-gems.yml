@@ -1,7 +1,7 @@
 name: "Ruby gems"
 
 # Builds platform-specific gems for the Ruby SDK. Each gem bundles the
-# secretspec-ffi staticlib (into vendor/); at `gem install` mkmf compiles a tiny
+# libsecretspec staticlib (into vendor/); at `gem install` mkmf compiles a tiny
 # C glue and statically links that archive, so the resolver is embedded in the
 # extension and one platform gem serves every Ruby ABI.
 #
@@ -108,7 +108,7 @@ jobs:
         run: |
           cd secretspec-rb
           # Installing compiles the extension (spec.extensions) against the
-          # bundled vendor/libsecretspec_ffi.a -- no Rust toolchain needed here.
+          # bundled vendor/libsecretspec.a -- no Rust toolchain needed here.
           gem install --no-document --install-dir "$RUNNER_TEMP/gemhome" secretspec-*.gem
           # Run outside the repo so only the installed extension satisfies require.
           cd "$RUNNER_TEMP"

@@ -104,9 +104,9 @@ pub(crate) use address::{OwnedAddress, flat_item};
 #[cfg(any(feature = "openbao", feature = "scaleway", feature = "vault"))]
 pub(crate) use credentials::preferred_env;
 pub(crate) use credentials::{ProviderCredentials, credential_or_env, credential_or_envs};
-pub(crate) use factory::provider_from_spec;
+pub(crate) use factory::{provider_from_spec, reject_uri_credential};
 #[cfg(test)]
-pub(crate) use factory::provider_from_url;
+pub(crate) use factory::{provider_from_url, provider_from_url_with_discovery};
 #[cfg(any(feature = "awssm", feature = "infisical", feature = "scaleway", test))]
 pub(crate) use path::join_slash_path;
 pub(crate) use preflight::ProviderWithPreflight;
@@ -114,23 +114,14 @@ pub(crate) use preflight::ProviderWithPreflight;
 pub(crate) use registry::spec_provider_reads;
 pub(crate) use registry::{
     credential_names_for_spec, deleting_provider_names, provider_display_name_for_spec,
-    spec_names_known_provider, spec_provider_deletes,
+    spec_names_known_provider, static_delete_capability,
 };
-#[cfg(any(
-    feature = "akv",
-    feature = "awsps",
-    feature = "awssm",
-    feature = "gcsm",
-    feature = "infisical",
-    feature = "scaleway"
-))]
 pub(crate) use runtime::block_on;
 #[cfg(test)]
 pub(crate) use traits::GET_EACH_CONCURRENCY_ENV;
-#[cfg(test)]
-pub(crate) use traits::get_each;
 #[cfg(any(feature = "infisical", feature = "openbao", feature = "vault"))]
 pub(crate) use traits::get_each_with;
+pub(crate) use traits::{exists_each, get_each};
 pub(crate) use traits::{get_each_concurrency, map_concurrently, same_storage_container};
 pub(crate) use url::{ProviderUrl, URI_ENCODE_SET};
 
@@ -152,6 +143,7 @@ pub mod bws;
 pub mod dashlane;
 pub mod dotenv;
 pub mod env;
+pub mod external;
 pub mod file;
 pub mod fly;
 #[cfg(feature = "gcsm")]

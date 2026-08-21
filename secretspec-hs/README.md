@@ -1,9 +1,13 @@
 # secretspec (Haskell SDK)
 
 Haskell bindings for [SecretSpec](https://secretspec.dev/), a declarative secrets
-manager. A thin client over the `secretspec-ffi` C ABI, linked at build time via
+manager. A thin client over the `libsecretspec` C ABI, linked at build time via
 the Haskell FFI. Resolution happens in the Rust core, so the SDK inherits every
 provider with no Haskell-side logic.
+
+> The embedded ABI and its pkg-config file are named `libsecretspec` in
+> SecretSpec 0.20+. Through 0.19 they were named `secretspec-ffi` and
+> `secretspec_ffi.pc`.
 
 ```haskell
 import qualified SecretSpec as S
@@ -68,18 +72,18 @@ secretspec schema | quicktype -s schema --top-level SecretSpec --lang haskell -o
 
 ## Building
 
-The build links the `secretspec-ffi` archive statically. Stage the `.a` in a
+The build links the `libsecretspec` archive statically. Stage the `.a` in a
 directory of its own (so the linker picks the archive, not the co-located
 `.so`) and pass its native dependencies to the linker:
 
 ```bash
-cargo build -p secretspec-ffi
+cargo build -p libsecretspec
 TARGET="$(cargo metadata --no-deps --format-version 1 \
   | grep -o '"target_directory":"[^"]*"' | head -1 | sed 's/.*:"\(.*\)"/\1/')"
 
 LIBDIR="$(mktemp -d)"
-cp "$TARGET/debug/libsecretspec_ffi.a" "$LIBDIR/"
-NATIVE_LIBS="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \
+cp "$TARGET/debug/libsecretspec.a" "$LIBDIR/"
+NATIVE_LIBS="$(cargo rustc -q -p libsecretspec --crate-type staticlib -- \
   --print native-static-libs 2>&1 | sed -n 's/^note: native-static-libs: //p' | tail -1)"
 
 cabal build --extra-lib-dirs="$LIBDIR" --ghc-options="-optl${NATIVE_LIBS// / -optl}"
@@ -92,7 +96,7 @@ Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 
 ```bash
 # Use "static" (the default) or "shared"; use separate prefixes for both.
-bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
+bash libsecretspec/scripts/cinstall.sh "$PREFIX" static
 ```
 
 Then use the same Cabal flag for either type:

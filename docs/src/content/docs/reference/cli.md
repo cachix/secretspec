@@ -782,6 +782,48 @@ $ secretspec audit --action get -n 5
 $ secretspec audit --json | jq 'select(.outcome == "missing")'
 ```
 
+### serve (0.20+)
+
+:::caution[Version compatibility]
+`serve` is available starting with SecretSpec 0.20.
+:::
+
+Run one private Secret Resolution Protocol session over standard input and
+standard output. SDKs launch this command directly and communicate with bounded
+newline-delimited JSON-RPC frames; it is not intended for interactive
+terminal use or as a network listener.
+
+```bash
+$ secretspec serve [--read-only]
+```
+
+**Options:**
+- `--read-only` - Resolve only, never write to a provider (SecretSpec 0.20+)
+
+The client supplies an absolute path or inline manifest plus immutable
+provider, profile, scope, and reason selection during initialization. See the
+[Secret Resolution Protocol](/reference/resolver-protocol/) for lifecycle,
+least-access resolution, file leases, and reconnect rules.
+
+The session also answers `resolver.set` and `resolver.delete` (0.20+), which
+store and remove one declared name where that same session resolves it.
+`--read-only` withholds both, for an operator who wants a consumer to read a
+store it may not change.
+
+Withholding those two methods is not on its own enough to make a session
+read-only, so `--read-only` does more than that. Resolving a name is not always
+a read: a `generate = true` declaration with no stored value is minted *and
+written back*, and a `prompt = true` one is written back after a person answers.
+A `--read-only` session refuses both rather than reaching the store, and the
+resolve fails with `permission_denied`. A provider that produces such a value
+without storing it is unaffected, since nothing is written. SecretSpec's own
+cache is also unaffected: populating a derived copy does not change the secret.
+
+`resolver.reject` (0.20+) is answered in both modes. A consumer that was refused
+with a resolved value reports it there, and the session discards its cached copy
+so the next resolve consults the authoritative store instead of serving a
+credential that was revoked before it expired.
+
 ### completions (0.20+)
 
 :::caution[Version compatibility]

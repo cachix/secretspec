@@ -105,7 +105,7 @@ SecretSpec reads it into memory and hands it directly to the target provider.
 Every process in the same service runs under the same credential access
 boundary. If `secretspec run` starts the application in that service, the
 application can also access the service's credential directory. Put a
-high-value bootstrap credential in a separate SecretSpec broker or provisioning
+high-value bootstrap credential in a separate SecretSpec resolver or provisioning
 service when the application itself must not be able to read it.
 :::
 

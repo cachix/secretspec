@@ -5,7 +5,7 @@ Gem::Specification.new do |spec|
   spec.version     = "0.19.1"
   spec.summary     = "A declarative interface for every secret provider. Ruby SDK."
   spec.description = "Ruby bindings for SecretSpec: a native extension that " \
-                     "statically links the secretspec-ffi C ABI."
+                     "statically links the libsecretspec C ABI."
   spec.authors     = ["Cachix"]
   spec.license     = "Apache-2.0"
   spec.homepage    = "https://secretspec.dev/"
@@ -16,10 +16,10 @@ Gem::Specification.new do |spec|
   spec.required_ruby_version = ">= 3.0"
 
   # The extension compiles a tiny C glue at `gem install` and statically links
-  # the prebuilt libsecretspec_ffi.a staged into vendor/ (see
+  # the prebuilt libsecretspec.a staged into vendor/ (see
   # scripts/stage-staticlib.sh). The archive is platform-specific, so build a
   # platform gem when it is present; one such gem serves every Ruby ABI.
-  staged = File.exist?("vendor/libsecretspec_ffi.a")
+  staged = File.exist?("vendor/libsecretspec.a")
   if staged
     platform = Gem::Platform.new(Gem::Platform.local)
     platform.version = nil if platform.os == "darwin"

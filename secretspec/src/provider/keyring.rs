@@ -157,7 +157,7 @@ impl Provider for KeyringProvider {
         Ok(std::borrow::Cow::Owned(coords))
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 

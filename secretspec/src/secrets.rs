@@ -1,7 +1,7 @@
 //! Core secrets management functionality
 
 use crate::CallerContext;
-use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
+use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome, AuditPurpose};
 use crate::cache::{self, CacheEntryStatus, CacheOwnership};
 use crate::compiled_spec::{CompiledSpec, MissingPolicy};
 use crate::config::{
@@ -29,6 +29,8 @@ use secrecy::{ExposeSecret, SecretSlice, SecretString};
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
 #[cfg(unix)]
 use signal_hook::iterator::{Handle as SignalHandle, Signals};
+#[cfg(feature = "cli")]
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::io::{self, IsTerminal, Read, Write};
@@ -251,7 +253,10 @@ fn group_names(group: &[&PlannedSecret]) -> String {
 /// What a stored cache entry can do for the read that found it.
 enum CachedEntry {
     /// Fresh, and written for this route: serve it.
-    Fresh(SecretString),
+    Fresh {
+        value: SecretString,
+        expires_at_unix_ms: Option<u64>,
+    },
     /// A SecretSpec entry no read will serve: expired regardless of owner, or
     /// ours but unreadable or written for another route or freshness policy.
     /// Safe to drop.
@@ -283,7 +288,13 @@ fn cached_entry(
         &route_fingerprint,
         cache.max_age_secs,
     ) {
-        Ok(CacheEntryStatus::Fresh(value)) => CachedEntry::Fresh(value),
+        Ok(CacheEntryStatus::Fresh {
+            value,
+            expires_at_unix_ms,
+        }) => CachedEntry::Fresh {
+            value,
+            expires_at_unix_ms,
+        },
         Ok(CacheEntryStatus::Stale) => CachedEntry::Stale,
         Ok(CacheEntryStatus::OursUnreadable) => {
             cache_read_warning(&planned.name, "the cache entry could not be read");
@@ -559,6 +570,106 @@ enum PreparedSecret {
     },
 }
 
+/// Named resolution with temporary-file ownership retained by the caller.
+/// The resolver converts these owners into session leases; the embedded API
+/// persists them to preserve its existing one-shot path behavior.
+pub(crate) enum OwnedNamedResolution {
+    Undeclared,
+    Missing {
+        required: bool,
+    },
+    Value {
+        value: String,
+        source: ResolvedSource,
+        source_provider: Option<String>,
+        #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+        expires_at_unix_ms: Option<u64>,
+        supporting_files: Vec<tempfile::NamedTempFile>,
+    },
+    File {
+        file: tempfile::NamedTempFile,
+        source: ResolvedSource,
+        source_provider: Option<String>,
+        #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+        expires_at_unix_ms: Option<u64>,
+        supporting_files: Vec<tempfile::NamedTempFile>,
+    },
+}
+
+impl OwnedNamedResolution {
+    fn into_embedded(self) -> Result<NamedResolution> {
+        match self {
+            Self::Undeclared => Ok(NamedResolution::Undeclared),
+            Self::Missing { required } => Ok(NamedResolution::Missing { required }),
+            Self::Value {
+                value,
+                source,
+                source_provider,
+                supporting_files,
+                ..
+            } => {
+                keep_owned_files(supporting_files)?;
+                Ok(NamedResolution::Resolved(ResolvedSecret {
+                    value: Some(value),
+                    path: None,
+                    as_path: false,
+                    source,
+                    source_provider,
+                }))
+            }
+            Self::File {
+                file,
+                source,
+                source_provider,
+                supporting_files,
+                ..
+            } => {
+                keep_owned_files(supporting_files)?;
+                let path = file
+                    .into_temp_path()
+                    .keep()
+                    .map_err(|error| SecretSpecError::Io(error.error))?;
+                Ok(NamedResolution::Resolved(ResolvedSecret {
+                    value: None,
+                    path: Some(path.to_string_lossy().into_owned()),
+                    as_path: true,
+                    source,
+                    source_provider,
+                }))
+            }
+        }
+    }
+}
+
+/// Where a write landed. Reported instead of printed, so the caller that knows
+/// whether it owns a terminal decides how the destination is announced.
+pub(crate) struct StoredSecret {
+    pub(crate) profile: String,
+    /// Display name of the provider that took the write, as the CLI prints it.
+    pub(crate) provider_name: String,
+    /// Credential-free URI of the same provider, as audit records it.
+    #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+    pub(crate) provider_uri: String,
+}
+
+/// The outcome of removing one stored value, with the same attribution a write
+/// reports.
+pub(crate) struct DeletedSecret {
+    /// `false` when the store held nothing: removal is idempotent.
+    pub(crate) deleted: bool,
+    #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+    pub(crate) provider_uri: String,
+}
+
+fn keep_owned_files(files: Vec<tempfile::NamedTempFile>) -> Result<()> {
+    for file in files {
+        file.into_temp_path()
+            .keep()
+            .map_err(|error| SecretSpecError::Io(error.error))?;
+    }
+    Ok(())
+}
+
 /// Whether a resolved string came from a storage boundary and is eligible for
 /// decoding, or is already the logical value produced inside SecretSpec.
 #[derive(Clone, Copy)]
@@ -619,8 +730,14 @@ pub struct Secrets {
     global_config: Option<GlobalConfig>,
     /// The provider to use (if set via builder)
     provider: Option<String>,
+    /// Resolver sessions fix provider selection at initialization and must not
+    /// inherit the resolver process's provider environment.
+    ignore_ambient_provider: bool,
     /// The profile to use (if set via builder)
     profile: Option<String>,
+    /// Resolver sessions fix profile selection at initialization and must not
+    /// inherit the resolver process's profile environment.
+    ignore_ambient_profile: bool,
     /// The active secret scope (if set via builder/`--scope`/`SECRETSPEC_SCOPE`).
     /// `None` resolves the complete profile; a scope narrows resolution to the
     /// intersection of the merged profile and the scope's secret list.
@@ -652,6 +769,10 @@ pub struct Secrets {
     /// read. Cleared by [`Secrets::store_provider_credential`] so a freshly
     /// stored credential is re-read.
     provider_credentials_cache: ProviderCredentialsCache,
+    /// Memoized `provider.delete` support for external providers, keyed by
+    /// resolved spec. In-tree providers answer from the static registry and
+    /// never reach this map.
+    external_delete_capability: Mutex<HashMap<String, bool>>,
     /// Optional CLI-owned observer for writes that are about to prompt for or
     /// consume a value. Library and SDK instances leave this unset, so planning
     /// a write never produces unsolicited output outside the CLI.
@@ -659,6 +780,13 @@ pub struct Secrets {
     /// Test seam for deterministic run-prompt coverage. Production CLI
     /// instances leave this unset and use the controlling terminal.
     prompt_reader: Option<PromptReader>,
+    /// Whether generation and prompting may write their progress lines to
+    /// stderr. False in resolver mode; see [`Secrets::silence_progress`].
+    progress: bool,
+    /// Whether a resolution may store a value it produced. False when an
+    /// operator withheld the mutation methods; see
+    /// [`Secrets::refuse_produced_writes`].
+    refuse_produced_writes: bool,
 }
 
 /// Credential-free description of one provider write, computed after routing
@@ -672,7 +800,7 @@ pub(crate) struct WriteTarget {
 }
 
 type WriteTargetReporter = Arc<dyn Fn(&WriteTarget) + Send + Sync>;
-type PromptReader = Arc<dyn Fn(&str, &str) -> Result<SecretString> + Send + Sync>;
+type PromptReader = Arc<dyn Fn(&str, &str, Option<&str>) -> Result<SecretString> + Send + Sync>;
 
 /// secretspec's own opt-in for marking the current process as an agent. Lets any
 /// harness that the `detect-coding-agent` crate does not recognize identify itself.
@@ -821,6 +949,39 @@ struct AuditFields<'a> {
     error_kind: Option<&'a str>,
 }
 
+#[derive(Clone)]
+#[cfg(feature = "cli")]
+pub(crate) struct IpcAuditPurpose {
+    pub consumer: String,
+    pub operation: String,
+    pub host: Option<String>,
+    pub path: Option<String>,
+}
+
+#[cfg(feature = "cli")]
+thread_local! {
+    static IPC_AUDIT_PURPOSE: RefCell<Option<IpcAuditPurpose>> = const { RefCell::new(None) };
+}
+
+#[cfg(feature = "cli")]
+struct IpcPurposeGuard(Option<IpcAuditPurpose>);
+
+#[cfg(feature = "cli")]
+impl Drop for IpcPurposeGuard {
+    fn drop(&mut self) {
+        IPC_AUDIT_PURPOSE.with(|slot| {
+            slot.replace(self.0.take());
+        });
+    }
+}
+
+#[cfg(feature = "cli")]
+fn with_ipc_audit_purpose<T>(purpose: IpcAuditPurpose, operation: impl FnOnce() -> T) -> T {
+    let previous = IPC_AUDIT_PURPOSE.with(|slot| slot.replace(Some(purpose)));
+    let _guard = IpcPurposeGuard(previous);
+    operation()
+}
+
 impl Secrets {
     /// Creates a new `Secrets` instance with the given configurations
     ///
@@ -848,7 +1009,9 @@ impl Secrets {
             config_dir: PathBuf::from("."),
             global_config,
             provider,
+            ignore_ambient_provider: false,
             profile,
+            ignore_ambient_profile: false,
             scope: None,
             ignore_ambient_scope: false,
             reason: None,
@@ -856,8 +1019,11 @@ impl Secrets {
             require_reason: RequireReason::Never,
             audit: None,
             provider_credentials_cache: ProviderCredentialsCache::default(),
+            external_delete_capability: Mutex::new(HashMap::new()),
             write_target_reporter: None,
             prompt_reader: None,
+            progress: true,
+            refuse_produced_writes: false,
         }
     }
 
@@ -928,6 +1094,36 @@ impl Secrets {
         // A Spec already owns the exact compiled view produced by validation,
         // so file and Rust frontends both arrive here without recompiling.
         let (config, manifest) = spec.into_parts();
+        Self::from_compiled_spec(config, manifest, base_dir.into(), true)
+    }
+
+    /// Load an explicit path for a resolver session without consulting ambient
+    /// provider, profile, scope, or reason variables.
+    #[cfg(feature = "cli")]
+    pub(crate) fn load_from_ipc(path: &Path) -> Result<Self> {
+        let spec = Spec::try_from(path)?;
+        let config_dir = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let (config, manifest) = spec.into_parts();
+        Self::from_compiled_spec(config, manifest, config_dir, false)
+    }
+
+    /// Parse an inline resolver manifest with inheritance rooted at `base_dir`.
+    #[cfg(feature = "cli")]
+    pub(crate) fn load_inline_ipc(source: &str, base_dir: &Path) -> Result<Self> {
+        let config = Config::from_inline(source, base_dir)?;
+        let manifest = config.validate_and_compile()?;
+        Self::from_compiled_spec(config, manifest, base_dir.to_path_buf(), false)
+    }
+
+    fn from_compiled_spec(
+        config: Config,
+        manifest: CompiledSpec,
+        config_dir: PathBuf,
+        use_ambient_session: bool,
+    ) -> Result<Self> {
         let global_config = GlobalConfig::load()?;
         // Auditing is a per-machine concern configured in the user-global config
         // (`[audit]` in ~/.config/secretspec/config.toml), not the project. It is
@@ -942,18 +1138,23 @@ impl Secrets {
             require_reason: config.project.require_reason.unwrap_or_default(),
             config,
             manifest,
-            config_dir: base_dir.into(),
+            config_dir,
             global_config,
             provider: None,
+            ignore_ambient_provider: !use_ambient_session,
             profile: None,
+            ignore_ambient_profile: !use_ambient_session,
             scope: None,
-            ignore_ambient_scope: false,
-            reason: env_reason(),
+            ignore_ambient_scope: !use_ambient_session,
+            reason: use_ambient_session.then(env_reason).flatten(),
             caller: None,
             audit,
             provider_credentials_cache: ProviderCredentialsCache::default(),
+            external_delete_capability: Mutex::new(HashMap::new()),
             write_target_reporter: None,
             prompt_reader: None,
+            progress: true,
+            refuse_produced_writes: false,
         })
     }
 
@@ -973,12 +1174,55 @@ impl Secrets {
         self.write_target_reporter = Some(Arc::new(reporter));
     }
 
-    #[cfg(test)]
+    /// Replaces controlling-terminal input for `prompt = true` declarations.
+    ///
+    /// Tests use it for deterministic coverage. The resolver uses it because it
+    /// has no terminal to read from at all: its stdin and stdout are the
+    /// protocol, so the only process that can ask a person is the one that
+    /// launched it, and the reader forwards the question there.
+    #[cfg(any(test, feature = "cli"))]
     pub(crate) fn set_prompt_reader(
         &mut self,
-        reader: impl Fn(&str, &str) -> Result<SecretString> + Send + Sync + 'static,
+        reader: impl Fn(&str, &str, Option<&str>) -> Result<SecretString> + Send + Sync + 'static,
     ) {
         self.prompt_reader = Some(Arc::new(reader));
+    }
+
+    /// Refuses every resolution that would produce a value and store it in a
+    /// provider (0.20+).
+    ///
+    /// Resolving is not always read-only: a generatable secret with no stored
+    /// value is minted *and written back*, and a prompted one is written back
+    /// after a person answers. An operator who withheld the mutation methods
+    /// means those writes too, so this closes the paths that would otherwise
+    /// let a read reach the store. It does not touch SecretSpec's own cache:
+    /// populating a derived copy is not a change to the secret, which is the
+    /// same line `resolver.reject` draws.
+    #[cfg(feature = "cli")]
+    pub(crate) fn refuse_produced_writes(&mut self) {
+        self.refuse_produced_writes = true;
+    }
+
+    /// Rejects a produced value that would have to be stored, before it is
+    /// generated or asked of a person.
+    fn ensure_produced_write_allowed(&self, name: &str) -> Result<()> {
+        if self.refuse_produced_writes {
+            return Err(SecretSpecError::ProducedValueWriteRefused(name.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Suppresses the progress lines that generation and prompting write to
+    /// stderr (0.20+).
+    ///
+    /// A CLI run wants them. A resolver does not: its stderr is captured by
+    /// whatever launched it, which the wire protocol requires the host to treat
+    /// as sensitive until it has applied a redaction policy. Naming which
+    /// secrets a session generated or provisioned is not something to hand over
+    /// by default.
+    #[cfg(feature = "cli")]
+    pub(crate) fn silence_progress(&mut self) {
+        self.progress = false;
     }
 
     /// Sets the provider to use for secret operations
@@ -1206,6 +1450,34 @@ impl Secrets {
         profile: Option<&str>,
     ) -> Result<Box<dyn ProviderTrait>> {
         self.build_provider_for_use(spec, profile, false)
+    }
+
+    pub(crate) fn provider_supports_delete(&self, spec: &str) -> Result<bool> {
+        let resolved = self.resolve_provider_spec(spec.to_string());
+        if let Some(supports_delete) = crate::provider::static_delete_capability(&resolved) {
+            return Ok(supports_delete);
+        }
+        // An external provider advertises deletion during its handshake, so
+        // answering costs a full endpoint launch and teardown. Planning asks
+        // this for every cached alias on every plan build, so the answer is
+        // memoized per resolved spec for the life of this `Secrets`.
+        if let Some(cached) = self
+            .external_delete_capability
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&resolved)
+        {
+            return Ok(*cached);
+        }
+        let profile = self.resolve_profile_name(None);
+        let supports_delete = self
+            .build_provider(spec.to_string(), Some(&profile))
+            .map(|provider| provider.supports_delete())?;
+        self.external_delete_capability
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(resolved, supports_delete);
+        Ok(supports_delete)
     }
 
     /// Builds the authoritative leaf selected by a planned route.
@@ -1509,10 +1781,10 @@ impl Secrets {
             return Ok(());
         };
         let resolved_target = self.resolve_provider_spec(spec.to_string());
-        let supported = crate::provider::credential_names_for_spec(&resolved_target);
+        let supported = crate::provider::credential_names_for_spec(&resolved_target)?;
         let provider_name = crate::provider::provider_display_name_for_spec(&resolved_target);
         for (name, source) in sorted_credential_entries(credentials) {
-            if !supported.contains(&name.as_str()) {
+            if !supported.iter().any(|supported| supported == name) {
                 let supported_display = if supported.is_empty() {
                     "none".to_string()
                 } else {
@@ -1597,6 +1869,17 @@ impl Secrets {
         fields: AuditFields<'_>,
     ) {
         if let Some(logger) = &self.audit {
+            #[cfg(feature = "cli")]
+            let ipc_purpose = IPC_AUDIT_PURPOSE.with(|slot| slot.borrow().clone());
+            #[cfg(feature = "cli")]
+            let purpose = ipc_purpose.as_ref().map(|purpose| AuditPurpose {
+                consumer: &purpose.consumer,
+                operation: &purpose.operation,
+                host: purpose.host.as_deref(),
+                path: purpose.path.as_deref(),
+            });
+            #[cfg(not(feature = "cli"))]
+            let purpose: Option<AuditPurpose<'_>> = None;
             // Scopes affect only these bulk resolution surfaces. `get`, `set`,
             // and `import` deliberately ignore an ambient scope, so attaching it
             // to those events would falsely imply that it constrained the action.
@@ -1626,6 +1909,7 @@ impl Secrets {
                     error_kind: fields.error_kind,
                     reason: self.reason.as_deref(),
                     caller: self.caller.as_ref(),
+                    purpose,
                 },
             );
         }
@@ -2021,6 +2305,9 @@ impl Secrets {
             .map(|p| p.to_string())
             .or_else(|| self.profile.clone())
             .or_else(|| {
+                if self.ignore_ambient_profile {
+                    return None;
+                }
                 env::var("SECRETSPEC_PROFILE")
                     .ok()
                     .as_deref()
@@ -2057,6 +2344,12 @@ impl Secrets {
                     .as_deref()
                     .and_then(non_blank)
             })
+    }
+
+    #[cfg(feature = "cli")]
+    pub(crate) fn validate_ipc_selection(&self) -> Result<()> {
+        let profile = self.resolve_profile_name(None);
+        Surface::Scoped.names(self, &profile).map(|_| ())
     }
 
     /// The set of secret names the active scope admits, or `None` when no scope
@@ -2404,6 +2697,9 @@ impl Secrets {
             .map(|spec| spec.to_string())
             .or_else(|| self.provider.clone())
             .or_else(|| {
+                if self.ignore_ambient_provider {
+                    return None;
+                }
                 env::var("SECRETSPEC_PROVIDER")
                     .ok()
                     .as_deref()
@@ -2449,7 +2745,7 @@ impl Secrets {
         &self,
         plan: &ResolutionPlan,
         profile: &str,
-    ) -> HashMap<String, (SecretString, String)> {
+    ) -> HashMap<String, (SecretString, String, Option<u64>)> {
         // Grouped by cache spec (not URI) so an alias's `credentials` stays
         // reachable at build time, and sorted so warnings come out in a stable
         // order.
@@ -2497,8 +2793,14 @@ impl Secrets {
                     .and_then(Route::cache)
                     .expect("the group was built from secrets with a cached route");
                 match cached_entry(planned, cache, stored, &self.config.project.name, profile) {
-                    CachedEntry::Fresh(value) => {
-                        cached.insert(planned.name.clone(), (value, uri.clone()));
+                    CachedEntry::Fresh {
+                        value,
+                        expires_at_unix_ms,
+                    } => {
+                        cached.insert(
+                            planned.name.clone(),
+                            (value, uri.clone(), expires_at_unix_ms),
+                        );
                     }
                     CachedEntry::Stale => {
                         self.evict_cache_entry(provider.as_ref(), &planned.name, profile)
@@ -3270,6 +3572,23 @@ impl Secrets {
     /// spec.set("DATABASE_URL", Some("postgres://localhost".to_string())).unwrap();
     /// ```
     pub fn set(&self, name: &str, value: Option<String>) -> Result<()> {
+        let stored = self.store_secret(name, value)?;
+        eprintln!(
+            "{} Secret '{}' saved to {} (profile: {})",
+            "✓".green(),
+            name,
+            stored.provider_name,
+            stored.profile
+        );
+        Ok(())
+    }
+
+    /// Shared core of [`Self::set`] and the resolver's `resolver.set`.
+    ///
+    /// Reports where the value landed rather than printing it: a resolver
+    /// session's only output is its framed response, and a confirmation line on
+    /// its stderr would be a diagnostic no consumer asked for.
+    fn store_secret(&self, name: &str, value: Option<String>) -> Result<StoredSecret> {
         self.ensure_reason_for(AuditAction::Set, Some(name))?;
         // Check if the secret exists in the spec
         let profile_name = self.resolve_profile_name(None);
@@ -3403,15 +3722,11 @@ impl Secrets {
         result?;
         self.sync_cache_after_write(&planned, route, &profile_name, stored_value);
 
-        eprintln!(
-            "{} Secret '{}' saved to {} (profile: {})",
-            "✓".green(),
-            name,
-            backend.name(),
-            profile_name
-        );
-
-        Ok(())
+        Ok(StoredSecret {
+            profile: profile_name,
+            provider_name: backend.name().to_string(),
+            provider_uri: backend.uri(),
+        })
     }
 
     /// Deletes one secret value from its authoritative provider. Available
@@ -3423,6 +3738,12 @@ impl Secrets {
     /// also invalidates the manifest's cache so a later read cannot return the
     /// removed value. Missing values are an idempotent `Ok(false)`.
     pub fn delete(&self, name: &str) -> Result<bool> {
+        Ok(self.delete_secret(name)?.deleted)
+    }
+
+    /// Shared core of [`Self::delete`] and the resolver's `resolver.delete`,
+    /// reporting the provider the removal was addressed to.
+    fn delete_secret(&self, name: &str) -> Result<DeletedSecret> {
         self.ensure_reason_for(AuditAction::Delete, Some(name))?;
         let profile_name = self.resolve_profile_name(None);
         self.require_profile(&profile_name)?;
@@ -3494,7 +3815,10 @@ impl Secrets {
         // Even a no-op authoritative delete must invalidate the cache: the
         // cache may still contain the only surviving copy of the value.
         self.sync_cache_after_delete(&planned, route, &profile_name);
-        Ok(deleted)
+        Ok(DeletedSecret {
+            deleted,
+            provider_uri: backend.uri(),
+        })
     }
 
     /// Resolves one secret and prints it to stdout: the CLI's `secretspec get`.
@@ -4086,11 +4410,7 @@ impl Secrets {
                 },
             );
 
-            if delete_source
-                && !crate::provider::spec_provider_deletes(
-                    &self.resolve_provider_spec(from_provider.to_string()),
-                )
-            {
+            if delete_source && !from_provider_instance.supports_delete() {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
                     "provider '{}' does not support deleting secrets and cannot be used with import --delete-source",
                     from_provider_instance.name()
@@ -4522,14 +4842,21 @@ impl Secrets {
         let backend = self.write_provider_for_route(route, Some(profile_name))?;
 
         if backend.generated_value_persistence() == ProducedValuePersistence::Ephemeral {
-            eprintln!(
-                "{} {} - generated for this resolution without provider storage (profile: {})",
-                "✓".green(),
-                name,
-                profile_name
-            );
+            if self.progress {
+                eprintln!(
+                    "{} {} - generated for this resolution without provider storage (profile: {})",
+                    "✓".green(),
+                    name,
+                    profile_name
+                );
+            }
             return Ok(Some(value));
         }
+
+        // Checked only on the persisting branch: an ephemeral provider returned
+        // above without touching a store, and refusing that would deny a read
+        // that never wrote anything.
+        self.ensure_produced_write_allowed(name)?;
 
         // The provider states why a write is refused; wrapping it here would
         // only nest a second "Provider operation failed" prefix.
@@ -4558,13 +4885,15 @@ impl Secrets {
             stored_value,
         );
 
-        eprintln!(
-            "{} {} - generated and saved to {} (profile: {})",
-            "✓".green(),
-            name,
-            backend.name(),
-            profile_name
-        );
+        if self.progress {
+            eprintln!(
+                "{} {} - generated and saved to {} (profile: {})",
+                "✓".green(),
+                name,
+                backend.name(),
+                profile_name
+            );
+        }
 
         Ok(Some(value))
     }
@@ -4574,9 +4903,14 @@ impl Secrets {
     /// input handle on Windows) when stdin is redirected, so the child retains
     /// its original stdin stream. Persistence is deliberately handled by
     /// [`Self::try_prompt_secret`], after this input-only step succeeds.
-    fn prompt_run_secret(&self, name: &str, profile: &str) -> Result<SecretString> {
+    fn prompt_run_secret(
+        &self,
+        name: &str,
+        profile: &str,
+        target_provider: Option<&str>,
+    ) -> Result<SecretString> {
         let value = if let Some(reader) = &self.prompt_reader {
-            reader(name, profile)?
+            reader(name, profile, target_provider)?
         } else {
             let message = format!("Enter value for {name} (profile: {profile}):");
             let entered = inquire::Password::new(&message)
@@ -4625,17 +4959,26 @@ impl Secrets {
         // and reject a read-only destination, before asking the operator for a
         // value. Ephemeral providers explicitly bypass the write path.
         if persistence == ProducedValuePersistence::Persist {
+            // Refused before anyone is asked: a person who answers a prompt
+            // whose answer is then thrown away has been asked for nothing.
+            self.ensure_produced_write_allowed(name)?;
             self.preflight_write(planned, profile_name, backend.as_ref())?;
         }
 
-        let value = self.prompt_run_secret(name, profile_name)?;
+        // Named only when the answer is actually going to be stored there, so a
+        // person is never shown a destination that will not receive it.
+        let target_provider =
+            (persistence == ProducedValuePersistence::Persist).then(|| backend.uri());
+        let value = self.prompt_run_secret(name, profile_name, target_provider.as_deref())?;
         if persistence == ProducedValuePersistence::Ephemeral {
-            eprintln!(
-                "{} {} - entered for this run without provider storage (profile: {})",
-                "✓".green(),
-                name,
-                profile_name
-            );
+            if self.progress {
+                eprintln!(
+                    "{} {} - entered for this run without provider storage (profile: {})",
+                    "✓".green(),
+                    name,
+                    profile_name
+                );
+            }
             return Ok(value);
         }
 
@@ -4653,13 +4996,15 @@ impl Secrets {
         set_result?;
         self.sync_cache_after_write(planned, route, profile_name, stored_value);
 
-        eprintln!(
-            "{} {} - entered and saved to {} (profile: {})",
-            "✓".green(),
-            name,
-            backend.name(),
-            profile_name
-        );
+        if self.progress {
+            eprintln!(
+                "{} {} - entered and saved to {} (profile: {})",
+                "✓".green(),
+                name,
+                backend.name(),
+                profile_name
+            );
+        }
         Ok(value)
     }
 
@@ -4834,6 +5179,129 @@ impl Secrets {
         self.resolve_named_within(name, Surface::Scoped)
     }
 
+    /// Named resolution retaining every materialized file owner, as the
+    /// resolver sees it but without its caller attribution or prompting.
+    #[cfg(test)]
+    pub(crate) fn resolve_named_owned(&self, name: &str) -> Result<OwnedNamedResolution> {
+        self.resolve_named_owned_within(name, Surface::Scoped, Materialize::Values)
+    }
+
+    /// Resolver-mode resolution with structured caller attribution scoped to the
+    /// blocking worker that performs the read (0.20+).
+    ///
+    /// `interactive` decides whether a `prompt = true` declaration with no
+    /// stored value may ask for one. It is true only when the session's client
+    /// advertised that it can reach a person; otherwise the declaration is left
+    /// to fail as unavailable rather than blocking on a question nobody will
+    /// see.
+    #[cfg(feature = "cli")]
+    pub(crate) fn resolve_named_owned_for_ipc(
+        &self,
+        name: &str,
+        purpose: IpcAuditPurpose,
+        interactive: bool,
+    ) -> Result<OwnedNamedResolution> {
+        let materialize = if interactive {
+            Materialize::Run
+        } else {
+            Materialize::Values
+        };
+        with_ipc_audit_purpose(purpose, || {
+            self.resolve_named_owned_within(name, Surface::Scoped, materialize)
+        })
+    }
+
+    /// Resolver-mode write of one declared name (0.20+).
+    ///
+    /// The value goes where a resolver read of the same name would look for it,
+    /// so a consumer that stores and then resolves never has to model routing.
+    /// The session's scope bounds this exactly as it bounds a read: a name the
+    /// scope does not offer is not a name this session may write, which is why
+    /// the surface is checked here rather than left to the CLI's unscoped rule.
+    #[cfg(feature = "cli")]
+    pub(crate) fn store_named_for_ipc(
+        &self,
+        name: &str,
+        value: String,
+        purpose: IpcAuditPurpose,
+    ) -> Result<StoredSecret> {
+        with_ipc_audit_purpose(purpose, || {
+            self.require_ipc_surface(AuditAction::Set, name)?;
+            self.store_secret(name, Some(value))
+        })
+    }
+
+    /// Resolver-mode removal of one declared name's stored value (0.20+), under
+    /// the same scope rule as [`Self::store_named_for_ipc`].
+    #[cfg(feature = "cli")]
+    pub(crate) fn delete_named_for_ipc(
+        &self,
+        name: &str,
+        purpose: IpcAuditPurpose,
+    ) -> Result<DeletedSecret> {
+        with_ipc_audit_purpose(purpose, || {
+            self.require_ipc_surface(AuditAction::Delete, name)?;
+            self.delete_secret(name)
+        })
+    }
+
+    /// Resolver-mode report that a resolved value was refused by its consumer
+    /// (0.20+), returning whether a cached copy was discarded.
+    ///
+    /// Expiry only covers a value that aged out. A token revoked at its issuer
+    /// stays fresh by the clock, so without this the cache serves a dead value
+    /// until the entry ages out and the consumer has no way to say otherwise.
+    /// Only the derived copy is dropped: the authoritative store behind the
+    /// cached route still holds the secret, which is why this is not a
+    /// mutation and a read-only endpoint answers it too.
+    ///
+    /// Every "nothing to discard" reason reports the same success. A name this
+    /// session's scope does not offer is one of them, so that a scope does not
+    /// disclose the names it hides, exactly as a hidden name reads as
+    /// undeclared on the read path.
+    #[cfg(feature = "cli")]
+    pub(crate) fn reject_named_for_ipc(
+        &self,
+        name: &str,
+        purpose: IpcAuditPurpose,
+    ) -> Result<bool> {
+        with_ipc_audit_purpose(purpose, || {
+            self.ensure_reason_for(AuditAction::CacheClear, Some(name))?;
+            let profile = self.resolve_profile_name(None);
+            let visible = Surface::Scoped.names(self, &profile)?;
+            if !visible.iter().any(|declared| declared == name) {
+                return Ok(false);
+            }
+            let Some(planned) = self.plan_declared_secret(name, &profile)? else {
+                return Ok(false);
+            };
+            let Some(route) = &planned.route else {
+                return Ok(false);
+            };
+            self.invalidate_cached_secret(&planned, route, &profile)
+        })
+    }
+
+    /// Rejects a mutation of a name the session's scope does not offer, and
+    /// audits the attempt the way a read of a hidden name is audited.
+    #[cfg(feature = "cli")]
+    fn require_ipc_surface(&self, action: AuditAction, name: &str) -> Result<()> {
+        let profile_name = self.resolve_profile_name(None);
+        let visible = match Surface::Scoped.names(self, &profile_name) {
+            Ok(visible) => visible,
+            Err(err) => {
+                self.record_key_error(action, &profile_name, name, None, None, &err);
+                return Err(err);
+            }
+        };
+        if visible.iter().any(|declared| declared == name) {
+            return Ok(());
+        }
+        let err = SecretSpecError::SecretNotFound(name.to_string());
+        self.record_key_error(action, &profile_name, name, None, None, &err);
+        Err(err)
+    }
+
     /// Shared core of [`Self::resolve_named`] and [`Self::get`].
     ///
     /// They differ only in which surface decides that a name exists: the SDK
@@ -4841,6 +5309,16 @@ impl Secrets {
     /// `get` names one secret and has no `--scope`, so an ambient or configured
     /// scope must not hide a secret from it.
     fn resolve_named_within(&self, name: &str, surface: Surface) -> Result<NamedResolution> {
+        self.resolve_named_owned_within(name, surface, Materialize::Values)?
+            .into_embedded()
+    }
+
+    fn resolve_named_owned_within(
+        &self,
+        name: &str,
+        surface: Surface,
+        materialize: Materialize,
+    ) -> Result<OwnedNamedResolution> {
         self.ensure_reason_for(AuditAction::Get, Some(name))?;
         let profile_name = self.resolve_profile_name(None);
 
@@ -4859,7 +5337,7 @@ impl Secrets {
             // records an undefined secret). No provider can be attributed.
             let err = SecretSpecError::SecretNotFound(name.to_string());
             self.record_key_error(AuditAction::Get, &profile_name, name, None, None, &err);
-            return Ok(NamedResolution::Undeclared);
+            return Ok(OwnedNamedResolution::Undeclared);
         }
 
         // The target plus its transitive composition inputs: the same
@@ -4877,22 +5355,14 @@ impl Secrets {
         // would additionally enable the whole-profile constraint checks that a
         // single-secret read does not own.
         let mut read_addresses = HashMap::new();
-        let outcome =
-            match self.execute_plan(&plan, Materialize::Values, None, Some(&mut read_addresses)) {
-                Ok(outcome) => outcome,
-                Err(err) => {
-                    let reference = read_addresses.get(name);
-                    self.record_key_error(
-                        AuditAction::Get,
-                        &profile_name,
-                        name,
-                        None,
-                        reference,
-                        &err,
-                    );
-                    return Err(err);
-                }
-            };
+        let outcome = match self.execute_plan(&plan, materialize, None, Some(&mut read_addresses)) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                let reference = read_addresses.get(name);
+                self.record_key_error(AuditAction::Get, &profile_name, name, None, reference, &err);
+                return Err(err);
+            }
+        };
         // Exactly the coordinates the read reached, never the declared ones: an
         // alias `ref` template resolves to a different address per provider, and
         // a read served from cache addressed no authoritative store at all.
@@ -4919,14 +5389,11 @@ impl Secrets {
                             ..Default::default()
                         },
                     );
-                    return Ok(NamedResolution::Missing {
+                    return Ok(OwnedNamedResolution::Missing {
                         required: entry.required,
                     });
                 }
 
-                // Persist as_path temp files so the returned path stays valid
-                // for the caller, exactly as `resolve` does.
-                validated.keep_temp_files()?;
                 let raw = validated
                     .resolved
                     .secrets
@@ -4934,12 +5401,6 @@ impl Secrets {
                     .expect("a Resolved entry always has a value")
                     .expose_secret()
                     .to_string();
-                let (value, path) = if entry.as_path {
-                    (None, Some(raw))
-                } else {
-                    (Some(raw), None)
-                };
-
                 self.record(
                     AuditAction::Get,
                     &profile_name,
@@ -4955,13 +5416,42 @@ impl Secrets {
                         ..Default::default()
                     },
                 );
-                Ok(NamedResolution::Resolved(ResolvedSecret {
-                    value,
-                    path,
-                    as_path: entry.as_path,
-                    source: resolved_source(&entry),
-                    source_provider: entry.source_provider,
-                }))
+                let source = resolved_source(&entry);
+                let source_provider = entry.source_provider;
+                let expires_at_unix_ms = validated.expiries.remove(name);
+                let mut supporting_files = std::mem::take(&mut validated.temp_files);
+                if entry.as_path {
+                    // Every resolution branch materializes an `as_path` value
+                    // through `insert_resolved`, so the owner is expected to be
+                    // present. This stays an error rather than a panic because
+                    // it runs inside the public SDK entry point and the resolver's
+                    // blocking worker, where every other failure is recoverable.
+                    let target = supporting_files
+                        .iter()
+                        .position(|file| file.path().to_string_lossy() == raw)
+                        .ok_or_else(|| {
+                            SecretSpecError::ProviderOperationFailed(format!(
+                                "secret '{name}' is declared `as_path` but its resolved value has \
+                                 no retained file owner"
+                            ))
+                        })?;
+                    let file = supporting_files.swap_remove(target);
+                    Ok(OwnedNamedResolution::File {
+                        file,
+                        source,
+                        source_provider,
+                        expires_at_unix_ms,
+                        supporting_files,
+                    })
+                } else {
+                    Ok(OwnedNamedResolution::Value {
+                        value: raw,
+                        source,
+                        source_provider,
+                        expires_at_unix_ms,
+                        supporting_files,
+                    })
+                }
             }
             Err(errors) => {
                 // Constraints are skipped for this partial plan, so a violation
@@ -4997,7 +5487,7 @@ impl Secrets {
                         ..Default::default()
                     },
                 );
-                Ok(NamedResolution::Missing { required })
+                Ok(OwnedNamedResolution::Missing { required })
             }
         }
     }
@@ -5428,6 +5918,7 @@ impl Secrets {
                 with_defaults: Vec::new(),
                 resolution: Vec::new(),
                 temp_files: Vec::new(),
+                expiries: HashMap::new(),
             }));
         }
 
@@ -5458,12 +5949,16 @@ impl Secrets {
         let mut fetched_values: HashMap<String, SecretString> = HashMap::new();
         let mut failed_primary_uris: HashMap<Option<&str>, SecretSpecError> = HashMap::new();
         let mut cached_uris: HashMap<String, String> = HashMap::new();
+        let mut known_expiries: HashMap<String, u64> = HashMap::new();
 
         // Consult caches before constructing source providers. Cache hits are
         // inserted into the same fetched-values map, and their names are
         // filtered out of source groups below. This ordering is what makes a
         // cached route useful when its remote provider is slow or unavailable.
-        for (name, (value, uri)) in self.read_cached_group(plan, profile) {
+        for (name, (value, uri, expiry)) in self.read_cached_group(plan, profile) {
+            if let Some(expiry) = expiry {
+                known_expiries.insert(name.clone(), expiry);
+            }
             cached_uris.insert(name.clone(), uri);
             fetched_values.insert(name, value);
         }
@@ -6049,6 +6544,7 @@ impl Secrets {
                 with_defaults,
                 resolution,
                 temp_files,
+                expiries: known_expiries,
             }))
         }
     }
@@ -6530,7 +7026,7 @@ mod write_target_tests {
             Ok("described".to_string())
         }
 
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             "counting"
         }
 
@@ -7301,7 +7797,7 @@ mod run_prompt_tests {
         let prompts = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&prompts);
         let mut spec = prompted_spec();
-        spec.set_prompt_reader(move |name, profile| {
+        spec.set_prompt_reader(move |name, profile, _| {
             assert_eq!(name, "DEPLOY_PASSWORD");
             assert_eq!(profile, "default");
             observed.fetch_add(1, Ordering::SeqCst);
@@ -7336,7 +7832,7 @@ mod run_prompt_tests {
         let prompts = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&prompts);
         let mut spec = prompted_dotenv_spec(&dotenv_path);
-        spec.set_prompt_reader(move |name, profile| {
+        spec.set_prompt_reader(move |name, profile, _| {
             assert_eq!(name, "DEPLOY_PASSWORD");
             assert_eq!(profile, "default");
             observed.fetch_add(1, Ordering::SeqCst);
@@ -7365,7 +7861,9 @@ mod run_prompt_tests {
     fn run_surfaces_an_unavailable_controlling_terminal() {
         let _env = crate::tests::scrub_resolution_env();
         let mut spec = prompted_spec();
-        spec.set_prompt_reader(|name, _| Err(SecretSpecError::PromptUnavailable(name.to_string())));
+        spec.set_prompt_reader(|name, _, _| {
+            Err(SecretSpecError::PromptUnavailable(name.to_string()))
+        });
 
         let error = match spec.validate_audited(false, Materialize::Run) {
             Err(error) => error,
@@ -7382,7 +7880,7 @@ mod run_prompt_tests {
     fn run_injects_the_prompted_value_into_the_child() {
         let _env = crate::tests::scrub_resolution_env();
         let mut spec = prompted_spec();
-        spec.set_prompt_reader(|_, _| Ok(SecretString::new("entered-once".into())));
+        spec.set_prompt_reader(|_, _, _| Ok(SecretString::new("entered-once".into())));
 
         let exit = spec
             .run_command(vec![

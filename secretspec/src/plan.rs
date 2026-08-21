@@ -669,10 +669,11 @@ impl Secrets {
         // route. A store that cannot delete gives an uninvalidatable cache, so
         // require the capability here rather than discovering it the first time
         // a stale value needs dropping.
-        if !crate::provider::spec_provider_deletes(&cache_uri) {
+        if !self.provider_supports_delete(cache.provider())? {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "cached provider alias '{name}' caches into '{uri}', which cannot delete secrets, \
-                 so its entries could never be invalidated. Cache into one of: {supported}.",
+                 so its entries could never be invalidated. Cache into an external provider \
+                 advertising `provider.delete`, or one of: {supported}.",
                 uri = crate::audit::redact_uri_strict(&cache_uri),
                 supported = crate::provider::deleting_provider_names().join(", "),
             )));

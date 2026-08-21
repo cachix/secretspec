@@ -95,6 +95,13 @@
     # For development of the SOPS provider
     pkgs.sops
     pkgs.pkg-config
+    # JSON parsing for libsecretspec-resolver, resolved through pkg-config
+    # (Meson, cc-rs) and its CMake package config rather than vendored
+    pkgs.yyjson
+    # Standalone libsecretspec-resolver builds and install metadata.
+    pkgs.cmake
+    pkgs.meson
+    pkgs.ninja
     # Installs the libsecretspec archive with its header and pkg-config file
     pkgs.cargo-c
   ];

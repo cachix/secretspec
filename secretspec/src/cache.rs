@@ -113,7 +113,10 @@ pub(crate) enum CacheOwnership {
 /// What a stored cache entry can do for the read that found it.
 pub(crate) enum CacheEntryStatus {
     /// Fresh, and written for the expected authoritative route.
-    Fresh(SecretBytes),
+    Fresh {
+        value: SecretBytes,
+        expires_at_unix_ms: Option<u64>,
+    },
     /// Expired (regardless of owner), or ours but no longer usable because its
     /// authoritative route or freshness policy changed.
     Stale,
@@ -292,9 +295,13 @@ fn inspect_entry_with_clock<E>(
             if envelope.cached_at > now || now.saturating_sub(envelope.cached_at) > max_age_secs {
                 return Ok(CacheEntryStatus::Stale);
             }
-            return Ok(CacheEntryStatus::Fresh(SecretBytes::from_utf8(
-                envelope.value.as_str(),
-            )));
+            return Ok(CacheEntryStatus::Fresh {
+                value: SecretBytes::from_utf8(envelope.value.as_str()),
+                expires_at_unix_ms: envelope
+                    .cached_at
+                    .checked_add(max_age_secs)
+                    .and_then(|expires_at| expires_at.checked_mul(1000)),
+            });
         }
         Err(_) => return Ok(CacheEntryStatus::OursUnreadable),
     };
@@ -322,7 +329,7 @@ fn inspect_entry_with_clock<E>(
         return Ok(CacheEntryStatus::Stale);
     }
     Ok(match value {
-        Some(value) => CacheEntryStatus::Fresh(value),
+        Some(value) => CacheEntryStatus::Fresh { value, expires_at_unix_ms: expires_at.checked_mul(1000) },
         None => CacheEntryStatus::OursUnreadable,
     })
 }
@@ -430,7 +437,11 @@ mod tests {
             MAX_AGE,
             EXPIRES_AT - 1,
         );
-        let CacheEntryStatus::Fresh(value) = status else {
+        let CacheEntryStatus::Fresh {
+            value,
+            expires_at_unix_ms,
+        } = status
+        else {
             panic!("an entry is fresh before its expiration timestamp");
         };
         assert_eq!(envelope.expires_at, EXPIRES_AT);
@@ -646,7 +657,11 @@ mod tests {
     fn fresh_legacy_entry_remains_usable_during_migration() {
         let legacy = legacy_entry();
         let status = inspect_entry_at(&legacy, PROJECT, PROFILE, FINGERPRINT, MAX_AGE, EXPIRES_AT);
-        let CacheEntryStatus::Fresh(value) = status else {
+        let CacheEntryStatus::Fresh {
+            value,
+            expires_at_unix_ms,
+        } = status
+        else {
             panic!("v2 preserves its original inclusive freshness boundary");
         };
         assert_eq!(value.expose_secret(), b"sensitive");

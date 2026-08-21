@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":2,"method":"resolver.get","_meta":{"deadline_unix_ms":1786766405000},"params":{"name":"FORGE_TOKEN","representation":"value","purpose":{"consumer":"nix","operation":"fetch","host":"github.com","path":"/acme/project"}}}

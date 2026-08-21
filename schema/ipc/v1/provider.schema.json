@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secretspec.dev/schema/ipc/v1/provider.schema.json",
+  "title": "SecretSpec Secret Provider Protocol version 1",
+  "$defs": {
+    "InitializeApplication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scheme", "uri", "base_dir", "credentials", "reason"],
+      "properties": {
+        "scheme": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "uri": { "type": "string", "minLength": 1, "maxLength": 32768 },
+        "base_dir": { "type": ["string", "null"], "maxLength": 32768 },
+        "credentials": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 256 },
+          "additionalProperties": { "type": "string" }
+        },
+        "reason": { "type": ["string", "null"], "maxLength": 4096 }
+      }
+    },
+    "ProviderMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "display_uri",
+        "supported_coordinates",
+        "generated_value_persistence",
+        "prompted_value_persistence",
+        "storage_identity",
+        "entry_container_identity",
+        "physical_store_path"
+      ],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "display_uri": { "type": "string", "maxLength": 32768 },
+        "supported_coordinates": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["field", "vault", "section", "version"] }
+        },
+        "generated_value_persistence": { "$ref": "common.schema.json#/$defs/Persistence" },
+        "prompted_value_persistence": { "$ref": "common.schema.json#/$defs/Persistence" },
+        "storage_identity": { "type": "string", "maxLength": 32768 },
+        "entry_container_identity": { "type": "string", "maxLength": 32768 },
+        "physical_store_path": { "type": ["string", "null"], "maxLength": 32768 }
+      }
+    },
+    "InitializedApplication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider"],
+      "properties": {
+        "provider": { "$ref": "#/$defs/ProviderMetadata" }
+      }
+    },
+    "InitializeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "versions", "client", "limits", "application"],
+      "properties": {
+        "protocol": { "const": "secretspec.provider" },
+        "versions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 1, "maximum": 4294967295 }
+        },
+        "client": { "$ref": "common.schema.json#/$defs/Product" },
+        "limits": { "$ref": "common.schema.json#/$defs/Limits" },
+        "client_methods": { "$ref": "common.schema.json#/$defs/Methods" },
+        "application": { "$ref": "#/$defs/InitializeApplication" }
+      }
+    },
+    "InitializeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "version", "server", "methods", "capabilities", "limits", "application"],
+      "properties": {
+        "protocol": { "const": "secretspec.provider" },
+        "version": { "const": 1 },
+        "server": { "$ref": "common.schema.json#/$defs/Product" },
+        "methods": { "$ref": "common.schema.json#/$defs/Methods" },
+        "capabilities": { "$ref": "common.schema.json#/$defs/Capabilities" },
+        "limits": { "$ref": "common.schema.json#/$defs/Limits" },
+        "application": { "$ref": "#/$defs/InitializedApplication" }
+      }
+    },
+    "AddressParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address"],
+      "properties": {
+        "address": { "$ref": "common.schema.json#/$defs/Address" }
+      }
+    },
+    "ResolveAddressResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coordinates"],
+      "properties": {
+        "coordinates": { "$ref": "common.schema.json#/$defs/Coordinates" }
+      }
+    },
+    "GetResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": { "const": "found" },
+            "value": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": { "status": { "const": "missing" } }
+        }
+      ]
+    },
+    "GetManyParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requests"],
+      "properties": {
+        "requests": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "address"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+              "address": { "$ref": "common.schema.json#/$defs/Address" }
+            }
+          }
+        }
+      }
+    },
+    "NamedGetResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "status", "value"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "status": { "const": "found" },
+            "value": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "status"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "status": { "const": "missing" }
+          }
+        }
+      ]
+    },
+    "GetManyResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["results"],
+      "properties": {
+        "results": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": { "$ref": "#/$defs/NamedGetResult" }
+        }
+      }
+    },
+    "ExistsResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exists"],
+      "properties": { "exists": { "type": "boolean" } }
+    },
+    "SetParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "value"],
+      "properties": {
+        "address": { "$ref": "common.schema.json#/$defs/Address" },
+        "value": { "type": "string" }
+      }
+    },
+    "SetExpiringParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "value", "ttl_ms"],
+      "properties": {
+        "address": { "$ref": "common.schema.json#/$defs/Address" },
+        "value": { "type": "string" },
+        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }
+      }
+    },
+    "StoredResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stored"],
+      "properties": { "stored": { "const": true } }
+    },
+    "DeletedResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deleted"],
+      "properties": { "deleted": { "type": "boolean" } }
+    },
+    "ClearScope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "all" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "project", "profile"],
+          "properties": {
+            "kind": { "const": "convention" },
+            "project": { "type": "string", "maxLength": 4096 },
+            "profile": { "type": "string", "maxLength": 4096 }
+          }
+        }
+      ]
+    },
+    "ClearParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope"],
+      "properties": {
+        "scope": { "$ref": "#/$defs/ClearScope" }
+      }
+    },
+    "ClearResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cleared"],
+      "properties": { "cleared": { "type": "integer", "minimum": 0 } }
+    },
+    "DescribeWriteTargetResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description"],
+      "properties": { "description": { "type": "string", "maxLength": 4096 } }
+    },
+    "ReflectParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project", "profile"],
+      "properties": {
+        "project": { "type": "string", "maxLength": 4096 },
+        "profile": { "type": "string", "maxLength": 4096 }
+      }
+    },
+    "ReflectedDeclaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description", "required", "ref"],
+      "properties": {
+        "description": { "type": "string", "maxLength": 4096 },
+        "required": { "type": "boolean" },
+        "ref": { "$ref": "common.schema.json#/$defs/Coordinates" }
+      }
+    },
+    "ReflectResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "declarations"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "declarations": {
+          "type": "object",
+          "propertyNames": { "maxLength": 4096 },
+          "additionalProperties": { "$ref": "#/$defs/ReflectedDeclaration" }
+        }
+      }
+    }
+  }
+}

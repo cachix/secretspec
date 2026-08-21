@@ -27,6 +27,10 @@ for the API below.
 > `libsecretspec` (`libsecretspec.*`). The runtime loader still accepts the
 > pre-0.20 `secretspec_ffi` filenames.
 
+> **Native library name:** SecretSpec 0.20+ packages the embedded C ABI as
+> `libsecretspec` (`libsecretspec.*`). The runtime loader
+> still accepts the pre-0.20 `secretspec_ffi` filenames.
+
 The C# SDK (`Cachix.SecretSpec`) is a thin client over the same Rust resolver as
 the CLI. Every provider, fallback chain, profile, generator, reference, and
 `as_path` secret therefore works without C#-side resolution logic.

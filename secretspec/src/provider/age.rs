@@ -368,7 +368,7 @@ impl Provider for AgeProvider {
         })
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 

@@ -1,5 +1,5 @@
 /*
- * SecretSpec C ABI.
+ * libsecretspec: the embedded SecretSpec C ABI.
  *
  * A deliberately narrow, JSON-in / JSON-out boundary. The entire native surface
  * is the functions below; all richness lives in the versioned JSON

@@ -59,9 +59,16 @@ mod report;
 mod resolve;
 mod secret_value;
 mod secrets;
+#[cfg(feature = "cli")]
+mod serve;
 mod spec;
 mod spec_edit;
 mod validation;
+/// Windows ACL helpers. Public only so the IPC conformance harness can build a
+/// directory the endpoint trust checks accept; not part of the stable API.
+#[cfg(windows)]
+#[doc(hidden)]
+pub mod windows_security;
 
 pub(crate) mod provider;
 
@@ -107,7 +114,11 @@ pub use config::{
 };
 pub use error::{Result, SecretSpecError};
 pub use native::{INLINE_SPEC_SCHEMA_VERSION, NATIVE_CALL_REQUEST_VERSION, call_json};
-pub use provider::{DiscoveryContext, ProducedValuePersistence, Provider};
+pub use provider::external::{
+    EndpointSecurity, ExternalProvider, PlatformEndpointSecurity, ProviderDiscovery,
+    ProviderEndpoint, RegistrationScope, set_provider_discovery,
+};
+pub use provider::{Address, DiscoveryContext, ProducedValuePersistence, Provider};
 pub use report::{
     RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus, SecretResolution,
 };

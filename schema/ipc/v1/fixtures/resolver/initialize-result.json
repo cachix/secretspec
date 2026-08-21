@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"result":{"protocol":"secretspec.resolver","version":1,"server":{"name":"secretspec-resolver","version":"0.20.0"},"methods":["resolver.get","resolver.release"],"capabilities":{},"limits":{"max_frame_bytes":1048576,"max_in_flight":8},"application":{"manifest_kind":"path","supports_inline_manifest":true}}}

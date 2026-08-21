@@ -47,3 +47,7 @@ Or install one library form, its header, and pkg-config metadata:
 bash libsecretspec/scripts/cinstall.sh "$PREFIX" static
 bash libsecretspec/scripts/cinstall.sh "$PREFIX" shared
 ```
+
+This is distinct from
+[`libsecretspec-resolver`](../libsecretspec-resolver/), the pure-C client for
+SecretSpec's out-of-process resolution protocol.

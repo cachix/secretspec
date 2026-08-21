@@ -52,6 +52,7 @@ and how to turn it off.
     "operation": "credential_get",
     "resource": "github.com"
   },
+  "purpose": { "consumer": "python-sdk", "operation": "resolve" },
   "actor": { "user": "alice", "agent": "claude-code", "is_agent": true },
   "version": "0.20.0"
 }
@@ -76,6 +77,7 @@ and how to turn it off.
 | `error_kind` | A non-sensitive tag when `outcome` is `error` |
 | `reason` | The reason supplied via `--reason` / `SECRETSPEC_REASON` / the SDK, if any |
 | `caller` | Caller-asserted software integration context: `name`, and optional `version`, `operation`, and non-secret `resource` (SecretSpec 0.20+) |
+| `purpose` | Structured resolver-client attribution (`consumer`, `operation`, and optional `host`/`path`); present only for resolver resolution in SecretSpec 0.20+. It is audit context, never identity or authorization input. |
 | `actor` | The OS user, the detected coding agent (if any), and whether this is an agent session |
 
 This pairs naturally with the [`require_reason`](/reference/configuration/#requiring-a-reason-for-secret-access)

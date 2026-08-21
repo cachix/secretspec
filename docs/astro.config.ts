@@ -380,6 +380,16 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
           ],
         },
         {
+          label: "Integrations",
+          items: [
+            {
+              label: "Git credentials",
+              slug: "integrations/git",
+              badge: { text: "0.20+", variant: "note" },
+            },
+          ],
+        },
+        {
           label: "SDK",
           items: [
             {

@@ -226,6 +226,81 @@ Run 'secretspec check --provider bws' to verify authentication.
 
 A read-only source provider is rejected. An alias that declares no credentials reports that there is nothing to store.
 
+### git configure (0.20+)
+
+Configure Git to retrieve an HTTP(S) or SMTP password or token through
+SecretSpec. Repository-local configuration is the default.
+
+```bash
+$ secretspec git configure --url <URL> [OPTIONS]
+```
+
+**Options:**
+
+- `--url <URL>` - HTTP(S) or SMTP URL this credential may authenticate; an
+  HTTP(S) path limits it to that part of the host, while SMTP requires an
+  explicit port
+- `--username <USERNAME>` - Non-secret username to keep in the managed Git
+  configuration; required for SMTP and must match `sendemail.smtpUser`
+- `-p, --provider <PROVIDER>` - Provider override the helper should use
+- `--global` - Configure the current user's global Git settings instead
+- `-y, --yes` - Confirm a global change non-interactively; requires `--global`
+
+Without `--file`, the command uses the embedded Git manifest with required
+`PASSWORD` and optional `USERNAME` declarations. It records no manifest path
+and isolates storage by the canonical protocol, host, and configured path.
+
+With `--file`, `--token-secret <KEY>` is required;
+`--username-secret <KEY>` and `-P, --profile <PROFILE>` select custom manifest
+declarations and conflict with the embedded defaults. `--username-secret`
+conflicts with `--username`.
+
+Global changes prompt with a default of **No**. Existing helpers and unrelated
+Git configuration are not replaced. See [Git credentials](/integrations/git/)
+for setup examples and the ownership model.
+
+### git login (0.20+)
+
+Store an embedded Git password or token, prompting securely on a terminal or
+reading it from piped standard input.
+
+```bash
+$ secretspec git login <URL> [--username <USERNAME>] [--provider <PROVIDER>]
+```
+
+`--username` also stores the optional embedded username. The URL must match the
+one passed to `configure`, including a path scope. For SMTP, the username is
+read from managed Git configuration unless passed explicitly. `git login`
+rejects `--file`; use `secretspec set` for custom manifest declarations.
+
+### git logout (0.20+)
+
+Remove the embedded username and password or token for one exact target without
+removing its Git helper configuration.
+
+```bash
+$ secretspec git logout <URL> [--username <USERNAME>] [--provider <PROVIDER>]
+```
+
+For SMTP, the username is read from managed Git configuration unless passed
+explicitly. `git logout` rejects `--file`; use `secretspec delete` for custom
+manifest declarations.
+
+### git unconfigure (0.20+)
+
+Remove one or all Git credentials configured by SecretSpec in the selected
+scope.
+
+```bash
+$ secretspec git unconfigure --url <URL>
+$ secretspec git unconfigure --all
+$ secretspec git unconfigure --all --global
+```
+
+Use `--global` to select global configuration and `--yes` to confirm that
+global change non-interactively. `--all` removes only entries SecretSpec owns;
+it does not remove existing helpers, usernames, or unrelated includes.
+
 ### check
 Check if all required secrets are available, with interactive prompting for missing secrets.
 

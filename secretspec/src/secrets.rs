@@ -957,6 +957,11 @@ impl Secrets {
         })
     }
 
+    pub(crate) fn load_config(config: Config, config_dir: PathBuf) -> Result<Self> {
+        let spec = Spec::from_config_document(config)?;
+        Self::from_spec_at(spec, config_dir)
+    }
+
     /// Installs the CLI's write-target observer. The provider and core library
     /// only compute credential-free target metadata; presentation stays with
     /// the caller that explicitly opts in.

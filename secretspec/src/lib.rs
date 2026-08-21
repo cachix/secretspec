@@ -67,6 +67,10 @@ pub(crate) mod provider;
 #[cfg(feature = "cli")]
 pub mod cli;
 
+#[cfg(feature = "cli")]
+#[doc(hidden)]
+pub mod integration;
+
 // Re-export only the types needed by users and generated code
 pub use caller::CallerContext;
 pub use config::Resolved;

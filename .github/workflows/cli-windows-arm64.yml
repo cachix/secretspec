@@ -72,7 +72,7 @@ jobs:
           # holding the target path.
           cp secretspec/README.md staging/README.md
           cp CHANGELOG.md LICENSE staging/
-          cp target/aarch64-pc-windows-msvc/dist/secretspec.exe staging/
+          cp target/aarch64-pc-windows-msvc/dist/{secretspec,git-credential-secretspec}.exe staging/
 
       - name: Create the archive
         shell: pwsh
@@ -88,7 +88,7 @@ jobs:
           $names = $zip.Entries.FullName
           $zip.Dispose()
           # Every file dist puts in a Windows archive, at the archive root.
-          foreach ($entry in 'secretspec.exe', 'README.md', 'LICENSE', 'CHANGELOG.md') {
+          foreach ($entry in 'secretspec.exe', 'git-credential-secretspec.exe', 'README.md', 'LICENSE', 'CHANGELOG.md') {
             if ($names -notcontains $entry) {
               throw "the archive is missing $entry"
             }

@@ -166,7 +166,7 @@ impl TryFrom<&Url> for Box<dyn Provider> {
 /// carries a credential rejects it itself.
 ///
 /// Since SecretSpec 0.19.
-fn reject_uri_credential(url: &ProviderUrl) -> Result<()> {
+pub(crate) fn reject_uri_credential(url: &ProviderUrl) -> Result<()> {
     if url.password().is_none() {
         return Ok(());
     }
@@ -211,16 +211,29 @@ pub(crate) fn provider_from_url(
     url: &ProviderUrl,
     credentials: ProviderCredentials,
 ) -> Result<Box<dyn Provider>> {
+    provider_from_url_with_discovery(url, credentials, super::external::discover)
+}
+
+pub(crate) fn provider_from_url_with_discovery(
+    url: &ProviderUrl,
+    credentials: ProviderCredentials,
+    discover: impl FnOnce(&str) -> Result<Option<super::external::ProviderEndpoint>>,
+) -> Result<Box<dyn Provider>> {
     reject_uri_credential(url)?;
     let scheme = url.scheme();
 
-    let registration = registration_for_scheme(scheme)
-        .ok_or_else(|| SecretSpecError::ProviderNotFound(scheme.to_string()))?;
-
-    let pwp = (registration.factory)(url, credentials)?;
-    if pwp.preflight.is_some() {
-        Ok(Box::new(PreflightGuard::new(pwp)))
+    if let Some(registration) = registration_for_scheme(scheme) {
+        let pwp = (registration.factory)(url, credentials)?;
+        if pwp.preflight.is_some() {
+            Ok(Box::new(PreflightGuard::new(pwp)))
+        } else {
+            Ok(pwp.provider)
+        }
+    } else if let Some(endpoint) = discover(scheme)? {
+        let mut provider = super::external::ExternalProvider::from_url(endpoint, url);
+        provider.with_credentials(credentials);
+        Ok(Box::new(provider))
     } else {
-        Ok(pwp.provider)
+        Err(SecretSpecError::ProviderNotFound(scheme.to_string()))
     }
 }

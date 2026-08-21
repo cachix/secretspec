@@ -33,7 +33,7 @@ on:
   pull_request:
     paths:
       - "secretspec-go/**"
-      - "secretspec-ffi/**"
+      - "libsecretspec/**"
       - ".github/workflows/go-embed.yml"
       - "scripts/check-linux-portability.sh"
       - "scripts/install-rustup.sh"
@@ -85,7 +85,7 @@ jobs:
         shell: bash
         run: >-
           bash scripts/check-linux-portability.sh
-          "secretspec-go/lib/secretspec_ffi_${{ matrix.target }}.so"
+          "secretspec-go/lib/secretspec_${{ matrix.target }}.so"
 
       - name: Build and smoke test the embedded SDK (no SECRETSPEC_FFI_LIB)
         shell: bash
@@ -154,7 +154,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           set -euo pipefail
-          mapfile -t assets < <(find staged -type f -name 'secretspec_ffi_*' -print | sort)
+          mapfile -t assets < <(find staged -type f -name 'secretspec_*' -print | sort)
           if [[ "${#assets[@]}" -ne 4 ]]; then
             printf 'expected 4 embedded libraries, found %s\n' "${#assets[@]}" >&2
             printf '%s\n' "${assets[@]}" >&2

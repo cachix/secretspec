@@ -296,6 +296,19 @@ enum Commands {
         #[command(subcommand)]
         action: CacheAction,
     },
+    /// Serve one `secretspec.resolver/1` session over stdin and stdout (0.20+)
+    ///
+    /// The session is a private child of whoever launched it: it exchanges
+    /// framed IPC on the standard streams, never prompts on them, and exits
+    /// with its parent. A future daemon mode would instead expose a socket
+    /// other local processes can reach, so that mode has to be asked for while
+    /// this one does not.
+    Serve {
+        /// Advertise resolution only, refusing `resolver.set` and
+        /// `resolver.delete` (0.20+)
+        #[arg(long)]
+        read_only: bool,
+    },
     /// Show the local audit log of secret access
     Audit {
         /// Only show entries for this project
@@ -1590,6 +1603,11 @@ pub fn main() -> Result<()> {
                 Ok(())
             }
         },
+        Commands::Serve { read_only } => {
+            crate::provider::block_on(crate::serve::run_stdio(read_only))
+                .into_diagnostic()
+                .wrap_err("SecretSpec resolver failed")
+        }
         // Show the local audit log
         Commands::Audit {
             project,

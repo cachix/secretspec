@@ -12,6 +12,10 @@ share one resolver.
 > package is an unsupported package-ID bootstrap; use version 0.16 or later
 > for the API shown in the C# guide.
 
+> **Native library name:** Starting with SecretSpec 0.20, the embedded C ABI is
+> `libsecretspec`. It was called `secretspec-ffi` through SecretSpec 0.19;
+> current runtime SDKs retain shared-library filename compatibility.
+
 ## One resolver, thin clients
 
 Resolution (providers, fallback chains, profiles, generation, `as_path`
@@ -20,7 +24,7 @@ that core rather than a reimplementation:
 
 - **Rust** uses the library directly, with a compile-time derive macro for
   strongly-typed access.
-- **Ruby** (a native C extension) statically links the `secretspec-ffi` C ABI
+- **Ruby** (a native C extension) statically links the `libsecretspec` C ABI
   at build time; **Go** (purego) loads it at runtime with no cgo. Both exchange
   a small JSON request/response with the core.
 - **Haskell** links the same C ABI at build time via the GHC FFI.
@@ -93,7 +97,7 @@ The resolver ships inside each package, so there is nothing extra to install and
 no runtime library path to set:
 
 - **Python** builds the resolver into a pyo3 extension shipped as a `cp39-abi3`
-  wheel, and **Ruby** statically links the `secretspec-ffi` archive into a
+  wheel, and **Ruby** statically links the `libsecretspec` archive into a
   native C extension in the gem.
 - **Haskell** statically links the same archive at build time via the GHC FFI.
 - **C# (0.16+)** ships the `cdylib` as runtime-specific native assets in one

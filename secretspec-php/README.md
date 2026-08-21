@@ -12,8 +12,12 @@ contract, preferring the first that is available:
    [ext-php-rs](https://github.com/davidcole1340/ext-php-rs), crate
    `secretspec-php-native`) embeds the resolver like `ext-redis` does — no
    `ffi.enable`, works under PHP-FPM. Recommended for Laravel/Symfony.
-2. **`ext-ffi`** dlopens the `secretspec-ffi` shared library at runtime. Nothing
+2. **`ext-ffi`** dlopens the `libsecretspec` shared library at runtime. Nothing
    to compile; ideal for CLI and local development.
+
+> The embedded ABI is named `libsecretspec` in SecretSpec 0.20+. It was named
+> `secretspec-ffi` through 0.19; the 0.20+ FFI loader accepts both shared
+> library filename families.
 
 ## Install
 
@@ -68,7 +72,7 @@ composer install                 # run at the repo root; installs to secretspec-
 
 # Backend 1: ext-ffi fallback. Build the cdylib; it is discovered via the
 # nearest Cargo target/ dir (or set SECRETSPEC_FFI_LIB).
-cargo build -p secretspec-ffi
+cargo build -p libsecretspec
 ( cd secretspec-php && ./vendor/bin/phpunit )
 
 # Backend 2: the native extension. Build and load it.

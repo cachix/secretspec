@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "client.lifecycle",
+  "targets": ["c-client", "rust-client"],
+  "timeout_ms": 10000,
+  "actions": [
+    {"kind": "initialize", "protocol": "secretspec.resolver", "version": 1},
+    {"kind": "call", "method": "resolver.get", "deadline_after_ms": 1000},
+    {"kind": "cancel"},
+    {"kind": "close", "deadline_after_ms": 1000}
+  ],
+  "required_events": ["initialized", "terminal", "child_reaped", "closed"]
+}

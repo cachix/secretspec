@@ -3,7 +3,7 @@ use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use secrecy::SecretString;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 /// Return type from provider factories that pairs a provider with an
@@ -72,7 +72,7 @@ impl<K: std::hash::Hash + Eq + Clone> AuthCheckCache<K> {
 
 /// Auth probes shared across provider instances (see
 /// [`Provider::auth_scope_key`]), keyed by provider name plus scope.
-static PREFLIGHT_AUTH_CACHE: LazyLock<AuthCheckCache<(&'static str, String)>> =
+static PREFLIGHT_AUTH_CACHE: LazyLock<AuthCheckCache<(String, String)>> =
     LazyLock::new(AuthCheckCache::default);
 
 /// Wrapper that runs a preflight check exactly once before any provider
@@ -101,7 +101,7 @@ impl PreflightGuard {
         // secret's `providers` chain creates all reuse one probe.
         if let Some(scope) = self.inner.auth_scope_key() {
             return PREFLIGHT_AUTH_CACHE
-                .check((self.inner.name(), scope), || {
+                .check((self.inner.name().to_string(), scope), || {
                     f().map_err(|e| crate::error::display_error_chain(&e))
                 })
                 .map_err(SecretSpecError::ProviderOperationFailed);
@@ -126,6 +126,10 @@ impl Provider for PreflightGuard {
         self.inner.supported_coords()
     }
 
+    fn supports_coord(&self, name: &str) -> bool {
+        self.inner.supports_coord(name)
+    }
+
     fn resolve_coords<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
         // Pure naming, no I/O: needs no auth preflight.
         self.inner.resolve_coords(addr)
@@ -139,6 +143,15 @@ impl Provider for PreflightGuard {
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
         self.check()?;
         self.inner.get(addr)
+    }
+
+    fn supports_read(&self) -> bool {
+        self.inner.supports_read()
+    }
+
+    fn exists(&self, addr: Address<'_>) -> Result<bool> {
+        self.check()?;
+        self.inner.exists(addr)
     }
 
     fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
@@ -193,7 +206,7 @@ impl Provider for PreflightGuard {
         self.inner.auth_scope_key()
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.inner.name()
     }
 
@@ -255,6 +268,11 @@ impl Provider for PreflightGuard {
         self.check()?;
         self.inner.get_many(requests)
     }
+
+    fn exists_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashSet<String>> {
+        self.check()?;
+        self.inner.exists_many(requests)
+    }
 }
 
 #[cfg(test)]
@@ -292,7 +310,7 @@ mod tests {
             Ok(())
         }
 
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             "profile-recording"
         }
 

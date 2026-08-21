@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "provider.operations",
+  "targets": ["rust-server", "provider-endpoint", "external-adapter"],
+  "timeout_ms": 10000,
+  "actions": [
+    {"kind": "initialize", "protocol": "secretspec.provider", "version": 1, "scheme": "memory"},
+    {"kind": "call", "method": "provider.resolve_address"},
+    {"kind": "call", "method": "provider.get"},
+    {"kind": "call", "method": "provider.get_many"},
+    {"kind": "call", "method": "provider.exists"},
+    {"kind": "call", "method": "provider.set"},
+    {"kind": "call", "method": "provider.set_expiring"},
+    {"kind": "call", "method": "provider.delete"},
+    {"kind": "call", "method": "provider.clear"},
+    {"kind": "call", "method": "provider.check_writable"},
+    {"kind": "call", "method": "provider.check_deletable"},
+    {"kind": "call", "method": "provider.describe_write_target"},
+    {"kind": "call", "method": "provider.reflect"},
+    {"kind": "shutdown"}
+  ],
+  "required_events": [
+    "initialized",
+    "resolved_address",
+    "read",
+    "batched",
+    "preflighted",
+    "mutated",
+    "expired",
+    "cleared",
+    "reflected",
+    "closed"
+  ]
+}

@@ -274,7 +274,7 @@ impl Provider for GoPassProvider {
         true
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 

@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":4,"method":"resolver.set","_meta":{"deadline_unix_ms":1786766407000},"params":{"name":"FORGE_TOKEN","value":"IPC_CANARY_NOT_A_REAL_SECRET","purpose":{"consumer":"cargo","operation":"login","host":"crates.io"}}}

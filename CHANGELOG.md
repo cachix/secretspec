@@ -18,6 +18,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   includes valid when repositories move, distinguishes percent-encoded reserved
   path bytes, avoids persisting an ambient profile, and exits quietly when its
   output pipe closes on Unix.
+- `libsecretspec-resolver` now links yyjson from the system instead of building
+  a vendored copy. Building it from source needs yyjson installed, discovered
+  through pkg-config for Meson or through `find_package(yyjson CONFIG)` for
+  CMake, and consumers of the static archive must add `-lyyjson` to their link
+  line. Its `secretspec-resolver.pc` records this as `Requires.private`. The
+  shared library still exports only its own `secretspec_resolver_*` symbols.
+- IPC sessions now use bounded newline-delimited JSON, monotonic request IDs,
+  and `_meta` request metadata. They distinguish methods from capabilities,
+  accept forward-compatible result fields, correlate callbacks with their
+  parent requests, tolerate notification races, and drain accepted work during
+  graceful shutdown.
+- IPC subprocess sessions now reap children after startup timeouts, preserve a
+  buffered shutdown response when an endpoint exits immediately, and remain
+  usable after the terminal response from an expired callback arrives. Callback
+  requests now honor negotiated concurrency, reject reused IDs for the whole
+  session, and expire unanswered prompts at their deadline; watchdog-killed
+  blocking sessions report themselves closed. Resolver-mode ephemeral
+  generation also stays silent on stderr.
+- `secretspec serve --read-only` now refuses any resolution that would write to
+  a provider, instead of only withholding the store and remove methods.
+  Resolving is not always a read: a `generate = true` declaration with no stored
+  value is minted and written back, and a `prompt = true` one is written back
+  after a person answers, so a read could still reach the store through a
+  session that advertised no way to write. Both are now refused with
+  `permission_denied`. Producing a value the provider does not store is
+  unaffected, and so is SecretSpec's own cache.
+- IPC clients now decode an error kind or a resolved-value `source` they do not
+  recognize instead of failing the session. Both are closed for senders and open
+  for receivers, so a later protocol revision can name a new failure or a new
+  value origin without breaking a deployed peer. An unrecognized error is
+  reported as a failure and never as a success, and a code the client does know
+  must still arrive with the kind that belongs to it.
+- An IPC endpoint that writes a banner, warning, or stack trace to the stream
+  reserved for protocol frames is now reported as having written non-protocol
+  text, instead of as an oversized frame. Both the Rust and C clients report it,
+  and neither echoes the bytes. This is the most common integration failure when
+  bringing up a new endpoint, and the old message pointed at a frame-size
+  problem that did not exist.
+
 - Dotenv parsing and rendering now use dotenv-ng throughout the dotenv
   provider, age-encrypted dotenv blobs, and `secretspec export --format
   dotenv`. Values containing `$` remain literal, output uses only the quoting
@@ -96,6 +135,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provider and reason options are persisted, while `--file` retains the
   custom-manifest workflow (0.20+).
 
+- `secretspec-ipc` gained a `blocking` feature with a synchronous
+  `secretspec.resolver/1` session, so a program with no async runtime can talk to
+  `secretspec serve` without acquiring one. It speaks the same wire
+  protocol as the async client and passes the same fake-peer conformance cases,
+  and it pulls in no dependencies beyond the crate's existing serde, serde_json,
+  thiserror, and zeroize. Deadlines are enforced by terminating the child, since
+  a blocking pipe read cannot be interrupted.
+- `libsecretspec-resolver` can answer prompts, so a C consumer is no longer headless
+  for a `prompt = true` declaration. It takes no callback: the ABI hands no
+  function pointer to a foreign runtime, so a session opened with
+  `SECRETSPEC_RESOLVER_ANSWER_PROMPTS` reports `SECRETSPEC_RESOLVER_PROMPT_PENDING` from a
+  waiting call, and the caller takes the prompt, answers or declines it, and
+  waits again. The library adds the advertised capability itself, so a consumer
+  cannot claim one this build could not answer.
+- A declaration with `prompt = true` can now be resolved over IPC. The resolver
+  has no terminal of its own, so it asks the process that launched it, using the
+  new `client.prompt` callback, and that process reads the value from a person
+  and answers on the same session. A client says whether it can answer during
+  initialization; one that cannot is never asked, so a headless consumer gets
+  its answer immediately instead of waiting out a deadline. The answer is
+  persisted exactly as a terminal prompt would persist it.
+- `secretspec serve` no longer writes its generation and prompt confirmations to
+  stderr. Those lines name which secrets a session provisioned, and a resolver's
+  stderr belongs to whatever launched it.
+- The Secret Resolution Protocol gained `resolver.reject`, so a consumer that
+  was refused with a resolved value can say so and have the cached copy
+  discarded. Expiry only retires a value the clock invalidated; a token revoked
+  at its issuer stays fresh by the clock, and until now the cache served it
+  until the entry aged out. Rejection drops only SecretSpec's derived copy, never
+  the authoritative value, so every endpoint answers it, including one started
+  with `--read-only`. It is idempotent, and reports whether anything was
+  discarded.
+- The Secret Resolution Protocol gained the optional `resolver.set` and
+  `resolver.delete` methods, so a consumer such as `cargo login` can store or
+  remove one declared secret where the same session resolves it, rather than
+  shelling out to `secretspec set` with a manifest of its own. The value lands
+  on the route the session reads from, an active scope bounds a write exactly as
+  it bounds a read, and removal stays idempotent. Both are advertised as
+  capabilities, so a client can tell an endpoint that is older or read-only
+  apart from one that refused a particular write, and `secretspec serve
+  --read-only` advertises resolution only.
 - **Azure App Configuration provider** (`aac://`, 0.20+): select direct
   values and Azure Key Vault references by label, prefix, and tags, with Entra
   ID or connection-string authentication and guarded writes, deletion, and
@@ -133,6 +213,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `flyctl secrets set` over stdin, refuse boundary whitespace that `flyctl`
   would silently trim, and scrub ambient Fly token variables before injecting
   the token selected through the provider credential mechanism.
+- SecretSpec 0.20+ adds versioned local IPC: a private stdio resolver,
+  trusted out-of-tree provider endpoints, independent Rust and pure-C clients,
+  exact-name resolution with resolver-owned file leases, and shared
+  schema/OpenRPC/conformance contracts, including executable common-case
+  drivers for both clients, the Rust provider endpoint and external adapter,
+  plus the real resolver process. Provider IPC preserves structured error kinds,
+  never uses protocol streams for prompts, and isolates endpoint state by URI
+  and reason; discovery precedence and non-replay are covered by executable
+  tests. IPC deadlines live once on the request envelope, endpoints advertise
+  their supported application methods, Rust exposes owned typed sessions and
+  endpoint helpers, and the C client includes a synchronous call convenience
+  API alongside cancellable call handles. The embedded C ABI is now named `libsecretspec`,
+  with `libsecretspec.so`/`.dylib`/`.dll`, `libsecretspec.a`, and
+  `libsecretspec.pc` as its public artifacts; runtime SDK loaders continue to
+  recognize the pre-0.20 `secretspec-ffi` filenames.
 - `secretspec completions <shell>` generates completion scripts for Bash,
   Elvish, Fish, Nushell, PowerShell, and Zsh directly from the CLI definition,
   including descriptions and contextual suggestions for profiles, scopes,
@@ -266,6 +361,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   secret through a profile-derived versus explicit environment, or through an
   absolute ref that overrides different configured path defaults, preventing
   aliased destinations from overwriting one another.
+
+### Fixed
+
+- SecretSpec 0.20+ IPC enforces Windows ACL isolation for provider discovery
+  and resolver lease files, bounds cancellation and child-process cleanup by
+  request deadlines, and validates the same protocol constraints in its Rust
+  and C clients. Request deadlines are clamped to 300 seconds in the future by
+  both clients, so a peer cannot hold an in-flight slot indefinitely; a
+  provider endpoint that ignores shutdown is now always reaped rather than
+  left behind; and a transport failure still cancels in-flight work and runs
+  session cleanup. Correcting a rejected base directory or credential set
+  recovers an external provider instead of disabling it permanently, and a
+  rejected credential set no longer replaces the accepted one.
+- Both IPC clients now report a deadline that has already passed as
+  `deadline_exceeded` rather than the C client calling it an invalid argument,
+  so the same mistake has the same kind in either implementation and there is
+  no cliff at the current instant. Nothing is written and the session stays
+  usable, exactly as when a deadline elapses in flight.
+- SecretSpec 0.20+ IPC now preserves terminal responses that race a callback
+  deadline or child-process exit, and always gives a killed startup process a
+  fresh reaping budget. Windows provider discovery validates every executable
+  ancestor, the C launcher emits the sorted environment block required by
+  Windows, and prompt answers reject invalid UTF-8 before consuming the prompt.
+- On Unix, external provider discovery trusts a path only when every directory
+  above the endpoint is trusted, not just its immediate parent, since one
+  writable ancestor lets an attacker swap a component for a symlink to any
+  executable that satisfies the checks below it. The walk runs over the
+  resolved path, so a symlinked component is validated as the chain it actually
+  points at rather than as whatever the registration spelled; a world-writable
+  ancestor is still accepted when it is sticky, which is what keeps a build or
+  temporary directory usable. Reported by @djbclark.
 
 ## [0.19.1] - 2026-08-11
 

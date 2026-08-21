@@ -1031,6 +1031,12 @@ impl ConfigGraphLoader {
         Ok(merged)
     }
 
+    #[cfg(feature = "cli")]
+    fn load_inline(content: &str, base_dir: &Path) -> Result<Config, ParseError> {
+        let root = Config::parse_document(content)?;
+        Config::from_root_in(root, base_dir)
+    }
+
     fn visit_extends(&mut self, config: &Config, base_dir: &Path) -> Result<(), ParseError> {
         for extend_path in config.project.extends.iter().flatten() {
             let joined_path = base_dir.join(extend_path);
@@ -1092,6 +1098,13 @@ impl FromStr for Config {
     /// from a string since there's no base path to resolve relative paths.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse_document(s)
+    }
+}
+
+impl Config {
+    #[cfg(feature = "cli")]
+    pub(crate) fn from_inline(content: &str, base_dir: &Path) -> Result<Self, ParseError> {
+        ConfigGraphLoader::load_inline(content, base_dir)
     }
 }
 

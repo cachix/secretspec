@@ -56,7 +56,7 @@ impl Provider for MockProvider {
         Ok(self.storage.lock().unwrap().remove(&item).is_some())
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "mock"
     }
 
@@ -116,7 +116,7 @@ impl Provider for CountingProvider {
         Ok(())
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "counting"
     }
 
@@ -198,7 +198,7 @@ impl Provider for MemTestProvider {
         Ok(MEM_STORE.lock().unwrap().remove(&item).is_some())
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -281,7 +281,7 @@ impl Provider for SlowTestProvider {
         MemTestProvider.delete(addr)
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -378,7 +378,7 @@ impl Provider for StatefulTestProvider {
         MemTestProvider.delete(addr)
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -470,7 +470,7 @@ impl Provider for FailWriteProvider {
         MemTestProvider.delete(addr)
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -535,7 +535,7 @@ impl Provider for FailDeleteProvider {
         ))
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -619,7 +619,7 @@ impl Provider for ExpiringProvider {
         MemTestProvider.delete(addr)
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -739,7 +739,7 @@ impl Provider for PeakConcurrencyProvider {
         Ok(())
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "peak"
     }
 
@@ -2287,6 +2287,19 @@ fn dotenv_write_read_symmetry() {
 }
 
 #[test]
+fn compiled_provider_cannot_be_shadowed_by_external_discovery() {
+    use super::{ProviderCredentials, ProviderUrl, provider_from_url_with_discovery};
+
+    let directory = TempDir::new().unwrap();
+    let url = ProviderUrl::new(url::Url::from_file_path(directory.path().join(".env")).unwrap());
+    let provider = provider_from_url_with_discovery(&url, ProviderCredentials::new(), |_| {
+        panic!("external discovery must not run for a compiled provider scheme")
+    })
+    .unwrap();
+    assert_eq!(provider.name(), "file");
+}
+
+#[test]
 fn file_write_read_symmetry() {
     use super::file::{FileConfig, FileProvider};
 
@@ -2334,7 +2347,7 @@ impl Provider for DeletingProvider {
         true
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "deleting"
     }
 

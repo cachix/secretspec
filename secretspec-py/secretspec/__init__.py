@@ -22,7 +22,7 @@ from typing import Optional
 
 from secretspec import _native
 
-# Response wire-format version this SDK understands. Tracks secretspec-ffi's
+# Response wire-format version this SDK understands. Tracks libsecretspec's
 # RESOLVE_SCHEMA_VERSION; a mismatch means the loaded library is incompatible.
 _RESOLVE_SCHEMA_VERSION = 2
 
@@ -219,7 +219,7 @@ def _checked_response(request: dict, kind: str, expected_version: int) -> dict:
         raise SecretSpecError(
             "version",
             f"unsupported {kind} schema version {version} (expected "
-            f"{expected_version}); the secretspec-ffi library and this SDK "
+            f"{expected_version}); the libsecretspec library and this SDK "
             "are out of sync",
         )
     return response

@@ -1018,6 +1018,12 @@ MANUAL_SECRET = { description = "Manually managed", type = "password" }
 - Subsequent runs find the stored value and skip generation (idempotent)
 - `generate` and `default` cannot both be set on the same secret
 - `type = "command"` requires `generate = { command = "..." }` (not just `generate = true`)
+- The value-free preflights — [`check --json` / `check --explain`](/reference/cli/#resolution-report---json----explain)
+  and the SDKs' report/no-values resolutions — never mint a value. Since
+  SecretSpec 0.20 a **required** generatable secret that no provider holds is
+  reported as `missing_required` there (and exits non-zero) until a `check` or
+  `run` provisions it; an optional one, or one stored in a provider that never
+  retains generated values such as `null`, is reported as *will generate*
 
 ## Profile Inheritance
 

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The value-free resolution surfaces — `secretspec check --json`,
+  `check --explain`, and the SDKs' report and no-values resolutions — no longer
+  report a **required** `generate` secret as resolved while no provider holds
+  its value. Because these surfaces deliberately mint nothing, such a secret is
+  now reported as `missing_required` and the command exits non-zero, instead of
+  passing a CI gate against an empty store. Run `secretspec check` or
+  `secretspec run` once to generate and store the value; the preflight then
+  reports it as resolved from its provider. An optional `generate` secret, or
+  one routed to a provider that never retains generated values such as `null`,
+  is unaffected and still resolves. `check --explain` also phrases such an
+  entry as `will generate` rather than `generated`, since nothing was minted.
+
 - Bitwarden convention item names now preserve project and profile isolation
   when either contains `/`, and `secretspec init --from bw://` recognizes
   existing convention names case-insensitively while retaining legacy items'

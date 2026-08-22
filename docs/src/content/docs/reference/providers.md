@@ -680,7 +680,7 @@ k8s+secret://db-credentials@db-postgres
 **Prerequisites**: A Kubernetes configuration in `$KUBECONFIG` or
 `$HOME/.kube/config`; build with `--features kubernetes` (0.20+)
 **Authentication**: Configured in Kubernetes configuration
-**Storage**: `secretspec-{project}-{profile}-{key}` key under `.data` in the
+**Storage**: `secretspec--{project}--{profile}--{key}` key under `.data` in the
 Kubernetes object
 
 ## Provider Selection

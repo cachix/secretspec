@@ -91,6 +91,12 @@ tasks.test {
     }
 }
 
+tasks.named<Jar>("jar") {
+    manifest {
+        attributes["Automatic-Module-Name"] = "org.cachix.secretspec"
+    }
+}
+
 tasks.named<Jar>("sourcesJar") {
     exclude("**/*.so")
     exclude("**/*.dll")

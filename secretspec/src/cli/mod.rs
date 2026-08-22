@@ -1,5 +1,9 @@
 use crate::config::{Config, GlobalConfig, GlobalDefaults, Profile as ConfigProfile, Project};
-use crate::provider::{Provider, providers, spec_names_known_provider};
+use crate::provider::{
+    Provider,
+    kubernetes::{KubernetesKind, KubernetesProvider},
+    providers, spec_names_known_provider,
+};
 use crate::{CallerContext, ExportFormat, Secrets};
 use clap::{Parser, Subcommand, ValueEnum, ValueHint};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
@@ -836,6 +840,34 @@ fn select_config_init_provider(provider: Option<String>) -> Result<String> {
             .prompt()
             .into_diagnostic()?;
         let spec = format!("file:{}", directory.trim());
+        Box::<dyn Provider>::try_from(spec.as_str())
+            .into_diagnostic()
+            .wrap_err("Invalid file provider configuration")?;
+        Ok(spec)
+    } else if selected_provider == "kubernetes" {
+        use inquire::Text;
+
+        let kind_choices = vec![KubernetesKind::ConfigMap, KubernetesKind::Secret];
+        let kind = Select::new(
+            "Select your preferred kubernetes object kind:",
+            kind_choices,
+        )
+        .prompt()
+        .into_diagnostic()?;
+        let name = Text::new("Kubernetes object name:")
+            .prompt()
+            .into_diagnostic()?;
+        let namespace = Text::new("Kubernetes namespace:")
+            .with_help_message("Leave empty to use the default cluster namespace")
+            .prompt()
+            .into_diagnostic()?;
+        let namespace = if namespace.is_empty() {
+            None
+        } else {
+            Some(namespace)
+        };
+
+        let spec = KubernetesProvider::build_uri(&kind, &name, &namespace);
         Box::<dyn Provider>::try_from(spec.as_str())
             .into_diagnostic()
             .wrap_err("Invalid file provider configuration")?;

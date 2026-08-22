@@ -115,6 +115,8 @@ const consumerMetadata: ConsumerMetadata[] = [
     secrets: ['DATABASE_URL', 'API_KEY', 'SIGNING_KEY'] },
   { icon: 'swift', label: 'Swift (0.18+)', href: '/sdk/swift/',
     secrets: ['DATABASE_URL', 'API_KEY', 'SENTRY_DSN'] },
+  { icon: 'openjdk', label: 'JVM (0.20+)', href: '/sdk/jvm/',
+    secrets: ['DATABASE_URL', 'API_KEY', 'SENTRY_DSN'] },
   { icon: 'githubactions', label: 'GitHub Actions', href: '/ci/github-actions/',
     secrets: ['NPM_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'CODECOV_TOKEN'] },
   { label: 'Forgejo Actions', href: '/ci/github-actions/',
@@ -179,6 +181,7 @@ const consumerColors: Record<string, SyntaxColorName> = {
   '.NET / C#': 'blue',
   Haskell: 'magenta',
   'Swift (0.18+)': 'red',
+  'JVM (0.20+)': 'blue',
   'GitHub Actions': 'comment',
   'Forgejo Actions': 'orange',
   'devenv & Nix': 'cyan',
@@ -297,6 +300,20 @@ const languageSdkMetadata = [
     <span class="tok-pun">.</span><span class="tok-fn">withReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span><span class="tok-pun">()</span>
 <span class="tok-kw">defer</span> <span class="tok-pun">{</span> <span class="tok-kw">try</span><span class="tok-pun">?</span> <span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-fn">close</span><span class="tok-pun">()</span> <span class="tok-pun">}</span>
 <span class="tok-fn">print</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">]?.</span><span class="tok-fn">get</span><span class="tok-pun">()</span> <span class="tok-pun">??</span> <span class="tok-str">""</span><span class="tok-pun">)</span>`,
+  },
+  {
+    id: 'jvm',
+    icon: 'openjdk',
+    label: 'JVM (0.20+)',
+    href: '/sdk/jvm/',
+    color: consumerTone({ label: 'JVM (0.20+)', href: '/sdk/jvm/', secrets: [] }),
+    code: `<span class="tok-kw">import</span> <span class="tok-var">org</span><span class="tok-pun">.</span><span class="tok-var">cachix</span><span class="tok-pun">.</span><span class="tok-var">secretspec</span><span class="tok-pun">.</span><span class="tok-var">SecretSpec</span><span class="tok-pun">;</span>
+
+<span class="tok-kw">var</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
+    <span class="tok-pun">.</span><span class="tok-fn">withProvider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
+    <span class="tok-pun">.</span><span class="tok-fn">withReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">)</span>
+    <span class="tok-pun">.</span><span class="tok-fn">load</span><span class="tok-pun">();</span>
+<span class="tok-var">System</span><span class="tok-pun">.</span><span class="tok-var">out</span><span class="tok-pun">.</span><span class="tok-fn">println</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-fn">secret</span><span class="tok-pun">(</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">).</span><span class="tok-fn">get</span><span class="tok-pun">());</span>`,
   },
 ];
 
@@ -1885,7 +1902,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       <span class="landing-showcase-eyebrow">Language SDKs</span>
       <h2 class="landing-section-title">Resolve secrets directly from your language.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        One resolver across {sdkCount} SDKs—Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, PHP, C#, and Swift (0.18+). Same profiles. Same providers. <a href="/sdk/overview/" class="landing-link">SDKs →</a>
+        One resolver across {sdkCount} SDKs—Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, PHP, C#, Swift (0.18+) and JVM (0.20+). Same profiles. Same providers. <a href="/sdk/overview/" class="landing-link">SDKs →</a>
       </p>
     </div>
 

@@ -1725,7 +1725,7 @@
 
 .landing-sdk-logo-belt {
   display: grid;
-  grid-template-columns: repeat(9, minmax(0, 1fr));
+  grid-template-columns: repeat(10, minmax(0, 1fr));
   gap: clamp(0.45rem, 1.2vw, 0.8rem);
   align-items: stretch;
 }

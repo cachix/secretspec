@@ -19,6 +19,7 @@ on:
       - "secretspec-py/pyproject.toml"
       - "secretspec-rb/secretspec.gemspec"
       - "secretspec-dotnet/src/SecretSpec/SecretSpec.csproj"
+      - "secretspec-jvm/gradle.properties"
       - "Package.swift"
 
 permissions:
@@ -128,6 +129,13 @@ jobs:
       contents: write
     uses: ./.github/workflows/swift-package.yml
 
+  jvm:
+    name: JVM package
+    needs: authorize
+    permissions:
+      contents: read
+    uses: ./.github/workflows/jvm-package.yml
+  
   release-artifacts:
     name: CLI release artifacts
     needs: authorize

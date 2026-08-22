@@ -97,6 +97,10 @@ run_swift() { (
     "$artifact" "$SECRETSPEC_FFI_LIB"
   swift test --filter SecretSpecTests.testCrossLanguageConformance
 ); }
+run_jvm() { (
+  cd secretspec-jvm
+  ./gradlew test
+); }
 
 run "Python"  python run_python
 run "Go"      go     run_go
@@ -111,6 +115,8 @@ else
   echo "==> SKIP Swift (the XCFramework SDK is macOS-only)"
   names+=("Swift"); statuses+=("SKIP")
 fi
+# The gradle wrapper will download gradle, use "bash" as a placeholder
+run "JVM"     bash   run_jvm
 
 echo
 echo "==> Conformance summary"

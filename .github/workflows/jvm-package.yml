@@ -1,0 +1,458 @@
+name: "Java Virtual Machine SDK"
+
+# Builds the JVM client and the runtime-specific secretspec-ffi libraries packed
+# into org.cachix.secretspec-jvm. Glibc Linux uses a manylinux_2_28 baseline; Alpine
+# receives separate musl assets.
+
+on:
+  workflow_call:
+    inputs:
+      publish:
+        description: Publish the built package
+        required: false
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the built package
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags:
+      - v**
+  pull_request:
+    paths:
+      - "secretspec-jvm/**"
+      - "secretspec-ffi/**"
+      - ".github/workflows/jvm-package.yml"
+      - "scripts/install-rustup.sh"
+      - "scripts/sync-sdk-versions.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: "Build ${{ matrix.rid }} native library"
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container || null }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x86-64
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            container: quay.io/pypa/manylinux_2_28_x86_64:2026.08.05-1@sha256:e0b40ace8e818e96026eb47714b01998cbca022a6995797d0905474ce3e82ae8
+            library: libsecretspec_ffi.so
+            rustflags: -C strip=symbols -C opt-level=z
+            jdk11_distribution: temurin
+          - rid: linux-aarch64
+            target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64:2026.08.05-1@sha256:f766b402889e40f439e7a3ee5788eef1aa3ef399d0110107d27419fa2ba9d905
+            library: libsecretspec_ffi.so
+            rustflags: -C strip=symbols -C opt-level=z
+            jdk11_distribution: temurin
+          - rid: darwin-x86-64
+            target: x86_64-apple-darwin
+            runner: macos-15-intel
+            library: libsecretspec_ffi.dylib
+            deployment_target: "12.0"
+            rustflags: -C strip=symbols -C opt-level=z
+            jdk11_distribution: temurin
+          - rid: darwin-aarch64
+            target: aarch64-apple-darwin
+            runner: macos-latest
+            library: libsecretspec_ffi.dylib
+            deployment_target: "12.0"
+            rustflags: -C strip=symbols -C opt-level=z
+            jdk11_distribution: temurin
+          - rid: win32-x86-64
+            target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            library: secretspec_ffi.dll
+            rustflags: -C strip=symbols -C target-feature=+crt-static -C opt-level=z
+            jdk11_distribution: temurin
+          - rid: win32-aarch64
+            target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            library: secretspec_ffi.dll
+            rustflags: -C strip=symbols -C target-feature=+crt-static -C opt-level=z
+            jdk11_distribution: microsoft # temurin does not provide win32-aarch64 builds
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Sync SDK package versions
+        shell: bash
+        run: bash scripts/sync-sdk-versions.sh
+
+      - name: Install verified rustup in manylinux
+        if: matrix.container
+        shell: bash
+        run: |
+          bash scripts/install-rustup.sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: ${{ matrix.jdk11_distribution }}
+          java-version: "11"
+          set-default: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          set-default: true
+
+      - name: Build native resolver
+        shell: bash
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: >-
+          cargo build -p secretspec-ffi --release
+          --target ${{ matrix.target }}
+
+      - name: Verify glibc portability (glibc <= 2.28, no libdbus)
+        if: matrix.container
+        shell: bash
+        run: >-
+          bash scripts/check-linux-portability.sh
+          "target/${{ matrix.target }}/release/${{ matrix.library }}"
+
+      - name: Verify Windows CRT is statically linked
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          rustup component add llvm-tools-preview
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          llvm_objdump="$(rustc --print sysroot)/lib/rustlib/$host/bin/llvm-objdump"
+          imports="$("$llvm_objdump" -p \
+            "target/${{ matrix.target }}/release/${{ matrix.library }}")"
+          if grep -Eiq 'DLL Name: (VCRUNTIME|MSVCP)' <<<"$imports"; then
+            echo "the packaged resolver still depends on the MSVC runtime" >&2
+            grep -Ei 'DLL Name: (VCRUNTIME|MSVCP)' <<<"$imports" >&2
+            exit 1
+          fi
+
+      - name: Run JVM SDK tests against native resolver
+        shell: bash
+        env:
+          SECRETSPEC_FFI_LIB: ${{ github.workspace }}/target/${{ matrix.target }}/release/${{ matrix.library }}
+        run: >-
+          cd secretspec-jvm && ./gradlew test --no-daemon
+
+      - name: Stage native Jar asset
+        shell: bash
+        run: |
+          mkdir -p "staged/${{ matrix.rid }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.library }}" \
+             "staged/${{ matrix.rid }}"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: jvm-native-${{ matrix.rid }}
+          path: staged/${{ matrix.rid }}
+
+  musl:
+    name: "Build ${{ matrix.rid }} native library"
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x86-64-musl
+            target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            image: quay.io/pypa/musllinux_1_2_x86_64:2026.08.05-1@sha256:c7b2187aa4d095a8da73ea4db96acefd46701a13439a9cc4546f5d61a4b5bba1
+          - rid: linux-aarch64-musl
+            target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            image: quay.io/pypa/musllinux_1_2_aarch64:2026.08.05-1@sha256:668c455aeddf5e363bd6fd801f10b369a634a9f01974876cee8c8c518b44ef10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+      - name: Build dynamically loadable musl resolver
+        shell: bash
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace \
+            --env CARGO_TARGET_DIR=/workspace/target \
+            --env "RUSTFLAGS=-C target-feature=-crt-static -C strip=symbols -C opt-level=z" \
+            "${{ matrix.image }}" \
+            bash -c '
+              set -euo pipefail
+              bash scripts/install-rustup.sh
+              export PATH="$HOME/.cargo/bin:$PATH"
+              rustup toolchain install
+              cargo build -p secretspec-ffi --release \
+                --target "${{ matrix.target }}"
+            '
+          test -f \
+            "target/${{ matrix.target }}/release/libsecretspec_ffi.so"
+      - name: Verify musl portability
+        shell: bash
+        run: |
+          library="target/${{ matrix.target }}/release/libsecretspec_ffi.so"
+          dynamic="$(readelf -d "$library")"
+          needed="$(grep NEEDED <<<"$dynamic")"
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-musl)
+              expected_libc=libc.musl-x86_64.so.1
+              ;;
+            aarch64-unknown-linux-musl)
+              expected_libc=libc.musl-aarch64.so.1
+              ;;
+          esac
+          # ARM musl's libgcc_s exports a compatibility symbol version named
+          # GLIBC_2.0, so inspect the actual dynamic dependencies instead.
+          if grep -q '\[libc\.so\.6\]' <<<"$needed" ||
+             ! grep -Fq "[$expected_libc]" <<<"$needed"; then
+            echo "$library does not use the expected musl libc" >&2
+            echo "$needed" >&2
+            exit 1
+          fi
+          if grep -q dbus <<<"$needed"; then
+            echo "$library links libdbus dynamically" >&2
+            echo "$needed" >&2
+            exit 1
+          fi
+      - name: Stage native Jar asset
+        run: |
+          mkdir -p "staged/${{ matrix.rid }}"
+          # MUSL and GLIBC libraries must both reside in linux-x86-64 or linux-aarch64
+          # Rename the library so they can coexist in the same directory
+          cp "target/${{ matrix.target }}/release/libsecretspec_ffi.so" \
+             "staged/${{ matrix.rid }}/libsecretspec_musl_ffi.so"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: jvm-native-${{ matrix.rid }}
+          path: staged/${{ matrix.rid }}
+
+  package:
+    name: Assemble multi-platform JAR package
+    needs: [native, musl]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: gradle/actions/wrapper-validation@a7406612929c8997f724ceab900ed029936e3bf5 # v6.3.0
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "11"
+          set-default: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          set-default: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: jvm-native-*
+          path: staged
+      - name: Place runtime assets
+        shell: bash
+        run: |
+          for artifact in staged/jvm-native-*; do
+            rid="${artifact##*/jvm-native-}"
+            # MUSL and GLIBC libraries must both reside in linux-x86-64 or linux-aarch64, remove the suffix
+            mkdir -p "secretspec-jvm/library/src/main/resources/${rid%-musl}"
+            cp -R "$artifact/"* "secretspec-jvm/library/src/main/resources/${rid%-musl}/"
+          done
+      - name: Pack
+        run: |
+          ( cd secretspec-jvm && ./gradlew build --no-daemon )
+          mkdir -p artifacts/
+          cp secretspec-jvm/library/build/libs/*.jar artifacts/
+      - name: Verify runtime assets are present
+        shell: bash
+        run: |
+          # The staged directories come from the same matrix that builds the
+          # native libraries, so this check cannot drift from the matrix.
+          package="$(find artifacts -name '*.jar' -not -name '*-sources.jar' -not -name '*-javadoc.jar' -print -quit)"
+          shopt -s nullglob
+          staged=(staged/jvm-native-*)
+          if [ "${#staged[@]}" -eq 0 ]; then
+            echo "no staged native artifacts were downloaded" >&2
+            exit 1
+          fi
+          for artifact in "${staged[@]}"; do
+            rid="${artifact##*/jvm-native-}"
+            if [ "${rid%-musl}" = "${rid}" ] ; then
+              unzip -l "$package" | grep -q "${rid%-musl}/"
+            else
+              unzip -l "$package" | grep -q "${rid%-musl}/libsecretspec_musl_ffi.so"
+            fi
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: artifacts/secretspec-jvm-*-SNAPSHOT.jar
+          archive: false
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: artifacts/secretspec-jvm-*-sources.jar
+          archive: false
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: artifacts/secretspec-jvm-*-javadoc.jar
+          archive: false
+
+  consumer:
+    name: Test multi-platform JAR package on ${{ matrix.rid }}
+    needs: [package]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x86-64
+            runner: ubuntu-latest
+            musl: false
+          - rid: linux-aarch64
+            runner: ubuntu-24.04-arm
+            musl: false
+          - rid: linux-x86-64-musl
+            runner: ubuntu-latest
+            musl: true
+          - rid: linux-aarch64-musl
+            runner: ubuntu-24.04-arm
+            musl: true
+          - rid: darwin-x86-64
+            runner: macos-15-intel
+            musl: false
+          - rid: darwin-aarch64
+            runner: macos-latest
+            musl: false
+          - rid: win32-x86-64
+            runner: windows-latest
+            musl: false
+          - rid: win32-aarch64
+            runner: windows-11-arm
+            musl: false
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: secretspec-jvm-*-SNAPSHOT.jar
+          path: artifacts
+          skip-decompress: true
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          set-default: true
+
+      - name: Run tests
+        if: matrix.musl == false && runner.os != 'Windows'
+        shell: bash
+        run: |
+          package="$(find ${GITHUB_WORKSPACE}/artifacts -name "*.jar" -not -name "*-sources.jar" -not -name "*-javadoc.jar" -print -quit)"
+          unset SECRETSPEC_FFI_LIB
+          cd secretspec-jvm && ./gradlew :consumer:test -Psecretspec.jar="$package" --no-daemon
+
+      - name: Run tests on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $package = (Get-ChildItem -Path (Join-Path $env:GITHUB_WORKSPACE "artifacts") -Filter "*.jar" | Where-Object { $_.Name -notlike "*-sources.jar" -and $_.Name -notlike "*-javadoc.jar" } | Select-Object -First 1).FullName
+          Set-Location "secretspec-jvm"
+          Remove-Item Env:\SECRETSPEC_FFI_LIB -ErrorAction SilentlyContinue
+          .\gradlew.bat :consumer:test "-Psecretspec.jar=$package" --no-daemon
+
+      - name: Run tests on Alpine
+        if: matrix.musl
+        shell: bash
+        run: |
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace" \
+            --workdir /workspace \
+            eclipse-temurin:21-jdk-alpine \
+            sh -c '
+              package="$(find /workspace/artifacts -name "*.jar" -not -name "*-sources.jar" -not -name "*-javadoc.jar" -print -quit)"
+              unset SECRETSPEC_FFI_LIB
+              cd secretspec-jvm && ./gradlew :consumer:test -Psecretspec.jar="$package" --no-daemon
+            '
+
+  publish:
+    name: Publish to central repository
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish
+    needs: [consumer]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: secretspec-jvm-*.jar
+          path: artifacts
+          skip-decompress: true
+      - name: Setup GPG Key
+        shell: bash
+        env:
+          MAVEN_CENTRAL_SIGNING_KEY: ${{ secrets.MAVEN_CENTRAL_SIGNING_KEY }}
+        run: |
+          mkdir -p -m 700 ~/.gnupg
+          echo "$MAVEN_CENTRAL_SIGNING_KEY" | gpg --batch --import
+          # Ultimately trust the imported key
+          KEY_ID=$(gpg --with-colons --list-secret-keys | grep '^sec' | cut -d':' -f5)
+          echo "${KEY_ID}:6:" | gpg --import-ownertrust
+      - name: Prepare Maven Bundle Structure
+        shell: bash
+        env:
+          GPG_PASSPHRASE: ${{ secrets.MAVEN_CENTRAL_SIGNING_PASSPHRASE }}
+        run: |
+          SNAPSHOT_VERSION=$(grep 'secretspec.version' secretspec-jvm/gradle.properties | cut -d'=' -f2 | tr -d '[:space:]')
+          VERSION="${SNAPSHOT_VERSION%-SNAPSHOT}"
+          BUNDLE_DIR="bundle-dir/org/cachix/secretspec-jvm/${VERSION}"
+          mkdir -p "${BUNDLE_DIR}"
+          ( cd secretspec-jvm && ./gradlew generatePomFileForMavenPublication )
+          cp artifacts/secretspec-jvm-${SNAPSHOT_VERSION}.jar "${BUNDLE_DIR}/secretspec-jvm-${VERSION}.jar"
+          cp artifacts/secretspec-jvm-${SNAPSHOT_VERSION}-javadoc.jar "${BUNDLE_DIR}/secretspec-jvm-${VERSION}-javadoc.jar"
+          cp artifacts/secretspec-jvm-${SNAPSHOT_VERSION}-sources.jar "${BUNDLE_DIR}/secretspec-jvm-${VERSION}-sources.jar"
+          cp secretspec-jvm/library/build/publications/maven/pom-default.xml "${BUNDLE_DIR}/secretspec-jvm-${VERSION}.pom"
+          cd bundle-dir
+          find . -type f \( -name "*.jar" -o -name "*.pom" \) -print0 | while IFS= read -r -d '' file; do
+            gpg --batch --yes --pinentry-mode loopback --passphrase-fd 3 -ab "$file" 3<<< "${GPG_PASSPHRASE}"
+            md5sum "$file" | cut -d' ' -f1 > "$file.md5"
+            sha1sum "$file" | cut -d' ' -f1 > "$file.sha1"
+            sha256sum "$file" | cut -d' ' -f1 > "$file.sha256"
+            sha512sum "$file" | cut -d' ' -f1 > "$file.sha512"
+          done
+          zip -r ../maven-central-bundle.zip .
+          cd ..
+
+      - name: Upload to Maven Central via API
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_TOKEN_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_TOKEN_PASSWORD }}
+        run: |
+          ENCODED_AUTH=$(echo -n "${MAVEN_CENTRAL_USERNAME}:${MAVEN_CENTRAL_PASSWORD}" | base64 -w 0)
+          curl --fail-with-body --request POST \
+            --header "Authorization: Bearer ${ENCODED_AUTH}" \
+            --form "bundle=@maven-central-bundle.zip" \
+            "https://central.sonatype.com/api/v1/publisher/upload?publishingType=AUTOMATIC"

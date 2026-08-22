@@ -284,6 +284,7 @@ works identically with no per-language resolution logic:
 - [PHP](https://secretspec.dev/sdk/php) (ext-php-rs extension, with an `ext-ffi` fallback)
 - [C# (0.16+)](https://secretspec.dev/sdk/csharp) (P/Invoke with native assets in the NuGet package)
 - [Swift (0.18+)](https://secretspec.dev/sdk/swift) (SwiftPM XCFramework for macOS Intel and Apple silicon)
+- [JVM languages (0.20+)](https://secretspec.dev/sdk/jvm) (via JNA with native assets in the JAR)
 
 ```python
 from secretspec import SecretSpec

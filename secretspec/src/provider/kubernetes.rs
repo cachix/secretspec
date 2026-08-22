@@ -152,6 +152,15 @@ impl KubernetesProvider {
         }
     }
 
+    pub fn build_uri(kind: &KubernetesKind, name: &String, namespace: &Option<String>) -> String {
+        let mut uri = format!("k8s+{}://{}", kind, name);
+        if let Some(namespace) = namespace {
+            uri.push('@');
+            uri.push_str(namespace);
+        }
+        uri
+    }
+
     async fn client(&self) -> Result<&Client> {
         if let Some(client) = self.client.get() {
             return Ok(client);
@@ -384,12 +393,7 @@ impl Provider for KubernetesProvider {
     }
 
     fn uri(&self) -> String {
-        let mut uri = format!("k8s+{}://{}", self.config.kind, self.config.name);
-        if let Some(namespace) = &self.config.namespace {
-            uri.push('@');
-            uri.push_str(&namespace);
-        }
-        uri
+        Self::build_uri(&self.config.kind, &self.config.name, &self.config.namespace)
     }
 
     fn convention_address(

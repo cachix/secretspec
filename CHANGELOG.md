@@ -128,6 +128,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   later helper calls, and ambient manifest/profile settings no longer switch or
   block the embedded credential workflow (0.20+).
 
+- Custom-manifest Docker credentials now pin a profile only when `--profile` is
+  explicitly supplied, preventing a shell's ambient profile from becoming a
+  permanent helper setting (0.20+).
+
 - Google Cloud Secret Manager convention names now use the readable,
   versioned `secretspec2--{project}--{profile}--{key}` layout. Distinct logical
   addresses such as `my-app/prod/K` and `my/app-prod/K` can no longer collide

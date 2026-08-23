@@ -38,7 +38,7 @@ pub(crate) enum CredentialSource {
     },
     Manifest {
         manifest: PathBuf,
-        profile: String,
+        profile: Option<String>,
         username: UsernameSource,
         password_secret: String,
     },
@@ -183,7 +183,7 @@ fn valid_source(source: &CredentialSource) -> bool {
             password_secret,
         } => {
             manifest.is_absolute()
-                && !profile.is_empty()
+                && profile.as_deref().is_none_or(|profile| !profile.is_empty())
                 && !password_secret.is_empty()
                 && match username {
                     UsernameSource::Literal(username) => valid_username(username),
@@ -361,7 +361,9 @@ fn resolve(credential: &ManagedCredential) -> Result<Option<(String, SecretStrin
             password_secret,
         } => {
             let mut secrets = Secrets::load_from(manifest).map_err(|error| error.to_string())?;
-            secrets.set_profile(profile);
+            if let Some(profile) = profile {
+                secrets.set_profile(profile);
+            }
             (secrets, username.clone(), password_secret.clone())
         }
     };
@@ -555,7 +557,7 @@ DOCKER_TOKEN = { description = "Docker token", default = "token=value", provider
             reason: None,
             source: CredentialSource::Manifest {
                 manifest,
-                profile: "default".to_string(),
+                profile: Some("default".to_string()),
                 username: UsernameSource::Secret("DOCKER_USERNAME".to_string()),
                 password_secret: "DOCKER_TOKEN".to_string(),
             },

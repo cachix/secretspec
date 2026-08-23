@@ -141,12 +141,14 @@ To resolve the username from SecretSpec too, declare it and replace
 `--username` with `--username-secret GHCR_USERNAME`. Custom-manifest mode also
 accepts `--profile` and `--provider`.
 
-The managed state records the manifest's absolute path and resolved profile,
-but never resolved secret values. A symlinked manifest retains its logical path,
-so relative `extends` entries resolve beside the symlink. If the manifest moves,
-rerun `configure` for the affected registry. Manage custom-manifest values with
-`secretspec set` and `secretspec delete`; `secretspec docker login` and `logout`
-intentionally manage only the embedded store.
+The managed state records the manifest's absolute path and, when supplied as
+`--profile`, that profile; it never records resolved secret values. Without an
+explicit `--profile`, the helper resolves the normal profile each time it runs.
+A symlinked manifest retains its logical path, so relative `extends` entries
+resolve beside the symlink. If the manifest moves, rerun `configure` for the
+affected registry. Manage custom-manifest values with `secretspec set` and
+`secretspec delete`; `secretspec docker login` and `logout` intentionally manage
+only the embedded store.
 
 ## Alternate Docker configuration directory
 

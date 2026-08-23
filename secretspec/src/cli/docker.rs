@@ -186,16 +186,22 @@ fn configure(options: ConfigureOptions<'_>) -> Result<()> {
         if let Some(profile) = &options.profile {
             secrets.set_profile(profile);
         }
-        let profile = secrets.resolve_profile_name(None);
-        validate_secret(&secrets, token_secret, &profile)?;
+        let resolved_profile = secrets.resolve_profile_name(None);
+        validate_secret(&secrets, token_secret, &resolved_profile)?;
         if let UsernameSource::Secret(secret) = &username {
-            validate_secret(&secrets, secret, &profile)?;
+            validate_secret(&secrets, secret, &resolved_profile)?;
         }
+        let persisted_profile = options
+            .typed
+            .profile
+            .then_some(options.profile.as_deref())
+            .flatten()
+            .map(str::to_string);
         (
             secrets,
             CredentialSource::Manifest {
                 manifest: manifest.clone(),
-                profile,
+                profile: persisted_profile,
                 username,
                 password_secret: token_secret.to_string(),
             },

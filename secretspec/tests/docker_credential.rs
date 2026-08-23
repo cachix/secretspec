@@ -29,6 +29,10 @@ require_reason = false
 [profiles.default]
 DOCKER_USERNAME = { description = "Docker username", default = "registry-user", providers = ["null"] }
 DOCKER_TOKEN = { description = "Docker token", default = "token=value", providers = ["null"] }
+
+[profiles.production]
+DOCKER_USERNAME = { description = "Docker username", default = "production-user", providers = ["null"] }
+DOCKER_TOKEN = { description = "Docker token", default = "production-token", providers = ["null"] }
 "#,
         )
         .unwrap();
@@ -558,6 +562,67 @@ fn exported_variables_do_not_become_durable_docker_configuration() {
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("require --file"));
+}
+
+#[test]
+fn custom_manifest_profile_is_only_persisted_when_typed() {
+    let fixture = Fixture::new();
+    let mut command = fixture.embedded_secretspec();
+    command
+        .arg("--file")
+        .arg(&fixture.manifest)
+        .env("SECRETSPEC_PROFILE", "production")
+        .args([
+            "docker",
+            "configure",
+            "--registry",
+            "ghcr.io",
+            "--token-secret",
+            "DOCKER_TOKEN",
+            "--username",
+            "registry-user",
+            "--yes",
+        ]);
+    let output = command.output().unwrap();
+    assert_success("ambient custom-manifest profile", &output);
+
+    let state_path = find_named(&fixture.root, "docker-credentials.json").unwrap();
+    let state = read_json(&state_path);
+    assert!(state["credentials"][0]["source"]["profile"].is_null());
+
+    let output = fixture.helper("get", b"ghcr.io\n");
+    assert_success("custom-manifest helper without a pinned profile", &output);
+    let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["Secret"], "token=value");
+
+    let output = fixture
+        .embedded_secretspec()
+        .arg("--file")
+        .arg(&fixture.manifest)
+        .args([
+            "docker",
+            "configure",
+            "--registry",
+            "ghcr.io",
+            "--token-secret",
+            "DOCKER_TOKEN",
+            "--username",
+            "registry-user",
+            "--profile",
+            "production",
+            "--yes",
+        ])
+        .output()
+        .unwrap();
+    assert_success("typed custom-manifest profile", &output);
+
+    let state = read_json(&state_path);
+    assert_eq!(state["credentials"][0]["source"]["profile"], "production");
+
+    let output = fixture.helper("get", b"ghcr.io\n");
+    assert_success("custom-manifest helper with a pinned profile", &output);
+    let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["Secret"], "production-token");
 }
 
 #[test]

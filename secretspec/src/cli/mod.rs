@@ -17,10 +17,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 mod completion;
+mod docker;
 mod git;
 
 use git::GitAction;
-
 /// Main CLI structure for the secretspec application.
 ///
 /// This is the entry point for the command-line interface, parsing user commands
@@ -62,6 +62,37 @@ struct Cli {
     command: Commands,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TypedArgs {
+    pub(crate) file: bool,
+    pub(crate) profile: bool,
+    pub(crate) provider: bool,
+    pub(crate) reason: bool,
+}
+
+impl TypedArgs {
+    fn from_matches(matches: &ArgMatches) -> Self {
+        let mut typed = Self::default();
+        let mut current = Some(matches);
+        while let Some(matches) = current {
+            for (id, typed) in [
+                ("file", &mut typed.file),
+                ("profile", &mut typed.profile),
+                ("provider", &mut typed.provider),
+                ("reason", &mut typed.reason),
+            ] {
+                if matches.ids().any(|known| known.as_str() == id)
+                    && matches.value_source(id) == Some(ValueSource::CommandLine)
+                {
+                    *typed = true;
+                }
+            }
+            current = matches.subcommand().map(|(_, matches)| matches);
+        }
+        typed
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum CompletionShell {
     /// Bourne Again Shell
@@ -77,49 +108,6 @@ enum CompletionShell {
     PowerShell,
     /// Z shell
     Zsh,
-}
-
-/// Records which env-backed options the user actually typed.
-///
-/// `secretspec git configure` writes some of these into Git configuration
-/// permanently and rejects others as unsupported. Clap cannot tell the two
-/// apart on its own: an exported `SECRETSPEC_PROVIDER` looks exactly like
-/// `--provider` on the command line, so without this an ambient variable would
-/// be baked into a credential helper, or trigger an error naming a flag that
-/// was never passed.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct TypedArgs {
-    pub file: bool,
-    pub profile: bool,
-    pub provider: bool,
-    pub reason: bool,
-}
-
-impl TypedArgs {
-    /// Walks the whole subcommand chain. Clap propagates a global option's
-    /// value source to every level, while a subcommand's own options appear
-    /// only on its leaf.
-    fn from_matches(matches: &ArgMatches) -> Self {
-        let mut typed = Self::default();
-        let mut current = Some(matches);
-        while let Some(matches) = current {
-            for (id, typed) in [
-                ("file", &mut typed.file),
-                ("profile", &mut typed.profile),
-                ("provider", &mut typed.provider),
-                ("reason", &mut typed.reason),
-            ] {
-                // value_source panics on an id the current level does not define.
-                if matches.ids().any(|known| known.as_str() == id)
-                    && matches.value_source(id) == Some(ValueSource::CommandLine)
-                {
-                    *typed = true;
-                }
-            }
-            current = matches.subcommand().map(|(_, matches)| matches);
-        }
-        typed
-    }
 }
 
 /// Available commands for the secretspec CLI.
@@ -278,6 +266,11 @@ enum Commands {
     Config {
         #[command(subcommand)]
         action: ConfigAction,
+    },
+    /// Manage Docker registry credential integration (0.20+)
+    Docker {
+        #[command(subcommand)]
+        action: docker::DockerAction,
     },
     #[command(about = "Configure Git HTTP(S) or SMTP credentials through SecretSpec (0.20+)")]
     Git {
@@ -966,6 +959,7 @@ pub fn main() -> Result<()> {
     let caller = caller_context(&cli)?;
 
     match cli.command {
+        Commands::Docker { action } => docker::run(action, &cli.file, &cli.reason, &caller, typed),
         // Initialize a new secretspec.toml configuration file
         Commands::Init {
             from,

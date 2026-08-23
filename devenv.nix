@@ -75,6 +75,7 @@
     pkgs.cargo-dist
     # bitwarden-cli for integration testing
     pkgs.bitwarden-cli
+    # JSON processor used by the Bitwarden integration test scripts
     pkgs.jq
     # docker CLI for tests/vaultwarden_harness.sh, which runs the disposable
     # Vaultwarden + TLS proxy containers. Client only: the harness talks to

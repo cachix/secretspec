@@ -395,6 +395,16 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
           ],
         },
         {
+          label: "Integrations",
+          items: [
+            {
+              label: "Docker credentials",
+              slug: "integrations/docker",
+              badge: { text: "0.20+", variant: "note" },
+            },
+          ],
+        },
+        {
           label: "SDK",
           items: [
             {

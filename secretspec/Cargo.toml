@@ -17,6 +17,11 @@ path = "src/bin/secretspec.rs"
 required-features = ["cli"]
 
 [[bin]]
+name = "docker-credential-secretspec"
+path = "src/bin/docker-credential-secretspec.rs"
+required-features = ["cli"]
+
+[[bin]]
 name = "git-credential-secretspec"
 path = "src/bin/git-credential-secretspec.rs"
 required-features = ["cli"]

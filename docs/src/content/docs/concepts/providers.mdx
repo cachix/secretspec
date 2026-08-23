@@ -68,6 +68,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [infisical](/providers/infisical/) (0.16+) | Infisical (requires the `infisical` build feature) | ✓ | ✓ | ✓ | — |
 | [age](/providers/age/) (0.17+) | An age-encrypted file (requires the `age` build feature) | ✓ | ✓ | ✓ | — |
 | [sops](/providers/sops/) (0.17+) | SOPS-encrypted files (requires the `sops` build feature and SOPS CLI) | ✓ | ✓ | ✓ | Depends on the configured SOPS key service |
+| [kubernetes](/providers/kubernetes/) (0.20+) | Kubernetes ConfigMaps and Secrets (requires the `kubernetes` build feature) | ✓ | ✓ | [Secrets can be encrypted at rest](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/#ensure-all-secrets-are-encrypted) | — |
 
 “TPM-backed keys” means the local key used by the provider can be protected by
 a [TPM 2.0](https://trustedcomputinggroup.org/resource/tpm-library-specification/)

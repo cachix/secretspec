@@ -10,15 +10,47 @@ const fs = require('node:fs');
 // as_path) happens entirely in the Rust core; this layer marshals JSON and
 // exposes the builder API. TypeScript declarations ship in index.d.ts.
 
-// Maps process.platform-process.arch to the optionalDependency package that
-// carries the addon for that platform (see napi.targets in package.json and
-// the generated npm/<platform>/ package dirs).
+// Maps a platform key to the optionalDependency package that carries the addon
+// for it (see napi.targets in package.json and the generated npm/<platform>/
+// package dirs). Linux keys carry a libc suffix: a glibc addon cannot load on
+// musl, and npm keeps the two apart through the `libc` field that napi-rs
+// writes into each platform package.
 const PLATFORM_PACKAGES = {
-  'linux-x64': 'secretspec-linux-x64-gnu',
-  'linux-arm64': 'secretspec-linux-arm64-gnu',
+  'linux-x64-gnu': 'secretspec-linux-x64-gnu',
+  'linux-x64-musl': 'secretspec-linux-x64-musl',
+  'linux-arm64-gnu': 'secretspec-linux-arm64-gnu',
+  'linux-arm64-musl': 'secretspec-linux-arm64-musl',
   'darwin-arm64': 'secretspec-darwin-arm64',
   'win32-x64': 'secretspec-win32-x64-msvc',
 };
+
+// Node exposes no libc accessor, so read the diagnostic report the way napi-rs
+// does in its generated loaders. A glibc process reports a runtime glibc
+// version; a musl process reports none and loads a musl interpreter instead.
+function isMusl() {
+  if (typeof process.report?.getReport !== 'function') {
+    return false;
+  }
+  const report = process.report.getReport();
+  if (report.header?.glibcVersionRuntime) {
+    return false;
+  }
+  return (
+    Array.isArray(report.sharedObjects) &&
+    report.sharedObjects.some(
+      (object) => object.includes('libc.musl-') || object.includes('ld-musl-'),
+    )
+  );
+}
+
+// The key into PLATFORM_PACKAGES for the running process.
+function platformKey() {
+  const key = `${process.platform}-${process.arch}`;
+  if (process.platform !== 'linux') {
+    return key;
+  }
+  return `${key}-${isMusl() ? 'musl' : 'gnu'}`;
+}
 
 function loadNative() {
   try {
@@ -27,7 +59,7 @@ function loadNative() {
   } catch (localErr) {
     // Installed from npm: the addon lives in a platform-specific
     // optionalDependency package instead of being bundled here.
-    const key = `${process.platform}-${process.arch}`;
+    const key = platformKey();
     const pkg = PLATFORM_PACKAGES[key];
     if (!pkg) {
       throw new Error(`secretspec: unsupported platform ${key}`);

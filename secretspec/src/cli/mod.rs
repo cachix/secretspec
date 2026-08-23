@@ -1,6 +1,11 @@
 use crate::config::{Config, GlobalConfig, GlobalDefaults, Profile as ConfigProfile, Project};
+#[cfg(feature = "kubernetes")]
+use crate::provider::kubernetes::{KubernetesKind, KubernetesProvider};
 use crate::provider::{Provider, providers, spec_names_known_provider};
-use crate::{CallerContext, ExportFormat, Secrets};
+use crate::spec_edit::{
+    add_description as add_secret_to_spec, validate_secret_name as validate_add_secret_name,
+};
+use crate::{CallerContext, ExportFormat, Secrets, Spec};
 use clap::parser::ValueSource;
 use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum, ValueHint};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
@@ -13,6 +18,9 @@ use std::path::{Path, PathBuf};
 
 mod completion;
 mod docker;
+mod git;
+
+use git::GitAction;
 /// Main CLI structure for the secretspec application.
 ///
 /// This is the entry point for the command-line interface, parsing user commands
@@ -263,6 +271,11 @@ enum Commands {
     Docker {
         #[command(subcommand)]
         action: docker::DockerAction,
+    },
+    #[command(about = "Configure Git HTTP(S) or SMTP credentials through SecretSpec (0.20+)")]
+    Git {
+        #[command(subcommand)]
+        action: GitAction,
     },
     /// Import secrets from a provider to another provider
     Import {
@@ -585,6 +598,15 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
             if let Some(composed) = &secret_config.composed {
                 inline.insert("composed", Value::from(composed.as_str()));
             }
+            if let Some(reference) = &secret_config.reference {
+                let mut native_address = InlineTable::new();
+                for (coordinate, value) in reference.coordinates() {
+                    if let Some(value) = value {
+                        native_address.insert(coordinate, Value::from(value));
+                    }
+                }
+                inline.insert("ref", Value::InlineTable(native_address));
+            }
             profile_table.insert(&secret_name, toml_edit::value(inline));
         }
 
@@ -601,25 +623,6 @@ fn generate_toml_with_comments(config: &Config) -> crate::Result<String> {
     doc.insert("profiles", Item::Table(profiles));
 
     Ok(doc.to_string())
-}
-
-/// Rejects names that cannot occupy a flattened secret key in [`ConfigProfile`].
-fn validate_add_secret_name(name: &str) -> Result<()> {
-    if !crate::config::is_valid_identifier(name) {
-        return Err(miette!(
-            "Invalid secret name '{}': must be a valid identifier (alphanumeric and underscores, not starting with a number)",
-            name
-        ));
-    }
-    // `Profile` reserves this key for its defaults table before flattening all
-    // remaining keys into secret declarations. Without an explicit check, the
-    // edit would be valid TOML but would not actually declare a secret.
-    if name == "defaults" {
-        return Err(miette!(
-            "Secret name 'defaults' is reserved for profile defaults"
-        ));
-    }
-    Ok(())
 }
 
 /// Ensures `add` will create a new effective declaration in an existing profile.
@@ -644,57 +647,6 @@ fn validate_add_target(app: &Secrets, profile: &str, name: &str) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Adds one secret to a manifest document without re-serializing the rest.
-///
-/// `toml_edit` retains the user's comments, whitespace, ordering, and any syntax
-/// that is not represented by [`Config`]. The caller validates the selected
-/// profile against the fully loaded configuration first; this helper creates a
-/// local profile table when that profile currently comes only from `extends`.
-fn add_secret_to_manifest(
-    source: &str,
-    profile: &str,
-    name: &str,
-    description: &str,
-) -> Result<String> {
-    use toml_edit::{DocumentMut, InlineTable, Item, Table, Value};
-
-    validate_add_secret_name(name)?;
-    if description.trim().is_empty() {
-        return Err(miette!("Secret description cannot be empty"));
-    }
-
-    let mut doc = source
-        .parse::<DocumentMut>()
-        .into_diagnostic()
-        .wrap_err("Failed to parse secretspec.toml for editing")?;
-    let profiles = doc
-        .get_mut("profiles")
-        .and_then(Item::as_table_like_mut)
-        .ok_or_else(|| miette!("secretspec.toml does not contain a [profiles] table"))?;
-
-    if !profiles.contains_key(profile) {
-        profiles.insert(profile, Item::Table(Table::new()));
-    }
-    let profile_table = profiles
-        .get_mut(profile)
-        .and_then(Item::as_table_like_mut)
-        .ok_or_else(|| miette!("Profile '{}' is not a TOML table", profile))?;
-
-    if profile_table.contains_key(name) {
-        return Err(miette!(
-            "Secret '{}' is already declared in profile '{}'",
-            name,
-            profile
-        ));
-    }
-
-    let mut secret = InlineTable::new();
-    secret.insert("description", Value::from(description));
-    profile_table.insert(name, toml_edit::value(secret));
-
-    Ok(doc.to_string())
 }
 
 /// Replaces an existing manifest only after its complete replacement has been
@@ -802,6 +754,19 @@ fn load_secrets(
     })
 }
 
+/// Loads only the validated declaration model used by value-free commands.
+///
+/// Unlike [`load_secrets`], this does not initialize global configuration,
+/// auditing, or provider state.
+fn load_spec(file: &Option<PathBuf>) -> miette::Result<Spec> {
+    match file {
+        Some(path) => Spec::try_from(path.as_path()),
+        None => crate::secrets::find_config_file().and_then(|path| Spec::try_from(path.as_path())),
+    }
+    .into_diagnostic()
+    .wrap_err("Failed to load secretspec configuration")
+}
+
 /// Applies a `--scope` selection to `app`. Clap resolves the flag and its
 /// `SECRETSPEC_SCOPE` fallback into the same `Option`, so `None` here means
 /// neither was given.
@@ -878,7 +843,45 @@ fn select_config_init_provider(provider: Option<String>) -> Result<String> {
             .wrap_err("Invalid file provider configuration")?;
         Ok(spec)
     } else {
-        Ok(selected_provider)
+        #[cfg(feature = "kubernetes")]
+        {
+            if selected_provider == "kubernetes" {
+                use inquire::Text;
+
+                let kind_choices = vec![KubernetesKind::ConfigMap, KubernetesKind::Secret];
+                let kind = Select::new(
+                    "Select your preferred kubernetes object kind:",
+                    kind_choices,
+                )
+                .prompt()
+                .into_diagnostic()?;
+                let name = Text::new("Kubernetes object name:")
+                    .prompt()
+                    .into_diagnostic()?;
+                let namespace = Text::new("Kubernetes namespace:")
+                    .with_help_message("Leave empty to use the default cluster namespace")
+                    .prompt()
+                    .into_diagnostic()?;
+                let namespace = if namespace.is_empty() {
+                    None
+                } else {
+                    Some(namespace)
+                };
+
+                let spec = KubernetesProvider::build_uri(&kind, &name, &namespace);
+                Box::<dyn Provider>::try_from(spec.as_str())
+                    .into_diagnostic()
+                    .wrap_err("Invalid Kubernetes provider configuration")?;
+                Ok(spec)
+            } else {
+                Ok(selected_provider)
+            }
+        }
+
+        #[cfg(not(feature = "kubernetes"))]
+        {
+            Ok(selected_provider)
+        }
     }
 }
 
@@ -1108,7 +1111,7 @@ pub fn main() -> Result<()> {
             let source = fs::read_to_string(&manifest_path)
                 .into_diagnostic()
                 .wrap_err_with(|| format!("Failed to read {}", manifest_path.display()))?;
-            let updated = add_secret_to_manifest(&source, &profile, &name, description)?;
+            let updated = add_secret_to_spec(&source, &profile, &name, description)?;
             write_manifest_atomically(&manifest_path, &updated)?;
 
             println!(
@@ -1123,6 +1126,7 @@ pub fn main() -> Result<()> {
             );
             Ok(())
         }
+        Commands::Git { action } => git::run(action, &cli.file, &cli.reason, &caller, typed),
         // Handle configuration management commands
         Commands::Config { action } => match normalize_config_action(action) {
             ConfigAction::Global { .. } => unreachable!("global action was normalized"),
@@ -1558,8 +1562,9 @@ pub fn main() -> Result<()> {
                 return Ok(());
             }
 
+            let mut out = std::io::stdout();
             let mut validated = app
-                .check(no_prompt)
+                .check_with_writer(no_prompt, &mut out)
                 .into_diagnostic()
                 .wrap_err("Failed to check secrets")?;
             // Persist temp files so they outlive the command
@@ -1571,10 +1576,8 @@ pub fn main() -> Result<()> {
         }
         // Generate typed accessors for another language (value-free)
         Commands::Schema { profile, output } => {
-            let app = load_secrets(&cli.file, &cli.reason, &caller)?;
-            let ir = crate::codegen::build_ir_from_manifest(&app.manifest);
-            let schema = crate::codegen::schema::emit(&ir, profile.as_deref())
-                .map_err(|e| miette!("{e}"))?;
+            let spec = load_spec(&cli.file)?;
+            let schema = spec.schema_json(profile.as_deref()).into_diagnostic()?;
             match output {
                 Some(path) => fs::write(&path, schema)
                     .into_diagnostic()
@@ -2161,6 +2164,32 @@ mod tests {
     }
 
     #[test]
+    fn generate_toml_preserves_native_references() {
+        let out = generate_toml_with_comments(&config_with_secret(Secret {
+            description: Some("legacy".to_string()),
+            reference: Some(crate::config::NativeAddress {
+                item: "LEGACY_TOKEN".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
+        .unwrap();
+
+        assert!(
+            out.contains(", ref = { item = \"LEGACY_TOKEN\" }"),
+            "got: {out}"
+        );
+        let parsed: Config = toml::from_str(&out).expect("must round-trip");
+        assert_eq!(
+            parsed.profiles["default"].secrets["S"]
+                .reference
+                .as_ref()
+                .map(|reference| reference.item.as_str()),
+            Some("LEGACY_TOKEN")
+        );
+    }
+
+    #[test]
     fn generated_config_with_example_template_is_valid_for_every_profile() {
         for profile in ["default", "development", "production"] {
             let mut config = config_with_secret(Secret {
@@ -2332,7 +2361,7 @@ mod tests {
     }
 
     #[test]
-    fn add_secret_to_manifest_preserves_comments_and_other_tables() {
+    fn add_secret_to_spec_preserves_comments_and_other_tables() {
         let source = r#"# Project documentation
 [project]
 name = "demo"
@@ -2346,8 +2375,7 @@ DATABASE_URL = { description = "Database connection string" }
 local = "dotenv://.env"
 "#;
 
-        let updated =
-            add_secret_to_manifest(source, "default", "API_KEY", "API access token").unwrap();
+        let updated = add_secret_to_spec(source, "default", "API_KEY", "API access token").unwrap();
 
         assert!(updated.contains("# Project documentation"));
         assert!(updated.contains("# Keep this explanation attached to the existing secret."));
@@ -2365,7 +2393,7 @@ local = "dotenv://.env"
     }
 
     #[test]
-    fn add_secret_to_manifest_can_overlay_an_inherited_profile() {
+    fn add_secret_to_spec_can_overlay_an_inherited_profile() {
         let source = r#"[project]
 name = "demo"
 revision = "1.0"
@@ -2376,7 +2404,7 @@ LOCAL = { description = "Local secret" }
 "#;
 
         let updated =
-            add_secret_to_manifest(source, "production", "API_KEY", "API access token").unwrap();
+            add_secret_to_spec(source, "production", "API_KEY", "API access token").unwrap();
 
         assert!(updated.contains("[profiles.production]"));
         assert!(updated.contains("API_KEY = { description = \"API access token\" }"));
@@ -2412,27 +2440,27 @@ API_KEY = { description = "API access token" }
     }
 
     #[test]
-    fn add_secret_to_manifest_rejects_invalid_or_duplicate_declarations() {
+    fn add_secret_to_spec_rejects_invalid_or_duplicate_declarations() {
         let source = r#"[profiles.default]
 API_KEY = { description = "Existing" }
 "#;
 
-        let invalid = add_secret_to_manifest(source, "default", "1BAD", "Description")
+        let invalid = add_secret_to_spec(source, "default", "1BAD", "Description")
             .unwrap_err()
             .to_string();
         assert!(invalid.contains("Invalid secret name"));
 
-        let reserved = add_secret_to_manifest(source, "default", "defaults", "Description")
+        let reserved = add_secret_to_spec(source, "default", "defaults", "Description")
             .unwrap_err()
             .to_string();
         assert!(reserved.contains("reserved for profile defaults"));
 
-        let duplicate = add_secret_to_manifest(source, "default", "API_KEY", "Description")
+        let duplicate = add_secret_to_spec(source, "default", "API_KEY", "Description")
             .unwrap_err()
             .to_string();
         assert!(duplicate.contains("already declared"));
 
-        let empty = add_secret_to_manifest(source, "default", "NEW_KEY", "   ")
+        let empty = add_secret_to_spec(source, "default", "NEW_KEY", "   ")
             .unwrap_err()
             .to_string();
         assert!(empty.contains("description cannot be empty"));

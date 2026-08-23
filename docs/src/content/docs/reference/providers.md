@@ -466,6 +466,7 @@ bw://dev-secrets                        # Collection, by name or ID
 bw://myorg@dev-secrets                  # Organization and collection
 bw://?server=https://vault.company.com  # Expected self-hosted server (guard)
 bw://?type=login&field=username         # Default item type and field
+bw://?folder=team/{project}/{profile}   # Convention title prefix (0.20+)
 ```
 
 Organizations and collections may be named or given as IDs; SecretSpec resolves
@@ -484,6 +485,14 @@ narrows both reads and writes to that item type, keeping a Card and a same-named
 Login separately addressable. An unsupported `?type=`, or an unknown query
 parameter, is rejected when the address is parsed rather than ignored.
 
+SecretSpec 0.20+ convention items use the title
+`secretspec/{project}/{profile}/{key}`. `?folder=` replaces the prefix before
+the key; it is an item-title namespace, not a Bitwarden folder. Explicit
+`ref.item` values remain complete, unprefixed item titles. Releases through
+0.19 wrote bare convention titles, which must be renamed to the 0.20 layout or
+kept with an explicit `ref = { item = "OLD_TITLE" }`; there is no automatic
+bare-name fallback because a bare item carries no project/profile ownership.
+
 `?server=` does not configure the CLI. The `bw` CLI takes its server only from
 `bw config server`, which must be run while logged out, so self-hosted users
 configure the CLI themselves and SecretSpec verifies the setting matches before
@@ -491,7 +500,7 @@ each operation. See the [provider guide](/providers/bw/#self-hosted-servers).
 
 **Features**: Read/write, all vault item types (logins, cards, identities, SSH keys, secure notes), organization/collection addressing by name or ID, field selection, `ref = { item, field }` mapping in `secretspec.toml`, declaration discovery through `init --from` (0.18+)
 **Prerequisites**: Bitwarden CLI (`bw`), signed in and unlocked (`BW_SESSION` env var), self-hosted servers set with `bw config server` before login, build with `--features bw`
-**Storage**: One vault item per secret; reads use per-type default fields unless `?field=` or a `ref` mapping selects one
+**Storage**: One vault item per secret; convention title `secretspec/{project}/{profile}/{key}` (0.20+, customizable with `?folder=`), with per-type default fields unless `?field=` or a `ref` mapping selects one
 
 ## Bitwarden Secrets Manager Provider
 
@@ -651,6 +660,29 @@ per project/profile. A single-file provider supports `ref = { item = "..." }`
 as a root key (or a key in `[DEFAULT]` for INI); extra coordinates and refs
 through templated paths are rejected.
 
+
+## Kubernetes Provider (0.20+)
+
+:::caution[Version compatibility]
+The `kubernetes` provider is added in SecretSpec 0.20.
+:::
+
+**URI**: `k8s+KIND://NAME[@NAMESPACE]` - Stores secrets in a Kubernetes
+ConfigMap or Secret
+
+```text
+k8s+configmap://db-config@db-postgres
+k8s+configmap://db-config
+k8s+secret://db-credentials@db-postgres
+```
+
+**Features**: Read/write Kubernetes ConfigMaps and Secrets
+**Prerequisites**: A Kubernetes configuration in `$KUBECONFIG` or
+`$HOME/.kube/config`; build with `--features kubernetes` (0.20+)
+**Authentication**: Configured in Kubernetes configuration
+**Storage**: `secretspec--{project}--{profile}--{key}` key under `.data` in the
+Kubernetes object
+
 ## Provider Selection
 
 ### Command Line
@@ -711,3 +743,4 @@ $ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Infisical | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |
 | age (0.17+) | ✅ age encryption | Local filesystem | ❌ No |
 | SOPS (0.17+) | ✅ Configured SOPS encryption | Local filesystem | Depends on configured key service |
+| Kubernetes (0.20+) | ❌ ConfigMap ✅ Secret if configured | Kubernetes server | ✅ Yes |

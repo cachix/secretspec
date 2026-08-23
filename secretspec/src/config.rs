@@ -33,8 +33,8 @@
 //! DATABASE_URL = { description = "Production database", required = true }
 //! ```
 
+use crate::compiled_spec::CompiledSpec;
 use crate::composition::Template;
-use crate::manifest::CompiledSpec;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
 use std::fs;
@@ -888,12 +888,12 @@ fn validate_compiled_profile(
 
 fn validate_profile_constraints(
     profile_name: &str,
-    profile: &crate::manifest::CompiledProfile,
+    profile: &crate::compiled_spec::CompiledProfile,
 ) -> Result<(), ParseError> {
     fn validate_groups(
         profile_name: &str,
         kind: &str,
-        groups: &[crate::manifest::CompiledConstraintGroup],
+        groups: &[crate::compiled_spec::CompiledConstraintGroup],
     ) -> Result<(), ParseError> {
         for group in groups {
             if group.members.len() < 2 {
@@ -940,7 +940,7 @@ fn validate_profile_constraints(
 
 fn validate_composition_graph(
     profile_name: &str,
-    profile: &crate::manifest::CompiledProfile,
+    profile: &crate::compiled_spec::CompiledProfile,
 ) -> Result<(), ParseError> {
     // Templates were parsed during manifest compilation; a malformed one was
     // already rejected by `validate_semantics` before this runs.
@@ -1031,6 +1031,24 @@ impl ConfigGraphLoader {
         Ok(merged)
     }
 
+    fn visit_extends(&mut self, config: &Config, base_dir: &Path) -> Result<(), ParseError> {
+        for extend_path in config.project.extends.iter().flatten() {
+            let joined_path = base_dir.join(extend_path);
+            let full_path = if extend_path.ends_with(".toml") {
+                joined_path
+            } else {
+                joined_path.join("secretspec.toml")
+            };
+            if !full_path.exists() {
+                return Err(ParseError::ExtendedConfigNotFound(
+                    full_path.display().to_string(),
+                ));
+            }
+            self.visit(&full_path)?;
+        }
+        Ok(())
+    }
+
     fn visit(&mut self, path: &Path) -> Result<(), ParseError> {
         let canonical_path = path.canonicalize().map_err(|e| {
             ParseError::Io(io::Error::new(
@@ -1056,20 +1074,7 @@ impl ConfigGraphLoader {
         // relative to the symlink, not to the file it points at. Cycle detection
         // and dedup still key on `canonical_path`.
         let base_dir = path.parent().unwrap_or(Path::new("."));
-        for extend_path in config.project.extends.iter().flatten() {
-            let joined_path = base_dir.join(extend_path);
-            let full_path = if extend_path.ends_with(".toml") {
-                joined_path
-            } else {
-                joined_path.join("secretspec.toml")
-            };
-            if !full_path.exists() {
-                return Err(ParseError::ExtendedConfigNotFound(
-                    full_path.display().to_string(),
-                ));
-            }
-            self.visit(&full_path)?;
-        }
+        self.visit_extends(&config, base_dir)?;
 
         self.active.remove(&canonical_path);
         self.emitted.insert(canonical_path);
@@ -1098,6 +1103,28 @@ impl TryFrom<&Path> for Config {
     /// This supports configuration inheritance via `extends` and circular dependency detection.
     fn try_from(path: &Path) -> Result<Self, Self::Error> {
         ConfigGraphLoader::load(path)
+    }
+}
+
+impl Config {
+    /// Merge an already parsed root document with its `extends` from `base_dir`.
+    pub(crate) fn from_root_in(root: Self, base_dir: &Path) -> Result<Self, ParseError> {
+        let mut loader = ConfigGraphLoader {
+            active: HashSet::new(),
+            emitted: HashSet::new(),
+            documents: Vec::new(),
+        };
+        loader.visit_extends(&root, base_dir)?;
+
+        let mut documents = loader.documents.into_iter();
+        let Some(mut merged) = documents.next() else {
+            return Ok(root);
+        };
+        for document in documents {
+            merged.overlay_with(document);
+        }
+        merged.overlay_with(root);
+        Ok(merged)
     }
 }
 
@@ -2010,6 +2037,11 @@ impl SecretEncoding {
 pub enum ExtractFormat {
     /// A JSON document selected with an RFC 6901 JSON Pointer.
     Json,
+    /// An INI document selected with an RFC 6901-escaped `/key` or
+    /// `/section/key` pointer.
+    ///
+    /// Available since SecretSpec 0.20.
+    Ini,
 }
 
 impl ExtractFormat {
@@ -2017,6 +2049,7 @@ impl ExtractFormat {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Json => "json",
+            Self::Ini => "ini",
         }
     }
 }
@@ -2033,7 +2066,9 @@ impl ExtractFormat {
 pub struct SecretExtract {
     /// The structured-data format of the stored value.
     pub format: ExtractFormat,
-    /// RFC 6901 JSON Pointer selecting the logical value.
+    /// Slash-delimited pointer selecting the logical value. JSON accepts a
+    /// complete RFC 6901 JSON Pointer; INI accepts `/key` or `/section/key`
+    /// with RFC 6901 escaping for each segment.
     pub pointer: String,
 }
 
@@ -2041,6 +2076,7 @@ impl SecretExtract {
     fn validate(&self) -> Result<(), String> {
         match self.format {
             ExtractFormat::Json => validate_json_pointer(&self.pointer),
+            ExtractFormat::Ini => crate::ini_field::validate_pointer(&self.pointer),
         }
     }
 }
@@ -2048,7 +2084,7 @@ impl SecretExtract {
 /// Validate the JSON Pointer grammar independently of any particular document.
 /// An empty pointer selects the whole document; every non-empty pointer starts
 /// with `/`, and `~` escapes only `~0` and `~1`.
-fn validate_json_pointer(pointer: &str) -> Result<(), String> {
+pub(crate) fn validate_json_pointer(pointer: &str) -> Result<(), String> {
     if pointer.is_empty() {
         return Ok(());
     }
@@ -2138,9 +2174,11 @@ pub struct Secret {
     /// Available since SecretSpec 0.19.
     pub encoding: Option<SecretEncoding>,
     /// Structured stored-value extraction applied after optional decoding.
-    /// JSON extraction uses an RFC 6901 pointer. Extracted secrets are
-    /// read-only because a selected value cannot reconstruct its containing
-    /// document for a storage write.
+    /// JSON extraction uses an RFC 6901 pointer. INI extraction (0.20+) uses
+    /// `/key` for an unsectioned key or `/section/key` for a named section,
+    /// with RFC 6901 segment escaping. Extracted secrets are read-only because
+    /// a selected value cannot reconstruct its containing document for a
+    /// storage write.
     ///
     /// Available since SecretSpec 0.19.
     pub extract: Option<SecretExtract>,
@@ -2241,7 +2279,7 @@ impl Secret {
         self.validate_semantics()
     }
 
-    fn validate_description(&self) -> Result<(), String> {
+    pub(crate) fn validate_description(&self) -> Result<(), String> {
         match self.description.as_deref() {
             Some("") => Err("description cannot be empty".into()),
             None => Err("missing description".into()),
@@ -4071,11 +4109,7 @@ encoding = "rot13""#,
 
     #[test]
     fn secret_extract_parses_round_trips_and_inherits() {
-        let secret: Secret = toml::from_str(
-            r#"description = "selected"
-extract = { format = "json", pointer = "/database/password" }"#,
-        )
-        .unwrap();
+        let secret = extract_secret("json", "/database/password");
         assert_eq!(
             secret.extract,
             Some(SecretExtract {
@@ -4104,16 +4138,30 @@ extract = { format = "json", pointer = "/database/password" }"#,
         )
         .unwrap();
         assert_eq!(inherited.extract, secret.extract);
+
+        let ini = extract_secret("ini", "/database/password");
+        assert_eq!(
+            ini.extract,
+            Some(SecretExtract {
+                format: ExtractFormat::Ini,
+                pointer: "/database/password".to_string(),
+            })
+        );
+        assert!(toml::to_string(&ini).unwrap().contains("format = \"ini\""));
+    }
+
+    /// A secret declaring nothing but the extract table under test.
+    fn extract_secret(format: &str, pointer: &str) -> Secret {
+        toml::from_str(&format!(
+            "description = \"selected\"\nextract = {{ format = \"{format}\", pointer = \"{pointer}\" }}"
+        ))
+        .unwrap()
     }
 
     #[test]
     fn secret_extract_validates_json_pointer_and_table_shape() {
         for pointer in ["database/password", "/bad~", "/bad~2escape"] {
-            let secret: Secret = toml::from_str(&format!(
-                "description = \"selected\"\nextract = {{ format = \"json\", pointer = \"{pointer}\" }}"
-            ))
-            .unwrap();
-            let error = secret.validate().unwrap_err();
+            let error = extract_secret("json", pointer).validate().unwrap_err();
             assert!(error.contains("`extract.pointer`"), "{error}");
         }
 
@@ -4137,11 +4185,27 @@ extract = { format = "yaml", pointer = "/x" }"#,
     #[test]
     fn secret_extract_accepts_root_and_escaped_json_pointers() {
         for pointer in ["", "/a~1b/~0key", "/items/0"] {
-            let secret: Secret = toml::from_str(&format!(
-                "description = \"selected\"\nextract = {{ format = \"json\", pointer = \"{pointer}\" }}"
-            ))
-            .unwrap();
-            secret.validate().unwrap();
+            extract_secret("json", pointer).validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn secret_extract_validates_ini_pointer_shape() {
+        for pointer in ["/token", "/database/password", "/a~1b/~0key"] {
+            extract_secret("ini", pointer).validate().unwrap();
+        }
+
+        for pointer in [
+            "",
+            "token",
+            "/",
+            "//password",
+            "/database/",
+            "/database/password/extra",
+            "/bad~2escape",
+        ] {
+            let error = extract_secret("ini", pointer).validate().unwrap_err();
+            assert!(error.contains("`extract.pointer`"), "{pointer}: {error}");
         }
     }
 

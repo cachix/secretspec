@@ -46,17 +46,19 @@ mod audit;
 mod cache;
 mod caller;
 mod codegen;
+mod compiled_spec;
 mod composition;
 mod config;
 mod error;
 pub(crate) mod generator;
+pub(crate) mod ini_field;
 pub(crate) mod json_field;
-mod manifest;
 mod plan;
 mod report;
 mod resolve;
 mod secrets;
 mod spec;
+mod spec_edit;
 mod validation;
 
 pub(crate) mod provider;
@@ -79,6 +81,11 @@ pub use config::Resolved;
 /// and its builder API instead.
 #[doc(hidden)]
 pub mod __private {
+    // Generated code uses these re-exports so applications do not need to
+    // depend on the implementation crates just to compile the macro output.
+    pub use ::secrecy;
+    pub use ::serde;
+
     pub mod codegen {
         pub use crate::codegen::{CodegenIr, IrField, IrProfile, build_ir, capitalize};
     }

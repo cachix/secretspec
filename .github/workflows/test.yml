@@ -115,7 +115,7 @@ jobs:
         rustup toolchain install
         rustup component add rustfmt clippy
     - name: Cache Rust builds
-      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       with:
         key: ${{ matrix.os }}
 
@@ -148,11 +148,11 @@ jobs:
     - name: Install Rust
       run: rustup toolchain install stable --profile minimal
     - name: Cache Rust builds
-      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
     - name: Check each provider feature standalone
       run: |
         set -euo pipefail
-        for feature in cli keyring keeper gcsm awssm vault openbao infisical bws akv aac sops bw; do
+        for feature in cli keyring keeper gcsm awssm vault openbao infisical bws akv aac sops bw kubernetes; do
           echo "::group::$feature"
           cargo check --package secretspec --no-default-features --features "$feature"
           echo "::endgroup::"
@@ -206,7 +206,7 @@ jobs:
     - name: Install Rust
       run: rustup toolchain install stable --profile minimal
     - name: Cache Rust builds
-      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
     - name: cargo test
       # Exclude secretspec-php-native: it is an ext-php-rs extension that needs a
       # PHP dev toolchain (php-config/headers) this bare runner does not have, and

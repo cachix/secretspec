@@ -6,12 +6,16 @@ name: "Node addon"
 # optionalDependencies) using @napi-rs/cli, authenticated via npm Trusted
 # Publishing (OIDC) -- no NPM_TOKEN stored in CI.
 #
-# The Linux builds run inside manylinux_2_28 containers (AlmaLinux 8, glibc
-# 2.28), so the published addon loads on any distro with glibc >= 2.28
+# The glibc Linux builds run inside manylinux_2_28 containers (AlmaLinux 8,
+# glibc 2.28), so the published addon loads on any distro with glibc >= 2.28
 # (RHEL 8/9, Amazon Linux 2023, Debian 10+, Ubuntu 18.10+). Building on the bare
 # runner instead links the runner's glibc (2.39 on ubuntu-24.04), which broke
 # RHEL 9-family distros (issue #136). A post-build step fails the job if the
 # addon's glibc floor or NEEDED libraries regress.
+#
+# The musl builds live in a separate `musl` job, because an Alpine job container
+# cannot run JavaScript actions on an ARM runner. npm keeps the two libc variants
+# apart through the `libc` field in each platform package (issue #383).
 
 on:
   workflow_call:
@@ -109,12 +113,94 @@ jobs:
           name: node-addon-${{ matrix.target }}
           path: secretspec-node/secretspec.${{ matrix.platform }}.node
 
+  musl:
+    name: ${{ matrix.target }}
+    # GitHub Actions runs JavaScript actions inside an Alpine container only on
+    # x64 runners, so an Alpine job container breaks checkout on the ARM runner.
+    # These legs stay on the host and drive the build through docker run, the
+    # same shape dotnet-package.yml uses for its musl assets. Each image is
+    # Alpine based and matches its runner architecture, so the addon builds and
+    # tests natively against musl with no cross toolchain (issue #383).
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64-musl
+            runner: ubuntu-latest
+            image: quay.io/pypa/musllinux_1_2_x86_64:2026.08.05-1@sha256:c7b2187aa4d095a8da73ea4db96acefd46701a13439a9cc4546f5d61a4b5bba1
+          - target: linux-arm64-musl
+            runner: ubuntu-24.04-arm
+            image: quay.io/pypa/musllinux_1_2_aarch64:2026.08.05-1@sha256:668c455aeddf5e363bd6fd801f10b369a634a9f01974876cee8c8c518b44ef10
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+
+      - name: Build the addon and run the SDK tests
+        shell: bash
+        run: |
+          # For a musl target napi-rs points cargo at a cross toolchain named
+          # <arch>-linux-musl-gcc. This container builds musl natively, where
+          # the compiler is plain gcc, so the variables below name it instead;
+          # napi-rs keeps a linker the environment already sets. napi-rs adds
+          # -C target-feature=-crt-static for musl targets on its own.
+          #
+          # Variables in this single-quoted script expand inside the container,
+          # not in the outer workflow shell.
+          # shellcheck disable=SC2016
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace \
+            --env CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=gcc \
+            --env CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=gcc \
+            "${{ matrix.image }}" \
+            bash -c '
+              set -euo pipefail
+              # setup-node serves glibc builds, so Node comes from Alpine.
+              apk add --no-cache nodejs npm
+              bash scripts/install-rustup.sh
+              export PATH="$HOME/.cargo/bin:$PATH"
+              rustup toolchain install
+              ( cd secretspec-node && npm ci )
+              bash secretspec-node/scripts/build-addon.sh
+              ( cd secretspec-node && node --test )
+            '
+
+      - name: Verify addon portability (musl libc, no libdbus)
+        shell: bash
+        run: bash scripts/check-musl-portability.sh secretspec-node/secretspec.node
+
+      - name: Load the addon on node:alpine
+        shell: bash
+        run: |
+          # musllinux_1_2 and node:alpine are different Alpine releases, so
+          # confirm the addon loads on the image a Node service runs.
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace/secretspec-node \
+            node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 \
+            node --test
+
+      - name: Copy the addon to its platform-specific filename for publishing
+        shell: bash
+        run: cp secretspec-node/secretspec.node "secretspec-node/secretspec.${{ matrix.target }}.node"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: node-addon-${{ matrix.target }}
+          path: secretspec-node/secretspec.${{ matrix.target }}.node
+
+
   publish:
     name: publish to npm
     # Version tags publish automatically. A standalone manual run can opt in to
     # re-publishing one SDK, while reusable pre-release runs always leave this off.
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish
-    needs: [addon]
+    needs: [addon, musl]
     runs-on: ubuntu-latest
     permissions:
       id-token: write # npm Trusted Publishing (OIDC), no token needed

@@ -19,12 +19,12 @@ installers = ["shell"]
 precise-builds = true
 # Target platforms to build apps for (Rust target-triple syntax)
 #
-# aarch64-pc-windows-msvc is missing on purpose: dist refuses to build a target
-# whose standalone updater it cannot fetch, and axoupdater publishes no binary
-# for it (axodotdev/axoupdater#313). install-updater is a global setting, so
-# that target is built and attached by cli-windows-arm64.yml instead, leaving
-# the updater intact everywhere dist can provide one.
-targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# aarch64-pc-windows-msvc is missing on purpose: dist 0.29 pins axoupdater 0.9.1,
+# which has no binary for it (axodotdev/axoupdater#313). install-updater is a
+# global setting, so that target is built and attached by
+# cli-windows-arm64.yml instead, leaving the updater intact everywhere dist can
+# provide one.
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Whether to install an updater program
@@ -33,5 +33,6 @@ install-updater = true
 # https://github.com/axodotdev/cargo-dist/issues/74
 [dist.github-custom-runners]
 aarch64-unknown-linux-gnu = "ubuntu-24.04-arm"
+aarch64-unknown-linux-musl = "ubuntu-24.04-arm"
 aarch64-apple-darwin = "macos-latest"
 x86_64-apple-darwin = "macos-15"

@@ -780,7 +780,8 @@ mod secret_spec_generation {
     /// # Generated Code Example
     ///
     /// ```ignore
-    /// #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    /// #[derive(Debug, ::secretspec::__private::serde::Serialize, ::secretspec::__private::serde::Deserialize)]
+    /// #[serde(crate = "::secretspec::__private::serde")]
     /// pub struct SecretSpec {
     ///     pub database_url: String,
     ///     pub api_key: Option<String>,
@@ -791,7 +792,8 @@ mod secret_spec_generation {
         let fields = field_info.values().map(|info| info.generate_struct_field());
 
         quote! {
-            #[derive(Debug, serde::Serialize, serde::Deserialize)]
+            #[derive(Debug, ::secretspec::__private::serde::Serialize, ::secretspec::__private::serde::Deserialize)]
+            #[serde(crate = "::secretspec::__private::serde")]
             pub struct SecretSpec {
                 #(#fields,)*
             }
@@ -811,7 +813,8 @@ mod secret_spec_generation {
     /// # Generated Code Example
     ///
     /// ```ignore
-    /// #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    /// #[derive(Debug, ::secretspec::__private::serde::Serialize, ::secretspec::__private::serde::Deserialize)]
+    /// #[serde(crate = "::secretspec::__private::serde")]
     /// pub enum SecretSpecProfile {
     ///     Development {
     ///         database_url: String,
@@ -828,7 +831,8 @@ mod secret_spec_generation {
         profile_variants: &[proc_macro2::TokenStream],
     ) -> proc_macro2::TokenStream {
         quote! {
-            #[derive(Debug, serde::Serialize, serde::Deserialize)]
+            #[derive(Debug, ::secretspec::__private::serde::Serialize, ::secretspec::__private::serde::Deserialize)]
+            #[serde(crate = "::secretspec::__private::serde")]
             pub enum SecretSpecProfile {
                 #(#profile_variants,)*
             }
@@ -945,6 +949,7 @@ mod secret_spec_generation {
                 profile_str: Option<String>,
                 reason: Option<String>,
                 caller: Option<secretspec::CallerContext>,
+                prompt_missing: bool,
             ) -> Result<secretspec::ValidatedSecrets, secretspec::SecretSpecError> {
                 let mut spec = secretspec::Secrets::load()?;
                 // A typed loader expects the full generated struct shape, so an
@@ -971,6 +976,16 @@ mod secret_spec_generation {
                 }
                 match spec.validate()? {
                     Ok(valid_secrets) => Ok(valid_secrets),
+                    // Delegate to the same interactive prompt-and-store logic the
+                    // untyped `Secrets` API uses, instead of reimplementing it here.
+                    // `provider`/`profile` were already applied to `spec` above via
+                    // `set_provider`/`set_profile`, so `ensure_secrets` picks them
+                    // back up through its own fallback to `self.provider`/`self.profile`
+                    // (see `Secrets::explicit_provider_spec`/`resolve_profile_name`)
+                    // without needing them passed in again here.
+                    Err(validation_errors) if prompt_missing && !validation_errors.missing_required.is_empty() => {
+                        spec.ensure_secrets(None, None, true)
+                    }
                     Err(validation_errors) if validation_errors.constraint_violations.is_empty() => {
                         Err(secretspec::SecretSpecError::RequiredSecretMissing(
                             validation_errors.missing_required.join(", ")
@@ -1033,7 +1048,7 @@ mod secret_spec_generation {
                     // The static `load` has no reason parameter; a reason is supplied
                     // via the SECRETSPEC_REASON env var (honored by `Secrets::load`)
                     // or through `SecretSpec::builder().with_reason(...)`.
-                    let validation_result = load_internal(provider_str, profile_str, None, None)?;
+                    let validation_result = load_internal(provider_str, profile_str, None, None, false)?;
 
                     let data = {
                         let secrets = &validation_result.resolved.secrets;
@@ -1078,6 +1093,7 @@ mod builder_generation {
     ///     profile: Option<Box<dyn FnOnce() -> Result<Profile, String>>>,
     ///     reason: Option<String>,
     ///     caller: Option<secretspec::CallerContext>,
+    ///     prompt_missing: bool,
     /// }
     /// ```
     pub fn generate_struct() -> proc_macro2::TokenStream {
@@ -1087,6 +1103,7 @@ mod builder_generation {
                 profile: Option<Box<dyn FnOnce() -> Result<Profile, String>>>,
                 reason: Option<String>,
                 caller: Option<secretspec::CallerContext>,
+                prompt_missing: bool,
             }
         }
     }
@@ -1125,6 +1142,7 @@ mod builder_generation {
                         profile: None,
                         reason: None,
                         caller: None,
+                        prompt_missing: false,
                     }
                 }
 
@@ -1148,6 +1166,16 @@ mod builder_generation {
                 /// the `require_reason` policy.
                 pub fn with_caller(mut self, caller: secretspec::CallerContext) -> Self {
                     self.caller = Some(caller);
+                    self
+                }
+
+                /// Prompt for and store any missing required secrets interactively
+                /// instead of failing with `RequiredSecretMissing`, mirroring
+                /// `Secrets::ensure_secrets`. Only prompts when stdin is a real
+                /// terminal; otherwise falls back to the same error as when this
+                /// is left unset (the default).
+                pub fn prompt_missing(mut self, prompt_missing: bool) -> Self {
+                    self.prompt_missing = prompt_missing;
                     self
                 }
 
@@ -1277,6 +1305,7 @@ mod builder_generation {
                         profile_str,
                         reason_str,
                         caller,
+                        self.prompt_missing,
                     )?;
 
                     let data = {
@@ -1321,6 +1350,7 @@ mod builder_generation {
                         profile_str,
                         reason_str,
                         caller,
+                        self.prompt_missing,
                     )?;
 
                     let data_result: LoadResult<SecretSpecProfile> = {
@@ -1439,7 +1469,7 @@ fn generate_secret_spec_code(ir: CodegenIr) -> proc_macro2::TokenStream {
 
     // Combine all components
     quote! {
-        use ::secrecy::ExposeSecret;
+        use ::secretspec::__private::secrecy::ExposeSecret;
 
         #secret_spec_struct
         #secret_spec_profile_enum

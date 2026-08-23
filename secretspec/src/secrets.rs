@@ -3,12 +3,12 @@
 use crate::CallerContext;
 use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
 use crate::cache::{self, CacheEntryStatus, CacheOwnership};
+use crate::compiled_spec::{CompiledSpec, MissingPolicy};
 use crate::config::{
     Config, CredentialSource, ExtractFormat, GlobalConfig, NativeAddress, Profile, ProviderAlias,
     RequireReason, Resolved, SecretEncoding, SecretExtract,
 };
 use crate::error::{Result, SecretSpecError};
-use crate::manifest::{CompiledSpec, MissingPolicy};
 use crate::plan::{PlannedSecret, ResolutionPlan, ResolvedCache, Route};
 use crate::provider::{
     Address, OwnedAddress, ProducedValuePersistence, Provider as ProviderTrait,
@@ -25,13 +25,84 @@ use data_encoding::{
     BASE64, BASE64_NOPAD, BASE64URL, BASE64URL_NOPAD, Encoding, HEXLOWER, HEXLOWER_PERMISSIVE,
 };
 use secrecy::{ExposeSecret, SecretSlice, SecretString};
+#[cfg(unix)]
+use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
+#[cfg(unix)]
+use signal_hook::iterator::{Handle as SignalHandle, Signals};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
-use std::io::{self, IsTerminal, Read};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use std::sync::{Arc, Mutex};
+#[cfg(unix)]
+use std::thread::JoinHandle;
 use std::time::Duration;
+
+#[cfg(unix)]
+struct ChildSignalForwarder {
+    signals: Option<Signals>,
+    handle: SignalHandle,
+    thread: Option<JoinHandle<()>>,
+}
+
+#[cfg(unix)]
+impl ChildSignalForwarder {
+    /// Install handlers before spawning the child so a signal cannot slip
+    /// through while SecretSpec is becoming the child's supervisor.
+    fn prepare() -> io::Result<Self> {
+        let signals = Signals::new([SIGTERM, SIGINT, SIGHUP])?;
+        let handle = signals.handle();
+        Ok(Self {
+            signals: Some(signals),
+            handle,
+            thread: None,
+        })
+    }
+
+    fn start(&mut self, child_pid: u32) {
+        let mut signals = self
+            .signals
+            .take()
+            .expect("signal forwarder can only be started once");
+        self.thread = Some(std::thread::spawn(move || {
+            for signal in signals.forever() {
+                // `kill` is async-signal-safe, and this call runs on an ordinary
+                // thread rather than inside the installed signal handler. The
+                // child may already have exited, in which case ESRCH is benign.
+                unsafe {
+                    libc::kill(child_pid as libc::pid_t, signal);
+                }
+            }
+        }));
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ChildSignalForwarder {
+    fn drop(&mut self) {
+        self.handle.close();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn command_exit_code(status: ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return 128 + signal;
+        }
+    }
+
+    1
+}
 
 /// Format the human-facing name and optional description used by status output.
 ///
@@ -461,9 +532,11 @@ enum Materialize {
     /// controlling-terminal input for declarations with `prompt = true`.
     Run,
     /// Value-free pass: never write a generated secret back to a provider and
-    /// never persist a secret to disk. A generatable-but-absent secret is still
-    /// reported as it *would* resolve, without minting it. Backs `report()` and
-    /// `resolve_without_values()`.
+    /// never persist a secret to disk. A generatable-but-absent secret is
+    /// reported as it *would* resolve, without minting it — unless it is
+    /// required and its store would keep the minted value, in which case the
+    /// value is simply not provisioned yet and is reported missing. Backs
+    /// `report()` and `resolve_without_values()`.
     None,
 }
 
@@ -884,6 +957,11 @@ impl Secrets {
             write_target_reporter: None,
             prompt_reader: None,
         })
+    }
+
+    pub(crate) fn load_config(config: Config, config_dir: PathBuf) -> Result<Self> {
+        let spec = Spec::from_config_document(config)?;
+        Self::from_spec_at(spec, config_dir)
     }
 
     /// Installs the CLI's write-target observer. The provider and core library
@@ -1771,23 +1849,20 @@ impl Secrets {
         diagnostic_name: &str,
         value: &str,
     ) -> Result<SecretString> {
+        let failed = |reason: String| SecretSpecError::DecodeFailed {
+            name: diagnostic_name.to_string(),
+            encoding: extract.format.as_str(),
+            reason,
+        };
         match extract.format {
             ExtractFormat::Json => {
-                let document: serde_json::Value =
-                    serde_json::from_str(value).map_err(|error| SecretSpecError::DecodeFailed {
-                        name: diagnostic_name.to_string(),
-                        encoding: extract.format.as_str(),
-                        reason: format!("stored value is not valid JSON: {error}"),
-                    })?;
+                let document: serde_json::Value = serde_json::from_str(value)
+                    .map_err(|error| failed(format!("stored value is not valid JSON: {error}")))?;
                 let selected = document.pointer(&extract.pointer).ok_or_else(|| {
-                    SecretSpecError::DecodeFailed {
-                        name: diagnostic_name.to_string(),
-                        encoding: extract.format.as_str(),
-                        reason: format!(
-                            "JSON Pointer '{}' did not match the stored document",
-                            extract.pointer
-                        ),
-                    }
+                    failed(format!(
+                        "JSON Pointer '{}' did not match the stored document",
+                        extract.pointer
+                    ))
                 })?;
                 // Rendering is shared with the awssm and scaleway providers.
                 // A null renders as "null" here: this caller was asked for one
@@ -1796,6 +1871,12 @@ impl Secrets {
                 // continues. See crate::json_field.
                 Ok(crate::json_field::render(selected))
             }
+            // The pointer grammar and the lookup that follows it live together
+            // in crate::ini_field, next to the validation that rejects every
+            // other shape at config time.
+            ExtractFormat::Ini => crate::ini_field::select(value, &extract.pointer)
+                .map(|selected| SecretString::new(selected.into()))
+                .map_err(failed),
         }
     }
 
@@ -2137,7 +2218,7 @@ impl Secrets {
     fn accessed_names(&self, profile_name: &str, visible: &[String]) -> Vec<String> {
         fn visit(
             name: &str,
-            profile: &crate::manifest::CompiledProfile,
+            profile: &crate::compiled_spec::CompiledProfile,
             acc: &mut HashSet<String>,
         ) {
             if !acc.insert(name.to_string()) {
@@ -3672,25 +3753,40 @@ impl Secrets {
     /// let validated = spec.check(false).unwrap();
     /// ```
     pub fn check(&self, no_prompt: bool) -> Result<ValidatedSecrets> {
+        self.check_with_writer(no_prompt, &mut io::stderr())
+    }
+
+    /// Checks the status of all secrets, writing the human-readable report to `out`.
+    ///
+    /// This is the writer-based counterpart to [`Self::check`]. Prompts and
+    /// diagnostics still use their standard streams; only the report containing
+    /// the header, per-secret statuses, constraint violations, and summary is
+    /// written to `out`.
+    pub fn check_with_writer(
+        &self,
+        no_prompt: bool,
+        out: &mut dyn Write,
+    ) -> Result<ValidatedSecrets> {
         self.ensure_reason_for(AuditAction::Check, None)?;
         let profile_display = self.resolve_profile_name(None);
 
-        eprintln!(
+        writeln!(
+            out,
             "Checking secrets in {} (profile: {})...\n",
             self.config.project.name.bold(),
             profile_display.cyan()
-        );
+        )?;
 
         // Validate and display results
         // The read is audited inside `validate()`, so no bulk event here.
         match self.validate()? {
             Ok(valid) => {
-                self.display_validation_success(&valid)?;
+                self.display_validation_success(out, &valid)?;
                 // All secrets present - return early without re-validating
                 Ok(valid)
             }
             Err(errors) => {
-                self.display_validation_errors(&errors)?;
+                self.display_validation_errors(out, &errors)?;
                 // Missing secrets - prompt if interactive (and not no_prompt) and re-validate
                 self.ensure_secrets(None, None, !no_prompt)
             }
@@ -3698,7 +3794,11 @@ impl Secrets {
     }
 
     /// Display validation success results
-    fn display_validation_success(&self, valid: &ValidatedSecrets) -> Result<()> {
+    fn display_validation_success(
+        &self,
+        out: &mut dyn Write,
+        valid: &ValidatedSecrets,
+    ) -> Result<()> {
         let mut found_count = 0;
         let mut optional_count = 0;
         let default_names = valid
@@ -3712,23 +3812,37 @@ impl Secrets {
             let label = format_secret_label(name, config.description.as_deref());
             if missing_optional.contains(&name) {
                 optional_count += 1;
-                eprintln!("{} {} {}", "○".blue(), label, "(optional)".blue());
+                writeln!(out, "{} {} {}", "○".blue(), label, "(optional)".blue())?;
             } else if config.default.is_some() && default_names.contains(&name) {
                 found_count += 1;
-                eprintln!("{} {} {}", "○".yellow(), label, "(has default)".yellow());
+                writeln!(
+                    out,
+                    "{} {} {}",
+                    "○".yellow(),
+                    label,
+                    "(has default)".yellow()
+                )?;
             } else {
                 found_count += 1;
-                eprintln!("{} {}", "✓".green(), label);
+                writeln!(out, "{} {}", "✓".green(), label)?;
             }
         }
 
-        eprintln!("\n{}", Self::format_summary(found_count, 0, optional_count));
+        writeln!(
+            out,
+            "\n{}",
+            Self::format_summary(found_count, 0, optional_count)
+        )?;
 
         Ok(())
     }
 
     /// Display validation error results
-    fn display_validation_errors(&self, errors: &ValidationErrors) -> Result<()> {
+    fn display_validation_errors(
+        &self,
+        out: &mut dyn Write,
+        errors: &ValidationErrors,
+    ) -> Result<()> {
         let mut found_count = 0;
         let mut missing_count = 0;
         let mut optional_count = 0;
@@ -3742,26 +3856,33 @@ impl Secrets {
             let label = format_secret_label(name, config.description.as_deref());
             if errors.missing_required.contains(name) {
                 missing_count += 1;
-                eprintln!("{} {} {}", "✗".red(), label, "(required)".red());
+                writeln!(out, "{} {} {}", "✗".red(), label, "(required)".red())?;
             } else if errors.missing_optional.contains(name) {
                 optional_count += 1;
-                eprintln!("{} {} {}", "○".blue(), label, "(optional)".blue());
+                writeln!(out, "{} {} {}", "○".blue(), label, "(optional)".blue())?;
             } else {
                 found_count += 1;
                 if default_names.contains(name) {
-                    eprintln!("{} {} {}", "○".yellow(), label, "(has default)".yellow());
+                    writeln!(
+                        out,
+                        "{} {} {}",
+                        "○".yellow(),
+                        label,
+                        "(has default)".yellow()
+                    )?;
                 } else {
-                    eprintln!("{} {}", "✓".green(), label);
+                    writeln!(out, "{} {}", "✓".green(), label)?;
                 }
             }
         }
 
-        eprintln!(
+        writeln!(
+            out,
             "\n{}",
             Self::format_summary(found_count, missing_count, optional_count)
-        );
+        )?;
         for violation in &errors.constraint_violations {
-            eprintln!("{} {}", "Constraint failed:".red().bold(), violation);
+            writeln!(out, "{} {}", "Constraint failed:".red().bold(), violation)?;
         }
 
         Ok(())
@@ -4352,6 +4473,27 @@ impl Secrets {
         );
 
         Ok(())
+    }
+
+    /// Whether a generated value for this secret would outlive the resolution
+    /// that mints it, i.e. whether its write route actually stores it.
+    ///
+    /// Capability inspection only: `generated_value_persistence` is documented
+    /// as pure, so this asks the store nothing over the wire and mints nothing.
+    /// A store that cannot even be built cannot be shown to be ephemeral, so it
+    /// counts as storing — the answer that reports a required secret as missing
+    /// rather than promising a value that may never materialize.
+    fn generated_value_is_stored(&self, planned: &PlannedSecret, profile_name: &str) -> bool {
+        planned
+            .route
+            .as_ref()
+            .and_then(|route| {
+                self.write_provider_for_route(route, Some(profile_name))
+                    .ok()
+            })
+            .is_none_or(|backend| {
+                backend.generated_value_persistence() == ProducedValuePersistence::Persist
+            })
     }
 
     /// Attempts to generate a secret if it has generation config.
@@ -4985,8 +5127,11 @@ impl Secrets {
     /// This pass is value-free and side-effect-free: it never mints or stores a
     /// generatable secret and never writes an `as_path` temp file. A secret that
     /// *would* be generated on a real resolve is reported as resolved
-    /// (`generated`), so the report still answers "would this resolve" without
-    /// mutating any provider or touching disk.
+    /// (`generated`) when generation is how its value is meant to appear — an
+    /// optional secret, or a store that never retains a generated value. A
+    /// required secret whose store keeps what it mints is reported
+    /// `MissingRequired` until a pass actually provisions it, so this preflight
+    /// never reports a value the store does not hold.
     pub fn report(&self) -> Result<ResolutionReport> {
         let mut report = match self.validate_audited(true, Materialize::None)? {
             Ok(validated) => validated.report(),
@@ -5108,7 +5253,7 @@ impl Secrets {
     fn composed_dependency_names(&self, target: &str, profile_name: &str) -> Vec<String> {
         fn visit(
             name: &str,
-            profile: &crate::manifest::CompiledProfile,
+            profile: &crate::compiled_spec::CompiledProfile,
             names: &mut HashSet<String>,
         ) {
             if !names.insert(name.to_string()) {
@@ -5152,7 +5297,7 @@ impl Secrets {
 
         fn visit(
             name: &str,
-            profile: &crate::manifest::CompiledProfile,
+            profile: &crate::compiled_spec::CompiledProfile,
             statuses: &HashMap<&str, &ResolutionStatus>,
             promptable: &mut HashSet<String>,
         ) {
@@ -5641,11 +5786,21 @@ impl Secrets {
                                 }
                             }
                             MissingPolicy::Generate => {
-                                // A full pass mints and stores; a value-free pass
-                                // reports that generation would resolve without
-                                // performing that side effect.
-                                generated = true;
+                                // A full pass mints and stores.
+                                //
+                                // A value-free pass must not answer for a value
+                                // nobody has provisioned. A required secret whose
+                                // store keeps what it mints has no value until
+                                // some pass writes one, so the preflight reports
+                                // it missing instead of promising it resolves —
+                                // otherwise `check --no-prompt` passes while the
+                                // store is still empty. Where generation *is* how
+                                // the value is meant to appear — an optional
+                                // secret, or a store that never retains a
+                                // generated value — resolution genuinely succeeds
+                                // and the report says so.
                                 if materialize.values() {
+                                    generated = true;
                                     let generated_value = self
                                         .try_generate_secret(planned, profile)?
                                         .expect("compiled Generate policy has a generator");
@@ -5657,8 +5812,16 @@ impl Secrets {
                                         generated_value,
                                         ResolvedRepresentation::Logical,
                                     )?;
+                                    status = ResolutionStatus::Resolved;
+                                } else if required
+                                    && self.generated_value_is_stored(planned, profile)
+                                {
+                                    missing_required.push(name.clone());
+                                    status = ResolutionStatus::MissingRequired;
+                                } else {
+                                    generated = true;
+                                    status = ResolutionStatus::Resolved;
                                 }
-                                status = ResolutionStatus::Resolved;
                             }
                             MissingPolicy::UseDefault => {
                                 let default_value = planned
@@ -6052,6 +6215,12 @@ impl Secrets {
             cmd.env_remove(key);
         }
 
+        // Set up Unix signal handling before `spawn`: when SecretSpec is PID 1,
+        // the kernel ignores terminating signals with their default disposition,
+        // and any signal received in a post-spawn setup window would be lost.
+        #[cfg(unix)]
+        let mut signal_forwarder = ChildSignalForwarder::prepare()?;
+
         // Spawn (rather than `status`) so the Run event is recorded the moment the
         // child starts, before the potentially long-running wait. A long-lived
         // command (e.g. a dev server) would otherwise not be logged until it exits,
@@ -6078,8 +6247,12 @@ impl Secrets {
             },
         );
 
-        let status = child?.wait()?;
-        Ok(status.code().unwrap_or(1))
+        let mut child = child?;
+        #[cfg(unix)]
+        signal_forwarder.start(child.id());
+
+        let status = child.wait()?;
+        Ok(command_exit_code(status))
     }
 
     /// Resolves every secret for the active profile and emits them in `format`,

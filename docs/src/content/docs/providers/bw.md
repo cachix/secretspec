@@ -8,6 +8,11 @@ using the official `bw` CLI.
 
 :::note[Version compatibility]
 The Bitwarden Password Manager provider was added in SecretSpec 0.18.
+
+SecretSpec 0.20+ isolates convention-managed items by project and profile. It
+stores `DATABASE_URL` under an item title such as
+`secretspec/my-project/default/DATABASE_URL`; releases through 0.19 used the
+bare title `DATABASE_URL`. See [Migrating bare item names](#migrating-bare-item-names-020).
 :::
 
 ## At a glance
@@ -110,6 +115,7 @@ bw://[collection]
 bw://[org@collection]
 bw://?server=https://vault.company.com
 bw://?type=login&field=password
+bw://?folder=team/{project}/{profile} # 0.20+
 ```
 
 - `collection`: Target collection, by name or by ID
@@ -117,6 +123,10 @@ bw://?type=login&field=password
 - `type`: Item type to require when matching an existing item and to use when
   creating a new one (`login`, `card`, `identity`, `sshkey`, or `securenote`)
 - `field`: Built-in or custom field to read or write
+- `folder` (0.20+): Convention item-title prefix. Supports `{project}` and
+  `{profile}` and defaults to `secretspec/{project}/{profile}`. This is not a
+  Bitwarden folder: Bitwarden folders are personal to each vault user and
+  therefore cannot provide a shared project namespace.
 - `server`: The self-hosted server this configuration expects. This does **not**
   configure the CLI — it is a guard that fails with remediation steps when the
   `bw` CLI is pointed somewhere else. See [Self-hosted servers](#self-hosted-servers).
@@ -193,18 +203,23 @@ $ secretspec init --from 'bw://myorg@dev-secrets?type=login' # 0.18+
 ✓ Created secretspec.toml with 8 secrets
 ```
 
-Each item name becomes a SecretSpec key. Names must therefore contain only
-letters, numbers, and underscores, cannot start with a number, and cannot be
-the reserved name `defaults`. Bitwarden allows duplicate names and matches them
-case-insensitively; discovery stops when two selected items collide under those
-rules instead of generating an ambiguous manifest. Rename the items or use
-`?type=` to select one type.
+In SecretSpec 0.20+, an item under the selected project/profile convention
+prefix becomes a convention declaration: for example,
+`secretspec/payments/production/API_KEY` becomes `API_KEY`. Items under another
+project/profile prefix are skipped. A bare existing item such as `LEGACY_TOKEN`
+is still discovered, but its declaration receives `ref = { item =
+"LEGACY_TOKEN" }` so it remains directly addressable.
 
-Discovery writes only names and generated descriptions to `secretspec.toml`;
-it never writes secret values. The `--project` and `--profile` discovery
-context does not change Bitwarden item names. To migrate the discovered values
-after reviewing the declarations, run the `secretspec import` command printed
-by `init`.
+Discovered keys must contain only letters, numbers, and underscores, cannot
+start with a number, and cannot be the reserved name `defaults`. Bitwarden
+allows duplicate names and matches them case-insensitively; discovery stops
+when two selected items map to colliding keys instead of generating an
+ambiguous manifest. Rename an item or narrow discovery with `?type=`.
+
+Discovery never writes secret values. In SecretSpec 0.20+, `--project` and
+`--profile` select the convention prefix used to recognize managed items; they
+do not rename anything in Bitwarden. To migrate values after reviewing the
+declarations, run the `secretspec import` command printed by `init`.
 
 ### Environment overrides
 
@@ -236,6 +251,18 @@ way as values in the URI. The complete precedence is:
 | Field | Secret `ref.field`, `BITWARDEN_DEFAULT_FIELD`, provider URI, item-type default |
 
 ## Storage model
+
+### Convention item names (0.20+)
+
+SecretSpec-managed convention items use the title
+`secretspec/{project}/{profile}/{key}` by default. Project and profile are part
+of the title so the same collection or personal vault can safely hold
+`DATABASE_URL` for several projects and environments. `?folder=` replaces the
+`secretspec/{project}/{profile}` prefix, and the key is appended to it.
+
+The prefix is an item-title namespace, not a Bitwarden `folderId`. Explicit
+`ref.item` coordinates always name the complete existing item title and do not
+receive the prefix.
 
 The Bitwarden provider supports every Password Manager item type. When an item
 type is selected through `BITWARDEN_DEFAULT_TYPE` or `?type=`, it filters reads
@@ -337,7 +364,7 @@ unintended partial match. `field = "notes"` addresses a Secure Note's body.
 
 ### How items are matched (0.18+)
 
-Item names are matched **in full, case-insensitively** — `test database` finds
+Resolved item titles are matched **in full, case-insensitively** — `test database` finds
 `Test Database`, but `API_KEY` never matches `API_KEY_OLD`. The `bw` CLI itself
 accepts a substring here, which works well interactively because it prints the
 candidates and lets you choose; a name in `secretspec.toml` is resolved with
@@ -358,14 +385,9 @@ $ secretspec get API_KEY --provider "bw://?type=card"
 
 ## Use existing secrets
 
-The secret name selects an existing Bitwarden item by default:
-
-```bash
-$ secretspec get 'MyApp Database' --provider 'bw://?type=login'
-```
-
-Use a `ref` when the SecretSpec key and Bitwarden item name differ, or when a
-specific field is required:
+Use a `ref` for an existing Bitwarden item that does not use SecretSpec's
+project/profile title convention, when the SecretSpec key differs from the
+item title, or when a specific field is required:
 
 ```toml title="secretspec.toml"
 [profiles.default]
@@ -373,6 +395,25 @@ DATABASE_URL = { description = "Application database", ref = { item = "MyApp Dat
 ```
 
 `ref.item` is matched against the Bitwarden item name, not its item ID.
+
+### Migrating bare item names (0.20+)
+
+Releases through 0.19 wrote convention secrets under their bare keys. Those
+titles contain no project or profile ownership, so SecretSpec cannot safely
+guess which project should inherit one. Version 0.20 therefore does not fall
+back to a bare item during convention reads or writes.
+
+Rename a SecretSpec-managed item from, for example, `DATABASE_URL` to
+`secretspec/my-project/default/DATABASE_URL`. If an item is intentionally
+shared or externally managed, keep its existing title and declare it explicitly:
+
+```toml title="secretspec.toml"
+[profiles.default]
+DATABASE_URL = { description = "Shared database", ref = { item = "DATABASE_URL" }, providers = ["bw"] }
+```
+
+`secretspec init --from bw://` in 0.20+ generates this native `ref` form for
+bare existing items automatically.
 
 ## CI/CD
 

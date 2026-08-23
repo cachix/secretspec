@@ -1,4 +1,4 @@
-//! Semantic compilation of a parsed manifest.
+//! Semantic compilation of a parsed specification.
 //!
 //! [`Config`](crate::config::Config) is the syntax tree: its `Option` fields
 //! record what a particular source/profile wrote. Runtime resolution and
@@ -16,7 +16,7 @@ pub(crate) enum MissingPolicy {
     Error,
     /// Absence is a valid optional result.
     Omit,
-    /// The committed manifest default supplies the value.
+    /// The committed spec default supplies the value.
     UseDefault,
     /// The configured generator supplies the value.
     Generate,
@@ -50,7 +50,7 @@ pub(crate) struct CompiledSecret {
 impl CompiledSecret {
     fn new(config: Secret, conditionally_required: bool) -> Self {
         // An inline default makes an omitted `required` behave as false. This
-        // preserves the manifest shorthand while keeping an explicit inherited
+        // preserves the spec shorthand while keeping an explicit inherited
         // `required = true` visible in reports. Membership in a profile
         // presence constraint likewise replaces the implicit per-secret
         // requirement, while an explicit `required = true` remains independent.
@@ -151,7 +151,7 @@ pub(crate) struct CompiledConstraints {
     pub(crate) exactly_one: Vec<CompiledConstraintGroup>,
 }
 
-/// A parsed manifest reduced to the semantics shared by runtime and codegen.
+/// A parsed spec reduced to the semantics shared by runtime and codegen.
 #[derive(Debug, Clone)]
 pub(crate) struct CompiledSpec {
     pub(crate) project: String,
@@ -169,7 +169,7 @@ impl CompiledSpec {
                 .flatten();
             // A `BTreeSet` unions the profile's own names with the inherited
             // ones already deduplicated and sorted, which is the deterministic
-            // order every surface consuming the manifest expects.
+            // order every surface consuming the spec expects.
             let mut names: BTreeSet<&String> = profile.secrets.keys().collect();
             if let Some(default) = inherited {
                 names.extend(default.secrets.keys());

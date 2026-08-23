@@ -15,10 +15,10 @@
 //! canonical provider URIs so equivalent spellings cannot disguise a cache as
 //! its own authoritative store. A plan never reads or writes a secret.
 
+use crate::compiled_spec::CompiledSecret;
 use crate::composition::Template;
 use crate::config::{NativeAddress, Secret, SecretEncoding, SecretExtract};
 use crate::error::{Result, SecretSpecError};
-use crate::manifest::CompiledSecret;
 use crate::provider::OwnedAddress;
 use crate::secrets::Secrets;
 use std::collections::HashMap;

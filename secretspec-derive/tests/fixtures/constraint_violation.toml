@@ -1,0 +1,7 @@
+[project]
+name = "constraint-violation-test"
+revision = "1.0"
+
+[profiles.default]
+PASSWORD = { description = "Account password", required = { at_least_one = "account_auth" } }
+ACCESS_TOKEN = { description = "Personal access token", required = { at_least_one = "account_auth" } }

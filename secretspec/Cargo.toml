@@ -21,6 +21,11 @@ name = "docker-credential-secretspec"
 path = "src/bin/docker-credential-secretspec.rs"
 required-features = ["cli"]
 
+[[bin]]
+name = "git-credential-secretspec"
+path = "src/bin/git-credential-secretspec.rs"
+required-features = ["cli"]
+
 [dependencies]
 clap.workspace = true
 clap_complete = { workspace = true, optional = true }
@@ -31,7 +36,7 @@ keepass = { workspace = true, optional = true }
 keeper-secrets-manager-core = { workspace = true, optional = true }
 serde.workspace = true
 toml.workspace = true
-toml_edit = { workspace = true, optional = true }
+toml_edit.workspace = true
 thiserror.workspace = true
 etcetera.workspace = true
 colored.workspace = true
@@ -40,6 +45,7 @@ dunce = { workspace = true, optional = true }
 inquire.workspace = true
 miette.workspace = true
 serde_json.workspace = true
+ini.workspace = true
 tempfile.workspace = true
 same-file.workspace = true
 url.workspace = true
@@ -65,10 +71,17 @@ data-encoding.workspace = true
 sha2.workspace = true
 detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
+kube = { workspace = true, optional = true }
+k8s-openapi = { workspace = true, optional = true }
+json-patch = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+signal-hook.workspace = true
 
 [features]
-default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "bw", "age", "scaleway", "sops"]
-cli = ["dep:toml_edit", "dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable", "dep:dunce"]
+default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "bw", "age", "scaleway", "sops", "kubernetes"]
+cli = ["dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable", "dep:dunce"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
 keeper = ["dep:keeper-secrets-manager-core"]
@@ -92,6 +105,7 @@ akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secr
 aac = ["akv", "dep:reqwest", "azure_core/hmac_rust"]
 age = ["dep:age"]
 sops = []
+kubernetes = ["dep:kube", "dep:k8s-openapi", "dep:base64", "dep:json-patch"]
 
 [dev-dependencies]
 # Validates serialized resolution reports against the committed JSON Schema.

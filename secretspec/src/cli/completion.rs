@@ -1,6 +1,6 @@
 use super::{Cli, CompletionShell};
+use crate::compiled_spec::CompiledSpec;
 use crate::config::{Config, GlobalConfig};
-use crate::manifest::CompiledSpec;
 use crate::provider::providers as registered_providers;
 use clap::builder::StyledStr;
 use clap::{ArgMatches, CommandFactory};
@@ -203,7 +203,7 @@ fn profile_candidates(
     }
     if let Some(config) = context.and_then(|context| context.config.as_ref()) {
         for name in config.profiles.keys() {
-            candidates.insert(name, "Manifest profile");
+            candidates.insert(name, "Spec profile");
         }
     }
     candidates
@@ -222,7 +222,7 @@ fn scope_candidates(context: Option<&CompletionContext>) -> Vec<CompletionCandid
         .and_then(|config| config.scopes.as_ref())
         .into_iter()
         .flat_map(|scopes| scopes.keys())
-        .map(|name| candidate(name, "Manifest scope"))
+        .map(|name| candidate(name, "Spec scope"))
         .collect();
     candidates.sort();
     candidates

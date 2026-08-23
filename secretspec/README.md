@@ -54,6 +54,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [Infisical](https://secretspec.dev/providers/infisical) (0.16+)
   - [age](https://secretspec.dev/providers/age) (0.17+)
   - [SOPS](https://secretspec.dev/providers/sops) (0.17+)
+  - [Kubernetes](https://secretspec.dev/providers/kubernetes) (0.20+)
 - **[Type-Safe Rust SDK](https://secretspec.dev/sdk/rust/)**: Generate strongly-typed structs from your `secretspec.toml` for compile-time safety
 - **[Profile Support](https://secretspec.dev/concepts/profiles/)**: Override secret requirements and defaults per profile (development, production, etc.)
 - **[Secret Generation](https://secretspec.dev/concepts/generation/)**: Auto-generate passwords, tokens, UUIDs, and more when secrets are missing — declarative "generate if absent"
@@ -62,6 +63,8 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
 - **[Configuration Inheritance](https://secretspec.dev/concepts/inheritance/)**: Extend and override shared configurations using the `extends` feature
 - **[Audit Logging](https://secretspec.dev/concepts/audit/)**: Every secret access recorded locally (who, when, why, outcome) — on by default, secret values never logged
 - **[Docker credential helper](https://secretspec.dev/integrations/docker/)** (0.20+): Authenticate registry pulls and pushes through any SecretSpec provider
+- **[Git credential helper](https://secretspec.dev/integrations/git/)** (0.20+): Authenticate Git HTTPS and
+  `git send-email` SMTP operations through any SecretSpec provider
 - **[Discovery](https://secretspec.dev/reference/cli#init)**: `secretspec init` to discover secrets from existing `.env` files
 
 ## Quick Start
@@ -108,6 +111,7 @@ $ secretspec config global init  # 0.17+
   infisical: Infisical secret management (0.16+)
   age: age-encrypted file (0.17+)
   sops: SOPS encrypted files (0.17+)
+  kubernetes: Kubernetes (0.20+)
 ? Select your default profile:
 > development
   default
@@ -131,6 +135,9 @@ See the [Quick Start Guide](https://secretspec.dev/quick-start) for detailed ins
 ```shell-session
 curl -sSL https://install.secretspec.dev | sh
 ```
+
+SecretSpec 0.20+ provides static musl CLI binaries for x64 and arm64 Linux, so
+the installer works directly on Alpine without a glibc compatibility layer.
 
 See the [installation guide](https://secretspec.dev/quick-start#installation) for more options including Nix and Devenv.
 
@@ -230,6 +237,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Infisical](https://secretspec.dev/providers/infisical)** (0.16+) - Infisical secret management
 - **[age](https://secretspec.dev/providers/age)** (0.17+) - age-encrypted file
 - **[SOPS](https://secretspec.dev/providers/sops)** (0.17+) - SOPS-encrypted files
+- **[Kubernetes](https://secretspec.dev/providers/kubernetes)** (0.20+) - Kubernetes
 
 ```bash
 $ secretspec run --provider keyring -- npm start

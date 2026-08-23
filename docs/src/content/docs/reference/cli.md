@@ -82,6 +82,10 @@ $ secretspec init --from 'bw://dev-secrets?type=login'
 ✓ Created secretspec.toml with 8 secrets
 ```
 
+For Bitwarden in SecretSpec 0.20+, items under the selected
+`secretspec/{project}/{profile}/` title prefix become convention declarations;
+bare existing items are emitted with explicit `ref.item` coordinates.
+
 ### config global init
 Initialize user-global configuration. The explicit `global` namespace is
 available in SecretSpec 0.17+; without options, the command prompts for the
@@ -290,6 +294,81 @@ registry helpers, stored authentication entries, and unrelated Docker options.
 See [Docker credentials](/integrations/docker/) for complete setup, custom
 manifest, and ownership details.
 
+### git configure (0.20+)
+
+Configure Git to retrieve an HTTP(S) or SMTP password or token through
+SecretSpec. Repository-local configuration is the default.
+
+```bash
+$ secretspec git configure --url <URL> [OPTIONS]
+```
+
+**Options:**
+
+- `--url <URL>` - HTTP(S) or SMTP URL this credential may authenticate; an
+  HTTP(S) path limits it to that part of the host, while SMTP requires an
+  explicit port
+- `--username <USERNAME>` - Non-secret username to keep in the managed Git
+  configuration; required for SMTP and must match `sendemail.smtpUser`
+- `-p, --provider <PROVIDER>` - Provider override the helper should use
+- `--global` - Configure the current user's global Git settings instead
+- `-y, --yes` - Confirm a global change non-interactively; requires `--global`
+
+Without `--file`, the command uses the embedded Git manifest with required
+`PASSWORD` and optional `USERNAME` declarations. It records no manifest path
+and isolates storage by the canonical protocol, host, and configured path.
+
+With `--file`, `--token-secret <KEY>` is required;
+`--username-secret <KEY>` and `-P, --profile <PROFILE>` select custom manifest
+declarations and conflict with the embedded defaults. `--username-secret`
+conflicts with `--username`.
+
+Global changes prompt with a default of **No**. Existing helpers and unrelated
+Git configuration are not replaced. See [Git credentials](/integrations/git/)
+for setup examples and the ownership model.
+
+### git login (0.20+)
+
+Store an embedded Git password or token, prompting securely on a terminal or
+reading it from piped standard input.
+
+```bash
+$ secretspec git login <URL> [--username <USERNAME>] [--provider <PROVIDER>]
+```
+
+`--username` also stores the optional embedded username. The URL must match the
+one passed to `configure`, including a path scope. For SMTP, the username is
+read from managed Git configuration unless passed explicitly. `git login`
+rejects `--file`; use `secretspec set` for custom manifest declarations.
+
+### git logout (0.20+)
+
+Remove the embedded username and password or token for one exact target without
+removing its Git helper configuration.
+
+```bash
+$ secretspec git logout <URL> [--username <USERNAME>] [--provider <PROVIDER>]
+```
+
+For SMTP, the username is read from managed Git configuration unless passed
+explicitly. `git logout` rejects `--file`; use `secretspec delete` for custom
+manifest declarations.
+
+### git unconfigure (0.20+)
+
+Remove one or all Git credentials configured by SecretSpec in the selected
+scope.
+
+```bash
+$ secretspec git unconfigure --url <URL>
+$ secretspec git unconfigure --all
+$ secretspec git unconfigure --all --global
+```
+
+Use `--global` to select global configuration and `--yes` to confirm that
+global change non-interactively. `--all` removes only entries SecretSpec owns;
+it does not remove existing helpers, usernames, or unrelated includes.
+
 ### check
 Check if all required secrets are available, with interactive prompting for missing secrets.
 
@@ -331,10 +410,23 @@ profile:  development
 provider: keyring://
   DATABASE_URL        ok        source keyring://
   DEV_SESSION_SECRET  ok        default value
-  JWT_SECRET          ok        generated
+  JWT_SECRET          ok        will generate
   SENTRY_DSN          missing   optional
   STRIPE_KEY          MISSING   required
 ```
+
+Both surfaces resolve without minting anything, so a `generate` secret that no
+provider holds yet reads as `will generate` rather than as an existing value.
+
+Since SecretSpec 0.20, a **required** `generate` secret is reported as
+`MISSING   required` while no provider holds it, and both surfaces exit
+non-zero. The value does not exist until a pass writes it, so a preflight that
+called it resolved would pass while the store is still empty. Run
+`secretspec check` (or `secretspec run`) once to mint and store it; afterwards
+the preflight reports it as resolved from its provider. `will generate` is
+reserved for the cases where nothing has to be provisioned: an optional
+`generate` secret, or a provider such as [`null`](/providers/null/) that never
+retains a generated value and therefore mints a fresh one every resolution.
 
 `--json` emits a versioned, machine-readable object for tooling and CI. Each
 entry reports the `status` (`resolved`, `missing_required`, `missing_optional`),
@@ -574,6 +666,12 @@ it and make the prompt a first-use provisioning step. If no controlling
 terminal exists, `run` fails before starting the child. Only declarations with
 `prompt = true` opt into this behavior; ordinary missing secrets still fail
 without a prompt.
+
+On Unix, SecretSpec 0.20+ forwards `SIGTERM`, `SIGINT`, and `SIGHUP` to the
+started command. This lets applications run their graceful-shutdown handlers
+when `secretspec run` is a container entrypoint, including when SecretSpec is
+PID 1. If the command is terminated by a signal, `run` exits with the
+conventional `128 + signal` status (for example, 143 for `SIGTERM`).
 
 The `--provider` override applies to every secret, including those with a
 [`ref`](/reference/configuration/#secret-references) field: refs are redirected

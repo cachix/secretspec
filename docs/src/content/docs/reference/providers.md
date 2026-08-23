@@ -336,6 +336,42 @@ and prompting-on-miss cannot use this write-only provider. See the
 rejects leading or trailing whitespace rather than silently publishing a
 different value.
 
+## Cloudflare Secrets Store provider (0.20+)
+
+**Availability**: Added in SecretSpec 0.20 and included in default builds; use
+the `cloudflare` feature for a custom minimal build.
+
+**URI**: `cloudflare://STORE_ID[?account_id=ACCOUNT_ID][&scopes=LIST][&auth=MODE][&wrangler_profile=NAME]`
+- Publishes account-level secrets through Cloudflare's REST API
+
+```text
+cloudflare://STORE_ID?account_id=ACCOUNT_ID
+cloudflare://STORE_ID?account_id=ACCOUNT_ID&auth=token
+cloudflare://STORE_ID?account_id=ACCOUNT_ID&auth=wrangler&wrangler_profile=production
+cloudflare://STORE_ID?account_id=ACCOUNT_ID&scopes=workers,containers
+```
+
+**Features (0.20+)**: Write, replace, delete, provider credentials, and
+name-only discovery through `init --from`; values are sent only in HTTPS
+request bodies
+
+**Prerequisites (0.20+)**: A Cloudflare account and Secrets Store, account
+**Secrets Store Write** permission, the account and store IDs, and either an
+`api_token` provider credential, `CLOUDFLARE_API_TOKEN`, or credentials from
+`wrangler auth token --json`. `CLOUDFLARE_ACCOUNT_ID` is the fallback when the
+URI omits `account_id`.
+
+**Storage (0.20+)**: Account secret `{key}` in the selected store. The store
+URI, rather than the SecretSpec project or profile name, supplies isolation.
+New and replaced entries receive the configured scopes, defaulting to
+`workers`.
+
+**Read limitation (0.20+)**: Cloudflare's management API exposes metadata but
+never plaintext secret values. `get`, `check`, `run`, fallback reads,
+generation-on-miss, and prompting-on-miss cannot use this write-only provider.
+Plaintext is available only inside a bound Cloudflare service. See the
+[Cloudflare provider guide](/providers/cloudflare/).
+
 ## Google Cloud Secret Manager Provider
 
 **URI**: `gcsm://PROJECT_ID` - Stores secrets in Google Cloud Secret Manager
@@ -726,6 +762,7 @@ $ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Proton Pass | ✅ End-to-end | Cloud (Proton) | ✅ Yes |
 | Passbolt (0.19+) | ✅ End-to-end | Self-hosted (Passbolt server) | ✅ Yes |
 | Fly.io secrets (0.20+) | ✅ Fly.io-managed | Cloud (Fly.io app vault) | ✅ Yes |
+| Cloudflare Secrets Store (0.20+) | ✅ Cloudflare-managed | Cloud (account-level store) | ✅ Yes |
 | LastPass | ✅ End-to-end | Cloud (LastPass) | ✅ Yes |
 | Dashlane (0.18+) | ✅ End-to-end | Cloud (Dashlane), synced locally | Yes — `dcli` auto-syncs hourly |
 | 1Password | ✅ End-to-end | Cloud (1Password) | ✅ Yes |

@@ -147,6 +147,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `flyctl secrets set` over stdin, refuse boundary whitespace that `flyctl`
   would silently trim, and scrub ambient Fly token variables before injecting
   the token selected through the provider credential mechanism.
+- The Cloudflare `cloudflare` provider (0.20+) publishes, replaces, deletes,
+  and discovers account-level Secrets Store entries through Cloudflare's API.
+  Cloudflare never returns plaintext values through its management API, so the
+  provider clearly reports its write-only behavior. Authentication can use a
+  SecretSpec `api_token` credential, `CLOUDFLARE_API_TOKEN`, or the current
+  Wrangler OAuth, API-token, or legacy API-key session; secret values are sent
+  only in HTTPS request bodies ([#84]).
+
+  [#84]: https://github.com/cachix/secretspec/issues/84
 - `secretspec completions <shell>` generates completion scripts for Bash,
   Elvish, Fish, Nushell, PowerShell, and Zsh directly from the CLI definition,
   including descriptions and contextual suggestions for profiles, scopes,

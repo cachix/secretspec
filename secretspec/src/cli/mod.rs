@@ -1,9 +1,7 @@
 use crate::config::{Config, GlobalConfig, GlobalDefaults, Profile as ConfigProfile, Project};
-use crate::provider::{
-    Provider,
-    kubernetes::{KubernetesKind, KubernetesProvider},
-    providers, spec_names_known_provider,
-};
+#[cfg(feature = "kubernetes")]
+use crate::provider::kubernetes::{KubernetesKind, KubernetesProvider};
+use crate::provider::{Provider, providers, spec_names_known_provider};
 use crate::spec_edit::{
     add_description as add_secret_to_spec, validate_secret_name as validate_add_secret_name,
 };
@@ -851,36 +849,46 @@ fn select_config_init_provider(provider: Option<String>) -> Result<String> {
             .into_diagnostic()
             .wrap_err("Invalid file provider configuration")?;
         Ok(spec)
-    } else if selected_provider == "kubernetes" {
-        use inquire::Text;
-
-        let kind_choices = vec![KubernetesKind::ConfigMap, KubernetesKind::Secret];
-        let kind = Select::new(
-            "Select your preferred kubernetes object kind:",
-            kind_choices,
-        )
-        .prompt()
-        .into_diagnostic()?;
-        let name = Text::new("Kubernetes object name:")
-            .prompt()
-            .into_diagnostic()?;
-        let namespace = Text::new("Kubernetes namespace:")
-            .with_help_message("Leave empty to use the default cluster namespace")
-            .prompt()
-            .into_diagnostic()?;
-        let namespace = if namespace.is_empty() {
-            None
-        } else {
-            Some(namespace)
-        };
-
-        let spec = KubernetesProvider::build_uri(&kind, &name, &namespace);
-        Box::<dyn Provider>::try_from(spec.as_str())
-            .into_diagnostic()
-            .wrap_err("Invalid file provider configuration")?;
-        Ok(spec)
     } else {
-        Ok(selected_provider)
+        #[cfg(feature = "kubernetes")]
+        {
+            if selected_provider == "kubernetes" {
+                use inquire::Text;
+
+                let kind_choices = vec![KubernetesKind::ConfigMap, KubernetesKind::Secret];
+                let kind = Select::new(
+                    "Select your preferred kubernetes object kind:",
+                    kind_choices,
+                )
+                .prompt()
+                .into_diagnostic()?;
+                let name = Text::new("Kubernetes object name:")
+                    .prompt()
+                    .into_diagnostic()?;
+                let namespace = Text::new("Kubernetes namespace:")
+                    .with_help_message("Leave empty to use the default cluster namespace")
+                    .prompt()
+                    .into_diagnostic()?;
+                let namespace = if namespace.is_empty() {
+                    None
+                } else {
+                    Some(namespace)
+                };
+
+                let spec = KubernetesProvider::build_uri(&kind, &name, &namespace);
+                Box::<dyn Provider>::try_from(spec.as_str())
+                    .into_diagnostic()
+                    .wrap_err("Invalid Kubernetes provider configuration")?;
+                Ok(spec)
+            } else {
+                Ok(selected_provider)
+            }
+        }
+
+        #[cfg(not(feature = "kubernetes"))]
+        {
+            Ok(selected_provider)
+        }
     }
 }
 

@@ -16,7 +16,6 @@ use k8s_openapi::{
 use kube::{
     Api, Client,
     api::{Patch, PatchParams, PostParams},
-    core::Status,
 };
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -63,7 +62,7 @@ impl KubernetesKind {
     fn plural(&self) -> &'static str {
         match self {
             KubernetesKind::ConfigMap => "configmaps",
-            KubernetesKind::Secret => "secret",
+            KubernetesKind::Secret => "secrets",
         }
     }
 }
@@ -420,6 +419,7 @@ impl Provider for KubernetesProvider {
     }
 
     fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        self.check_deletable(addr)?;
         let coords = self.resolve_coords(addr)?;
         block_on(self.delete_secret_async(&coords.item))
     }
@@ -441,6 +441,10 @@ impl Provider for KubernetesProvider {
         Ok(())
     }
 
+    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        self.check_writable(addr)
+    }
+
     fn supports_delete(&self) -> bool {
         true
     }
@@ -449,10 +453,117 @@ impl Provider for KubernetesProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::{Read, Write},
+        net::{TcpListener, TcpStream},
+        thread::JoinHandle,
+        time::{Duration, Instant},
+    };
     use url::Url;
 
     fn config(s: &str) -> KubernetesConfig {
         KubernetesConfig::try_from(&ProviderUrl::new(Url::parse(s).unwrap())).unwrap()
+    }
+
+    fn read_json_request(stream: &mut TcpStream) -> serde_json::Value {
+        let mut request = Vec::new();
+        let mut buffer = [0; 1024];
+        let (headers_end, content_length) = loop {
+            let read = stream.read(&mut buffer).unwrap();
+            assert_ne!(
+                read, 0,
+                "connection closed before completing request headers"
+            );
+            request.extend_from_slice(&buffer[..read]);
+
+            if let Some(headers_end) = request
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|position| position + 4)
+            {
+                let headers = std::str::from_utf8(&request[..headers_end]).unwrap();
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or_default();
+                break (headers_end, content_length);
+            }
+        };
+
+        while request.len() < headers_end + content_length {
+            let read = stream.read(&mut buffer).unwrap();
+            assert_ne!(read, 0, "connection closed before completing request body");
+            request.extend_from_slice(&buffer[..read]);
+        }
+
+        serde_json::from_slice(&request[headers_end..headers_end + content_length]).unwrap()
+    }
+
+    fn provider_with_access_reviews(
+        allowed: bool,
+        expected_requests: usize,
+    ) -> (KubernetesProvider, JoinHandle<Vec<serde_json::Value>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut requests = Vec::new();
+
+            while requests.len() < expected_requests && Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .unwrap();
+                        let request = read_json_request(&mut stream);
+                        let body = serde_json::json!({
+                            "apiVersion": "authorization.k8s.io/v1",
+                            "kind": "SelfSubjectAccessReview",
+                            "status": { "allowed": allowed },
+                        })
+                        .to_string();
+                        let response = format!(
+                            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                            body.len(),
+                            body,
+                        );
+                        stream.write_all(response.as_bytes()).unwrap();
+                        stream.flush().unwrap();
+                        requests.push(request);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("failed to accept Kubernetes API request: {error}"),
+                }
+            }
+
+            requests
+        });
+
+        let config = kube::Config::new(format!("http://{address}").parse().unwrap());
+        let client = block_on(async { Client::try_from(config).unwrap() });
+        let provider = KubernetesProvider::new(KubernetesConfig {
+            kind: KubernetesKind::Secret,
+            name: "app-secrets".to_string(),
+            namespace: Some("app".to_string()),
+        });
+        assert!(provider.client.set(client).is_ok());
+
+        (provider, server)
+    }
+
+    fn assert_secret_patch_review(request: &serde_json::Value) {
+        let attributes = &request["spec"]["resourceAttributes"];
+        assert_eq!(attributes["verb"], "patch");
+        assert_eq!(attributes["resource"], "secrets");
+        assert_eq!(attributes["namespace"], "app");
+        assert_eq!(attributes["name"], "app-secrets");
     }
 
     #[test]
@@ -485,6 +596,41 @@ mod tests {
         let url = ProviderUrl::new(Url::parse(uri).unwrap());
         let config = KubernetesConfig::try_from(&url);
         assert!(config.is_err());
+    }
+
+    #[test]
+    fn secret_patch_authorization_uses_plural_resource_name() {
+        let (provider, server) = provider_with_access_reviews(true, 1);
+
+        provider
+            .check_writable(Address::convention("project", "default", "API_KEY"))
+            .unwrap();
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_secret_patch_review(&requests[0]);
+    }
+
+    #[test]
+    fn deletion_preflight_and_delete_require_patch_permission() {
+        let (provider, server) = provider_with_access_reviews(false, 2);
+        let addr = Address::convention("project", "default", "API_KEY");
+
+        let preflight = provider.check_deletable(addr).unwrap_err().to_string();
+        let deletion = provider.delete(addr).unwrap_err().to_string();
+
+        assert_eq!(preflight, deletion);
+        assert!(preflight.contains("Cannot patch secret/app-secrets in app"));
+
+        let requests = server.join().unwrap();
+        assert_eq!(
+            requests.len(),
+            2,
+            "delete must repeat the destructive preflight"
+        );
+        for request in &requests {
+            assert_secret_patch_review(request);
+        }
     }
 
     #[test]

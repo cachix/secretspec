@@ -186,6 +186,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   semantic builder changes, resolve parent specs independently of later working
   directory changes, remove synthesized profile tables when additions are
   undone, and apply description validation consistently across builder origins.
+
+- The Kubernetes provider now checks the correct Kubernetes Secret resource
+  permission and refuses `import --delete-source` before copying values when
+  the source object cannot be patched.
 - Closing the output pipe now ends the CLI quietly on Unix, so
   `secretspec export | head` and `secretspec check --json | head` behave like
   any other Unix tool. Previously `export` reported `IO error: Broken pipe`

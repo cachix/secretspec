@@ -23,6 +23,7 @@
 //! - [`null::NullProvider`]: Defaults, generation, or run prompts without storage (0.19+)
 //! - [`file::FileProvider`]: Plaintext file-per-secret storage (0.19+)
 //! - [`fly::FlyProvider`]: Fly.io application secrets, write-only (0.20+)
+//! - [`cloudflare::CloudflareProvider`]: Cloudflare Secrets Store, write-only (0.20+)
 //! - [`pass::PassProvider`]: Pass integration
 //! - [`gopass::GoPassProvider`]: Gopass integration
 //! - [`systemd_credential::SystemdCredentialProvider`]: systemd service credentials (0.17+)
@@ -102,7 +103,12 @@ pub use traits::{DiscoveryContext, ProducedValuePersistence, Provider};
 
 // Shared implementation support used by provider backends and orchestration.
 pub(crate) use address::{OwnedAddress, flat_item};
-#[cfg(any(feature = "openbao", feature = "scaleway", feature = "vault"))]
+#[cfg(any(
+    feature = "cloudflare",
+    feature = "openbao",
+    feature = "scaleway",
+    feature = "vault"
+))]
 pub(crate) use credentials::preferred_env;
 pub(crate) use credentials::{ProviderCredentials, credential_or_env, credential_or_envs};
 pub(crate) use factory::provider_from_spec;
@@ -121,6 +127,7 @@ pub(crate) use registry::{
     feature = "akv",
     feature = "awsps",
     feature = "awssm",
+    feature = "cloudflare",
     feature = "gcsm",
     feature = "infisical",
     feature = "scaleway"
@@ -150,6 +157,8 @@ pub mod awssm;
 pub mod bw;
 #[cfg(feature = "bws")]
 pub mod bws;
+#[cfg(feature = "cloudflare")]
+pub mod cloudflare;
 pub mod dashlane;
 pub mod dotenv;
 pub mod env;

@@ -80,7 +80,7 @@ libc.workspace = true
 signal-hook.workspace = true
 
 [features]
-default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "bw", "age", "scaleway", "sops", "kubernetes"]
+default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "bw", "age", "scaleway", "sops", "kubernetes", "cloudflare"]
 cli = ["dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable", "dep:dunce"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
@@ -92,6 +92,7 @@ vault = ["dep:reqwest", "tokio/sync"]
 # Scaleway Secret Manager talks to the v1beta1 REST API directly; base64
 # payloads use data-encoding, which is already a non-optional dependency.
 scaleway = ["dep:reqwest"]
+cloudflare = ["dep:reqwest"]
 openbao = ["dep:reqwest", "tokio/sync"]
 # `tokio/sync` for the async `OnceCell` that serializes the Universal Auth
 # exchange. It is already on transitively via reqwest, but a provider should

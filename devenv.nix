@@ -96,11 +96,10 @@
     pkgs.pkg-config
     # Installs the secretspec-ffi archive with its header and pkg-config file
     pkgs.cargo-c
-    # Need JDK 11 as a compilation target
-    pkgs.jdk11
   ];
 
   env = {
+    # Gradle runs on JDK 21 but compiles the JVM SDK against this JDK 11 toolchain.
     SECRETSPEC_JVM_TARGET_JDK = "${pkgs.jdk11}";
   } //
   # Fully-static musl build of the Go SDK (-tags static + -extldflags -static).
@@ -121,7 +120,6 @@
       CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = muslcc;
       MUSL_CC = muslcc;
       MUSL_STATIC_LDFLAGS = "-L${pkgs.pkgsStatic.libunwind}/lib";
-      SECRETSPEC_JVM_TARGET_JDK = "${pkgs.jdk11}";
     }
   );
 

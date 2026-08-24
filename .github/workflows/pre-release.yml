@@ -135,7 +135,7 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/jvm-package.yml
-  
+
   release-artifacts:
     name: CLI release artifacts
     needs: authorize

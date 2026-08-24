@@ -140,7 +140,7 @@ SecretSpec 0.17.
 | JVM (0.20+) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 Most Linux packages build against a manylinux_2_28 baseline (glibc 2.28 or
-newer); the C# package additionally ships musl Linux assets. Hackage
+newer); the C# and JVM packages additionally ship musl Linux assets. Hackage
 distributes the Haskell SDK as source, so its row records the platforms CI
 builds and tests. Contributors: the [SDK development](/development/sdks) page
 documents how these artifacts are built and how to add a platform.

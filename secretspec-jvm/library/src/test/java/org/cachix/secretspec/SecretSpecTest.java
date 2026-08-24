@@ -148,6 +148,7 @@ class SecretSpecTest {
             ResolutionReport report = project.builder().report();
 
             assertThat(report.profile()).isEqualTo("default");
+            assertThat(report.constraintViolations()).isEmpty();
 
             SecretReport database = report.secrets().stream()
                     .filter(s -> "DATABASE_URL".equals(s.name()))
@@ -161,6 +162,29 @@ class SecretSpecTest {
                     .findFirst()
                     .orElseThrow(() -> new AssertionError("DEV_SESSION_SECRET not found"));
             assertThat(sessionSecret.defaultApplied()).withFailMessage("DEV_SESSION_SECRET default was not reported").isTrue();
+        }
+    }
+
+    @Test
+    void testConstraintViolations() {
+        String manifest =
+            "[project]\n" +
+            "name = \"java-test\"\n" +
+            "revision = \"1.0\"\n" +
+            "\n" +
+            "[profiles.default]\n" +
+            "AWS_KEY = { description = \"AWS credential\", required = { at_least_one = \"cloud\" } }\n" +
+            "GCP_KEY = { description = \"GCP credential\", required = { at_least_one = \"cloud\" } }\n";
+
+        try (Project project = Project.create(manifest, "")) {
+            ResolutionReport report = project.builder().report();
+
+            assertThat(report.constraintViolations()).hasSize(1);
+            ConstraintViolation violation = report.constraintViolations().get(0);
+            assertThat(violation.kind()).isEqualTo("at_least_one");
+            assertThat(violation.group()).isEqualTo("cloud");
+            assertThat(violation.secrets()).containsExactly("AWS_KEY", "GCP_KEY");
+            assertThat(violation.present()).isEmpty();
         }
     }
 

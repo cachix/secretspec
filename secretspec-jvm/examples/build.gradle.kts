@@ -6,6 +6,12 @@ group = "org.cachix"
 
 version = providers.gradleProperty("secretspec.version").get()
 
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(11))
+    }
+}
+
 repositories {
     mavenCentral()
 }

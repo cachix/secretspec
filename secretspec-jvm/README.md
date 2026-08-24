@@ -2,7 +2,7 @@
 
 > Supported starting with SecretSpec 0.20.
 
-`org.cachix.SecretSpec` is the Java SDK for
+`org.cachix.secretspec.SecretSpec` is the Java SDK for
 [SecretSpec](https://secretspec.dev/), the declarative secrets manager. It is a
 thin client over the shared Rust resolver, so every provider, fallback chain,
 profile, generator, and `as_path` secret behaves exactly like the CLI and the
@@ -14,28 +14,29 @@ import org.cachix.secretspec.SecretSpec;
 
 public class MyApplication {
 
-  public static void main() {
-    var resolved = SecretSpec.builder()
-      .withProvider("keyring://")
-      .withProfile("production")
-      .withReason("boot web app")
-      .load();
-
-    var secrets = resolved.getSecrets():
-    System.out.println(secrets.get("DATABASE_URL").get());
-    resolved.setAsSystemProperties();
+  public static void main(String[] args) {
+    try (var resolved = SecretSpec.builder()
+        .withProvider("keyring://")
+        .withProfile("production")
+        .withReason("boot web app")
+        .load()
+    ) {
+      var secrets = resolved.secrets();
+      System.out.println(secrets.get("DATABASE_URL").get());
+      resolved.setAsSystemProperties();
+    }
   }
 }
 ```
 
-A missing required secret throws `MissingRequiredException`, whose `missing`
-property contains the names. Other failures throw `SecretSpecException`, with a
-stable `kind`.
+A missing required secret throws `MissingRequiredException`, whose `missing()`
+method returns the names. Other failures throw `SecretSpecException`, with a
+stable `kind()`.
 
 ## Scopes (0.17+)
 
 Use `withScope("api")` to resolve only a named `[scopes.api]` subset. Both
-`Resolved.getScope()` and `ResolutionReport.getScope()` return the selected scope:
+`Resolved.scope()` and `ResolutionReport.scope()` return the selected scope:
 
 ```java
 var resolved = SecretSpec.builder().withScope("api").load();
@@ -45,7 +46,7 @@ var resolved = SecretSpec.builder().withScope("api").load();
 
 `report()` returns the same inventory/preflight view as
 `secretspec check --json`. It never exposes values, and a missing required
-secret is an entry with `getStatus() == "missing_required"` rather than an exception.
+secret is an entry with `status().equals("missing_required")` rather than an exception.
 
 ```java
 var report = SecretSpec.builder()
@@ -53,8 +54,8 @@ var report = SecretSpec.builder()
     .withReason("deployment preflight")
     .report();
 
-for (var secret : report.getSecrets())
-    System.out.println("%s: %s".formatted(secret.getName(), secret.getStatus()));
+for (var secret : report.secrets())
+    System.out.println(secret.name() + ": " + secret.status());
 ```
 
 ## Typed access

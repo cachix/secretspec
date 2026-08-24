@@ -24,7 +24,9 @@ public final class ResolutionReport {
         this.profile = profile;
         this.scope = scope;
         this.secrets = safeCopyOf(secrets);
-        this.constraintViolations = safeCopyOf(constraintViolations);
+        this.constraintViolations = safeCopyOf(
+            constraintViolations != null ? constraintViolations : List.of()
+        );
     }
 
     private final String provider;

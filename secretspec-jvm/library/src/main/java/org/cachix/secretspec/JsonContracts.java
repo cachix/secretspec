@@ -371,7 +371,7 @@ final class ReportResponseContract {
         this.profile = profile != null ? profile : "";
         this.scope = scope;
         this.secrets = secrets != null ? secrets : List.of();
-        this.constraintViolations = constraintViolations;
+        this.constraintViolations = constraintViolations != null ? constraintViolations : List.of();
     }
 
     @JsonProperty("schema_version")
@@ -401,7 +401,7 @@ final class ReportResponseContract {
 
     @JsonProperty("constraint_violations")
     public List<ConstraintViolation> constraintViolations() {
-        return constraintViolations == null ? null : unmodifiableList(constraintViolations);
+        return unmodifiableList(constraintViolations);
     }
 
     @Override
@@ -411,7 +411,8 @@ final class ReportResponseContract {
             provider,
             profile,
             scope,
-            secrets
+            secrets,
+            constraintViolations
         );
     }
 
@@ -428,6 +429,7 @@ final class ReportResponseContract {
             && Objects.equals(provider, other.provider)
             && Objects.equals(profile, other.profile)
             && Objects.equals(scope, other.scope)
-            && Objects.equals(secrets, other.secrets);
+            && Objects.equals(secrets, other.secrets)
+            && Objects.equals(constraintViolations, other.constraintViolations);
     }
 }

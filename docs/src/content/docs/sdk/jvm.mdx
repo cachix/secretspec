@@ -52,13 +52,13 @@ Visual C++ Redistributable, or system `libdbus` installation is needed.
 
 `get()` returns the inline value, or the readable file path for an `as_path`
 secret. A missing required secret throws `MissingRequiredException`; its
-`missing` property contains the secret names. Other failures throw
-`SecretSpecException`, whose `kind` property is a stable error category.
+`missing()` method returns the secret names. Other failures throw
+`SecretSpecException`, whose `kind()` method returns a stable error category.
 
 ## Scopes (0.17+)
 
 Use `withScope("api")` to resolve only a named `[scopes.api]` subset. The
-selected name is available as `Resolved.getScope()` and `ResolutionReport.getScope()`:
+selected name is available as `Resolved.scope()` and `ResolutionReport.scope()`:
 
 <Code code={scopesExample} lang="java" meta='title="ScopeExample.java"' />
 
@@ -66,7 +66,7 @@ selected name is available as `Resolved.getScope()` and `ResolutionReport.getSco
 
 `report()` returns the inventory view exposed by `secretspec check --json`.
 It never carries values. Missing required secrets appear with
-`getStatus() == "missing_required"` rather than throwing, so incomplete deployments
+`status().equals("missing_required")` rather than throwing, so incomplete deployments
 can still be inspected.
 
 <Code code={reportExample} lang="java" meta='title="ReportExample.java"' />

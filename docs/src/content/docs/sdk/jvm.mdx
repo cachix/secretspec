@@ -1,0 +1,118 @@
+---
+title: JVM SDK
+description: Resolve SecretSpec secrets from Java Virtual Machine languages
+---
+
+import { Code } from 'astro:components';
+import quickStartExample from '../../../../../secretspec-jvm/examples/src/main/java/org/cachix/examples/QuickStartExample.java?raw';
+import scopesExample from '../../../../../secretspec-jvm/examples/src/main/java/org/cachix/examples/ScopeExample.java?raw';
+import reportExample from '../../../../../secretspec-jvm/examples/src/main/java/org/cachix/examples/ReportExample.java?raw';
+import typedAccessExample from '../../../../../secretspec-jvm/examples/src/main/java/org/cachix/examples/TypedAccessExample.java?raw';
+import asPathExample from '../../../../../secretspec-jvm/examples/src/main/java/org/cachix/examples/AsPathExample.java?raw';
+import callerExample from '../../../../../secretspec-jvm/examples/src/main/java/org/cachix/examples/CallerExample.java?raw';
+
+> **Version compatibility:** Available since SecretSpec 0.20.
+
+The JVM SDK (`org.cachix.secretspec-jvm`) is a thin client over the same Rust resolver as
+the CLI. Every provider, fallback chain, profile, generator, reference, and
+`as_path` secret therefore works without JVM-side resolution logic.
+
+## Install (0.20+)
+
+### Using gradle
+
+In your `build.gradle.kts` dependencies:
+
+```kotlin
+implementation("org.cachix:secretspec-jvm:$secretspecVersion")
+```
+
+### Using Maven
+
+In your `pom.xml` dependencies:
+
+```xml
+<dependency>
+  <groupId>org.cachix</groupId>
+  <artifactId>secretspec-jvm</artifactId>
+  <version>${secretspec.version}</version>
+</dependency>
+```
+
+### Native libraries
+
+The package targets JDK 11 and includes native resolvers for glibc and musl
+Linux x64/Arm64, macOS x64/Arm64, and Windows x64/Arm64. Windows assets
+statically include the C runtime. No separate SecretSpec CLI, native library,
+Visual C++ Redistributable, or system `libdbus` installation is needed.
+
+## Quick start
+
+<Code code={quickStartExample} lang="java" meta='title="QuickStartExample.java"' />
+
+`get()` returns the inline value, or the readable file path for an `as_path`
+secret. A missing required secret throws `MissingRequiredException`; its
+`missing()` method returns the secret names. Other failures throw
+`SecretSpecException`, whose `kind()` method returns a stable error category.
+
+## Scopes (0.17+)
+
+Use `withScope("api")` to resolve only a named `[scopes.api]` subset. The
+selected name is available as `Resolved.scope()` and `ResolutionReport.scope()`:
+
+<Code code={scopesExample} lang="java" meta='title="ScopeExample.java"' />
+
+## Value-free preflight
+
+`report()` returns the inventory view exposed by `secretspec check --json`.
+It never carries values. Missing required secrets appear with
+`status().equals("missing_required")` rather than throwing, so incomplete deployments
+can still be inspected.
+
+<Code code={reportExample} lang="java" meta='title="ReportExample.java"' />
+
+## Typed access
+
+Generate an idiomatic language model from the manifest schema:
+
+```bash
+secretspec schema |
+  quicktype -s schema --top-level AppSecrets --lang java -o AppSecrets.java
+```
+
+Then deserialize the SDK's flat field map:
+
+<Code code={typedAccessExample} lang="java" meta='title="TypedAccessExample.java"' />
+
+The schema models successful resolution: required, defaulted, and generated
+secrets are non-nullable, and profile-specific schemas include inherited
+default-profile fields.
+
+## Files (`as_path`)
+
+File-shaped secrets are materialized as mode-0400 temporary files. The returned
+path must remain valid after `load()`, so the caller owns its lifetime.
+`Resolved` implements `AutoCloseable`; use a `try-with-resources` declaration or call `close()`
+to remove these files deterministically:
+
+<Code code={asPathExample} lang="java" meta='title="AsPathExample.java"' />
+
+## Caller (0.20+)
+
+Caller context answers *what* invoked SecretSpec (for example, `git`). It is
+deliberately separate from the user-supplied access reason, which answers
+*why* the access is happening and may be required by a project's
+`require_reason` policy. Caller context never satisfies that policy.
+
+The context is caller-asserted metadata, not an authenticated identity. It is
+included in audit events and forwarded to providers that choose to consume it.
+Do not put credentials or secret values in any field.
+
+<Code code={callerExample} lang="java" meta='title="CallerExample.java"' />
+
+## Native loading
+
+The Jar runtime asset is selected automatically. For local SDK development,
+`SECRETSPEC_FFI_LIB` can point to a particular `libsecretspec_ffi` build. From
+a SecretSpec source checkout, the SDK also searches an ancestor Cargo
+`target/debug` or `target/release` directory.

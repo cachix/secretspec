@@ -64,3 +64,5 @@ relative to the repo root:
 - Swift (0.18+, macOS):
   `swift test --filter SecretSpecTests.testCrossLanguageConformance` after
   staging the local XCFramework as described in `secretspec-swift/README.md`
+- JVM (0.20+):
+  `cd secretspec-jvm && ./gradlew test`

@@ -177,6 +177,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Docker credential-helper settings without replacing existing helpers, while
   `secretspec docker login` and `logout` manage isolated embedded credentials;
   custom manifests remain available through `--file` (0.20+).
+- **JVM SDK** (0.20+): use SecretSpec from languages such as Java or Kotlin.
 
 ### Fixed
 - Bitwarden Password Manager convention secrets now use

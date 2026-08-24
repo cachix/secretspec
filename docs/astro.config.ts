@@ -397,11 +397,6 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
               slug: "integrations/git",
               badge: { text: "0.20+", variant: "note" },
             },
-          ],
-        },
-        {
-          label: "Integrations",
-          items: [
             {
               label: "Docker credentials",
               slug: "integrations/docker",

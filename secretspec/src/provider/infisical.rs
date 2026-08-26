@@ -523,8 +523,9 @@ impl InfisicalProvider {
             "clientSecret": client_secret,
         });
 
-        let response = self
-            .http()
+        // Keep the authentication connection out of the pool used for secret reads.
+        let auth_client = reqwest::Client::new();
+        let response = auth_client
             .post(&url)
             .json(&body)
             .send()
@@ -1290,8 +1291,15 @@ impl Provider for InfisicalProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufRead, BufReader, Write};
-    use std::net::{SocketAddr, TcpListener};
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    };
+    use std::thread;
+    use std::time::{Duration, Instant};
     use url::Url;
 
     const PROJECT: &str = "7e2f1a4c-0000-0000-0000-000000000000";
@@ -1302,6 +1310,151 @@ mod tests {
 
     fn provider(s: &str) -> InfisicalProvider {
         InfisicalProvider::new(config(s))
+    }
+
+    fn read_request(reader: &mut BufReader<TcpStream>) -> Option<String> {
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line).ok()? == 0 {
+            return None;
+        }
+
+        let mut content_length = 0;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).ok()?;
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':') {
+                if name.eq_ignore_ascii_case("content-length") {
+                    content_length = value.trim().parse().ok()?;
+                }
+            }
+        }
+
+        if content_length > 0 {
+            let mut body = vec![0; content_length];
+            reader.read_exact(&mut body).ok()?;
+        }
+
+        Some(request_line.trim_end().to_string())
+    }
+
+    /// Keeps responses alive and records the accepted connection for each request.
+    fn connection_recording_server() -> (SocketAddr, thread::JoinHandle<Vec<(usize, String)>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut workers = Vec::new();
+            let mut next_connection_id = 0;
+
+            while request_count.load(Ordering::Acquire) < 2 && Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let connection_id = next_connection_id;
+                        next_connection_id += 1;
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(5)))
+                            .unwrap();
+                        let sender = sender.clone();
+                        let request_count = Arc::clone(&request_count);
+                        workers.push(thread::spawn(move || {
+                            let mut reader = BufReader::new(stream.try_clone().unwrap());
+                            let mut writer = stream;
+                            loop {
+                                let Some(request) = read_request(&mut reader) else {
+                                    break;
+                                };
+                                let seen = request_count.fetch_add(1, Ordering::AcqRel) + 1;
+                                sender.send((connection_id, request.clone())).unwrap();
+
+                                let body = if request
+                                    .starts_with("POST /api/v1/auth/universal-auth/login ")
+                                {
+                                    r#"{"accessToken":"test-token"}"#
+                                } else if request
+                                    .starts_with("GET /api/v4/secrets/DATABASE_HOST?")
+                                {
+                                    r#"{"secret":{"secretKey":"DATABASE_HOST","secretValue":"db.internal","secretValueHidden":false}}"#
+                                } else {
+                                    r#"{"message":"unexpected request"}"#
+                                };
+                                write!(
+                                    writer,
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
+                                    body.len()
+                                )
+                                .unwrap();
+                                writer.flush().unwrap();
+                                if seen >= 2 {
+                                    break;
+                                }
+                            }
+                        }));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("accept failed: {error}"),
+                }
+            }
+
+            for worker in workers {
+                worker.join().unwrap();
+            }
+            drop(sender);
+            receiver.into_iter().collect()
+        });
+        (endpoint, server)
+    }
+
+    #[test]
+    fn universal_auth_and_secret_read_use_distinct_tcp_connections() {
+        let (endpoint, server) = connection_recording_server();
+        let mut provider = provider(&format!(
+            "infisical://{endpoint}/{PROJECT}?tls=false&env=development"
+        ));
+        provider.with_credentials(ProviderCredentials::from([
+            (
+                CLIENT_ID.to_string(),
+                SecretString::new("test-client-id".to_string().into()),
+            ),
+            (
+                CLIENT_SECRET.to_string(),
+                SecretString::new("test-client-secret".to_string().into()),
+            ),
+        ]));
+        let address = NativeAddress {
+            item: "/DATABASE_HOST".into(),
+            ..Default::default()
+        };
+
+        let value = provider
+            .get(Address::Native(&address))
+            .expect("the secret read must succeed")
+            .expect("the fixture must return DATABASE_HOST");
+        assert_eq!(value.expose_secret(), "db.internal");
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2, "{requests:#?}");
+        assert!(
+            requests[0]
+                .1
+                .starts_with("POST /api/v1/auth/universal-auth/login ")
+        );
+        assert!(
+            requests[1]
+                .1
+                .starts_with("GET /api/v4/secrets/DATABASE_HOST?")
+        );
+        assert_ne!(
+            requests[0].0, requests[1].0,
+            "Universal Auth and secret reads must use different TCP connections"
+        );
     }
 
     fn provider_with_token(endpoint: SocketAddr, environment: Option<&str>) -> InfisicalProvider {

@@ -57,6 +57,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Native SDKs can resolve a strict, versioned inline secret declaration through
+  the new `secretspec_call` C ABI entry point. Inline declarations use an
+  explicit logical base directory for relative providers, reject unknown fields,
+  and require the new symbol so an older library cannot silently fall back to a
+  filesystem manifest. The Go, Python, Node.js, Ruby, Haskell, PHP, C#, and
+  Swift SDKs expose this as their `WithInlineSpec` / `with_inline_spec` builder
+  method.
+
 - Static musl CLI release binaries for x64 and arm64 Linux are available in
   0.20+, so the standalone installer and `secretspec-update` work on Alpine
   without a glibc compatibility layer.

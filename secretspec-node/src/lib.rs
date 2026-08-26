@@ -18,11 +18,18 @@ pub fn resolve(request_json: String) -> String {
     secretspec::resolve_json(&request_json)
 }
 
+/// Process a versioned native operation request, including inline specs.
+#[napi]
+pub fn call(request_json: String) -> String {
+    secretspec::call_json(&request_json)
+}
+
 /// Dispatches `resolve_json` from the libuv threadpool to one short-lived Rust
 /// thread, so it never runs on the JS thread and provider runtime/TLS state is
 /// torn down before the libuv worker is returned to Node.
 pub struct ResolveTask {
     request_json: String,
+    versioned_call: bool,
 }
 
 impl Task for ResolveTask {
@@ -40,7 +47,13 @@ impl Task for ResolveTask {
         std::thread::scope(|scope| {
             let resolver = std::thread::Builder::new()
                 .name("secretspec-resolve".to_string())
-                .spawn_scoped(scope, || secretspec::resolve_json(&self.request_json))
+                .spawn_scoped(scope, || {
+                    if self.versioned_call {
+                        secretspec::call_json(&self.request_json)
+                    } else {
+                        secretspec::resolve_json(&self.request_json)
+                    }
+                })
                 .map_err(|error| {
                     napi::Error::from_reason(format!(
                         "failed to start the SecretSpec resolver thread: {error}"
@@ -63,7 +76,19 @@ impl Task for ResolveTask {
 /// worker. Returns a Promise of the same JSON response envelope string.
 #[napi]
 pub fn resolve_async(request_json: String) -> AsyncTask<ResolveTask> {
-    AsyncTask::new(ResolveTask { request_json })
+    AsyncTask::new(ResolveTask {
+        request_json,
+        versioned_call: false,
+    })
+}
+
+/// Async variant of [`call`].
+#[napi]
+pub fn call_async(request_json: String) -> AsyncTask<ResolveTask> {
+    AsyncTask::new(ResolveTask {
+        request_json,
+        versioned_call: true,
+    })
 }
 
 /// The addon (ABI) version.

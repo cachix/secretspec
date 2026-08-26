@@ -83,6 +83,22 @@ def test_load_returns_values_and_provenance(tmp_path):
     assert "SENTRY_DSN" not in resolved.secrets
 
 
+def test_inline_spec_resolves_at_its_logical_base_dir(tmp_path):
+    env_path = tmp_path / "inline.env"
+    env_path.write_text("TOKEN=inline-python\n")
+    spec = {
+        "project": {"name": "python-inline"},
+        "providers": {"env": "dotenv://inline.env"},
+        "profiles": {"default": {"secrets": {
+            "TOKEN": {"description": "token", "providers": ["env"]},
+        }}},
+    }
+    resolved = SecretSpec.builder().with_inline_spec(spec, str(tmp_path)).with_reason(
+        "python inline test"
+    ).load()
+    assert resolved.secrets["TOKEN"].get == "inline-python"
+
+
 def test_scope_is_selected_and_returned(tmp_path):
     manifest, provider = _project(
         tmp_path,

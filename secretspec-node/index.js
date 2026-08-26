@@ -207,9 +207,16 @@ class Report {
 class Builder {
   constructor() {
     this._request = {};
+    this._inline = null;
   }
 
-  withPath(p) { if (p != null) this._request.path = p; return this; }
+  withPath(p) { this._inline = null; if (p != null) this._request.path = p; return this; }
+  /** Resolve inline-spec v1 at baseDir (SecretSpec 0.20+). */
+  withInlineSpec(spec, baseDir) {
+    delete this._request.path;
+    this._inline = { spec, baseDir };
+    return this;
+  }
   withProvider(p) { if (p != null) this._request.provider = p; return this; }
   withProfile(p) { if (p != null) this._request.profile = p; return this; }
   /** Limit resolution to a named manifest scope (SecretSpec 0.17+). */
@@ -227,7 +234,7 @@ class Builder {
    * loadAsync() when a provider may do network I/O (1Password, LastPass).
    */
   load() {
-    return this._parse(native.resolve(JSON.stringify(this._request)));
+    return this._parse(this._nativeCall());
   }
 
   /**
@@ -236,13 +243,14 @@ class Builder {
    * and rejects with the same error types load() throws.
    */
   async loadAsync() {
-    if (typeof native.resolveAsync !== 'function') {
+    const method = this._inline ? 'callAsync' : 'resolveAsync';
+    if (typeof native[method] !== 'function') {
       throw new SecretSpecError(
         'addon',
-        'the loaded native addon predates resolveAsync; rebuild it with scripts/build-addon.sh',
+        `the loaded native addon predates ${method}; rebuild it with scripts/build-addon.sh`,
       );
     }
-    return this._parse(await native.resolveAsync(JSON.stringify(this._request)));
+    return this._parse(await this._nativeCallAsync());
   }
 
   /**
@@ -288,27 +296,52 @@ class Builder {
    * network-backed providers.
    */
   report() {
-    return this._parseReport(
-      native.resolve(JSON.stringify({ ...this._request, mode: 'report' })),
-    );
+    return this._parseReport(this._nativeCall('report'));
   }
 
   /** Like report(), but resolves on the libuv threadpool. */
   async reportAsync() {
-    if (typeof native.resolveAsync !== 'function') {
+    const method = this._inline ? 'callAsync' : 'resolveAsync';
+    if (typeof native[method] !== 'function') {
       throw new SecretSpecError(
         'addon',
-        'the loaded native addon predates resolveAsync; rebuild it with scripts/build-addon.sh',
+        `the loaded native addon predates ${method}; rebuild it with scripts/build-addon.sh`,
       );
     }
-    return this._parseReport(
-      await native.resolveAsync(JSON.stringify({ ...this._request, mode: 'report' })),
-    );
+    return this._parseReport(await this._nativeCallAsync('report'));
   }
 
   /** Parse a JSON report envelope string into a Report (or throw). */
   _parseReport(raw) {
     return new Report(this._parseEnvelope(raw, 'report', REPORT_SCHEMA_VERSION));
+  }
+
+  _nativeRequest(mode) {
+    const options = { ...this._request };
+    if (mode) options.mode = mode;
+    if (!this._inline) return options;
+    return {
+      request_version: 1,
+      operation: 'resolve',
+      source: { kind: 'inline', spec_version: 1, base_dir: this._inline.baseDir, spec: this._inline.spec },
+      options,
+    };
+  }
+
+  _nativeCall(mode) {
+    const payload = JSON.stringify(this._nativeRequest(mode));
+    if (this._inline && typeof native.call !== 'function') {
+      throw new SecretSpecError(
+        'capability',
+        'the loaded native addon predates inline specifications; rebuild it with scripts/build-addon.sh',
+      );
+    }
+    return this._inline ? native.call(payload) : native.resolve(payload);
+  }
+
+  _nativeCallAsync(mode) {
+    const payload = JSON.stringify(this._nativeRequest(mode));
+    return this._inline ? native.callAsync(payload) : native.resolveAsync(payload);
   }
 }
 

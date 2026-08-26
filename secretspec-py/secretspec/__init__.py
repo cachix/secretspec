@@ -201,13 +201,23 @@ def _resolve_envelope(request: dict) -> dict:
     return json.loads(raw)
 
 
-def _checked_response(request: dict, kind: str, expected_version: int) -> dict:
+def _call_envelope(request: dict) -> dict:
+    if not hasattr(_native, "call"):
+        raise SecretSpecError(
+            "capability",
+            "the loaded native extension predates inline specifications; reinstall SecretSpec 0.20+",
+        )
+    raw = _native.call(json.dumps(request))
+    return json.loads(raw)
+
+
+def _checked_response(request: dict, kind: str, expected_version: int, *, versioned: bool = False) -> dict:
     """Resolve ``request`` and return the validated ``response`` envelope.
 
     ``kind`` is ``"resolve"`` or ``"report"``; it selects the schema version to
     enforce and labels the version-mismatch message.
     """
-    envelope = _resolve_envelope(request)
+    envelope = _call_envelope(request) if versioned else _resolve_envelope(request)
     if not envelope.get("ok", False):
         err = envelope.get("error", {})
         raise SecretSpecError(err.get("kind", "unknown"), err.get("message", ""))
@@ -289,10 +299,22 @@ class SecretSpec:
 class _Builder:
     def __init__(self) -> None:
         self._request: dict = {}
+        self._inline: Optional[tuple[dict, str]] = None
 
     def with_path(self, path: Optional[str]) -> "_Builder":
+        self._inline = None
         if path is not None:
             self._request["path"] = path
+        return self
+
+    def with_inline_spec(self, spec: dict, base_dir: str) -> "_Builder":
+        """Resolve inline-spec v1 at ``base_dir`` (SecretSpec 0.20+).
+
+        Inline resolution uses the versioned native call entry point, so an
+        older runtime cannot fall back to a filesystem manifest.
+        """
+        self._request.pop("path", None)
+        self._inline = (spec, base_dir)
         return self
 
     def with_provider(self, provider: Optional[str]) -> "_Builder":
@@ -328,7 +350,10 @@ class _Builder:
         return self
 
     def load(self) -> Resolved:
-        response = _checked_response(self._request, "resolve", _RESOLVE_SCHEMA_VERSION)
+        request, versioned = self._native_request()
+        response = _checked_response(
+            request, "resolve", _RESOLVE_SCHEMA_VERSION, versioned=versioned
+        )
 
         missing_required = response.get("missing_required", [])
         if missing_required:
@@ -359,9 +384,8 @@ class _Builder:
         required secret appears as a :class:`SecretReport` with status
         ``"missing_required"``.
         """
-        request = dict(self._request)
-        request["mode"] = "report"
-        response = _checked_response(request, "report", _REPORT_SCHEMA_VERSION)
+        request, versioned = self._native_request("report")
+        response = _checked_response(request, "report", _REPORT_SCHEMA_VERSION, versioned=versioned)
         secrets = [
             SecretReport(
                 name=s["name"],
@@ -380,3 +404,18 @@ class _Builder:
             secrets=secrets,
             scope=response.get("scope"),
         )
+
+    def _native_request(self, mode: Optional[str] = None) -> tuple[dict, bool]:
+        options = dict(self._request)
+        if mode is not None:
+            options["mode"] = mode
+        if self._inline is None:
+            return options, False
+        spec, base_dir = self._inline
+        return ({
+            "request_version": 1,
+            "operation": "resolve",
+            "source": {"kind": "inline", "spec_version": 1,
+                       "base_dir": base_dir, "spec": spec},
+            "options": options,
+        }, True)

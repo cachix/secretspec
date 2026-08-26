@@ -7,6 +7,7 @@ namespace Secretspec\Tests;
 use PHPUnit\Framework\TestCase;
 use Secretspec\CallerContext;
 use Secretspec\MissingRequiredException;
+use Secretspec\Native;
 use Secretspec\SecretReport;
 use Secretspec\SecretSpec;
 use Secretspec\SecretSpecException;
@@ -62,6 +63,20 @@ final class ResolveTest extends TestCase
         self::assertNotEmpty(SecretSpec::abiVersion());
     }
 
+    public function testLegacyFfiBindingDoesNotRequireInlineCallSymbol(): void
+    {
+        $reflection = new \ReflectionClass(Native::class);
+
+        self::assertStringNotContainsString(
+            'secretspec_call',
+            $reflection->getConstant('CDEF'),
+        );
+        self::assertStringContainsString(
+            'secretspec_call',
+            $reflection->getConstant('CALL_CDEF'),
+        );
+    }
+
     public function testCallerContextCanAccompanyASeparateReason(): void
     {
         [$manifest, $provider] = $this->project("DATABASE_URL=postgres://db\n");
@@ -103,6 +118,26 @@ final class ResolveTest extends TestCase
 
         self::assertSame(['SENTRY_DSN'], $resolved->missingOptional);
         self::assertArrayNotHasKey('SENTRY_DSN', $resolved->secrets);
+    }
+
+    public function testInlineSpecResolvesAtItsLogicalBaseDir(): void
+    {
+        [$manifest] = $this->project('');
+        $dir = \dirname($manifest);
+        \file_put_contents($dir . \DIRECTORY_SEPARATOR . 'inline.env', "TOKEN=inline-php\n");
+        $spec = [
+            'project' => ['name' => 'php-inline'],
+            'providers' => ['env' => 'dotenv://inline.env'],
+            'profiles' => ['default' => ['secrets' => [
+                'TOKEN' => ['description' => 'token', 'providers' => ['env']],
+            ]]],
+        ];
+        $resolved = SecretSpec::builder()
+            ->withInlineSpec($spec, $dir)
+            ->withReason('php inline test')
+            ->load();
+
+        self::assertSame('inline-php', $resolved->secrets['TOKEN']->get());
     }
 
     public function testSetAsEnv(): void

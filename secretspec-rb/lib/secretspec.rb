@@ -134,6 +134,17 @@ module Secretspec
         result
       end
 
+      def call(request_json)
+        unless respond_to?(:c_call, true)
+          raise Error.new("capability", "the loaded native extension predates inline specifications; rebuild the secretspec gem")
+        end
+
+        result = c_call(request_json)
+        raise Error.new("ffi", "secretspec_call returned null") if result.nil?
+
+        result
+      end
+
       def abi_version
         c_abi_version
       end
@@ -151,10 +162,19 @@ module Secretspec
   class Builder
     def initialize
       @request = {}
+      @inline = nil
     end
 
     def with_path(path)
+      @inline = nil
       @request["path"] = path if path
+      self
+    end
+
+    # Resolve strict inline-spec v1 at its logical base directory (0.20+).
+    def with_inline_spec(spec, base_dir)
+      @request.delete("path")
+      @inline = { "spec" => spec, "base_dir" => base_dir }
       self
     end
 
@@ -198,7 +218,7 @@ module Secretspec
     # done to clean up any as_path temp files). With a block, yields the Resolved
     # and closes it afterwards, returning the block's value.
     def load
-      response = parse_response(JSON.generate(@request), "resolve", RESOLVE_SCHEMA_VERSION)
+      response = parse_response(*native_request, "resolve", RESOLVE_SCHEMA_VERSION)
 
       missing = response["missing_required"] || []
       raise MissingRequiredError.new(missing) unless missing.empty?
@@ -229,8 +249,7 @@ module Secretspec
     # MissingRequiredError: a missing required secret appears as a SecretReport
     # with status "missing_required".
     def report
-      request = @request.merge("mode" => "report")
-      response = parse_response(JSON.generate(request), "report", REPORT_SCHEMA_VERSION)
+      response = parse_response(*native_request("report"), "report", REPORT_SCHEMA_VERSION)
 
       secrets = (response["secrets"] || []).map do |s|
         SecretReport.new(s["name"], s["status"], s["required"],
@@ -245,8 +264,9 @@ module Secretspec
     # Resolve a JSON request payload and return the validated "response" hash, or
     # raise. +kind+ is "resolve" or "report"; it selects the schema version to
     # enforce and labels the version-mismatch message.
-    def parse_response(payload, kind, expected_version)
-      envelope = JSON.parse(Native.resolve(payload))
+    def parse_response(request, versioned, kind, expected_version)
+      payload = JSON.generate(request)
+      envelope = JSON.parse(versioned ? Native.call(payload) : Native.resolve(payload))
 
       unless envelope["ok"]
         err = envelope["error"] || {}
@@ -265,6 +285,17 @@ module Secretspec
       end
 
       response
+    end
+
+    def native_request(mode = nil)
+      options = @request.dup
+      options["mode"] = mode if mode
+      return [options, false] unless @inline
+
+      [{ "request_version" => 1, "operation" => "resolve",
+         "source" => { "kind" => "inline", "spec_version" => 1,
+                       "base_dir" => @inline["base_dir"], "spec" => @inline["spec"] },
+         "options" => options }, true]
     end
   end
 

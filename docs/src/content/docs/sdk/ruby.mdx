@@ -35,6 +35,12 @@ builder = Secretspec::SecretSpec.builder.with_caller(
 Caller context identifies the invoking integration in audit records but never
 satisfies `require_reason`. Do not put credentials or secret values in it.
 
+## Inline specifications (0.20+)
+
+Use `.with_inline_spec(spec, base_dir)` to resolve a strict inline-spec v1 hash
+at its logical provider-path base directory. The extension links the separate
+native call symbol, so an older archive cannot fall back to a manifest search.
+
 ## Scopes (0.17+)
 
 Use `.with_scope("api")` to resolve only a named `[scopes.api]` subset. The

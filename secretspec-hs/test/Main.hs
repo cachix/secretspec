@@ -41,6 +41,7 @@ main = do
   let tests =
         [ ("abi_version_nonempty", testAbiVersion)
         , ("caller_context_builder", testCallerContextBuilder)
+        , ("inline_spec", testInlineSpec)
         , ("missing_required_throws", testMissingRequired)
         , ("scoped_resolution", testScope)
         , ("codegen", testCodegen)
@@ -79,6 +80,30 @@ testCallerContextBuilder = do
         (Just "credential_get") (Just "github.com")
       configured = S.builder & S.withCaller caller
   configured `seq` pure ()
+
+testInlineSpec :: IO ()
+testInlineSpec = do
+  tmp <- getTemporaryDirectory
+  let dir = tmp </> "secretspec-hs-inline"
+  createDirectoryIfMissing True dir
+  writeFile (dir </> "inline.env") "TOKEN=inline-haskell\n"
+  let spec = object
+        [ "project" .= object ["name" .= ("haskell-inline" :: Text)]
+        , "providers" .= object ["env" .= ("dotenv://inline.env" :: Text)]
+        , "profiles" .= object
+            [ "default" .= object
+                [ "secrets" .= object
+                    [ "TOKEN" .= object
+                        [ "description" .= ("token" :: Text)
+                        , "providers" .= (["env"] :: [Text])
+                        ]
+                    ]
+                ]
+            ]
+        ]
+  resolved <- S.load (S.builder & S.withInlineSpec spec (T.pack dir) & S.withReason "inline test")
+  let token = Map.lookup "TOKEN" (S.resolvedSecrets resolved) >>= S.get
+  expect (token == Just "inline-haskell") "inline spec did not resolve TOKEN"
 
 testMissingRequired :: IO ()
 testMissingRequired = do

@@ -19,11 +19,15 @@ import (
 )
 
 var (
-	loadOnce sync.Once
-	loadErr  error
-	cResolve func(string) uintptr
-	cFree    func(uintptr)
-	cABI     func() uintptr
+	loadOnce  sync.Once
+	loadErr   error
+	callOnce  sync.Once
+	callErr   error
+	libHandle uintptr
+	cResolve  func(string) uintptr
+	cCall     func(string) uintptr
+	cFree     func(uintptr)
+	cABI      func() uintptr
 )
 
 func libNames() []string {
@@ -106,11 +110,31 @@ func ensureLoaded() error {
 			loadErr = err
 			return
 		}
+		libHandle = handle
 		purego.RegisterLibFunc(&cResolve, handle, "secretspec_resolve")
 		purego.RegisterLibFunc(&cFree, handle, "secretspec_free")
 		purego.RegisterLibFunc(&cABI, handle, "secretspec_abi_version")
 	})
 	return loadErr
+}
+
+// ensureCallLoaded binds the capability-gated call symbol only for SDKs that
+// request an inline declaration. Keeping it out of ensureLoaded preserves the
+// legacy path/search API for an older runtime that predates secretspec_call.
+func ensureCallLoaded() error {
+	if err := ensureLoaded(); err != nil {
+		return err
+	}
+	callOnce.Do(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				callErr = &Error{Kind: "capability", Message: fmt.Sprintf(
+					"loaded secretspec-ffi does not support inline specs (missing secretspec_call): %v", r)}
+			}
+		}()
+		purego.RegisterLibFunc(&cCall, libHandle, "secretspec_call")
+	})
+	return callErr
 }
 
 // nativeResolve calls secretspec_resolve and returns the owned response, freeing
@@ -119,6 +143,16 @@ func nativeResolve(payload string) (string, error) {
 	ptr := cResolve(payload)
 	if ptr == 0 {
 		return "", &Error{Kind: "ffi", Message: "secretspec_resolve returned null"}
+	}
+	raw := goString(ptr)
+	cFree(ptr)
+	return raw, nil
+}
+
+func nativeCall(payload string) (string, error) {
+	ptr := cCall(payload)
+	if ptr == 0 {
+		return "", &Error{Kind: "ffi", Message: "secretspec_call returned null"}
 	}
 	raw := goString(ptr)
 	cFree(ptr)

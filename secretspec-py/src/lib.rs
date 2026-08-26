@@ -14,6 +14,12 @@ fn resolve(request_json: &str) -> String {
     secretspec::resolve_json(request_json)
 }
 
+/// Process a versioned native operation request, including inline specs.
+#[pyfunction]
+fn call(request_json: &str) -> String {
+    secretspec::call_json(request_json)
+}
+
 /// The extension's version (tracks the crate version).
 #[pyfunction]
 fn abi_version() -> String {
@@ -23,6 +29,7 @@ fn abi_version() -> String {
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(resolve, m)?)?;
+    m.add_function(wrap_pyfunction!(call, m)?)?;
     m.add_function(wrap_pyfunction!(abi_version, m)?)?;
     Ok(())
 }

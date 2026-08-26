@@ -70,6 +70,36 @@ func TestConformance(t *testing.T) {
 	}
 }
 
+// TestInlineSpecConformance exercises the purego/dlopen-capable SDK through
+// the versioned `secretspec_call` symbol. It deliberately has no manifest: a
+// successful result proves the inline declaration did not fall back to a file
+// search and that its logical base directory resolves relative providers.
+func TestInlineSpecConformance(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "inline.env"), []byte("TOKEN=inline\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spec := map[string]any{
+		"project":   map[string]any{"name": "go-inline"},
+		"providers": map[string]any{"env": "dotenv://inline.env"},
+		"profiles": map[string]any{
+			"default": map[string]any{
+				"secrets": map[string]any{
+					"TOKEN": map[string]any{"description": "inline token", "providers": []string{"env"}},
+				},
+			},
+		},
+	}
+	resolved, err := New().WithInlineSpec(spec, dir).WithReason("conformance").Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resolved.Close()
+	if got := resolved.Secrets["TOKEN"].Get(); got != "inline" {
+		t.Fatalf("TOKEN = %q, want inline", got)
+	}
+}
+
 func canonical(t *testing.T, resolved *Resolved) map[string]any {
 	t.Helper()
 	secrets := map[string]any{}

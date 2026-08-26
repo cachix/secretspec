@@ -95,11 +95,36 @@ private struct ReportResponse: Decodable {
 /// Configures a SecretSpec resolution.
 public struct SecretSpecBuilder: Sendable {
     private var request = ResolveRequest()
+    private var inline: InlineSpec? = nil
+
+    private struct InlineSpec: Sendable {
+        let declaration: Data
+        let baseDir: String
+    }
 
     public init() {}
 
     public func withPath(_ path: String?) -> Self {
-        setting(\.path, to: path)
+        var copy = setting(\.path, to: path)
+        copy.inline = nil
+        return copy
+    }
+
+    /// Resolves strict inline-spec v1 at `baseDir` (SecretSpec 0.20+).
+    ///
+    /// The declaration is encoded once into the dedicated native wire format.
+    /// An older native library reports a capability error rather than searching
+    /// for a filesystem manifest.
+    public func withInlineSpec<Declaration: Encodable & Sendable>(
+        _ declaration: Declaration,
+        baseDir: String
+    ) throws -> Self {
+        var copy = self
+        copy.request.path = nil
+        copy.inline = InlineSpec(
+            declaration: try JSONEncoder().encode(declaration), baseDir: baseDir
+        )
+        return copy
     }
 
     public func withProvider(_ provider: String?) -> Self {
@@ -185,7 +210,20 @@ public struct SecretSpecBuilder: Sendable {
 
         let requestData: Data
         do {
-            requestData = try JSONEncoder().encode(configured)
+            if let inline {
+                let declaration = try JSONSerialization.jsonObject(with: inline.declaration)
+                requestData = try JSONSerialization.data(withJSONObject: [
+                    "request_version": 1,
+                    "operation": "resolve",
+                    "source": [
+                        "kind": "inline", "spec_version": 1,
+                        "base_dir": inline.baseDir, "spec": declaration,
+                    ],
+                    "options": try JSONSerialization.jsonObject(with: JSONEncoder().encode(configured)),
+                ])
+            } else {
+                requestData = try JSONEncoder().encode(configured)
+            }
         } catch {
             throw SecretSpecError(kind: "encode", message: error.localizedDescription)
         }
@@ -196,7 +234,12 @@ public struct SecretSpecBuilder: Sendable {
             )
         }
 
-        let responseJSON = try Native.resolve(requestJSON)
+        let responseJSON: String
+        if inline == nil {
+            responseJSON = try Native.resolve(requestJSON)
+        } else {
+            responseJSON = try Native.call(requestJSON)
+        }
         let envelope: Envelope<Response>
         do {
             envelope = try JSONDecoder().decode(

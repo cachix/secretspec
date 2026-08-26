@@ -10,6 +10,19 @@ import Glibc
 @testable import SecretSpec
 
 final class SecretSpecTests: XCTestCase {
+    private struct InlineSpec: Encodable, Sendable {
+        struct Project: Encodable, Sendable { let name: String }
+        struct Secret: Encodable, Sendable {
+            let description: String
+            let providers: [String]
+        }
+        struct Profile: Encodable, Sendable { let secrets: [String: Secret] }
+
+        let project: Project
+        let providers: [String: String]
+        let profiles: [String: Profile]
+    }
+
     private static let manifest = """
     [project]
     name = "swift-test"
@@ -69,6 +82,29 @@ final class SecretSpecTests: XCTestCase {
         let fields = try JSONSerialization.jsonObject(with: resolved.fieldsJSON())
         let object = try XCTUnwrap(fields as? [String: Any])
         XCTAssertEqual(object["DATABASE_URL"] as? String, "postgres://db")
+    }
+
+    func testInlineSpecResolvesAtItsLogicalBaseDirectory() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try "TOKEN=inline-swift\n".write(
+            to: directory.appendingPathComponent("inline.env"), atomically: true, encoding: .utf8
+        )
+        let spec = InlineSpec(
+            project: .init(name: "swift-inline"),
+            providers: ["env": "dotenv://inline.env"],
+            profiles: ["default": .init(secrets: [
+                "TOKEN": .init(description: "token", providers: ["env"]),
+            ])]
+        )
+        let resolved = try SecretSpec.builder()
+            .withInlineSpec(spec, baseDir: directory.path)
+            .withReason("Swift inline test")
+            .load()
+        defer { try? resolved.close() }
+        XCTAssertEqual(resolved.secrets["TOKEN"]?.get(), "inline-swift")
     }
 
     func testScopedResolveAndReport() throws {

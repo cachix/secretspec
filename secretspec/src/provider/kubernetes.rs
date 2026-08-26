@@ -517,6 +517,11 @@ mod tests {
             while requests.len() < expected_requests && Instant::now() < deadline {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // Winsock propagates the listener's nonblocking mode to
+                        // accepted sockets. Return the connection to blocking
+                        // mode so the request reader waits for the complete
+                        // headers and body, as it does on Unix.
+                        stream.set_nonblocking(false).unwrap();
                         stream
                             .set_read_timeout(Some(Duration::from_secs(2)))
                             .unwrap();

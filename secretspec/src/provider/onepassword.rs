@@ -11,6 +11,11 @@ use std::process::Command;
 /// and contains an array of fields that hold the actual secret data.
 #[derive(Debug, Deserialize)]
 struct OnePasswordItem {
+    /// Stable item identifier returned by batched `op item get` calls.
+    ///
+    /// Single-item reads only need the fields, so this remains optional for
+    /// compatibility with older CLI output and focused parser fixtures.
+    id: Option<String>,
     /// Collection of fields within the OnePassword item.
     /// Each field represents a piece of data stored in the item.
     fields: Vec<OnePasswordField>,
@@ -1049,28 +1054,31 @@ impl OnePasswordProvider {
     /// password or concealed fields.
     fn extract_value_from_item(&self, output: &str) -> Result<Option<SecretString>> {
         let item: OnePasswordItem = serde_json::from_str(output)?;
+        Ok(Self::extract_value(&item))
+    }
 
+    fn extract_value(item: &OnePasswordItem) -> Option<SecretString> {
         // Look for the "value" field
         for field in &item.fields {
             if field.label.as_deref() == Some("value") {
-                return Ok(field
+                return field
                     .value
                     .as_ref()
-                    .map(|v| SecretString::new(v.clone().into())));
+                    .map(|v| SecretString::new(v.clone().into()));
             }
         }
 
         // Fallback: look for password field or first concealed field
         for field in &item.fields {
             if field.field_type == "CONCEALED" || field.id == "password" {
-                return Ok(field
+                return field
                     .value
                     .as_ref()
-                    .map(|v| SecretString::new(v.clone().into())));
+                    .map(|v| SecretString::new(v.clone().into()));
             }
         }
 
-        Ok(None)
+        None
     }
 }
 
@@ -1370,9 +1378,9 @@ impl Provider for OnePasswordProvider {
     /// Retrieves multiple secrets from OnePassword in a single batch operation.
     ///
     /// Whole-item addresses (every convention secret, and field-less refs)
-    /// are served from one item listing per vault plus parallel `op item get`
-    /// calls for the titles that exist. Multiple field-addressed refs use one
-    /// `op inject` call, with individual reads only as a correctness fallback.
+    /// are served from one item listing plus one batched `op item get` call per
+    /// vault. Multiple field-addressed refs use one `op inject` call, with
+    /// individual reads only as a correctness fallback.
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
         if requests.is_empty() {
             return Ok(HashMap::new());
@@ -1430,8 +1438,9 @@ impl Provider for OnePasswordProvider {
 
 impl OnePasswordProvider {
     /// Fetches the given `(request name, item title)` pairs from one vault:
-    /// lists the vault once to resolve titles to ids, then fetches the items
-    /// that exist in parallel threads and extracts their value/password field.
+    /// lists the vault once to resolve titles to ids, then pipes every matching
+    /// id through one `op item get` process and extracts each value/password
+    /// field from the returned JSON stream.
     fn get_items_batch(
         &self,
         vault: &str,
@@ -1455,30 +1464,85 @@ impl OnePasswordProvider {
             .map(|item| (item.title, item.id))
             .collect();
 
-        // Find which titles exist and need to be fetched
-        let to_fetch: Vec<(String, String)> = items
-            .into_iter()
-            .filter_map(|(name, title)| item_map.get(&title).map(|id| (name, id.clone())))
-            .collect();
+        // Find which titles exist and need to be fetched. Multiple request names
+        // may resolve to one physical item, so fetch each id once and fan its
+        // value back out afterwards.
+        let mut fetch_indices: HashMap<String, usize> = HashMap::new();
+        let mut to_fetch: Vec<(String, Vec<String>)> = Vec::new();
+        for (name, title) in items {
+            let Some(item_id) = item_map.get(&title) else {
+                continue;
+            };
+            if let Some(index) = fetch_indices.get(item_id) {
+                to_fetch[*index].1.push(name);
+            } else {
+                fetch_indices.insert(item_id.clone(), to_fetch.len());
+                to_fetch.push((item_id.clone(), vec![name]));
+            }
+        }
 
-        // Fetch the items concurrently. Each id came from the listing above, so
-        // it is unambiguous: `read_item`'s duplicate-title fallback never fires.
-        let fetched: Vec<(String, Result<Option<SecretString>>)> = std::thread::scope(|scope| {
-            let handles: Vec<_> = to_fetch
-                .into_iter()
-                .map(|(name, item_id)| (name, scope.spawn(move || self.read_item(vault, &item_id))))
-                .collect();
-            handles
-                .into_iter()
-                .map(|(name, handle)| (name, handle.join().expect("op item get thread panicked")))
-                .collect()
-        });
+        if to_fetch.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        // `op item get` treats each stdin line as an item specifier and emits
+        // one JSON document per item. Do not pass `-`: current CLI versions can
+        // interpret it as an additional literal item. This keeps desktop-app
+        // authentication to one connection instead of spawning one `op`
+        // process per secret.
+        let mut input = to_fetch
+            .iter()
+            .map(|(item_id, _)| item_id.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        input.push('\n');
+        let output = self.execute_op_command(
+            &["item", "get", "--vault", vault, "--format", "json"],
+            Some(&input),
+        )?;
+
+        let fetched: Vec<OnePasswordItem> =
+            match serde_json::from_str::<Vec<OnePasswordItem>>(&output) {
+                // Accept an array as well as the JSON stream emitted by current
+                // CLI versions so this remains compatible with output changes.
+                Ok(items) => items,
+                Err(_) => serde_json::Deserializer::from_str(&output)
+                    .into_iter::<OnePasswordItem>()
+                    .collect::<std::result::Result<_, _>>()
+                    .map_err(|error| {
+                        SecretSpecError::ProviderOperationFailed(format!(
+                            "1Password CLI returned invalid batched item JSON: {error}"
+                        ))
+                    })?,
+            };
+
+        let expected_count = to_fetch.len();
+        let mut names_by_id: HashMap<String, Vec<String>> = to_fetch.into_iter().collect();
 
         let mut results = HashMap::new();
-        for (name, result) in fetched {
-            if let Some(value) = result? {
-                results.insert(name, value);
+        for item in fetched {
+            let item_id = item.id.as_deref().ok_or_else(|| {
+                SecretSpecError::ProviderOperationFailed(
+                    "1Password CLI batch response omitted an item ID".to_string(),
+                )
+            })?;
+            let names = names_by_id.remove(item_id).ok_or_else(|| {
+                SecretSpecError::ProviderOperationFailed(
+                    "1Password CLI batch response contained an unexpected item".to_string(),
+                )
+            })?;
+            if let Some(value) = Self::extract_value(&item) {
+                for name in names {
+                    results.insert(name, value.clone());
+                }
             }
+        }
+
+        if !names_by_id.is_empty() {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "1Password CLI returned {} of {expected_count} requested items",
+                expected_count - names_by_id.len()
+            )));
         }
 
         Ok(results)
@@ -2866,13 +2930,19 @@ mod tests {
             let args = command_args(command);
             observed.lock().unwrap().push(args.clone());
             match args.as_slice() {
-                [command, list, ..] if command == "item" && list == "list" => Ok(
-                    r#"[{"id":"whole-id","title":"Whole Item"}]"#.to_string(),
-                ),
-                [command, get, id, ..]
-                    if command == "item" && get == "get" && id == "whole-id" =>
+                [command, list, ..] if command == "item" && list == "list" => {
+                    Ok(r#"[{"id":"whole-id","title":"Whole Item"}]"#.to_string())
+                }
+                [command, get, vault_flag, vault, format_flag, format]
+                    if command == "item"
+                        && get == "get"
+                        && vault_flag == "--vault"
+                        && vault == "Personal"
+                        && format_flag == "--format"
+                        && format == "json" =>
                 {
-                    Ok(r#"{"fields":[{"id":"value","type":"STRING","label":"value","value":"whole value"}]}"#.to_string())
+                    assert_eq!(stdin, Some("whole-id\n"));
+                    Ok(r#"{"id":"whole-id","fields":[{"id":"value","type":"STRING","label":"value","value":"whole value"}]}"#.to_string())
                 }
                 [command] if command == "inject" => Ok(stdin
                     .expect("inject stdin")
@@ -2923,6 +2993,103 @@ mod tests {
         assert!(secret_matches(&results, "WHOLE", "whole value"));
         assert!(secret_matches(&results, "FIRST", "field one"));
         assert!(secret_matches(&results, "SECOND", "field two"));
+    }
+
+    #[test]
+    fn whole_item_batch_uses_one_get_process_and_maps_results_by_id() {
+        use std::sync::{Arc, Mutex};
+
+        let listed = serde_json::Value::Array(
+            (0..10)
+                .map(|index| {
+                    serde_json::json!({
+                        "id": format!("item-{index}"),
+                        "title": format!("Secret {index}"),
+                    })
+                })
+                .collect(),
+        )
+        .to_string();
+        // `op item get --format json` emits a stream of JSON documents. Use
+        // reverse order to prove results are associated by item ID, not by the
+        // order in which the CLI returns them.
+        let fetched = (0..10)
+            .rev()
+            .map(|index| {
+                serde_json::json!({
+                    "id": format!("item-{index}"),
+                    "fields": [{
+                        "id": "value",
+                        "type": "STRING",
+                        "label": "value",
+                        "value": format!("value-{index}"),
+                    }],
+                })
+                .to_string()
+            })
+            .collect::<String>();
+
+        let calls = Arc::new(Mutex::new(Vec::<(Vec<String>, Option<String>)>::new()));
+        let observed = Arc::clone(&calls);
+        let mut provider = OnePasswordProvider::new(config("onepassword://Personal"));
+        provider.command_override = Some(Arc::new(move |command, stdin| {
+            let args = command_args(command);
+            observed
+                .lock()
+                .unwrap()
+                .push((args.clone(), stdin.map(str::to_string)));
+            match args.as_slice() {
+                [command, list, ..] if command == "item" && list == "list" => {
+                    assert!(stdin.is_none());
+                    Ok(listed.clone())
+                }
+                [command, get, vault_flag, vault, format_flag, format]
+                    if command == "item"
+                        && get == "get"
+                        && vault_flag == "--vault"
+                        && vault == "Personal"
+                        && format_flag == "--format"
+                        && format == "json" =>
+                {
+                    assert!(stdin.is_some());
+                    Ok(fetched.clone())
+                }
+                _ => unreachable!("unexpected mocked command"),
+            }
+        }));
+
+        let names: Vec<String> = (0..10).map(|index| format!("SECRET_{index}")).collect();
+        let addresses: Vec<crate::config::NativeAddress> = (0..10)
+            .map(|index| crate::config::NativeAddress {
+                item: format!("Secret {index}"),
+                ..Default::default()
+            })
+            .collect();
+        let requests: Vec<(&str, Address<'_>)> = names
+            .iter()
+            .zip(&addresses)
+            .map(|(name, address)| (name.as_str(), Address::Native(address)))
+            .collect();
+
+        let results = provider.get_many(&requests).unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2, "one list process and one get process");
+        assert_eq!(
+            calls[1].0,
+            ["item", "get", "--vault", "Personal", "--format", "json"]
+        );
+        let batch_input = calls[1].1.as_deref().expect("batch item IDs on stdin");
+        assert_eq!(batch_input.lines().count(), 10);
+        for index in 0..10 {
+            let item_id = format!("item-{index}");
+            assert!(batch_input.lines().any(|line| line == item_id));
+            assert!(secret_matches(
+                &results,
+                &format!("SECRET_{index}"),
+                &format!("value-{index}")
+            ));
+        }
     }
 
     #[test]

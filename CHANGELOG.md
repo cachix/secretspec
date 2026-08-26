@@ -180,6 +180,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **JVM SDK** (0.20+): use SecretSpec from languages such as Java or Kotlin.
 
 ### Fixed
+- OnePassword convention-secret batches now retrieve all matching items through
+  one `op item get` process instead of starting one process per secret, avoiding
+  desktop-app connection timeouts when resolving larger manifests and working
+  with current 1Password CLI releases ([#398]).
+
+  [#398]: https://github.com/cachix/secretspec/issues/398
+
 - Bitwarden Password Manager convention secrets now use
   `secretspec/{project}/{profile}/{key}` item titles, preventing a same-named
   secret in another project or profile from being read or overwritten. The

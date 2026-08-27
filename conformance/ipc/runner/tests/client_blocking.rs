@@ -56,6 +56,7 @@ fn application() -> InitializeApplication {
         profile: None,
         scope: None,
         reason: None,
+        requested_authorization_duration_ms: None,
     }
 }
 

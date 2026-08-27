@@ -93,6 +93,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Rust SDK and resolver IPC callers can request a default authorization
+  lifetime for provider approval surfaces. The request is forwarded as
+  untrusted application context; the provider and approving user retain control
+  of the actual grant lifetime.
+
 - Static musl CLI release binaries for x64 and arm64 Linux are available in
   0.20+, so the standalone installer and `secretspec-update` work on Alpine
   without a glibc compatibility layer.

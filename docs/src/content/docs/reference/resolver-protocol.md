@@ -86,7 +86,8 @@ the lifetime of the connection:
   "provider": null,
   "profile": "production",
   "scope": "deploy",
-  "reason": "build api container"
+  "reason": "build api container",
+  "requested_authorization_duration_ms": 28800000
 }
 ```
 
@@ -117,8 +118,12 @@ Rules:
 - `profile`, `scope`, and `reason` are nullable strings with the embedded API's
   meaning. Null requests the resolver's configured/default value; it does not
   consult a resolver-specific environment variable.
+- `requested_authorization_duration_ms` is an optional positive app-requested
+  default for provider approval surfaces. The provider and approving user may
+  choose a different lifetime.
 - The complete object is immutable after initialization. A caller needing
-  another profile, scope, reason, or manifest opens another session.
+  another profile, scope, reason, authorization-duration request, or manifest
+  opens another session.
 - Inline TOML is sensitive transport data because a manifest can contain
   defaults. It must never be logged.
 

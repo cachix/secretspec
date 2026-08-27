@@ -566,6 +566,7 @@ struct ExternalState {
     base_dir: Option<PathBuf>,
     credentials: ProviderCredentials,
     reason: Option<String>,
+    requested_authorization_duration: Option<std::time::Duration>,
     /// Latched rejection from the last `with_base_dir`, cleared when a later
     /// call supplies an acceptable value.
     base_dir_error: Option<String>,
@@ -629,6 +630,7 @@ impl ExternalProvider {
                 base_dir: None,
                 credentials: ProviderCredentials::new(),
                 reason: None,
+                requested_authorization_duration: None,
                 base_dir_error: None,
                 credentials_error: None,
                 session: None,
@@ -672,6 +674,9 @@ impl ExternalProvider {
                     .as_ref()
                     .map(|path| path.to_string_lossy().into_owned()),
                 reason: state.reason.clone(),
+                requested_authorization_duration_ms: state
+                    .requested_authorization_duration
+                    .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)),
             },
             credentials,
         };
@@ -1086,6 +1091,20 @@ impl Provider for ExternalProvider {
                 return;
             }
             state.reason = reason;
+            state.session.take()
+        };
+        if let Some(session) = session {
+            close_live_session(session);
+        }
+    }
+
+    fn set_requested_authorization_duration(&self, duration: Option<std::time::Duration>) {
+        let session = {
+            let mut state = self.state();
+            if state.requested_authorization_duration == duration {
+                return;
+            }
+            state.requested_authorization_duration = duration;
             state.session.take()
         };
         if let Some(session) = session {

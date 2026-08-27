@@ -198,10 +198,10 @@ forwarded by the resolver is only an assertion and is not authenticated
 delegation.
 
 The provider initialization context (0.20+) follows the same rule. Its project,
-profile, base directory, and reason let an endpoint render useful approval and
-audit records and apply consent policy consistently to convention and native
-addresses. They remain resolver-declared assertions, not authenticated subject
-identity.
+profile, base directory, reason, and requested authorization duration let an
+endpoint render useful approval and audit records and apply consent policy
+consistently to convention and native addresses. They remain resolver-declared
+assertions, not authenticated subject identity or authorization.
 
 If grants must instead follow the application that invoked SecretSpec, a later
 capability must define a cryptographic delegation that is:

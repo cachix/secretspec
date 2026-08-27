@@ -498,6 +498,13 @@ pub trait Provider: Send + Sync {
     /// [`Secrets::with_reason`]: crate::Secrets::with_reason
     fn set_reason(&self, _reason: Option<String>) {}
 
+    /// Records the app-requested authorization lifetime for approval surfaces.
+    /// Available starting with SecretSpec 0.20.
+    ///
+    /// This is an untrusted default: the provider and user decide the actual
+    /// grant lifetime. The default implementation ignores it.
+    fn set_requested_authorization_duration(&self, _duration: Option<std::time::Duration>) {}
+
     /// Records structured context about the software integration invoking
     /// SecretSpec, such as `git` performing `credential_get` for `github.com`.
     ///
@@ -917,6 +924,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     }
     fn set_reason(&self, reason: Option<String>) {
         (**self).set_reason(reason);
+    }
+    fn set_requested_authorization_duration(&self, duration: Option<std::time::Duration>) {
+        (**self).set_requested_authorization_duration(duration);
     }
     fn set_caller(&self, caller: Option<crate::CallerContext>) {
         (**self).set_caller(caller);

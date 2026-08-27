@@ -121,7 +121,8 @@ Its `application` member is:
     "project": "payments",
     "profile": "production",
     "base_dir": "/absolute/project/directory",
-    "reason": "deploy production api"
+    "reason": "deploy production api",
+    "requested_authorization_duration_ms": 28800000
   },
   "credentials": {}
 }
@@ -133,7 +134,8 @@ Rules:
 - `uri` is the original configured provider URI. It is sensitive input and is
   never logged or echoed because it may contain credentials.
 - `context` (0.20+) carries the resolver-declared project, active profile, absolute
-  base directory, and access reason. Each member is nullable. Project and
+  base directory, access reason, and optional requested authorization duration.
+  The original four members are nullable. Project and
   profile are context for approval, policy, and audit surfaces, including for
   native addresses that do not carry convention components. They are
   assertions, not authenticated application identity or delegation.
@@ -150,6 +152,9 @@ Rules:
   environment variables.
 - `context.reason` is the session-wide access reason or null. An endpoint
   needing a different reason must use another session.
+- `context.requested_authorization_duration_ms`, when present, is a positive
+  app-requested default for an approval surface. It is not an authorization or
+  an upper bound: the endpoint and approving user choose the actual lifetime.
 - The endpoint MUST reject a URI whose scheme differs from `scheme`.
 
 The provider does not receive `config_file` and does not reread arbitrary

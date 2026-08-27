@@ -26,7 +26,8 @@
         "project": { "type": ["string", "null"], "minLength": 1, "maxLength": 4096 },
         "profile": { "type": ["string", "null"], "minLength": 1, "maxLength": 4096 },
         "base_dir": { "type": ["string", "null"], "maxLength": 32768 },
-        "reason": { "type": ["string", "null"], "maxLength": 4096 }
+        "reason": { "type": ["string", "null"], "maxLength": 4096 },
+        "requested_authorization_duration_ms": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }
       }
     },
     "ProviderMetadata": {

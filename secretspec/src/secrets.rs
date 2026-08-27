@@ -757,6 +757,9 @@ pub struct Secrets {
     /// Reason for this session's secret access, forwarded to providers that
     /// support audit logging (set via [`Secrets::with_reason`]).
     reason: Option<String>,
+    /// App-requested authorization lifetime, forwarded to providers as an
+    /// untrusted default for approval surfaces.
+    requested_authorization_duration: Option<std::time::Duration>,
     /// Software integration that invoked SecretSpec. This is audit context, not
     /// a user-supplied reason, and never satisfies `require_reason`.
     caller: Option<CallerContext>,
@@ -1022,6 +1025,7 @@ impl Secrets {
             scope: None,
             ignore_ambient_scope: false,
             reason: None,
+            requested_authorization_duration: None,
             caller: None,
             require_reason: RequireReason::Never,
             audit: None,
@@ -1154,6 +1158,7 @@ impl Secrets {
             scope: None,
             ignore_ambient_scope: !use_ambient_session,
             reason: use_ambient_session.then(env_reason).flatten(),
+            requested_authorization_duration: None,
             caller: None,
             audit,
             provider_credentials_cache: ProviderCredentialsCache::default(),
@@ -1346,6 +1351,16 @@ impl Secrets {
         if let Some(reason) = normalize_reason(&reason.into()) {
             self.reason = Some(reason);
         }
+        self
+    }
+
+    /// Requests a default authorization lifetime from providers that expose an
+    /// approval surface. Available starting with SecretSpec 0.20.
+    ///
+    /// The provider or approving user may choose a different lifetime. A zero
+    /// duration clears the request.
+    pub fn with_requested_authorization_duration(mut self, duration: std::time::Duration) -> Self {
+        self.requested_authorization_duration = (!duration.is_zero()).then_some(duration);
         self
     }
 
@@ -1609,6 +1624,7 @@ impl Secrets {
             .map_err(|err| self.explain_unknown_provider(err, &resolved))?;
         provider.with_base_dir(&self.config_dir);
         provider.set_reason(self.reason.clone());
+        provider.set_requested_authorization_duration(self.requested_authorization_duration);
         provider.set_caller(self.caller.clone());
         provider.set_project(&self.config.project.name);
         // Context a native address cannot carry: a `ref` names coordinates only,

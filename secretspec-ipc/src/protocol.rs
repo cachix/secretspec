@@ -367,6 +367,10 @@ pub mod resolver {
         pub scope: Option<String>,
         #[serde(deserialize_with = "deserialize_required_nullable")]
         pub reason: Option<String>,
+        /// App-requested authorization lifetime in milliseconds. The provider
+        /// may shorten, extend, or reject this request after user approval.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub requested_authorization_duration_ms: Option<u64>,
     }
 
     impl InitializeApplication {
@@ -379,7 +383,13 @@ pub mod resolver {
             )?;
             validate_optional_bytes("profile is too long", self.profile.as_deref(), 4096)?;
             validate_optional_bytes("scope is too long", self.scope.as_deref(), 4096)?;
-            validate_optional_bytes("reason is too long", self.reason.as_deref(), 4096)
+            validate_optional_bytes("reason is too long", self.reason.as_deref(), 4096)?;
+            if self.requested_authorization_duration_ms == Some(0) {
+                return Err(Error::Protocol(
+                    "requested authorization duration must be positive",
+                ));
+            }
+            Ok(())
         }
     }
 
@@ -855,6 +865,10 @@ pub mod provider {
         pub base_dir: Option<String>,
         #[serde(deserialize_with = "deserialize_required_nullable")]
         pub reason: Option<String>,
+        /// App-requested authorization lifetime in milliseconds. This is an
+        /// untrusted default for an approval surface, not an authorization.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub requested_authorization_duration_ms: Option<u64>,
     }
 
     impl ApplicationContext {
@@ -873,6 +887,11 @@ pub mod provider {
                 32768,
             )?;
             validate_optional_bytes("provider reason is too long", self.reason.as_deref(), 4096)?;
+            if self.requested_authorization_duration_ms == Some(0) {
+                return Err(Error::Protocol(
+                    "requested authorization duration must be positive",
+                ));
+            }
             if let Some(base_dir) = &self.base_dir
                 && !std::path::Path::new(base_dir).is_absolute()
             {
@@ -1370,6 +1389,7 @@ mod tests {
                 profile: Some("default".into()),
                 base_dir: None,
                 reason: None,
+                requested_authorization_duration_ms: None,
             },
             credentials: BTreeMap::new(),
         };
@@ -1456,5 +1476,25 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn requested_authorization_duration_is_optional_but_must_be_positive() {
+        let without_request =
+            serde_json::from_value::<resolver::InitializeApplication>(serde_json::json!({
+                "manifest": {"kind": "path", "path": "/tmp/secretspec.toml"},
+                "provider": null,
+                "profile": null,
+                "scope": null,
+                "reason": null
+            }))
+            .unwrap();
+        assert_eq!(without_request.requested_authorization_duration_ms, None);
+
+        let zero = resolver::InitializeApplication {
+            requested_authorization_duration_ms: Some(0),
+            ..without_request
+        };
+        assert!(zero.validate().is_err());
     }
 }

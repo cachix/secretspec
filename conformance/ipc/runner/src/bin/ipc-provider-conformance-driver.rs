@@ -248,6 +248,7 @@ fn initialize_params() -> InitializeParams<InitializeApplication> {
                 profile: Some("default".into()),
                 base_dir: None,
                 reason: Some("conformance".into()),
+                requested_authorization_duration_ms: Some(8 * 60 * 60 * 1_000),
             },
             credentials: BTreeMap::new(),
         },

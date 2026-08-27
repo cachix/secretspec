@@ -4286,6 +4286,7 @@ fn operation_scoped_provider_cache_applies_changed_session_context_on_later_reso
     let item = format!("{PROJECT}/default/{SECRET}");
     crate::provider::tests::take_stateful_reason_reads(&item);
     crate::provider::tests::take_stateful_caller_reads(&item);
+    crate::provider::tests::take_stateful_authorization_duration_reads(&item);
     let store = crate::provider::provider_from_spec(
         "statefultest://",
         crate::provider::ProviderCredentials::new(),
@@ -4300,17 +4301,21 @@ fn operation_scoped_provider_cache_applies_changed_session_context_on_later_reso
 
     let spec = stateful_fallback_spec(PROJECT, SECRET, &primary_file)
         .with_reason("first reason")
+        .with_requested_authorization_duration(std::time::Duration::from_secs(8 * 60 * 60))
         .with_caller(
             crate::CallerContext::new("git")
                 .with_operation("credential_get")
                 .with_resource("github.com"),
         );
     spec.validate().unwrap().expect("first resolution succeeds");
-    let spec = spec.with_reason("second reason").with_caller(
-        crate::CallerContext::new("git")
-            .with_operation("credential_store")
-            .with_resource("github.com"),
-    );
+    let spec = spec
+        .with_reason("second reason")
+        .with_requested_authorization_duration(std::time::Duration::from_secs(30 * 60))
+        .with_caller(
+            crate::CallerContext::new("git")
+                .with_operation("credential_store")
+                .with_resource("github.com"),
+        );
     spec.validate()
         .unwrap()
         .expect("second resolution succeeds");
@@ -4335,6 +4340,13 @@ fn operation_scoped_provider_cache_applies_changed_session_context_on_later_reso
                     .with_operation("credential_store")
                     .with_resource("github.com")
             ),
+        ]
+    );
+    assert_eq!(
+        crate::provider::tests::take_stateful_authorization_duration_reads(&item),
+        vec![
+            Some(std::time::Duration::from_secs(8 * 60 * 60)),
+            Some(std::time::Duration::from_secs(30 * 60)),
         ]
     );
 }

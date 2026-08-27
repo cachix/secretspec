@@ -201,7 +201,7 @@ int main(int argc, char **argv) {
                     "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{"
                     "\"protocol\":\"secretspec.resolver\",\"version\":1,"
                     "\"server\":{\"name\":\"fake-peer\",\"version\":\"1\"},"
-                    "\"methods\":[\"resolver.get\",\"resolver.release\",\"resolver.reject\"],\"capabilities\":{},"
+                    "\"methods\":[\"resolver.get\",\"resolver.release\"],\"capabilities\":{},"
                     "\"limits\":{\"max_frame_bytes\":32768,\"max_in_flight\":4},"
                     "\"application\":{}}}",
                 (unsigned long long)yyjson_get_uint(id));

@@ -9,6 +9,8 @@ enum Mode {
     SilentInitialize,
     FragmentInitialize(Vec<usize>),
     RejectInitialize(Rejection),
+    DescendantHoldsPipes,
+    HoldPipes,
 }
 
 enum Rejection {
@@ -44,6 +46,10 @@ fn parse_mode() -> Result<Mode, ()> {
     match arguments.next().as_deref() {
         None => Ok(Mode::Normal),
         Some("--silent-init") if arguments.next().is_none() => Ok(Mode::SilentInitialize),
+        Some("--descendant-holds-pipes") if arguments.next().is_none() => {
+            Ok(Mode::DescendantHoldsPipes)
+        }
+        Some("--hold-pipes") if arguments.next().is_none() => Ok(Mode::HoldPipes),
         Some("--fragment-init") => {
             let chunks = arguments
                 .next()
@@ -84,6 +90,10 @@ fn parse_mode() -> Result<Mode, ()> {
 }
 
 fn serve(mode: Mode) -> Result<(), ()> {
+    if matches!(&mode, Mode::HoldPipes) {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        return Ok(());
+    }
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
     let mut pending = BTreeSet::new();
@@ -105,6 +115,14 @@ fn serve(mode: Mode) -> Result<(), ()> {
                     Mode::FragmentInitialize(chunks) => {
                         write_frame_fragmented(&mut output, &response, &chunks)?
                     }
+                    Mode::DescendantHoldsPipes => {
+                        write_frame(&mut output, &response)?;
+                        std::process::Command::new(std::env::current_exe().map_err(|_| ())?)
+                            .arg("--hold-pipes")
+                            .spawn()
+                            .map_err(|_| ())?;
+                    }
+                    Mode::HoldPipes => return Err(()),
                     Mode::RejectInitialize(rejection) => {
                         write_rejection(&mut output, rejection)?;
                         return Ok(());
@@ -203,7 +221,8 @@ fn resolve_response(id: u64, name: &str) -> Option<Value> {
             "value": "canary-value",
             "source": "provider",
             "source_provider": "keyring://",
-            "expires_at_unix_ms": null
+            "expires_at_unix_ms": null,
+            "refresh_at_unix_ms": null
         }),
         "MISSING_REQUIRED" => json!({"status": "missing", "required": true}),
         "UNDECLARED" => json!({"status": "undeclared"}),
@@ -231,7 +250,7 @@ fn initialize_response(id: u64) -> Value {
             "protocol": "secretspec.resolver",
             "version": 1,
             "server": {"name": "differential-peer", "version": "1"},
-            "methods": ["resolver.get", "resolver.release", "resolver.reject"],
+            "methods": ["resolver.get", "resolver.release"],
             "capabilities": {},
             "limits": {"max_frame_bytes": 32768, "max_in_flight": 4},
             "application": {"manifest_kind": "inline", "supports_inline_manifest": true}

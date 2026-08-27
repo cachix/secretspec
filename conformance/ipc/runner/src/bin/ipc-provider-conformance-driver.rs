@@ -352,9 +352,43 @@ async fn run_endpoint_operations(endpoint: &Path) -> Result<Vec<Value>, String> 
     if found
         != (GetResult::Found {
             value: CANARY.into(),
+            expires_at_unix_ms: None,
         })
     {
         return Err("provider did not return the stored value".into());
+    }
+    set_wire(client, wire_address("SECRET_EXPIRY"), CANARY).await?;
+    let validity_bounded: GetResult = client
+        .call(
+            "provider.get",
+            &AddressParams {
+                address: wire_address("SECRET_EXPIRY"),
+            },
+            deadline_after(Duration::from_secs(2)),
+        )
+        .await
+        .map_err(stable)?;
+    if !matches!(
+        validity_bounded,
+        GetResult::Found {
+            expires_at_unix_ms: Some(_),
+            ..
+        }
+    ) {
+        return Err("provider did not report the secret expiry".into());
+    }
+    let removed_validity_fixture: wire::DeletedResult = client
+        .call(
+            "provider.delete",
+            &AddressParams {
+                address: wire_address("SECRET_EXPIRY"),
+            },
+            deadline_after(Duration::from_secs(2)),
+        )
+        .await
+        .map_err(stable)?;
+    if !removed_validity_fixture.deleted {
+        return Err("provider could not remove the validity fixture".into());
     }
     let batch: GetManyResult = client
         .call(
@@ -401,7 +435,7 @@ async fn run_endpoint_operations(endpoint: &Path) -> Result<Vec<Value>, String> 
             &SetExpiringParams {
                 address: wire_address("TOKEN"),
                 value: CANARY.into(),
-                ttl_ms: 25,
+                ttl_ms: 250,
             },
             deadline_after(Duration::from_secs(2)),
         )
@@ -410,7 +444,20 @@ async fn run_endpoint_operations(endpoint: &Path) -> Result<Vec<Value>, String> 
     if !stored.stored {
         return Err("provider did not confirm the expiring write".into());
     }
-    tokio::time::sleep(Duration::from_millis(60)).await;
+    let retained: GetResult = client
+        .call(
+            "provider.get",
+            &AddressParams {
+                address: wire_address("TOKEN"),
+            },
+            deadline_after(Duration::from_secs(2)),
+        )
+        .await
+        .map_err(stable)?;
+    if !matches!(retained, GetResult::Found { .. }) {
+        return Err("provider did not retain the expiring store entry".into());
+    }
+    tokio::time::sleep(Duration::from_millis(350)).await;
     let expired: GetResult = client
         .call(
             "provider.get",
@@ -639,9 +686,32 @@ fn run_adapter_operations(endpoint: &Path) -> Result<Vec<Value>, String> {
         return Err("external adapter presence check missed a stored value".into());
     }
     provider
-        .set_expiring(core_address("TOKEN"), &secret, Duration::from_millis(25))
+        .set(core_address("SECRET_EXPIRY"), &secret)
         .map_err(|error| error.to_string())?;
-    std::thread::sleep(Duration::from_millis(60));
+    let validity_bounded = provider
+        .get_with_metadata(core_address("SECRET_EXPIRY"))
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "external adapter missed a validity-bounded value".to_string())?;
+    if validity_bounded.expires_at_unix_ms.is_none() {
+        return Err("external adapter dropped the provider-reported expiry".into());
+    }
+    if !provider
+        .delete(core_address("SECRET_EXPIRY"))
+        .map_err(|error| error.to_string())?
+    {
+        return Err("external adapter could not remove the validity fixture".into());
+    }
+    provider
+        .set_expiring(core_address("TOKEN"), &secret, Duration::from_millis(250))
+        .map_err(|error| error.to_string())?;
+    let retained = provider
+        .get_with_metadata(core_address("TOKEN"))
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "external adapter missed an expiring value".to_string())?;
+    if retained.expires_at_unix_ms.is_some() {
+        return Err("external adapter confused store retention with secret validity".into());
+    }
+    std::thread::sleep(Duration::from_millis(350));
     if provider
         .get(core_address("TOKEN"))
         .map_err(|error| error.to_string())?
@@ -700,6 +770,7 @@ fn operation_events() -> Vec<Value> {
         "initialized",
         "resolved_address",
         "read",
+        "secret_expiry_reported",
         "batched",
         "preflighted",
         "mutated",

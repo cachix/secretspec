@@ -134,10 +134,10 @@ The layers are independently owned and versioned:
    IDs, deadlines, cancellation, shutdown, common errors, resource bounds, and
    the callback direction an endpoint uses to ask its client something.
 2. `secretspec.resolver/1` owns resolver configuration, exact-name resolution,
-   value/path representations, path leases, and consumer-reported rejection of
-   a resolved value.
+   value/path representations, and path leases.
 3. `secretspec.provider/1` owns provider discovery, provider metadata,
-   canonical addresses, provider operations, and provider error mapping.
+   canonical addresses, secret-validity expiry, provider operations, and
+   provider error mapping.
 4. A provider owns its storage, encryption, synchronization, hardware keys,
    grants, and any protocol used behind its endpoint.
 
@@ -229,12 +229,14 @@ confused-deputy boundary.
 
 ## Reserved for dynamic secrets
 
-Dynamic secrets are issued on demand, have a backend-bounded lifetime, and are
-renewed or revoked rather than read. They are not part of version 1 and nothing
-below is implemented. They are recorded here because the wire protocol's
-compatibility rules are decided once, and an extension point that was not
-reserved before the protocol shipped costs a new protocol version rather than a
-capability.
+Dynamic secrets are issued on demand, have a backend-bounded lifetime, and may
+be renewed or revoked rather than merely read. Version 1 carries a
+provider-reported secret expiry on reads starting with SecretSpec 0.20. It does
+not model issuance, renewal, an explicit credential-lease handle, revocation,
+or feedback from an application whose use of a value failed. Those lifecycle
+operations remain reserved here because the wire protocol's compatibility
+rules are decided once, and an extension point that was not reserved before the
+protocol shipped costs a new protocol version rather than a capability.
 
 The design constraint is that every item below lands additively, under the
 [forward-compatibility rules](/reference/ipc-wire#forward-compatibility):
@@ -243,8 +245,9 @@ The design constraint is that every item below lands additively, under the
 | --- | --- |
 | A new provenance value on a resolved result | `source` gains a value. Receivers already decode an unknown `source` rather than failing, so no version change |
 | A "this name needs a live session" failure | A new error kind and a reserved code. Receivers already decode an unknown kind as a failure |
-| Lifetime facts on a result: renewable, revocable, issuance expiry | New result members, sent only to a client that advertised the matching capability |
-| A caller asking for a value with a minimum lifetime left | A new capability-gated request member. Deliberately absent from version 1: `expires_at_unix_ms` currently reports cache staleness, not credential lifetime, so a freshness floor would only bypass the cache and return the same bytes. It becomes meaningful once a provider can report expiry on read, or with issued credentials |
+| Secret validity expiry | Already represented by `expires_at_unix_ms`; cache freshness is separately represented by `refresh_at_unix_ms` |
+| Lifecycle facts such as renewable/revocable state and a credential-lease handle | New result members, sent only to a client that advertised the matching capability |
+| A caller asking for a value with a minimum lifetime left | A new capability-gated request member. Deliberately absent from version 1 even though provider reads can report expiry: minimum lifetime affects provider selection and issuance policy, so silently adding it to an existing strict request would be unsafe |
 | Atomic multi-output resolution | A new capability-gated method. One issuance can feed several declared names, so they must be read as one consistent set rather than name by name |
 | Session health, and a warning that a lease is nearing its bound | A capability-gated notification, or a callback in the direction `client.prompt` established |
 | Replacement, where reissued bytes differ and the consumer must adopt them | A callback, since adoption needs an answer from the consumer rather than a fire-and-forget signal |

@@ -23,6 +23,7 @@
     "initialized",
     "resolved_address",
     "read",
+    "secret_expiry_reported",
     "batched",
     "preflighted",
     "mutated",

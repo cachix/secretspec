@@ -90,6 +90,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `--read-only`. It is idempotent, and reports whether anything was
   discarded.
 
+- Provider reads can now report when the secret itself expires. Resolver
+  results keep that bound in `expires_at_unix_ms` and expose SecretSpec cache
+  freshness separately as `refresh_at_unix_ms`, preserving the earliest known
+  bounds through cached and composed results.
 - The Secret Resolution Protocol gained the optional `resolver.set` and
   `resolver.delete` methods, so a consumer such as `cargo login` can store or
   remove one declared secret where the same session resolves it, rather than

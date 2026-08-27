@@ -170,14 +170,6 @@ fn fixture_schema<'a>(role: &str, path: &Path, envelope: &'a Value) -> (&'static
             "https://secretspec.dev/schema/ipc/v1/resolver.schema.json#/$defs/PromptResult",
             &envelope["result"],
         ),
-        ("resolver", "reject-request.json") => (
-            "https://secretspec.dev/schema/ipc/v1/resolver.schema.json#/$defs/RejectParams",
-            &envelope["params"],
-        ),
-        ("resolver", "reject-result.json") => (
-            "https://secretspec.dev/schema/ipc/v1/resolver.schema.json#/$defs/RejectResult",
-            &envelope["result"],
-        ),
         ("resolver", "delete-request.json") => (
             "https://secretspec.dev/schema/ipc/v1/resolver.schema.json#/$defs/DeleteParams",
             &envelope["params"],

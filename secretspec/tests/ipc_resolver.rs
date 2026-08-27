@@ -5,8 +5,8 @@ use secretspec_ipc::error::RpcError;
 use secretspec_ipc::lifecycle::{Environment, LaunchOptions, PromptResponder, ResolverSession};
 use secretspec_ipc::protocol::callback::{PromptParams, PromptResult};
 use secretspec_ipc::protocol::resolver::{
-    DeleteParams, GetParams, GetResult, InitializeApplication, Manifest, Purpose, RejectParams,
-    ReleaseParams, Representation, SetParams, method,
+    DeleteParams, GetParams, GetResult, InitializeApplication, Manifest, Purpose, ReleaseParams,
+    Representation, SetParams, method,
 };
 use secretspec_ipc::protocol::{InitializeParams, Limits, Product};
 use serde_json::Value;
@@ -165,6 +165,7 @@ UNRELATED = { description = "named resolution must not read this", required = tr
                     ("TOKEN", GetResult::Value(value)) => {
                         assert_eq!(value.value, "inline-value");
                         assert_eq!(value.expires_at_unix_ms, None);
+                        assert_eq!(value.refresh_at_unix_ms, None);
                         events.insert("resolved_value");
                     }
                     ("OPTIONAL", GetResult::Missing(missing)) => {
@@ -180,6 +181,7 @@ UNRELATED = { description = "named resolution must not read this", required = tr
                             "leased-value"
                         );
                         assert_eq!(leased.expires_at_unix_ms, None);
+                        assert_eq!(leased.refresh_at_unix_ms, None);
                         #[cfg(unix)]
                         {
                             use std::os::unix::fs::PermissionsExt;
@@ -365,152 +367,6 @@ CARGO_REGISTRY_TOKEN = { description = "Cargo registry token", required = false 
         .unwrap();
 }
 
-/// The checked-in `resolver.reject` case, against the real CLI.
-///
-/// A cached route is the only place rejection does anything: a value revoked at
-/// its issuer stays fresh by the clock, so nothing but an explicit report from
-/// the consumer retires the cached copy before it ages out. The case drives the
-/// whole sequence, including the read that proves the stale value really was
-/// being served beforehand.
-#[tokio::test]
-async fn checked_in_reject_case_runs_against_the_real_cli() {
-    let case: Value = serde_json::from_str(include_str!(
-        "../../conformance/ipc/cases/resolver-reject.json"
-    ))
-    .unwrap();
-    assert_eq!(case["schema_version"], 1);
-    assert_eq!(case["id"], "resolver.reject");
-    let actions = case["actions"].as_array().unwrap();
-
-    let directory = tempfile::tempdir().unwrap();
-    let upstream = directory.path().join("upstream.env");
-    let cache = directory.path().join("cache.env");
-    std::fs::write(&upstream, "FORGE_TOKEN=first\n").unwrap();
-    std::fs::write(&cache, "").unwrap();
-    // The paths are serialised as TOML strings rather than interpolated raw:
-    // a Windows path embeds backslashes, which are escape sequences in a TOML
-    // basic string.
-    let cache_uri = toml::Value::String(format!("dotenv:{}", cache.display())).to_string();
-    let upstream_uri = toml::Value::String(format!("dotenv:{}", upstream.display())).to_string();
-    let manifest = format!(
-        r#"
-[project]
-name = "reject"
-revision = "1.0"
-require_reason = false
-
-[providers]
-store = {cache_uri}
-cached = {{ uri = {upstream_uri}, cache = {{ provider = "store", max_age = "8h" }} }}
-
-[profiles.default]
-FORGE_TOKEN = {{ description = "forge token", providers = ["cached"] }}
-"#,
-        cache_uri = cache_uri,
-        upstream_uri = upstream_uri,
-    );
-
-    let session = ResolverSession::launch(
-        launch_options(),
-        product(),
-        limits(),
-        InitializeApplication {
-            manifest: Manifest::Inline {
-                toml: manifest,
-                base_dir: directory.path().to_string_lossy().into_owned(),
-            },
-            // No override: one would collapse the route and hide the very
-            // cache entry this case is about.
-            provider: None,
-            profile: Some("default".into()),
-            scope: None,
-            reason: None,
-        },
-        deadline(Duration::from_secs(5)),
-    )
-    .await
-    .unwrap();
-    assert!(session.supports(method::REJECT));
-
-    let purpose = Purpose {
-        consumer: "integration-test".into(),
-        operation: "fetch".into(),
-        host: Some("forge.example".into()),
-        path: None,
-    };
-    let mut events = BTreeSet::from(["initialized"]);
-    let mut rotated = false;
-
-    for action in actions.iter().skip(1) {
-        match action["kind"].as_str().unwrap() {
-            "rotate_upstream" => {
-                let value = action["value"].as_str().unwrap();
-                std::fs::write(&upstream, format!("FORGE_TOKEN={value}\n")).unwrap();
-                rotated = true;
-            }
-            "resolve" => {
-                let result = session
-                    .get(
-                        &GetParams {
-                            name: action["name"].as_str().unwrap().into(),
-                            representation: Representation::Value,
-                            purpose: purpose.clone(),
-                        },
-                        deadline(Duration::from_secs(5)),
-                    )
-                    .await
-                    .unwrap();
-                let GetResult::Value(value) = result else {
-                    panic!("expected an inline value")
-                };
-                assert_eq!(value.value, action["expect"].as_str().unwrap());
-                // The read after the rotation is the one that matters: it
-                // proves the cache really was serving a value the issuer had
-                // already replaced, so the rejection below is not a no-op.
-                if rotated {
-                    if value.value == "first" {
-                        events.insert("stale_value_served");
-                    } else {
-                        events.insert("fresh_value_served");
-                    }
-                }
-            }
-            "reject" => {
-                let name = action["name"].as_str().unwrap();
-                let rejected = session
-                    .reject(
-                        &RejectParams {
-                            name: name.into(),
-                            purpose: purpose.clone(),
-                        },
-                        deadline(Duration::from_secs(5)),
-                    )
-                    .await
-                    .unwrap();
-                let expected = action["invalidated"].as_bool().unwrap();
-                assert_eq!(rejected.invalidated, expected, "{name}");
-                if expected {
-                    events.insert("cache_invalidated");
-                } else if name == "NOT_DECLARED" {
-                    events.insert("undeclared_reject");
-                } else {
-                    events.insert("idempotent_reject");
-                }
-            }
-            "disconnect" => {
-                session
-                    .close(deadline(Duration::from_secs(5)))
-                    .await
-                    .unwrap();
-                events.insert("closed");
-            }
-            other => panic!("unsupported reject case action {other}"),
-        }
-    }
-
-    assert_eq!(events, required_events(&case));
-}
-
 /// The checked-in `resolver.prompt` case, against the real CLI.
 ///
 /// The resolver has no terminal of its own, so the question travels back to
@@ -578,7 +434,7 @@ DEPLOY_PASSWORD = { description = "deploy password", prompt = true }
     for action in actions {
         match action["kind"].as_str().unwrap() {
             "initialize" => {
-                let advertises = !action["client_capabilities"].as_array().unwrap().is_empty();
+                let advertises = !action["client_methods"].as_array().unwrap().is_empty();
                 let responder: Option<Arc<dyn PromptResponder>> = advertises.then(|| {
                     Arc::new(Responder {
                         asked: asked.clone(),

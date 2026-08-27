@@ -23,13 +23,6 @@
       "errors": [{ "$ref": "#/components/errors/CommonError" }]
     },
     {
-      "name": "resolver.reject",
-      "summary": "Report that a resolved value was refused by its consumer, discarding any cached copy (0.20+).",
-      "params": [{ "name": "params", "required": true, "schema": { "$ref": "resolver.schema.json#/$defs/RejectParams" } }],
-      "result": { "name": "result", "schema": { "$ref": "resolver.schema.json#/$defs/RejectResult" } },
-      "errors": [{ "$ref": "#/components/errors/CommonError" }]
-    },
-    {
       "name": "resolver.set",
       "summary": "Store one declared name. Optional: advertised only by endpoints that accept writes (0.20+).",
       "params": [{ "name": "params", "required": true, "schema": { "$ref": "resolver.schema.json#/$defs/SetParams" } }],

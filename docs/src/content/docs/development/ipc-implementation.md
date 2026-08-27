@@ -305,17 +305,21 @@ ambient profile/scope/reason variables.
 
 Thread the client request's structured purpose into the resolver's protected
 audit context without using it as identity, authorization, or a replacement for
-`reason`. Extend owned resolved metadata with an optional absolute expiry when
-the cache/provider resolution path knows one; serialize null/absence when it
-does not. Expiry never owns a materialized file—the lease table does.
+`reason`. Extend owned resolved metadata with two optional absolute timestamps:
+provider-reported secret validity and resolver cache refresh. Preserve validity
+through caches, cap freshness at known validity, and serialize null when either
+bound is unknown. Neither timestamp owns a materialized file—the lease table
+does.
 
 Three further resolver behaviors do not follow from the embedded API:
 
-- **Rejection** invalidates only the cached copy of one name. It reads and
-  writes nothing on the authoritative store, which is why a read-only endpoint
-  still answers it, and why every "nothing to discard" reason reports the same
-  result. Expiry cannot cover this: a credential revoked at its issuer is still
-  fresh by the clock.
+- **Rejection** retains the exact provider routes and addresses that contributed
+  to the most recent successful resolution, reports refusal to each provider,
+  then invalidates derived caches for the name and its composition dependencies.
+  The provider—not the consumer or resolver—authorizes and chooses any backend
+  response. A read-only endpoint still answers because the report grants no
+  mutation authority, and every unknown/no-target reason returns the same
+  success. Expiry cannot cover early revocation.
 - **Prompting** replaces the resolver's controlling-terminal reader, which in
   resolver mode would open a terminal belonging to the launching process rather
   than to the resolver. Scope the substitute reader to the blocking worker
@@ -342,8 +346,8 @@ a provider-protocol session. The adapter mapping is:
 | `name`, credential-free `uri`, storage/container identity, persistence policy | initialization metadata |
 | `supported_coords` | `supported_coordinates` metadata |
 | `convention_address`, `entry_coordinates` | `provider.resolve_address` |
-| `get` | `provider.get` |
-| `get_many` | `provider.get_many`, otherwise bounded `get` fallback |
+| `get` plus secret-validity metadata | `provider.get` |
+| `get_many` plus per-value validity metadata | `provider.get_many`, otherwise bounded `get` fallback |
 | `set` | optional `provider.check_writable`, then `provider.set` |
 | `set_expiring` | optional preflight, then `provider.set_expiring`; documented core fallback when absent |
 | `delete` | optional `provider.check_deletable`, then `provider.delete` |
@@ -820,11 +824,11 @@ The checked-in provider matrix launches a deterministic stateful endpoint as a
 real subprocess. One driver mode calls it through the public Rust provider
 client and endpoint-author handler API; the other calls the same endpoint
 through SecretSpec's external-provider adapter. The matrix covers shared frame
-acceptance and rejection, every provider operation, store-enforced expiry,
-bounded clear, idempotent deletion, preflight, reflection, cancellation,
-deadlines, structured error preservation, non-replay of one-shot failures,
-endpoint crash, reconnect for later work, and provider-URI and reason session
-isolation.
+acceptance and rejection, every provider operation, provider-reported secret
+expiry, store-enforced expiry, bounded clear, idempotent deletion, preflight,
+reflection, cancellation, deadlines, structured error
+preservation, non-replay of one-shot failures, endpoint crash, reconnect for
+later work, and provider-URI and reason session isolation.
 
 Run it with:
 
@@ -837,8 +841,7 @@ launches the actual `secretspec serve` binary, initializes it with inline
 manifests and explicit provider/profile selection, and verifies exact-name
 value, missing, undeclared, and file results. It checks owner-only file mode,
 duplicate release, explicit lease removal, removal of an unreleased lease when
-the session closes, cached-value rejection, and interactive versus headless
-prompt handling.
+the session closes, and interactive versus headless prompt handling.
 
 Run it with:
 
@@ -858,16 +861,14 @@ cargo test -p secretspec --test ipc_resolver
 - missing required and optional results;
 - `auto`, `value`, and `path` representation matching;
 - value results and all four source variants;
-- known and unknown expiry metadata, independent of path-lease lifetime, with
-  a cache hit carrying a timestamp and an authoritative read carrying null;
+- known and unknown secret-expiry metadata plus independent cache-refresh
+  metadata, both independent of path-lease lifetime, with provider validity
+  preserved through cache hits;
 - mode/ACL of materialized files;
 - random opaque leases, duplicate release, release batching, disconnect
   cleanup, cancelled-result cleanup, and response-write-failure cleanup;
 - resolver crash and conservative stale-directory cleanup;
 - no automatic replay after disconnect;
-- rejection discards a cached copy that the authoritative store has already
-  replaced, is idempotent, and reports the same result for a name the active
-  scope does not offer as for one with nothing cached;
 - a `prompt = true` declaration answered through the client callback and
   persisted, and the same declaration resolving as missing, without a prompt
   ever being sent, for a client that advertised none;
@@ -881,7 +882,8 @@ cargo test -p secretspec --test ipc_resolver
 - initialization URI/scheme mismatch and metadata redaction;
 - convention and native addresses, all coordinates, unknown and unsupported
   coordinates, and deterministic `resolve_address`;
-- read hit/miss/error, batch ordering/deduplication, and batch fallback;
+- read hit/miss/error, provider-reported expiry, batch ordering/deduplication,
+  and batch fallback;
 - write-only capability sets and `exists` without `get`;
 - set, store-enforced expiry, idempotent delete, and bounded idempotent clear;
 - mutation preflight agreement with the mutation itself;

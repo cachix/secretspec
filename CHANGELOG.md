@@ -62,6 +62,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bringing up a new endpoint, and the old message pointed at a frame-size
   problem that did not exist.
 
+- Rust SDK and resolver IPC callers can request a default authorization
+  lifetime for provider approval surfaces. The request is forwarded as
+  untrusted application context; the provider and approving user retain control
+  of the actual grant lifetime.
+
 - `secretspec-ipc` gained a `blocking` feature with a synchronous
   `secretspec.resolver/1` session, so a program with no async runtime can talk to
   `secretspec serve` without acquiring one. It speaks the same wire

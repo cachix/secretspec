@@ -110,6 +110,11 @@ impl ResolverHandler for ResolverHandlerImpl {
             if let Some(reason) = application.reason {
                 secrets = secrets.with_reason(reason);
             }
+            if let Some(duration_ms) = application.requested_authorization_duration_ms {
+                secrets = secrets.with_requested_authorization_duration(
+                    std::time::Duration::from_millis(duration_ms),
+                );
+            }
             // The terminal reader would open /dev/tty, which in resolver mode
             // belongs to whatever launched this process rather than to it.
             // Every prompt goes back over the session instead, and reaches
@@ -834,6 +839,7 @@ UNRELATED = { description = "must not fail named resolution", required = true }
                 profile: Some("default".to_string()),
                 scope: None,
                 reason: None,
+                requested_authorization_duration_ms: None,
             },
         };
         let (raw, _initialized) = Client::connect::<_, _, _, InitializedApplication>(
@@ -946,6 +952,7 @@ CERT = { description = "certificate", as_path = true }
                     profile: Some("default".into()),
                     scope: None,
                     reason: None,
+                    requested_authorization_duration_ms: None,
                 },
             )
             .await
@@ -1021,6 +1028,7 @@ secrets = ["OTHER"]
                     profile: Some("default".into()),
                     scope: scope.map(str::to_string),
                     reason: None,
+                    requested_authorization_duration_ms: None,
                 },
             )
             .await

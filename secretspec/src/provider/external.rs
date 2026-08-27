@@ -12,8 +12,8 @@ use secrecy::{ExposeSecret, SecretString};
 use secretspec_ipc::deadline_unix_ms_after;
 use secretspec_ipc::lifecycle::{Environment, LaunchOptions, ProviderSession};
 use secretspec_ipc::protocol::provider::{
-    self as wire, AddressParams, GetManyParams, GetResult, InitializeApplication, NamedRequest,
-    Persistence, ReflectParams, SetExpiringParams, SetParams,
+    self as wire, AddressParams, ApplicationContext, GetManyParams, GetResult,
+    InitializeApplication, NamedRequest, Persistence, ReflectParams, SetExpiringParams, SetParams,
 };
 use secretspec_ipc::protocol::{Limits, Product};
 use serde::{Deserialize, Serialize};
@@ -561,6 +561,8 @@ fn discovery_error(message: &str) -> SecretSpecError {
 }
 
 struct ExternalState {
+    project: Option<String>,
+    profile: Option<String>,
     base_dir: Option<PathBuf>,
     credentials: ProviderCredentials,
     reason: Option<String>,
@@ -583,8 +585,9 @@ impl ExternalState {
 
 /// A core provider backed by one `secretspec.provider/1` endpoint.
 ///
-/// Endpoint startup is lazy so `with_base_dir`, `with_credentials`, and the
-/// initial `set_reason` are applied to immutable initialization state first.
+/// Endpoint startup is lazy so project/profile context, `with_base_dir`,
+/// `with_credentials`, and the initial `set_reason` are applied to immutable
+/// initialization state first.
 pub struct ExternalProvider {
     endpoint: ProviderEndpoint,
     scheme: String,
@@ -621,6 +624,8 @@ impl ExternalProvider {
             endpoint,
             configured_uri: url.to_string(),
             state: Mutex::new(ExternalState {
+                project: None,
+                profile: None,
                 base_dir: None,
                 credentials: ProviderCredentials::new(),
                 reason: None,
@@ -659,12 +664,16 @@ impl ExternalProvider {
         let application = InitializeApplication {
             scheme: self.scheme.clone(),
             uri: self.configured_uri.clone(),
-            base_dir: state
-                .base_dir
-                .as_ref()
-                .map(|path| path.to_string_lossy().into_owned()),
+            context: ApplicationContext {
+                project: state.project.clone(),
+                profile: state.profile.clone(),
+                base_dir: state
+                    .base_dir
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                reason: state.reason.clone(),
+            },
             credentials,
-            reason: state.reason.clone(),
         };
         let launch = LaunchOptions {
             executable: self.endpoint.executable.clone(),
@@ -1077,6 +1086,34 @@ impl Provider for ExternalProvider {
                 return;
             }
             state.reason = reason;
+            state.session.take()
+        };
+        if let Some(session) = session {
+            close_live_session(session);
+        }
+    }
+
+    fn set_project(&self, project: &str) {
+        let session = {
+            let mut state = self.state();
+            if state.project.as_deref() == Some(project) {
+                return;
+            }
+            state.project = Some(project.to_string());
+            state.session.take()
+        };
+        if let Some(session) = session {
+            close_live_session(session);
+        }
+    }
+
+    fn set_profile(&self, profile: &str) {
+        let session = {
+            let mut state = self.state();
+            if state.profile.as_deref() == Some(profile) {
+                return;
+            }
+            state.profile = Some(profile.to_string());
             state.session.take()
         };
         if let Some(session) = session {

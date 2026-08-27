@@ -261,6 +261,10 @@ impl Provider for PreflightGuard {
         self.inner.set_caller(caller);
     }
 
+    fn set_project(&self, project: &str) {
+        self.inner.set_project(project);
+    }
+
     fn set_profile(&self, profile: &str) {
         self.inner.set_profile(profile);
     }

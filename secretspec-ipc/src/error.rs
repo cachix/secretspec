@@ -2,6 +2,88 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use thiserror::Error;
 
+/// The provider-owned interaction that must finish before an operation can be
+/// retried.
+///
+/// The set is closed for senders and open for receivers for the same reason as
+/// [`ErrorKind`]: adding another interaction kind must not make an older client
+/// reject an otherwise well-formed error response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InteractionKind {
+    Authorization,
+    Unrecognized,
+}
+
+impl InteractionKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Authorization => "authorization",
+            Self::Unrecognized => "unrecognized",
+        }
+    }
+
+    pub fn from_wire(kind: &str) -> Self {
+        match kind {
+            "authorization" => Self::Authorization,
+            _ => Self::Unrecognized,
+        }
+    }
+}
+
+impl Serialize for InteractionKind {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for InteractionKind {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        Ok(Self::from_wire(&String::deserialize(deserializer)?))
+    }
+}
+
+/// Opaque, non-secret correlation data for provider-owned interaction.
+/// Available starting with SecretSpec 0.20.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InteractionReference {
+    pub kind: InteractionKind,
+    pub id: String,
+    #[serde(deserialize_with = "crate::protocol::deserialize_required_nullable")]
+    pub expires_at_unix_ms: Option<u64>,
+}
+
+impl InteractionReference {
+    pub fn authorization(id: impl Into<String>, expires_at_unix_ms: Option<u64>) -> Self {
+        Self {
+            kind: InteractionKind::Authorization,
+            id: id.into(),
+            expires_at_unix_ms,
+        }
+    }
+
+    fn validate(&self) -> std::result::Result<(), &'static str> {
+        if self.id.is_empty()
+            || self.id.len() > 128
+            || !self
+                .id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            return Err("interaction id has an invalid format");
+        }
+        if self.expires_at_unix_ms == Some(0) {
+            return Err("interaction expiry must be positive");
+        }
+        Ok(())
+    }
+}
+
 /// Stable machine-readable error kinds shared by both application protocols.
 ///
 /// The set is closed for senders and open for receivers. An endpoint emits only
@@ -191,6 +273,8 @@ pub struct ErrorData {
     pub retryable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retry_after_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interaction: Option<InteractionReference>,
 }
 
 /// A stable, redacted JSON-RPC error.
@@ -211,8 +295,15 @@ impl RpcError {
                 kind,
                 retryable: kind.retryable_by_default(),
                 retry_after_ms: None,
+                interaction: None,
             },
         }
+    }
+
+    pub fn interaction_required(reference: Option<InteractionReference>) -> Self {
+        let mut error = Self::new(ErrorKind::InteractionRequired);
+        error.data.interaction = reference;
+        error
     }
 
     pub fn unavailable(retry_after_ms: Option<u64>) -> Self {
@@ -248,6 +339,12 @@ impl RpcError {
             if retry_after_ms == 0 {
                 return Err("retry_after_ms must be positive");
             }
+        }
+        if let Some(interaction) = &self.data.interaction {
+            if self.data.kind != ErrorKind::InteractionRequired {
+                return Err("interaction is only valid for interaction_required");
+            }
+            interaction.validate()?;
         }
         Ok(())
     }
@@ -365,5 +462,44 @@ mod tests {
     fn retry_after_must_be_positive() {
         assert!(RpcError::unavailable(Some(1)).validate().is_ok());
         assert!(RpcError::unavailable(Some(0)).validate().is_err());
+    }
+
+    #[test]
+    fn interaction_references_are_bounded_and_kind_specific() {
+        let reference = InteractionReference::authorization("apr_7K3M", Some(1));
+        let error = RpcError::interaction_required(Some(reference.clone()));
+        error.validate().unwrap();
+        let encoded = serde_json::to_string(&error).unwrap();
+        let decoded: RpcError = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.data.interaction, Some(reference));
+
+        let mut wrong_kind = RpcError::new(ErrorKind::PermissionDenied);
+        wrong_kind.data.interaction = Some(InteractionReference::authorization("apr_1", None));
+        assert!(wrong_kind.validate().is_err());
+
+        assert!(
+            RpcError::interaction_required(Some(InteractionReference::authorization(
+                "terminal escape \u{1b}",
+                None,
+            )))
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn later_interaction_kinds_decode_without_becoming_authority() {
+        let error: RpcError = serde_json::from_str(
+            r#"{"code":-32006,"message":"interaction required",
+                "data":{"kind":"interaction_required","retryable":false,
+                "interaction":{"kind":"later_kind","id":"ref_1",
+                "expires_at_unix_ms":null}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            error.data.interaction.as_ref().unwrap().kind,
+            InteractionKind::Unrecognized
+        );
+        error.validate().unwrap();
     }
 }

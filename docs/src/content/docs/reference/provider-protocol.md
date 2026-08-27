@@ -117,9 +117,13 @@ Its `application` member is:
 {
   "scheme": "example",
   "uri": "example://default",
-  "base_dir": "/absolute/project/directory",
-  "credentials": {},
-  "reason": "deploy production api"
+  "context": {
+    "project": "payments",
+    "profile": "production",
+    "base_dir": "/absolute/project/directory",
+    "reason": "deploy production api"
+  },
+  "credentials": {}
 }
 ```
 
@@ -128,14 +132,24 @@ Rules:
 - `scheme` is the validated URI scheme used for discovery.
 - `uri` is the original configured provider URI. It is sensitive input and is
   never logged or echoed because it may contain credentials.
-- `base_dir` is the absolute directory against which provider-relative paths
-  are resolved, or null when the provider has no project base directory.
+- `context` (0.20+) carries the resolver-declared project, active profile, absolute
+  base directory, and access reason. Each member is nullable. Project and
+  profile are context for approval, policy, and audit surfaces, including for
+  native addresses that do not carry convention components. They are
+  assertions, not authenticated application identity or delegation.
+- Convention-address project and profile components still name each operation;
+  they may differ from the session context when resolution falls back or a
+  low-level client intentionally addresses another namespace. An endpoint must
+  scope the requested resource from the address and use session context only
+  where the native address carries no corresponding component.
+- `context.base_dir` is the absolute directory against which provider-relative
+  paths are resolved, or null when the provider has no project base directory.
 - `credentials` maps registered semantic credential names to secret strings. The host
   obtains them through SecretSpec's provider-credential mechanism. They are
   sent in the private inherited pipe, never argv or protocol
   environment variables.
-- `reason` is the session-wide access reason or null. An endpoint needing a
-  different reason must use another session.
+- `context.reason` is the session-wide access reason or null. An endpoint
+  needing a different reason must use another session.
 - The endpoint MUST reject a URI whose scheme differs from `scheme`.
 
 The provider does not receive `config_file` and does not reread arbitrary
@@ -158,6 +172,15 @@ UI. That interaction consumes the request deadline.
 If the operation cannot complete without unavailable user interaction, the
 endpoint MUST return `interaction_required`. It MUST NOT include backend error
 text or provider-supplied remediation instructions in the error response.
+
+An `interaction_required` error may carry an opaque structured interaction
+reference (0.20+). Its `id` correlates the failed operation with a
+provider-owned CLI, agent, or notification, and is not authorization material.
+Version 1 defines the `authorization` interaction kind. The optional expiry
+bounds how long the provider will retain that pending interaction. The
+reference contains no provider-authored message, command, address, secret name,
+path, or credential; the host renders trusted local guidance for the selected
+provider scheme.
 
 The host MUST NOT automatically replay the failed request. After the user
 completes authentication out of band, the caller MAY explicitly issue a new
@@ -703,7 +726,8 @@ project/profile and provider URI. Empty results are successful.
 
 ## Lifecycle, reconnect, and concurrency
 
-- One endpoint process serves one provider URI and one reason.
+- One endpoint process serves one provider URI and one declared session
+  context.
 - Successful `rpc.initialize` is readiness on Linux, macOS, and Windows.
 - The endpoint must keep reading while operations run, accept cancellation,
   and enforce the negotiated in-flight limit.

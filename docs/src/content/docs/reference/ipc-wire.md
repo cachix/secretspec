@@ -349,21 +349,26 @@ SecretSpec reserves these server-error codes for both protocols:
 | `-32009` | `message_too_large` | No | A result cannot fit the negotiated frame limit |
 | `-32010` | `representation_mismatch` | No | The requested value/path representation does not match the declaration |
 
-`data` MUST contain exactly `kind` and `retryable`, plus an optional
-`retry_after_ms` for `unavailable`. A receiver MUST use `kind`, not parse
-`message`.
+`data` MUST contain `kind` and `retryable`. It may contain `retry_after_ms` only
+for `unavailable`. Starting in 0.20, an `interaction_required` error may instead
+contain an `interaction` reference with a bounded opaque `id`, an interaction
+`kind`, and a nullable absolute expiry. Version 1 defines the `authorization`
+interaction kind. The reference correlates provider-owned interaction; it is
+neither a bearer credential nor permission to retry automatically. A receiver
+MUST use `kind`, not parse `message`.
 
 Codes `-32011` and below in the SecretSpec range are reserved for later
 revisions. A receiver MUST accept an error whose code and kind it does not know
 and report it as a failure it cannot name; see
 [forward compatibility](#forward-compatibility).
 
-Errors are non-secret. `message` and `data` MUST NOT contain secret values,
-provider credentials, full provider URIs, addresses, secret names, manifest
-contents, file paths, executable paths, delegation material, or backend error
-bodies. Detailed diagnostics belong in a separately protected local diagnostic
-channel and must be redacted before display. A provider endpoint maps arbitrary
-backend failures to this stable set; it must not forward their text blindly.
+Errors are non-secret. Apart from the bounded opaque interaction ID and expiry,
+`message` and `data` MUST NOT contain secret values, provider credentials, full
+provider URIs, addresses, secret names, manifest contents, file paths,
+executable paths, delegation material, or backend error bodies. Detailed
+diagnostics belong in a separately protected local diagnostic channel and must
+be redacted before display. A provider endpoint maps arbitrary backend failures
+to this stable set; it must not forward their text blindly.
 
 ## Forward compatibility
 

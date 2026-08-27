@@ -1,1 +1,1 @@
-{"jsonrpc":"2.0","id":2,"error":{"code":-32005,"message":"permission denied","data":{"kind":"permission_denied","retryable":false}}}
+{"jsonrpc":"2.0","id":2,"error":{"code":-32006,"message":"interaction required","data":{"kind":"interaction_required","retryable":false,"interaction":{"kind":"authorization","id":"apr_7K3M","expires_at_unix_ms":1786766405000}}}}

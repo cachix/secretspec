@@ -159,14 +159,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `secretspec serve` no longer writes its generation and prompt confirmations to
   stderr. Those lines name which secrets a session provisioned, and a resolver's
   stderr belongs to whatever launched it.
-- The Secret Resolution Protocol gained `resolver.reject`, so a consumer that
-  was refused with a resolved value can say so and have the cached copy
-  discarded. Expiry only retires a value the clock invalidated; a token revoked
-  at its issuer stays fresh by the clock, and until now the cache served it
-  until the entry aged out. Rejection drops only SecretSpec's derived copy, never
-  the authoritative value, so every endpoint answers it, including one started
-  with `--read-only`. It is idempotent, and reports whether anything was
-  discarded.
+- Provider reads can now report when the secret itself expires. Resolver
+  results keep that bound in `expires_at_unix_ms` and expose SecretSpec cache
+  freshness separately as `refresh_at_unix_ms`, preserving the earliest known
+  bounds through cached and composed results.
 - The Secret Resolution Protocol gained the optional `resolver.set` and
   `resolver.delete` methods, so a consumer such as `cargo login` can store or
   remove one declared secret where the same session resolves it, rather than

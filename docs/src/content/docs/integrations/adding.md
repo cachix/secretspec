@@ -87,14 +87,12 @@ Beyond resolution, a session can:
   since the resolver has no terminal of its own;
 - store or remove one declared name with `resolver.set` and `resolver.delete`,
   for a tool such as `cargo login` that authenticates and then wants to keep
-  the result;
-- report a rejected value with `resolver.reject`, so a credential revoked at
-  its issuer is dropped from the cache instead of served until it expires.
+  the result.
 
-Each of those beyond plain resolution is advertised as a capability, so a
-client can tell an older endpoint apart from one that refused a particular
-request. Launch with `secretspec serve --read-only` when the consumer must
-never cause a write.
+Optional callbacks and mutations are advertised as capabilities, so a client
+can tell an older endpoint apart from one that refused a particular request.
+Launch with `secretspec serve --read-only` when the consumer must never cause a
+write.
 
 You have three ways to write the client:
 

@@ -24,8 +24,6 @@ Version 1 deliberately exposes less than the embedded Rust API:
 - resolve one exact declared secret name and only its composed dependencies;
 - return an inline UTF-8 value or a resolver-owned temporary file;
 - release path leases explicitly or by closing the session;
-- report that a resolved value was refused by its consumer, so a cached copy is
-  discarded rather than served again (0.20+);
 - store or remove one exact declared secret name (0.20+), when the endpoint
   advertises the optional mutation capabilities.
 
@@ -142,7 +140,6 @@ The server-advertised application capabilities MUST include:
 
 - `resolver.get`
 - `resolver.release`
-- `resolver.reject` (0.20+)
 
 They MAY additionally include the mutation capabilities (0.20+):
 
@@ -160,11 +157,6 @@ A read-only endpoint also refuses any resolution that would store what it
 produced. Withholding the two mutation methods does not by itself make a session
 read-only, because minting a `generate = true` value or accepting a `prompt =
 true` answer writes it back; see [failure mapping](#failure-mapping).
-
-`resolver.reject` is required rather than optional, and a read-only endpoint
-advertises it too. It discards a derived copy and never an authoritative value,
-and a consumer with no write authority is precisely the one that otherwise has
-no way to retire a credential its issuer revoked.
 
 ## Resolve an exact name
 
@@ -264,7 +256,8 @@ fatal for its operation.
     "value": "secret text",
     "source": "provider",
     "source_provider": "keyring://",
-    "expires_at_unix_ms": null
+    "expires_at_unix_ms": null,
+    "refresh_at_unix_ms": null
   }
 }
 ```
@@ -278,34 +271,34 @@ vouch for and decides accordingly.
 `source_provider` is present only for provider results and MUST be the
 credential-free display URI returned by `Provider::uri()`.
 
-`expires_at_unix_ms` is required, and it is narrower than its name suggests.
-Read it as **how long this copy of the value is considered current**, never as
-how long the credential works.
+Both absolute timestamps are available starting with SecretSpec 0.20. They are
+required and nullable, but they answer different questions:
 
-It is non-null only when the value was served from a SecretSpec cache, where it
-is the moment that cache entry goes stale: the time the entry was written plus
-the operator's configured `max_age`. It is null for every value read from an
-authoritative provider, including a credential that genuinely expires, because
-version 1 providers report values on read and not lifetimes.
+- `expires_at_unix_ms` is the provider-reported time at which the secret itself
+  ceases to be valid. At or after this time the consumer MUST stop using the
+  value and resolve it again. Null means the provider did not report a validity
+  bound; it does not mean the secret is permanent.
+- `refresh_at_unix_ms` is the time at which SecretSpec considers its cached copy
+  stale. At or after this time a new `resolver.get` consults the authoritative
+  route instead of serving the copy. It says nothing about whether a copy the
+  consumer already holds still works.
 
-Two consequences a consumer must not get wrong:
+A cached result may carry both. SecretSpec preserves the provider's secret
+expiry through its cache and never sets cache freshness later than known secret
+validity. A directly read provider value normally has a null refresh time. A
+composed value reports the earliest known secret expiry and earliest known
+refresh time among its dependencies.
 
-- **Passing this time does not mean the credential stopped working.** It means
-  SecretSpec would re-read the upstream store rather than serve its copy again.
-  Resolving the name again typically returns the same bytes with a later
-  timestamp.
-- **A credential can stop working long before this time, or when it is null.**
-  Nothing in a clock detects revocation. That is what
-  [`resolver.reject`](#report-a-refused-value) is for: a consumer that was
-  refused reports it, and the cached copy is discarded regardless of how much
-  of its window remained.
+Neither clock detects early revocation. If a remote service refuses a value,
+the application handles that service error according to its own protocol. It
+may resolve the secret again later, but that read follows the ordinary cache
+policy; SecretSpec does not infer why the remote service refused it, force a
+refresh, or instruct the provider to mutate stored material. A consumer must
+not infer that a null expiry means a value is permanent.
 
-A caller may still use the timestamp to avoid holding a copy indefinitely. It
-must not use it as the sole trigger for re-authentication, and it must not treat
-a null as "this never expires".
-
-It is also unrelated to a path lease: a leased path must still be released even
-if its value goes stale, and release may remove it earlier.
+Both fields are unrelated to a path lease: a leased path must still be released
+even if its secret expires or its cached copy becomes stale, and release may
+remove it earlier.
 
 The result carries secret data. The client should copy it directly into its
 final protected destination and release its JSON/frame buffers promptly.
@@ -323,7 +316,8 @@ final protected destination and release its JSON/frame buffers promptly.
     "path_lease_id": "Qk7jXGfOLpLzmvYxjOxvMw",
     "source": "provider",
     "source_provider": "file:./credentials",
-    "expires_at_unix_ms": 1786770000000
+    "expires_at_unix_ms": 1786770000000,
+    "refresh_at_unix_ms": null
   }
 }
 ```
@@ -333,12 +327,12 @@ an unpredictable, session-local opaque token containing at least 128 bits of
 randomness. The client must not parse it and must not send it on another
 connection.
 
-A lease here is a handle over a file this resolver owns, and nothing else. It is
-unrelated to the credential leases a dynamic provider issues, renews, and
-revokes; those are a
+A lease here is a handle over a file this resolver owns, and nothing else. A
+provider can report the value's validity through `expires_at_unix_ms`, but
+renewal and explicit revocation of a dynamic credential lease remain a
 [reserved extension](/reference/ipc-architecture#reserved-for-dynamic-secrets)
-that will carry their own distinctly named members. This one is named for the
-path it releases so the two can never be confused.
+with distinctly named members. This lease is named for the path it releases so
+the two can never be confused.
 
 A lease is a lifetime handle, not a read capability. Holding the lease ID is
 not what permits reading the file, and not holding it is not what prevents it:
@@ -481,77 +475,6 @@ Rules:
   declines it, and waits again. A session that does not set the flag advertises
   nothing and is never asked.
 
-## Report a refused value
-
-:::caution[Version compatibility]
-`resolver.reject` is available starting with SecretSpec 0.20. Every endpoint
-advertises it.
-:::
-
-Nothing in a clock detects revocation. `expires_at_unix_ms` says when
-SecretSpec's copy of a value goes stale, and it is null altogether for a value
-read straight from a provider, so it can never be what retires a credential the
-issuer withdrew. Only the consumer that was refused knows that happened.
-
-`resolver.reject` is how it says so: it reports that a value this session
-resolved was refused by whatever it was presented to, and the resolver discards
-its cached copy so the next resolve consults the authoritative store again. It
-applies whatever the timestamp said, including to a copy with hours of window
-left and to one that never had a timestamp at all.
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 6,
-  "method": "resolver.reject",
-  "_meta": { "deadline_unix_ms": 1786766409000 },
-  "params": {
-    "name": "FORGE_TOKEN",
-    "purpose": {
-      "consumer": "nix",
-      "operation": "fetch",
-      "host": "github.com",
-      "path": "/acme/project"
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 6,
-  "result": {
-    "status": "rejected",
-    "invalidated": true
-  }
-}
-```
-
-`name` and `purpose` carry the meaning they have for `resolver.get`. Send this
-only for a value this session actually resolved and actually had refused; it is
-a report, not a way to ask the resolver to re-read a name.
-
-Rules:
-
-- Only SecretSpec's own cached copy is discarded. The authoritative store behind
-  the cached route is not read, written, or removed, so this is not a mutation
-  and a read-only endpoint answers it.
-- `invalidated` is `true` when a cached copy was discarded. It is `false` when
-  there was nothing to discard, and that is a success, not an error.
-- Every "nothing to discard" reason reports the same result: no cached copy,
-  a name whose route has no cache, a composed declaration, and a name the
-  active scope does not offer. Reporting them apart would make a scope disclose
-  the names it hides, exactly as `resolver.get` reports a hidden name as
-  `undeclared`.
-- Rejection is idempotent. Sending it twice is not an error, and the second
-  reports `invalidated: false`.
-- A real invalidation is recorded in the resolver's protected audit event with
-  the request's `purpose`. A rejection that discarded nothing is not, so an
-  empty cache stays distinguishable from a credential that was actually retired.
-- The resolver does not re-resolve the name, contact the issuer, or notify the
-  provider. The consumer resolves again when it wants a fresh value.
-
 ## Store a value
 
 :::caution[Version compatibility]
@@ -674,8 +597,6 @@ than `SecretSpecError`. Resolver implementations map errors as follows:
 | Provider authorization refusal | `permission_denied` |
 | Read would store a generated or prompted value on a read-only endpoint | `permission_denied` |
 | Provider temporarily unreachable | `unavailable` only when retry safety is known; otherwise `operation_failed` |
-| Name absent or hidden by scope on a rejection | `invalidated: false` result |
-| Cache store unreachable on a rejection | `operation_failed` |
 | Name absent or hidden by scope on a mutation | `operation_failed` |
 | Declaration or provider does not accept writes | `operation_failed` |
 | Mutation method the endpoint did not advertise | `capability_required` |

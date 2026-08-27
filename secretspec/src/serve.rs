@@ -10,10 +10,9 @@ use secretspec_ipc::protocol::callback::{self, PromptParams};
 use secretspec_ipc::protocol::resolver::{
     CAPABILITIES, DeleteParams, DeleteResult, DeletedStatus, GetParams, GetResult,
     InitializeApplication, InitializedApplication, MUTATION_CAPABILITIES, Manifest, MissingResult,
-    MissingStatus, PathRepresentation, RejectParams, RejectResult, RejectedStatus, ReleaseParams,
-    ReleaseResult, Representation, ResolvedPathResult, ResolvedStatus, ResolvedValueResult,
-    SetParams, SetResult, Source, StoredStatus, UndeclaredResult, UndeclaredStatus,
-    ValueRepresentation,
+    MissingStatus, PathRepresentation, ReleaseParams, ReleaseResult, Representation,
+    ResolvedPathResult, ResolvedStatus, ResolvedValueResult, SetParams, SetResult, Source,
+    StoredStatus, UndeclaredResult, UndeclaredStatus, ValueRepresentation,
 };
 use secretspec_ipc::resolver::{ResolverHandler, serve_resolver};
 use secretspec_ipc::server::{RequestContext, RpcResult, ServerConfig};
@@ -221,6 +220,7 @@ impl ResolverHandler for ResolverHandlerImpl {
                 source,
                 source_provider,
                 expires_at_unix_ms,
+                refresh_at_unix_ms,
                 supporting_files,
             } => {
                 if params.representation == Representation::Path {
@@ -235,6 +235,7 @@ impl ResolverHandler for ResolverHandlerImpl {
                     source: map_source(source),
                     source_provider,
                     expires_at_unix_ms,
+                    refresh_at_unix_ms,
                 }))
             }
             OwnedNamedResolution::File {
@@ -242,6 +243,7 @@ impl ResolverHandler for ResolverHandlerImpl {
                 source,
                 source_provider,
                 expires_at_unix_ms,
+                refresh_at_unix_ms,
                 supporting_files,
             } => {
                 if params.representation == Representation::Value {
@@ -307,29 +309,10 @@ impl ResolverHandler for ResolverHandlerImpl {
                     source: map_source(source),
                     source_provider,
                     expires_at_unix_ms,
+                    refresh_at_unix_ms,
                 }))
             }
         }
-    }
-
-    async fn reject(
-        &self,
-        _context: RequestContext,
-        params: RejectParams,
-    ) -> RpcResult<RejectResult> {
-        let state = self.state().await?;
-        let name = params.name;
-        let purpose = Self::audit_purpose(params.purpose);
-        let secrets = state.secrets.clone();
-        let invalidated =
-            tokio::task::spawn_blocking(move || secrets.reject_named_for_ipc(&name, purpose))
-                .await
-                .map_err(|_| RpcError::new(ErrorKind::Internal))?
-                .map_err(map_resolver_error)?;
-        Ok(RejectResult {
-            status: RejectedStatus::Rejected,
-            invalidated,
-        })
     }
 
     async fn set(&self, _context: RequestContext, params: SetParams) -> RpcResult<SetResult> {
@@ -1197,18 +1180,10 @@ MINTED = { description = "minted", type = "password", generate = true }
 
     #[tokio::test]
     async fn a_read_only_endpoint_advertises_no_mutation() {
-        // Reject stays advertised: it drops a derived copy and never the
-        // authoritative value, and a read-only consumer is exactly the one with
-        // no other way to retire a credential that was revoked before it
-        // expired.
         let handler = ResolverHandlerImpl::new(true);
         assert_eq!(
             handler.capabilities(),
-            vec![
-                method::GET.to_string(),
-                method::RELEASE.to_string(),
-                method::REJECT.to_string()
-            ]
+            vec![method::GET.to_string(), method::RELEASE.to_string()]
         );
         assert!(
             ResolverHandlerImpl::new(false)

@@ -155,7 +155,7 @@ application capability.
     "protocol": "secretspec.resolver",
     "version": 1,
     "server": { "name": "secretspec-resolver", "version": "0.20.0" },
-    "methods": ["resolver.get", "resolver.release", "resolver.reject"],
+    "methods": ["resolver.get", "resolver.release"],
     "capabilities": {},
     "limits": {
       "max_frame_bytes": 1048576,

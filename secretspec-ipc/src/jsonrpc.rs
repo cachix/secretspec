@@ -148,6 +148,7 @@ impl Notification {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SuccessResponse {
     pub jsonrpc: Version,
     pub id: RequestId,
@@ -155,6 +156,7 @@ pub struct SuccessResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ErrorResponse {
     pub jsonrpc: Version,
     #[serde(deserialize_with = "crate::protocol::deserialize_required_nullable")]
@@ -479,6 +481,13 @@ mod tests {
                 br#"{"jsonrpc":"2.0","id":1,"method":"x","_meta":{"deadline_unix_ms":1},"params":{},"extra":true}"#
             )
                 .is_err()
+        );
+        assert!(Envelope::parse(br#"{"jsonrpc":"2.0","id":1,"result":{},"extra":true}"#).is_err());
+        assert!(
+            Envelope::parse(
+                br#"{"jsonrpc":"2.0","id":1,"result":{},"error":{"code":-32603,"message":"internal error","data":{"kind":"internal","retryable":false}}}"#
+            )
+            .is_err()
         );
     }
 

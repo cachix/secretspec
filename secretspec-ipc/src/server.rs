@@ -1,6 +1,6 @@
 use crate::deadline::instant_from_unix_ms;
 use crate::error::{ErrorKind, RpcError};
-use crate::frame::{read_frame, write_frame};
+use crate::frame::{AsyncFrameReader, write_frame};
 use crate::jsonrpc::{Envelope, Notification, Request, RequestId, Response};
 use crate::protocol::{
     CancelParams, EmptyParams, InitializeParams, InitializeResult, Limits, Product, rpc,
@@ -278,7 +278,7 @@ struct WriterCommand {
 
 /// Serve exactly one initialized application session on a private byte stream.
 pub async fn serve<R, W, H>(
-    mut reader: R,
+    reader: R,
     mut writer: W,
     handler: Arc<H>,
     config: ServerConfig,
@@ -290,6 +290,7 @@ where
 {
     config.product.validate()?;
     config.limits.validate()?;
+    let mut reader = AsyncFrameReader::new(reader);
 
     let (writer_tx, mut writer_rx) =
         mpsc::channel::<WriterCommand>(config.limits.max_in_flight + 2);
@@ -332,7 +333,7 @@ where
     loop {
         let frame = tokio::select! {
             _ = disconnected.cancelled() => break,
-            frame = read_frame(&mut reader, active_limit) => match frame {
+            frame = reader.read_frame(active_limit) => match frame {
                 Ok(frame) => frame,
                 Err(error) => {
                     fatal = Some(error);

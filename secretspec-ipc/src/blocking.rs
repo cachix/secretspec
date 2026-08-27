@@ -28,8 +28,8 @@ use crate::jsonrpc::{Envelope, Request, RequestId, Response};
 use crate::launch::{Environment, LaunchOptions};
 use crate::protocol::resolver::{
     self as resolver_protocol, DeleteParams, DeleteResult, GetParams, GetResult,
-    InitializeApplication, InitializedApplication, RejectParams, RejectResult, ReleaseParams,
-    ReleaseResult, SetParams, SetResult,
+    InitializeApplication, InitializedApplication, ReleaseParams, ReleaseResult, SetParams,
+    SetResult,
 };
 use crate::protocol::{
     InitializeParams, InitializeResult, Limits, PROTOCOL_VERSION, Product, RESOLVER_PROTOCOL, rpc,
@@ -42,6 +42,7 @@ use std::collections::{HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
@@ -135,18 +136,6 @@ impl ResolverSession {
         self.call(resolver_protocol::method::GET, params, deadline_unix_ms)
     }
 
-    /// Report that a value this session resolved was refused by whatever it
-    /// was presented to (0.20+), discarding any cached copy of it.
-    ///
-    /// A token revoked at its issuer is still fresh by the clock, so expiry
-    /// alone cannot retire it. This is how a consumer that got a 401 says so,
-    /// and every endpoint answers it, including a read-only one: only the
-    /// derived copy is dropped, never the authoritative value.
-    pub fn reject(&mut self, params: &RejectParams, deadline_unix_ms: u64) -> Result<RejectResult> {
-        params.validate()?;
-        self.call(resolver_protocol::method::REJECT, params, deadline_unix_ms)
-    }
-
     /// Store one exact declared name on the session's fixed configuration
     /// (0.20+).
     ///
@@ -227,10 +216,9 @@ struct Transport {
     /// a blocking read. Nothing holds this lock across an I/O call.
     child: Arc<Mutex<Child>>,
     stdin: Option<ChildStdin>,
-    stdout: ChildStdout,
+    stdout: Receiver<StdoutEvent>,
     decoder: FrameDecoder,
     frames: VecDeque<Zeroizing<Vec<u8>>>,
-    buffer: Zeroizing<Vec<u8>>,
     next_id: u64,
     max_frame_bytes: usize,
     closed: bool,
@@ -272,6 +260,7 @@ impl Transport {
             return Err(Error::Protocol("child pipes were not created"));
         };
         drain_stderr(stderr, options.max_stderr_bytes);
+        let stdout = read_stdout(stdout);
 
         Ok(Self {
             child: Arc::new(Mutex::new(child)),
@@ -279,7 +268,6 @@ impl Transport {
             stdout,
             decoder,
             frames: VecDeque::new(),
-            buffer: Zeroizing::new(vec![0; READ_CHUNK]),
             next_id: 1,
             max_frame_bytes: ABSOLUTE_MAX_FRAME_BYTES,
             closed: false,
@@ -334,14 +322,20 @@ impl Transport {
         }
         let id = self.next_id()?;
         let request = Request::new(id, method, deadline_unix_ms, params)?;
+        let deadline = Instant::now() + remaining;
 
         let watchdog = Watchdog::arm(&self.child, remaining);
-        let outcome = self.attempt(request, id);
+        let outcome = self.attempt(request, id, deadline);
+        let read_timed_out = self.closed && matches!(&outcome, Err(Error::DeadlineExceeded));
         // A watchdog that fired killed the transport, so every failure it
         // produced downstream is really the deadline. A response that won the
         // race is still valid and is reported as success; the session is dead
         // either way and `close` reaps it.
         let watchdog_fired = watchdog.disarm();
+        if read_timed_out && !watchdog_fired {
+            self.stdin = None;
+            self.kill_and_reap();
+        }
         if watchdog_fired {
             self.closed = true;
             if outcome.is_err() {
@@ -351,10 +345,10 @@ impl Transport {
         outcome
     }
 
-    fn attempt(&mut self, request: Request, id: RequestId) -> Result<Value> {
+    fn attempt(&mut self, request: Request, id: RequestId, deadline: Instant) -> Result<Value> {
         let limit = self.max_frame_bytes;
         self.write_envelope(&Envelope::Request(request), limit)?;
-        let response = self.read_response()?;
+        let response = self.read_response(deadline)?;
         if response.id() != Some(id) {
             // Strictly one call is in flight, so any other terminal ID is a
             // protocol violation rather than something to correlate later.
@@ -377,7 +371,7 @@ impl Transport {
         Ok(())
     }
 
-    fn read_response(&mut self) -> Result<Response> {
+    fn read_response(&mut self, deadline: Instant) -> Result<Response> {
         loop {
             if let Some(frame) = self.frames.pop_front() {
                 return match Envelope::parse(&frame) {
@@ -396,21 +390,32 @@ impl Transport {
                 };
             }
 
-            let read = match self.stdout.read(&mut self.buffer) {
-                Ok(read) => read,
-                Err(error) => {
+            let event = self
+                .stdout
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()));
+            let buffer = match event {
+                Ok(StdoutEvent::Chunk(buffer)) => buffer,
+                Ok(StdoutEvent::Error(error)) => {
                     self.closed = true;
                     return Err(Error::Io(error));
                 }
+                Ok(StdoutEvent::Eof) | Err(RecvTimeoutError::Disconnected) => {
+                    self.closed = true;
+                    // EOF between frames is a clean disconnect; a partial frame is
+                    // a truncation the caller must not confuse with one.
+                    self.decoder.finish_eof()?;
+                    return Err(Error::Closed);
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    self.closed = true;
+                    return Err(Error::DeadlineExceeded);
+                }
             };
-            if read == 0 {
+            if buffer.is_empty() {
                 self.closed = true;
-                // EOF between frames is a clean disconnect; a partial frame is
-                // a truncation the caller must not confuse with one.
-                self.decoder.finish_eof()?;
-                return Err(Error::Closed);
+                return Err(Error::Protocol("stdout reader returned an empty chunk"));
             }
-            match self.decoder.push(&self.buffer[..read]) {
+            match self.decoder.push(&buffer) {
                 Ok(frames) => self.frames.extend(frames),
                 Err(error) => {
                     self.closed = true;
@@ -479,12 +484,53 @@ impl Drop for Transport {
     }
 }
 
-/// Kills the child when a blocking call outlives its deadline.
+enum StdoutEvent {
+    Chunk(Zeroizing<Vec<u8>>),
+    Eof,
+    Error(std::io::Error),
+}
+
+/// Read stdout on its own thread and bound the handoff to one chunk.
 ///
-/// A blocking pipe read cannot be interrupted, so the deadline is enforced by
-/// ending the transport: killing the child closes its stdout, the parked read
-/// returns EOF, and the call reports [`Error::DeadlineExceeded`] instead of
-/// hanging for as long as the endpoint chooses to stay silent.
+/// The receiver can enforce a request deadline even if a descendant inherited
+/// the pipe and keeps this thread's blocking read alive after the direct child
+/// is killed. Dropping the receiver makes the thread exit on its next read.
+fn read_stdout(mut stdout: ChildStdout) -> Receiver<StdoutEvent> {
+    let (sender, receiver) = sync_channel(1);
+    std::thread::spawn(move || {
+        loop {
+            let mut buffer = Zeroizing::new(vec![0_u8; READ_CHUNK]);
+            match stdout.read(&mut buffer) {
+                Ok(0) => {
+                    send_stdout_event(&sender, StdoutEvent::Eof);
+                    break;
+                }
+                Ok(read) => {
+                    buffer.truncate(read);
+                    if sender.send(StdoutEvent::Chunk(buffer)).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    send_stdout_event(&sender, StdoutEvent::Error(error));
+                    break;
+                }
+            }
+        }
+    });
+    receiver
+}
+
+fn send_stdout_event(sender: &SyncSender<StdoutEvent>, event: StdoutEvent) {
+    let _ = sender.send(event);
+}
+
+/// Kills the direct child when a blocking call outlives its deadline.
+///
+/// Stdout is read on a dedicated thread and the caller's channel receive has
+/// its own timeout, so an inherited pipe cannot strand the caller. The
+/// watchdog remains necessary for writes, which can also block when a peer
+/// stops consuming input, and to end the direct child once either side stalls.
 struct Watchdog {
     finished: Arc<(Mutex<bool>, Condvar)>,
     fired: Arc<AtomicBool>,

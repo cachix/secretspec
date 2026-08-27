@@ -40,6 +40,26 @@ pub enum ProducedValuePersistence {
     Ephemeral,
 }
 
+/// A provider value with an optional authoritative validity bound.
+///
+/// `expires_at_unix_ms` is when the secret itself expires according to the
+/// provider. `None` means no bound is known. Resolver cache freshness is
+/// separate metadata and must never be placed here.
+#[derive(Clone)]
+pub struct ProviderValue {
+    pub value: SecretString,
+    pub expires_at_unix_ms: Option<u64>,
+}
+
+impl ProviderValue {
+    pub fn new(value: SecretString, expires_at_unix_ms: Option<u64>) -> Self {
+        Self {
+            value,
+            expires_at_unix_ms,
+        }
+    }
+}
+
 /// Trait defining the interface for secret storage providers.
 ///
 /// All secret storage backends must implement this trait to integrate with SecretSpec.
@@ -160,6 +180,17 @@ pub trait Provider: Send + Sync {
     /// }
     /// ```
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>>;
+
+    /// Retrieves a value together with its provider-reported validity bound.
+    ///
+    /// Available starting with SecretSpec 0.20. Existing providers inherit a
+    /// compatibility implementation with unknown expiry. Providers issuing or
+    /// reading time-bounded credentials override this method; callers use it in
+    /// preference to [`get`](Provider::get) when they can preserve metadata.
+    fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<ProviderValue>> {
+        self.get(addr)
+            .map(|value| value.map(|value| ProviderValue::new(value, None)))
+    }
 
     /// Whether this provider can return plaintext values through
     /// [`get`](Provider::get) or [`get_many`](Provider::get_many).
@@ -582,6 +613,23 @@ pub trait Provider: Send + Sync {
         get_each(self, requests)
     }
 
+    /// Batch form of [`get_with_metadata`](Provider::get_with_metadata).
+    ///
+    /// Existing providers retain their optimized `get_many` implementation and
+    /// report unknown expiry. A provider with per-value lifetime metadata must
+    /// override this method as well as the single-value form.
+    fn get_many_with_metadata(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, ProviderValue>> {
+        self.get_many(requests).map(|values| {
+            values
+                .into_iter()
+                .map(|(name, value)| (name, ProviderValue::new(value, None)))
+                .collect()
+        })
+    }
+
     /// Tests a batch of addressed secrets for presence, returning the request
     /// names that exist.
     ///
@@ -732,12 +780,13 @@ pub(crate) fn exists_each<P: Provider + ?Sized>(
 ///
 /// Providers can use this when the per-address reads need to share state that
 /// belongs to exactly one `get_many` call, such as a short-lived login token.
-pub(crate) fn get_each_with<'a, F>(
+pub(crate) fn get_each_with<'a, F, T>(
     requests: &[(&str, Address<'a>)],
     fetch: F,
-) -> Result<HashMap<String, SecretString>>
+) -> Result<HashMap<String, T>>
 where
-    F: Fn(Address<'a>) -> Result<Option<SecretString>> + Sync,
+    F: Fn(Address<'a>) -> Result<Option<T>> + Sync,
+    T: Clone + Send,
 {
     let mut groups: HashMap<Address<'_>, Vec<&str>> = HashMap::new();
     for (name, addr) in requests {
@@ -751,7 +800,7 @@ where
     // One address is the common case (a single secret, or several sharing a
     // `ref`); `map_concurrently` keeps it on this thread. Larger sets fan out in
     // capped waves so they do not stampede a provider.
-    let fetched: Vec<(Vec<&str>, Result<Option<SecretString>>)> =
+    let fetched: Vec<(Vec<&str>, Result<Option<T>>)> =
         map_concurrently(&groups, get_each_concurrency(), |(addr, names)| {
             (names.clone(), fetch(*addr))
         });
@@ -785,6 +834,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     }
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
         (**self).get(addr)
+    }
+    fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<ProviderValue>> {
+        (**self).get_with_metadata(addr)
     }
     fn supports_read(&self) -> bool {
         (**self).supports_read()
@@ -867,6 +919,12 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     }
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
         (**self).get_many(requests)
+    }
+    fn get_many_with_metadata(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, ProviderValue>> {
+        (**self).get_many_with_metadata(requests)
     }
     fn exists_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashSet<String>> {
         (**self).exists_many(requests)

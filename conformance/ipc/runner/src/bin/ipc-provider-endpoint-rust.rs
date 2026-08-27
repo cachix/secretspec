@@ -5,14 +5,14 @@ use secretspec_ipc::protocol::provider::{
     InitializeApplication, Metadata, NamedGetResult, Persistence, ReflectParams, ReflectResult,
     ResolveAddressResult,
 };
-use secretspec_ipc::provider::{ProviderHandler, SecretValue, serve_provider};
+use secretspec_ipc::provider::{ProvidedSecret, ProviderHandler, SecretValue, serve_provider};
 use secretspec_ipc::server::{RequestContext, RpcResult, ServerConfig};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_FRAME_BYTES: usize = 1024 * 1024;
 
@@ -35,7 +35,8 @@ enum Rejection {
 
 struct StoredValue {
     value: String,
-    expires_at: Option<Instant>,
+    storage_expires_at: Option<Instant>,
+    secret_expires_at_unix_ms: Option<u64>,
 }
 
 #[derive(Default)]
@@ -64,16 +65,26 @@ impl MemoryProvider {
         }
     }
 
-    fn read(values: &mut HashMap<String, StoredValue>, key: &str) -> Option<String> {
-        if values
-            .get(key)
-            .and_then(|entry| entry.expires_at)
-            .is_some_and(|expires_at| expires_at <= Instant::now())
-        {
+    fn read(values: &mut HashMap<String, StoredValue>, key: &str) -> Option<(String, Option<u64>)> {
+        let now_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|now| u64::try_from(now.as_millis()).ok());
+        let expired = values.get(key).is_some_and(|entry| {
+            entry
+                .storage_expires_at
+                .is_some_and(|expires_at| expires_at <= Instant::now())
+                || entry
+                    .secret_expires_at_unix_ms
+                    .is_some_and(|expires_at| now_unix_ms.is_some_and(|now| now >= expires_at))
+        });
+        if expired {
             values.remove(key);
             return None;
         }
-        values.get(key).map(|entry| entry.value.clone())
+        values
+            .get(key)
+            .map(|entry| (entry.value.clone(), entry.secret_expires_at_unix_ms))
     }
 
     fn maybe_crash(&self) {
@@ -162,7 +173,7 @@ impl ProviderHandler for MemoryProvider {
         &self,
         context: RequestContext,
         address: Address,
-    ) -> RpcResult<Option<SecretValue>> {
+    ) -> RpcResult<Option<ProvidedSecret>> {
         let key = Self::key(&address);
         if key.ends_with("/__BLOCK__") {
             context.cancellation.cancelled().await;
@@ -172,7 +183,8 @@ impl ProviderHandler for MemoryProvider {
             return Err(error);
         }
         self.maybe_crash();
-        Ok(Self::read(&mut self.values.lock().unwrap(), &key).map(SecretValue::new))
+        Ok(Self::read(&mut self.values.lock().unwrap(), &key)
+            .map(|(value, expires_at)| ProvidedSecret::new(value, expires_at)))
     }
 
     async fn get_many(
@@ -189,7 +201,10 @@ impl ProviderHandler for MemoryProvider {
                 .map(|request| NamedGetResult {
                     name: request.name,
                     outcome: match Self::read(&mut values, &Self::key(&request.address)) {
-                        Some(value) => wire::GetResult::Found { value },
+                        Some((value, expires_at_unix_ms)) => wire::GetResult::Found {
+                            value,
+                            expires_at_unix_ms,
+                        },
                         None => wire::GetResult::Missing,
                     },
                 })
@@ -211,11 +226,23 @@ impl ProviderHandler for MemoryProvider {
         if let Some(error) = self.one_shot_error(&Self::key(&address)) {
             return Err(error);
         }
+        let key = Self::key(&address);
+        let secret_expires_at_unix_ms = key
+            .ends_with("/SECRET_EXPIRY")
+            .then(|| {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .ok()
+                    .and_then(|now| u64::try_from(now.as_millis()).ok())
+                    .and_then(|now| now.checked_add(60_000))
+            })
+            .flatten();
         self.values.lock().unwrap().insert(
-            Self::key(&address),
+            key,
             StoredValue {
                 value: value.expose().to_string(),
-                expires_at: None,
+                storage_expires_at: None,
+                secret_expires_at_unix_ms,
             },
         );
         Ok(())
@@ -232,7 +259,8 @@ impl ProviderHandler for MemoryProvider {
             Self::key(&address),
             StoredValue {
                 value: value.expose().to_string(),
-                expires_at: Some(Instant::now() + Duration::from_millis(ttl_ms)),
+                storage_expires_at: Some(Instant::now() + Duration::from_millis(ttl_ms)),
+                secret_expires_at_unix_ms: None,
             },
         );
         Ok(())
@@ -251,7 +279,7 @@ impl ProviderHandler for MemoryProvider {
         let mut values = self.values.lock().unwrap();
         values.retain(|_, value| {
             value
-                .expires_at
+                .storage_expires_at
                 .is_none_or(|expiry| expiry > Instant::now())
         });
         let before = values.len();

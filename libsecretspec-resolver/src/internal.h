@@ -21,6 +21,14 @@
 
 typedef struct ss_process ss_process;
 
+#define SS_FRAME_READ_CHUNK ((size_t)8192)
+
+typedef struct {
+    unsigned char data[SS_FRAME_READ_CHUNK];
+    size_t start;
+    size_t end;
+} ss_frame_reader;
+
 typedef struct {
     char *executable;
     char **arguments;
@@ -53,6 +61,7 @@ bool ss_json_u64(yyjson_val *value, uint64_t *number);
 bool ss_json_write_value(yyjson_val *value, secretspec_resolver_buffer *buffer);
 secretspec_resolver_status ss_frame_read(
     ss_process *process,
+    ss_frame_reader *reader,
     size_t limit,
     secretspec_resolver_buffer *payload,
     bool *clean_eof,

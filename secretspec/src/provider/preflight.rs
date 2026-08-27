@@ -1,4 +1,7 @@
-use super::{Address, DiscoveryContext, ProducedValuePersistence, Provider, ProviderCredentials};
+use super::{
+    Address, DiscoveryContext, ProducedValuePersistence, Provider, ProviderCredentials,
+    ProviderValue,
+};
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use secrecy::SecretString;
@@ -145,6 +148,11 @@ impl Provider for PreflightGuard {
         self.inner.get(addr)
     }
 
+    fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<ProviderValue>> {
+        self.check()?;
+        self.inner.get_with_metadata(addr)
+    }
+
     fn supports_read(&self) -> bool {
         self.inner.supports_read()
     }
@@ -267,6 +275,14 @@ impl Provider for PreflightGuard {
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
         self.check()?;
         self.inner.get_many(requests)
+    }
+
+    fn get_many_with_metadata(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, ProviderValue>> {
+        self.check()?;
+        self.inner.get_many_with_metadata(requests)
     }
 
     fn exists_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashSet<String>> {

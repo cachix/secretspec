@@ -3,8 +3,8 @@ use crate::protocol::RESOLVER_PROTOCOL;
 use crate::protocol::callback::{self, PromptParams, PromptResult};
 use crate::protocol::resolver::{
     CAPABILITIES, DeleteParams, DeleteResult, GetParams, GetResult, InitializeApplication,
-    InitializedApplication, RejectParams, RejectResult, ReleaseParams, ReleaseResult, SetParams,
-    SetResult, method, validate_capabilities,
+    InitializedApplication, ReleaseParams, ReleaseResult, SetParams, SetResult, method,
+    validate_capabilities,
 };
 use crate::server::{ApplicationHandler, RequestContext, RpcResult, ServerConfig};
 use async_trait::async_trait;
@@ -29,15 +29,6 @@ pub trait ResolverHandler: Send + Sync + 'static {
         context: RequestContext,
         params: ReleaseParams,
     ) -> RpcResult<ReleaseResult>;
-
-    /// Discard any cached copy of one declared name after its consumer was
-    /// refused with it (0.20+). Required, not opt-in: without it a value
-    /// revoked before its expiry is served until the cache entry ages out.
-    async fn reject(
-        &self,
-        context: RequestContext,
-        params: RejectParams,
-    ) -> RpcResult<RejectResult>;
 
     /// Methods this endpoint advertises. The default is resolution only, so an
     /// endpoint gains a mutation method by naming it here and implementing it,
@@ -121,12 +112,6 @@ impl<H: ResolverHandler> ApplicationHandler for ResolverApplication<H> {
                 let params: ReleaseParams = parse(params)?;
                 params.validate().map_err(invalid_params)?;
                 let result = self.handler.release(context, params).await?;
-                serde_json::to_value(result).map_err(|_| RpcError::new(ErrorKind::Internal))
-            }
-            method::REJECT => {
-                let params: RejectParams = parse(params)?;
-                params.validate().map_err(invalid_params)?;
-                let result = self.handler.reject(context, params).await?;
                 serde_json::to_value(result).map_err(|_| RpcError::new(ErrorKind::Internal))
             }
             method::SET => {

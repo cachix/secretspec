@@ -4,7 +4,7 @@
 
 use super::{
     Address, DiscoveryContext, ProducedValuePersistence, Provider, ProviderCredentials,
-    ProviderUrl, exists_each, get_each,
+    ProviderUrl, ProviderValue, exists_each, get_each_with,
 };
 use crate::config::NativeAddress;
 use crate::{Result, Secret, SecretSpecError};
@@ -840,18 +840,41 @@ impl Provider for ExternalProvider {
     }
 
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+        self.get_with_metadata(addr)
+            .map(|value| value.map(|value| value.value))
+    }
+
+    fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<ProviderValue>> {
         let result = self.call::<wire::method::Get>(&AddressParams {
             address: to_wire_address(addr),
         })?;
         Ok(match result {
-            GetResult::Found { value } => Some(SecretString::from(value)),
+            GetResult::Found {
+                value,
+                expires_at_unix_ms,
+            } => Some(ProviderValue::new(
+                SecretString::from(value),
+                expires_at_unix_ms,
+            )),
             GetResult::Missing => None,
         })
     }
 
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+        self.get_many_with_metadata(requests).map(|values| {
+            values
+                .into_iter()
+                .map(|(name, value)| (name, value.value))
+                .collect()
+        })
+    }
+
+    fn get_many_with_metadata(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, ProviderValue>> {
         if !self.ensure_session()?.supports(wire::method::GET_MANY) {
-            return get_each(self, requests);
+            return get_each_with(requests, |address| self.get_with_metadata(address));
         }
         let params = GetManyParams {
             requests: requests
@@ -878,7 +901,13 @@ impl Provider for ExternalProvider {
             .results
             .into_iter()
             .filter_map(|item| match item.outcome {
-                GetResult::Found { value } => Some((item.name, SecretString::from(value))),
+                GetResult::Found {
+                    value,
+                    expires_at_unix_ms,
+                } => Some((
+                    item.name,
+                    ProviderValue::new(SecretString::from(value), expires_at_unix_ms),
+                )),
                 GetResult::Missing => None,
             })
             .collect())

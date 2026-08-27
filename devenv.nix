@@ -71,6 +71,8 @@
     pkgs.lychee
     # coverage testing
     pkgs.cargo-tarpaulin
+    # coverage-guided fuzzing of IPC wire targets (requires a nightly toolchain)
+    pkgs.cargo-fuzz
     # installers
     pkgs.cargo-dist
     # bitwarden-cli for integration testing
@@ -140,6 +142,28 @@
 
     # Run CLI integration tests
     bash tests/cli-integration.sh
+  '';
+
+  # Keep production builds on the stable toolchain from rust-toolchain.toml;
+  # libFuzzer alone needs nightly's sanitizer coverage flags. Referencing
+  # rustup by its Nix path avoids placing its cargo shim ahead of the pinned
+  # compiler in ordinary development shells.
+  scripts.install-fuzz-nightly.exec = ''
+    ${pkgs.rustup}/bin/rustup toolchain install nightly
+  '';
+
+  scripts.fuzz-resolver.exec = ''
+    nightly_cargo="$(${pkgs.rustup}/bin/rustup which --toolchain nightly cargo)"
+    export PATH="$(dirname "$nightly_cargo"):$PATH"
+    export RUSTC="$(${pkgs.rustup}/bin/rustup which --toolchain nightly rustc)"
+    cargo fuzz run resolver_wire -- "$@"
+  '';
+
+  scripts.fuzz-resolve-apis.exec = ''
+    nightly_cargo="$(${pkgs.rustup}/bin/rustup which --toolchain nightly cargo)"
+    export PATH="$(dirname "$nightly_cargo"):$PATH"
+    export RUSTC="$(${pkgs.rustup}/bin/rustup which --toolchain nightly rustc)"
+    cargo fuzz run resolve_apis -- "$@"
   '';
 
   processes.docs.exec = ''

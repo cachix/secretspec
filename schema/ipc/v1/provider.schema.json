@@ -108,10 +108,17 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["status", "value"],
+          "required": ["status", "value", "expires_at_unix_ms"],
           "properties": {
             "status": { "const": "found" },
-            "value": { "type": "string" }
+            "value": { "type": "string" },
+            "expires_at_unix_ms": {
+              "description": "Authoritative time at which the secret itself expires, or null when the provider knows no bound. This is not provider or resolver cache freshness.",
+              "oneOf": [
+                { "$ref": "common.schema.json#/$defs/DeadlineUnixMs" },
+                { "type": "null" }
+              ]
+            }
           }
         },
         {
@@ -147,11 +154,17 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["name", "status", "value"],
+          "required": ["name", "status", "value", "expires_at_unix_ms"],
           "properties": {
             "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
             "status": { "const": "found" },
-            "value": { "type": "string" }
+            "value": { "type": "string" },
+            "expires_at_unix_ms": {
+              "oneOf": [
+                { "$ref": "common.schema.json#/$defs/DeadlineUnixMs" },
+                { "type": "null" }
+              ]
+            }
           }
         },
         {

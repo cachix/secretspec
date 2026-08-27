@@ -39,6 +39,38 @@ impl SecretValue {
     }
 }
 
+/// A provider value and the absolute time at which the value itself expires.
+///
+/// `None` means the provider does not know a validity bound; it does not mean
+/// the value is permanent. Cache freshness is owned by the resolver and is not
+/// represented here.
+#[derive(Debug, Clone)]
+pub struct ProvidedSecret {
+    value: SecretValue,
+    expires_at_unix_ms: Option<u64>,
+}
+
+impl ProvidedSecret {
+    pub fn new(value: String, expires_at_unix_ms: Option<u64>) -> Self {
+        Self {
+            value: SecretValue::new(value),
+            expires_at_unix_ms,
+        }
+    }
+
+    pub fn value(&self) -> &str {
+        self.value.expose()
+    }
+
+    pub const fn expires_at_unix_ms(&self) -> Option<u64> {
+        self.expires_at_unix_ms
+    }
+
+    fn into_parts(self) -> (String, Option<u64>) {
+        (self.value.into_string(), self.expires_at_unix_ms)
+    }
+}
+
 #[async_trait]
 pub trait ProviderHandler: Send + Sync + 'static {
     /// Supported operation names. `provider.resolve_address` is mandatory.
@@ -60,7 +92,7 @@ pub trait ProviderHandler: Send + Sync + 'static {
         &self,
         _context: RequestContext,
         _address: Address,
-    ) -> RpcResult<Option<SecretValue>> {
+    ) -> RpcResult<Option<ProvidedSecret>> {
         Err(RpcError::new(ErrorKind::CapabilityRequired))
     }
 
@@ -233,9 +265,13 @@ impl<H: ProviderHandler> ApplicationHandler for ProviderApplication<H> {
             method::GET => {
                 let params = self.address_params(params)?;
                 let result = match self.handler.get(context, params.address).await? {
-                    Some(value) => GetResult::Found {
-                        value: value.into_string(),
-                    },
+                    Some(value) => {
+                        let (value, expires_at_unix_ms) = value.into_parts();
+                        GetResult::Found {
+                            value,
+                            expires_at_unix_ms,
+                        }
+                    }
                     None => GetResult::Missing,
                 };
                 encode(result)

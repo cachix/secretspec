@@ -113,7 +113,7 @@ pub use provider::external::{
     EndpointSecurity, ExternalProvider, PlatformEndpointSecurity, ProviderDiscovery,
     ProviderEndpoint, RegistrationScope, set_provider_discovery,
 };
-pub use provider::{Address, DiscoveryContext, ProducedValuePersistence, Provider};
+pub use provider::{Address, DiscoveryContext, ProducedValuePersistence, Provider, ProviderValue};
 pub use report::{
     RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus, SecretResolution,
 };

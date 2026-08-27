@@ -819,11 +819,6 @@ resolve fails with `permission_denied`. A provider that produces such a value
 without storing it is unaffected, since nothing is written. SecretSpec's own
 cache is also unaffected: populating a derived copy does not change the secret.
 
-`resolver.reject` (0.20+) is answered in both modes. A consumer that was refused
-with a resolved value reports it there, and the session discards its cached copy
-so the next resolve consults the authoritative store instead of serving a
-credential that was revoked before it expired.
-
 ### completions (0.20+)
 
 :::caution[Version compatibility]

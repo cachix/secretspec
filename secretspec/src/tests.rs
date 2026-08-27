@@ -342,7 +342,8 @@ fn test_validation_result_structure() {
         with_defaults: Vec::new(),
         resolution: Vec::new(),
         temp_files: Vec::new(),
-        expiries: HashMap::new(),
+        secret_expiries: HashMap::new(),
+        refreshes: HashMap::new(),
     };
     assert_eq!(valid_result.missing_optional.len(), 1);
     assert_eq!(valid_result.with_defaults.len(), 0);
@@ -10126,12 +10127,15 @@ fn named_cached_resolution_reports_the_cache_envelopes_expiry() {
 
     let second = secrets.resolve_named_owned("API_KEY").unwrap();
     let crate::secrets::OwnedNamedResolution::Value {
-        expires_at_unix_ms, ..
+        expires_at_unix_ms,
+        refresh_at_unix_ms,
+        ..
     } = second
     else {
         panic!("the cache read resolves an inline value");
     };
-    assert_eq!(expires_at_unix_ms, Some(expected));
+    assert_eq!(expires_at_unix_ms, None);
+    assert_eq!(refresh_at_unix_ms, Some(expected));
 }
 
 #[test]

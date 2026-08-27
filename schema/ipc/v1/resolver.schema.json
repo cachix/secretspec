@@ -120,7 +120,7 @@
     "ResolvedValueResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "representation", "value", "source", "expires_at_unix_ms"],
+      "required": ["status", "representation", "value", "source", "expires_at_unix_ms", "refresh_at_unix_ms"],
       "properties": {
         "status": { "const": "resolved" },
         "representation": { "const": "value" },
@@ -128,7 +128,14 @@
         "source": { "description": "Origins a conforming version 1 resolver emits. Closed for the resolver, open for the client, like ErrorKind.", "type": "string", "enum": ["provider", "generated", "default", "composed"] },
         "source_provider": { "type": "string", "maxLength": 32768 },
         "expires_at_unix_ms": {
-          "description": "When SecretSpec stops considering its copy current, not when the credential stops working. Non-null only for a value served from a SecretSpec cache, where it is the entry write time plus the configured max_age; null for an authoritative read, including a credential that genuinely expires. Revocation is reported with resolver.reject instead.",
+          "description": "Provider-reported time at which the secret itself expires. Null means no bound is known, not that the secret is permanent.",
+          "oneOf": [
+            { "$ref": "common.schema.json#/$defs/DeadlineUnixMs" },
+            { "type": "null" }
+          ]
+        },
+        "refresh_at_unix_ms": {
+          "description": "When the resolver stops considering its cached copy current and will consult the authoritative route again. Null means this result was not served from a resolver cache.",
           "oneOf": [
             { "$ref": "common.schema.json#/$defs/DeadlineUnixMs" },
             { "type": "null" }
@@ -139,7 +146,7 @@
     "ResolvedPathResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "representation", "path", "path_lease_id", "source", "expires_at_unix_ms"],
+      "required": ["status", "representation", "path", "path_lease_id", "source", "expires_at_unix_ms", "refresh_at_unix_ms"],
       "properties": {
         "status": { "const": "resolved" },
         "representation": { "const": "path" },
@@ -148,7 +155,14 @@
         "source": { "description": "Origins a conforming version 1 resolver emits. Closed for the resolver, open for the client, like ErrorKind.", "type": "string", "enum": ["provider", "generated", "default", "composed"] },
         "source_provider": { "type": "string", "maxLength": 32768 },
         "expires_at_unix_ms": {
-          "description": "When SecretSpec stops considering its copy current, not when the credential stops working. Non-null only for a value served from a SecretSpec cache, where it is the entry write time plus the configured max_age; null for an authoritative read, including a credential that genuinely expires. Revocation is reported with resolver.reject instead.",
+          "description": "Provider-reported time at which the secret itself expires. Null means no bound is known, not that the secret is permanent.",
+          "oneOf": [
+            { "$ref": "common.schema.json#/$defs/DeadlineUnixMs" },
+            { "type": "null" }
+          ]
+        },
+        "refresh_at_unix_ms": {
+          "description": "When the resolver stops considering its cached copy current and will consult the authoritative route again. Null means this result was not served from a resolver cache.",
           "oneOf": [
             { "$ref": "common.schema.json#/$defs/DeadlineUnixMs" },
             { "type": "null" }
@@ -180,24 +194,6 @@
       "required": ["value"],
       "properties": {
         "value": { "type": "string", "minLength": 1, "maxLength": 1048576 }
-      }
-    },
-    "RejectParams": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "purpose"],
-      "properties": {
-        "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
-        "purpose": { "$ref": "#/$defs/Purpose" }
-      }
-    },
-    "RejectResult": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["status", "invalidated"],
-      "properties": {
-        "status": { "const": "rejected" },
-        "invalidated": { "type": "boolean" }
       }
     },
     "SetParams": {

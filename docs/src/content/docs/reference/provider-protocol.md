@@ -34,10 +34,10 @@ Routing is not part of the address. SecretSpec chooses the provider instance,
 fallback chain, authoritative provider, and cache before making the request.
 The endpoint sees only the operation for its bound provider.
 
-Version 1 covers naming, reads, presence checks, writes, expiring writes,
-idempotent deletion, bounded cache clearing, mutation preflight, batch reads,
-write-target descriptions, and declaration reflection. Every optional method
-is capability-gated.
+Version 1 covers naming, reads with optional secret-validity expiry, presence
+checks, writes, expiring writes, idempotent deletion, bounded cache clearing,
+mutation preflight, batch reads, write-target descriptions, and declaration
+reflection. Every optional method is capability-gated.
 
 ## Discovery and registration
 
@@ -335,7 +335,15 @@ with the same initialized session and address MUST return the same coordinates.
 A hit and a miss are successful, distinct results:
 
 ```json
-{ "jsonrpc": "2.0", "id": 3, "result": { "status": "found", "value": "secret text" } }
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "status": "found",
+    "value": "secret text",
+    "expires_at_unix_ms": 1786770000000
+  }
+}
 ```
 
 ```json
@@ -344,6 +352,18 @@ A hit and a miss are successful, distinct results:
 
 An unavailable, unauthorized, malformed, or otherwise failed lookup is an
 error, never `missing`.
+
+`expires_at_unix_ms` (0.20+) is required on a found result and may be null. A
+timestamp is the provider's authoritative absolute bound on the validity of the
+secret itself, not a cache freshness time or a promise that no earlier
+revocation can happen. The endpoint MUST NOT knowingly return a value at or
+after its reported expiry. Null means the provider does not know or does not
+expose a validity bound; it never means the secret is permanent.
+
+SecretSpec carries this field through its own cache separately from cache
+freshness. Providers such as passive keyrings usually return null. Providers
+backed by expiring tokens, leases, certificates, or similar credentials should
+return the bound they can authoritatively establish.
 
 ### `provider.get_many`
 
@@ -385,7 +405,12 @@ canonical form and a batch may mix convention and native addresses.
   "id": 4,
   "result": {
     "results": [
-      { "name": "DATABASE_PASSWORD", "status": "found", "value": "secret text" },
+      {
+        "name": "DATABASE_PASSWORD",
+        "status": "found",
+        "value": "secret text",
+        "expires_at_unix_ms": null
+      },
       { "name": "API_TOKEN", "status": "missing" }
     ]
   }
@@ -486,6 +511,12 @@ the request. An endpoint advertising this capability MUST ensure the stored
 copy becomes unavailable no later than that interval, including without
 another SecretSpec process running. It may expire it earlier only if the
 backend's documented precision requires rounding.
+
+This is a retention bound on the stored copy. It is distinct from
+`expires_at_unix_ms` on `provider.get`, which describes the validity of the
+secret represented by the bytes. A provider may store an entry for one hour
+whose credential becomes invalid in ten minutes; the read reports the
+ten-minute validity bound.
 
 When this capability is absent, the external adapter follows the embedded
 `Provider::set_expiring` fallback policy and calls ordinary `set` only when the

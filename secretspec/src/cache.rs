@@ -32,6 +32,10 @@ struct CacheEnvelope {
     expires_at: u64,
     max_age_secs: u64,
     route_fingerprint: String,
+    /// Authoritative validity bound of the cached secret itself. This is
+    /// independent of `expires_at`, which is the cache entry's freshness bound.
+    #[serde(default)]
+    secret_expires_at_unix_ms: Option<u64>,
     /// The cached plaintext stays in a zeroizing buffer on both serialization
     /// and deserialization.
     #[serde(with = "zeroizing_string")]
@@ -98,6 +102,7 @@ pub(crate) enum CacheEntryStatus {
     /// Fresh, and written for the expected authoritative route.
     Fresh {
         value: SecretString,
+        refresh_at_unix_ms: Option<u64>,
         expires_at_unix_ms: Option<u64>,
     },
     /// Expired (regardless of owner), or ours but no longer usable because its
@@ -118,6 +123,8 @@ pub(crate) enum CacheEncodeError {
     Clock(#[from] std::time::SystemTimeError),
     #[error("cache expiration timestamp is too large")]
     ExpirationOverflow,
+    #[error("the secret has already expired")]
+    SecretExpired,
     #[error(transparent)]
     Serialize(#[from] serde_json::Error),
 }
@@ -226,10 +233,11 @@ fn inspect_entry_with_clock<E>(
             }
             return Ok(CacheEntryStatus::Fresh {
                 value: SecretString::new(envelope.value.as_str().into()),
-                expires_at_unix_ms: envelope
+                refresh_at_unix_ms: envelope
                     .cached_at
                     .checked_add(max_age_secs)
                     .and_then(|expires_at| expires_at.checked_mul(1000)),
+                expires_at_unix_ms: None,
             });
         }
         Err(_) => return Ok(CacheEntryStatus::OursUnreadable),
@@ -257,9 +265,16 @@ fn inspect_entry_with_clock<E>(
     if envelope.route_fingerprint != route_fingerprint {
         return Ok(CacheEntryStatus::Stale);
     }
+    if envelope
+        .secret_expires_at_unix_ms
+        .is_some_and(|expires_at| now.saturating_mul(1000) >= expires_at)
+    {
+        return Ok(CacheEntryStatus::Stale);
+    }
     Ok(CacheEntryStatus::Fresh {
         value: SecretString::new(envelope.value.as_str().into()),
-        expires_at_unix_ms: envelope.expires_at.checked_mul(1000),
+        refresh_at_unix_ms: envelope.expires_at.checked_mul(1000),
+        expires_at_unix_ms: envelope.secret_expires_at_unix_ms,
     })
 }
 
@@ -290,6 +305,7 @@ pub(crate) fn encode_entry(
     max_age_secs: u64,
     route_fingerprint: String,
     value: &SecretString,
+    secret_expires_at_unix_ms: Option<u64>,
 ) -> Result<SecretString, CacheEncodeError> {
     encode_entry_at(
         project,
@@ -298,6 +314,7 @@ pub(crate) fn encode_entry(
         max_age_secs,
         route_fingerprint,
         value,
+        secret_expires_at_unix_ms,
     )
 }
 
@@ -308,16 +325,28 @@ fn encode_entry_at(
     max_age_secs: u64,
     route_fingerprint: String,
     value: &SecretString,
+    secret_expires_at_unix_ms: Option<u64>,
 ) -> Result<SecretString, CacheEncodeError> {
-    let expires_at = now
+    let cache_expires_at = now
         .checked_add(max_age_secs)
         .ok_or(CacheEncodeError::ExpirationOverflow)?;
+    let expires_at = match secret_expires_at_unix_ms {
+        Some(secret_expiry) => {
+            let secret_expiry_secs = secret_expiry / 1000;
+            if secret_expiry_secs <= now {
+                return Err(CacheEncodeError::SecretExpired);
+            }
+            cache_expires_at.min(secret_expiry_secs)
+        }
+        None => cache_expires_at,
+    };
     let envelope = CacheEnvelope {
         project: project.to_string(),
         profile: profile.to_string(),
         expires_at,
         max_age_secs,
         route_fingerprint,
+        secret_expires_at_unix_ms,
         value: Zeroizing::new(value.expose_secret().to_string()),
     };
     // Both plaintext renderings of the envelope are held in buffers that
@@ -346,6 +375,7 @@ mod tests {
             MAX_AGE,
             FINGERPRINT.to_string(),
             &SecretString::new("sensitive".into()),
+            None,
         )
         .expect("cache envelope serializes")
     }
@@ -368,6 +398,7 @@ mod tests {
         );
         let CacheEntryStatus::Fresh {
             value,
+            refresh_at_unix_ms,
             expires_at_unix_ms,
         } = status
         else {
@@ -375,7 +406,8 @@ mod tests {
         };
         assert_eq!(envelope.expires_at, EXPIRES_AT);
         assert_eq!(envelope.max_age_secs, MAX_AGE);
-        assert_eq!(expires_at_unix_ms, Some(EXPIRES_AT * 1000));
+        assert_eq!(refresh_at_unix_ms, Some(EXPIRES_AT * 1000));
+        assert_eq!(expires_at_unix_ms, None);
         assert_eq!(value.expose_secret(), "sensitive");
     }
 
@@ -383,6 +415,50 @@ mod tests {
     fn entry_is_stale_at_its_expiration() {
         assert!(matches!(
             inspect_entry_at(&entry(), PROJECT, PROFILE, FINGERPRINT, MAX_AGE, EXPIRES_AT),
+            CacheEntryStatus::Stale
+        ));
+    }
+
+    #[test]
+    fn secret_expiry_is_preserved_and_caps_cache_freshness() {
+        let secret_expiry_ms = (WRITTEN_AT + 20) * 1000 + 500;
+        let entry = encode_entry_at(
+            PROJECT,
+            PROFILE,
+            WRITTEN_AT,
+            MAX_AGE,
+            FINGERPRINT.to_string(),
+            &SecretString::new("sensitive".into()),
+            Some(secret_expiry_ms),
+        )
+        .expect("unexpired secret can be cached");
+
+        let CacheEntryStatus::Fresh {
+            refresh_at_unix_ms,
+            expires_at_unix_ms,
+            ..
+        } = inspect_entry_at(
+            &entry,
+            PROJECT,
+            PROFILE,
+            FINGERPRINT,
+            MAX_AGE,
+            WRITTEN_AT + 19,
+        )
+        else {
+            panic!("entry is fresh before the capped cache boundary");
+        };
+        assert_eq!(refresh_at_unix_ms, Some((WRITTEN_AT + 20) * 1000));
+        assert_eq!(expires_at_unix_ms, Some(secret_expiry_ms));
+        assert!(matches!(
+            inspect_entry_at(
+                &entry,
+                PROJECT,
+                PROFILE,
+                FINGERPRINT,
+                MAX_AGE,
+                WRITTEN_AT + 20,
+            ),
             CacheEntryStatus::Stale
         ));
     }
@@ -440,6 +516,7 @@ mod tests {
                 MAX_AGE,
                 FINGERPRINT.to_string(),
                 &SecretString::new("sensitive".into()),
+                None,
             ),
             Err(CacheEncodeError::ExpirationOverflow)
         ));
@@ -533,12 +610,14 @@ mod tests {
         let status = inspect_entry_at(&legacy, PROJECT, PROFILE, FINGERPRINT, MAX_AGE, EXPIRES_AT);
         let CacheEntryStatus::Fresh {
             value,
+            refresh_at_unix_ms,
             expires_at_unix_ms,
         } = status
         else {
             panic!("v2 preserves its original inclusive freshness boundary");
         };
-        assert_eq!(expires_at_unix_ms, Some(EXPIRES_AT * 1000));
+        assert_eq!(refresh_at_unix_ms, Some(EXPIRES_AT * 1000));
+        assert_eq!(expires_at_unix_ms, None);
         assert_eq!(value.expose_secret(), "sensitive");
     }
 

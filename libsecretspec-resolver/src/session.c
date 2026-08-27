@@ -122,6 +122,7 @@ struct secretspec_resolver_call {
 
 struct secretspec_resolver_client {
     ss_process *process;
+    ss_frame_reader frame_reader;
     ss_mutex mutex;
     ss_mutex write_mutex;
     ss_condition state_changed;
@@ -803,7 +804,8 @@ static SS_THREAD_RETURN reader_main(void *context) {
         limit = client->max_frame_bytes;
         mutex_unlock(&client->mutex);
         frame_status =
-            ss_frame_read(client->process, limit, &payload, &clean_eof, &non_protocol_text);
+            ss_frame_read(client->process, &client->frame_reader, limit, &payload,
+                          &clean_eof, &non_protocol_text);
         if (frame_status != SECRETSPEC_RESOLVER_OK || clean_eof) {
             fail_all(client,
                      clean_eof ? SECRETSPEC_RESOLVER_UNAVAILABLE : frame_status,
@@ -1123,8 +1125,7 @@ static bool validate_initialize_result(
         frame > offered_frame || in_flight > offered_in_flight ||
         !yyjson_is_obj(yyjson_obj_get(result, "application"))) goto done;
     if (!array_has_text(capabilities, "resolver.get") ||
-        !array_has_text(capabilities, "resolver.release") ||
-        !array_has_text(capabilities, "resolver.reject")) goto done;
+        !array_has_text(capabilities, "resolver.release")) goto done;
     client->capabilities = (char **)calloc(yyjson_arr_size(capabilities), sizeof(char *));
     if (client->capabilities == NULL) goto done;
     yyjson_arr_foreach(capabilities, index, maximum, capability) {

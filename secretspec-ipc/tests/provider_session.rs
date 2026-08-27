@@ -7,7 +7,7 @@ use secretspec_ipc::protocol::provider::{
 use secretspec_ipc::protocol::{
     InitializeParams, Limits, PROTOCOL_VERSION, PROVIDER_PROTOCOL, Product,
 };
-use secretspec_ipc::provider::{ProviderHandler, SecretValue, serve_provider};
+use secretspec_ipc::provider::{ProvidedSecret, ProviderHandler, SecretValue, serve_provider};
 use secretspec_ipc::server::{RequestContext, RpcResult, ServerConfig};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
@@ -75,14 +75,14 @@ impl ProviderHandler for MemoryProvider {
         &self,
         _context: RequestContext,
         address: Address,
-    ) -> RpcResult<Option<SecretValue>> {
+    ) -> RpcResult<Option<ProvidedSecret>> {
         Ok(self
             .values
             .lock()
             .unwrap()
             .get(&key(address))
             .cloned()
-            .map(SecretValue::new))
+            .map(|value| ProvidedSecret::new(value, None)))
     }
 
     async fn exists(&self, _context: RequestContext, address: Address) -> RpcResult<bool> {
@@ -248,10 +248,10 @@ async fn typed_provider_handler_covers_naming_reads_mutations_and_reflection() {
     assert_eq!(
         found,
         GetResult::Found {
-            value: "canary-value".into()
+            value: "canary-value".into(),
+            expires_at_unix_ms: None,
         }
     );
-
     let reflected: ReflectResult = client
         .call(
             wire::method::REFLECT,

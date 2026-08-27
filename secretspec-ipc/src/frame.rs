@@ -97,31 +97,73 @@ fn validate_payload(payload: &[u8], limit: usize) -> Result<()> {
 }
 
 #[cfg(feature = "tokio")]
+pub(crate) struct AsyncFrameReader<R> {
+    reader: tokio::io::BufReader<R>,
+}
+
+#[cfg(feature = "tokio")]
+impl<R> AsyncFrameReader<R>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    pub(crate) fn new(reader: R) -> Self {
+        Self {
+            reader: tokio::io::BufReader::new(reader),
+        }
+    }
+
+    pub(crate) async fn read_frame(&mut self, limit: usize) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        use tokio::io::AsyncBufReadExt;
+        let mut decoder = FrameDecoder::new(limit)?;
+        loop {
+            let (consumed, mut frames) = {
+                let available = self.reader.fill_buf().await?;
+                if available.is_empty() {
+                    decoder.finish_eof()?;
+                    return Ok(None);
+                }
+                let consumed = available
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map_or(available.len(), |position| position + 1);
+                (consumed, decoder.push(&available[..consumed])?)
+            };
+            self.reader.consume(consumed);
+            if let Some(frame) = frames.pop() {
+                debug_assert!(frames.is_empty());
+                return Ok(Some(frame));
+            }
+        }
+    }
+}
+
+/// Read one frame from a one-shot or already-buffered stream.
+///
+/// Long-lived protocol loops use `AsyncFrameReader` so buffered bytes after
+/// the delimiter are retained for the next call. This compatibility helper
+/// intentionally avoids reading past the delimiter because it cannot retain
+/// state owned by a raw `AsyncRead` caller.
+#[cfg(feature = "tokio")]
 pub async fn read_frame<R>(reader: &mut R, limit: usize) -> Result<Option<Zeroizing<Vec<u8>>>>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
     use tokio::io::AsyncReadExt;
-    validate_limit(limit)?;
-    let mut payload = Zeroizing::new(Vec::new());
+    let mut decoder = FrameDecoder::new(limit)?;
     let mut byte = [0_u8; 1];
     loop {
-        let read = reader.read(&mut byte).await?;
-        if read == 0 {
-            return if payload.is_empty() {
-                Ok(None)
-            } else {
-                Err(Error::Protocol("truncated frame"))
-            };
+        match reader.read(&mut byte).await? {
+            0 => {
+                decoder.finish_eof()?;
+                return Ok(None);
+            }
+            _ => {
+                let mut frames = decoder.push(&byte)?;
+                if let Some(frame) = frames.pop() {
+                    return Ok(Some(frame));
+                }
+            }
         }
-        if byte[0] == b'\n' {
-            validate_payload(&payload, limit)?;
-            return Ok(Some(payload));
-        }
-        if payload.len() >= limit {
-            return Err(Error::Protocol("frame exceeds the active limit"));
-        }
-        payload.push(byte[0]);
     }
 }
 
@@ -159,5 +201,49 @@ mod tests {
     fn rejects_a_missing_delimiter_at_the_bound() {
         let mut decoder = FrameDecoder::new(4).unwrap();
         assert!(decoder.push(b"12345").is_err());
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn async_reader_reuses_one_buffered_chunk_across_frames() {
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::task::{Context, Poll};
+        use tokio::io::{AsyncRead, ReadBuf};
+
+        struct CountingReader {
+            bytes: Vec<u8>,
+            position: usize,
+            reads: Arc<AtomicUsize>,
+        }
+
+        impl AsyncRead for CountingReader {
+            fn poll_read(
+                mut self: Pin<&mut Self>,
+                _context: &mut Context<'_>,
+                buffer: &mut ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                self.reads.fetch_add(1, Ordering::Relaxed);
+                let available = &self.bytes[self.position..];
+                let read = available.len().min(buffer.remaining());
+                buffer.put_slice(&available[..read]);
+                self.position += read;
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        let reads = Arc::new(AtomicUsize::new(0));
+        let source = CountingReader {
+            bytes: b"{\"a\":1}\n{\"b\":2}\n".to_vec(),
+            position: 0,
+            reads: Arc::clone(&reads),
+        };
+        let mut reader = AsyncFrameReader::new(source);
+        let first = reader.read_frame(1024).await.unwrap().unwrap();
+        let second = reader.read_frame(1024).await.unwrap().unwrap();
+        assert_eq!(&*first, b"{\"a\":1}");
+        assert_eq!(&*second, b"{\"b\":2}");
+        assert_eq!(reads.load(Ordering::Relaxed), 1);
     }
 }

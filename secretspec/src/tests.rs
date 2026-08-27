@@ -8369,7 +8369,7 @@ fn test_resolve_profile_unknown_returns_invalid_profile() {
 
 /// Builds a `Secrets` whose only project provider alias is `target`, carrying
 /// the given semantic credential-source map.
-fn secrets_with_credential_alias(
+pub(crate) fn secrets_with_credential_alias(
     target_uri: &str,
     credentials: HashMap<String, CredentialSource>,
 ) -> Secrets {

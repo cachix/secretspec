@@ -53,6 +53,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [Azure Key Vault](https://secretspec.dev/providers/akv)
   - [Azure App Configuration](https://secretspec.dev/providers/aac) (0.20+)
   - [Infisical](https://secretspec.dev/providers/infisical) (0.16+)
+  - [EJSON](https://secretspec.dev/providers/ejson) (0.20+, read-only)
   - [age](https://secretspec.dev/providers/age) (0.17+)
   - [SOPS](https://secretspec.dev/providers/sops) (0.17+)
   - [Kubernetes](https://secretspec.dev/providers/kubernetes) (0.20+)
@@ -111,6 +112,7 @@ $ secretspec config global init  # 0.17+
   akv: Azure Key Vault
   aac: Azure App Configuration (0.20+)
   infisical: Infisical secret management (0.16+)
+  ejson: EJSON encrypted files, read-only (0.20+)
   age: age-encrypted file (0.17+)
   sops: SOPS encrypted files (0.17+)
   kubernetes: Kubernetes (0.20+)
@@ -238,6 +240,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Azure Key Vault](https://secretspec.dev/providers/akv)** - Azure secret management
 - **[Azure App Configuration](https://secretspec.dev/providers/aac)** (0.20+) - Azure key-value management with Key Vault reference resolution
 - **[Infisical](https://secretspec.dev/providers/infisical)** (0.16+) - Infisical secret management
+- **[EJSON](https://secretspec.dev/providers/ejson)** (0.20+) - Read-only EJSON encrypted files with an explicit private-key provider credential
 - **[age](https://secretspec.dev/providers/age)** (0.17+) - age-encrypted file
 - **[SOPS](https://secretspec.dev/providers/sops)** (0.17+) - SOPS-encrypted files
 - **[Kubernetes](https://secretspec.dev/providers/kubernetes)** (0.20+) - Kubernetes

@@ -51,6 +51,7 @@ same-file.workspace = true
 url.workspace = true
 percent-encoding.workspace = true
 whoami = { workspace = true, optional = true }
+wait-timeout = { workspace = true, optional = true }
 linkme.workspace = true
 jiff.workspace = true
 secrecy.workspace = true
@@ -79,8 +80,11 @@ json-patch = { workspace = true, optional = true }
 libc.workspace = true
 signal-hook.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, optional = true }
+
 [features]
-default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "bw", "age", "scaleway", "sops", "kubernetes", "cloudflare"]
+default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "bw", "age", "ejson", "scaleway", "sops", "kubernetes", "cloudflare"]
 cli = ["dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable", "dep:dunce"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
@@ -105,6 +109,7 @@ akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secr
 # implementation, avoiding a second cryptography dependency.
 aac = ["akv", "dep:reqwest", "azure_core/hmac_rust"]
 age = ["dep:age"]
+ejson = ["dep:wait-timeout", "dep:windows-sys"]
 sops = []
 kubernetes = ["dep:kube", "dep:k8s-openapi", "dep:base64", "dep:json-patch"]
 

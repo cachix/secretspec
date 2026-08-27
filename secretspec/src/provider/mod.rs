@@ -20,6 +20,7 @@
 //! - [`keeper::KeeperProvider`]: Keeper Secrets Manager integration (0.18+)
 //! - [`dotenv::DotEnvProvider`]: `.env` file support
 //! - [`env::EnvProvider`]: Environment variables (read-only)
+//! - [`ejson::EjsonProvider`]: EJSON encrypted files (0.20+)
 //! - [`null::NullProvider`]: Defaults, generation, or run prompts without storage (0.19+)
 //! - [`file::FileProvider`]: Plaintext file-per-secret storage (0.19+)
 //! - [`fly::FlyProvider`]: Fly.io application secrets, write-only (0.20+)
@@ -161,6 +162,8 @@ pub mod bws;
 pub mod cloudflare;
 pub mod dashlane;
 pub mod dotenv;
+#[cfg(feature = "ejson")]
+pub mod ejson;
 pub mod env;
 pub mod file;
 pub mod fly;

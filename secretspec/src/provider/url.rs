@@ -117,6 +117,14 @@ impl ProviderUrl {
         self.0.query().is_some()
     }
 
+    pub(crate) fn has_fragment(&self) -> bool {
+        self.0.fragment().is_some()
+    }
+
+    pub(crate) fn has_port(&self) -> bool {
+        self.0.port().is_some()
+    }
+
     /// Percent-encode a value for use in a URI path or host component (e.g., in
     /// `uri()` methods).
     pub fn encode(value: &str) -> String {

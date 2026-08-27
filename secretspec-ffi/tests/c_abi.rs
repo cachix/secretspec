@@ -199,6 +199,9 @@ fn call_rejects_unknown_inline_declaration_fields() {
 
 #[test]
 fn call_accepts_scalar_required_group_names() {
+    let dir = TempDir::new().unwrap();
+    let env_path = dir.path().join("inline-groups.env");
+    fs::write(&env_path, "").unwrap();
     let request = serde_json::json!({
         "request_version": 1,
         "operation": "resolve",
@@ -218,7 +221,10 @@ fn call_accepts_scalar_required_group_names() {
                 }}}
             }
         },
-        "options": { "reason": "ffi inline groups test" }
+        "options": {
+            "provider": format!("dotenv://{}", env_path.display()),
+            "reason": "ffi inline groups test"
+        }
     })
     .to_string();
 

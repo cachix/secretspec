@@ -83,6 +83,24 @@ class ResolveTest < Minitest::Test
     end
   end
 
+  def test_inline_spec_resolves_at_its_logical_base_dir
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "inline.env"), "TOKEN=inline-ruby\n")
+      spec = {
+        "project" => { "name" => "ruby-inline" },
+        "providers" => { "env" => "dotenv://inline.env" },
+        "profiles" => { "default" => { "secrets" => {
+          "TOKEN" => { "description" => "token", "providers" => ["env"] }
+        } } }
+      }
+      resolved = Secretspec::SecretSpec.builder
+                                        .with_inline_spec(spec, dir)
+                                        .with_reason("ruby inline test")
+                                        .load
+      assert_equal "inline-ruby", resolved.secrets.fetch("TOKEN").get
+    end
+  end
+
   def test_set_as_env
     Dir.mktmpdir do |dir|
       manifest, provider = project(dir, "DATABASE_URL=postgres://db\n")

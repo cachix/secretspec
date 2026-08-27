@@ -7,12 +7,48 @@ namespace Cachix.SecretSpec;
 public sealed class SecretSpecBuilder
 {
     private readonly ResolveRequest _request = new();
+    private bool _hasInlineSpec;
+    private JsonElement _inlineSpec;
+    private string? _inlineBaseDir;
 
     public SecretSpecBuilder WithPath(string? path)
     {
+        _inlineSpec = default;
+        _inlineBaseDir = null;
+        _hasInlineSpec = false;
         _request.Path = path;
         return this;
     }
+
+    /// <summary>Resolve strict inline-spec v1 at <paramref name="baseDir"/> (SecretSpec 0.20+).</summary>
+    public SecretSpecBuilder WithInlineSpec(JsonElement spec, string baseDir)
+    {
+        if (spec.ValueKind == JsonValueKind.Undefined)
+            throw new ArgumentException("The inline specification must be a JSON value.", nameof(spec));
+
+        _request.Path = null;
+        _hasInlineSpec = true;
+        _inlineSpec = spec.Clone();
+        _inlineBaseDir = baseDir;
+        return this;
+    }
+
+    /// <summary>
+    /// Resolve a pre-serialized strict inline-spec v1 at <paramref name="baseDir"/>
+    /// (SecretSpec 0.20+).
+    /// </summary>
+    public SecretSpecBuilder WithInlineSpec(string specJson, string baseDir)
+    {
+        using var document = JsonDocument.Parse(specJson);
+        return WithInlineSpec(document.RootElement, baseDir);
+    }
+
+    /// <summary>
+    /// Resolve strict inline-spec v1 using source-generated JSON metadata
+    /// (SecretSpec 0.20+).
+    /// </summary>
+    public SecretSpecBuilder WithInlineSpec<T>(T spec, string baseDir, JsonTypeInfo<T> jsonTypeInfo)
+        => WithInlineSpec(JsonSerializer.SerializeToElement(spec, jsonTypeInfo), baseDir);
 
     public SecretSpecBuilder WithProvider(string? provider)
     {
@@ -94,16 +130,20 @@ public sealed class SecretSpecBuilder
             response.Secrets);
     }
 
-    private static T Call<T>(
+    private T Call<T>(
         ResolveRequest request,
         string kind,
         JsonTypeInfo<Envelope<T>> envelopeTypeInfo)
         where T : class
     {
-        var payload = JsonSerializer.Serialize(
+        var versioned = _hasInlineSpec;
+        var options = JsonSerializer.SerializeToElement(
             request,
             SecretSpecJsonContext.Default.ResolveRequest);
-        var raw = Native.Resolve(payload);
+        var payload = versioned
+            ? SerializeInlineRequest(options)
+            : JsonSerializer.Serialize(request, SecretSpecJsonContext.Default.ResolveRequest);
+        var raw = versioned ? Native.Call(payload) : Native.Resolve(payload);
         Envelope<T>? envelope;
         try
         {
@@ -126,6 +166,29 @@ public sealed class SecretSpecBuilder
             ?? throw new SecretSpecException(
                 "ffi",
                 $"secretspec_resolve reported ok with no {kind} response");
+    }
+
+    private string SerializeInlineRequest(JsonElement options)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("request_version", 1);
+            writer.WriteString("operation", "resolve");
+            writer.WritePropertyName("source");
+            writer.WriteStartObject();
+            writer.WriteString("kind", "inline");
+            writer.WriteNumber("spec_version", 1);
+            writer.WriteString("base_dir", _inlineBaseDir);
+            writer.WritePropertyName("spec");
+            _inlineSpec.WriteTo(writer);
+            writer.WriteEndObject();
+            writer.WritePropertyName("options");
+            options.WriteTo(writer);
+            writer.WriteEndObject();
+        }
+        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
     }
 
     private static void EnsureSchemaVersion(int actual, int expected, string kind)

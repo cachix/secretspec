@@ -17,6 +17,14 @@ resolve_nogvl(void *arg)
     return secretspec_resolve((const char *)arg);
 }
 
+static void *
+call_nogvl(void *arg)
+{
+    return secretspec_call((const char *)arg);
+}
+
+static VALUE native_dispatch(VALUE request_json, void *(*dispatch)(void *));
+
 /*
  * Secretspec::Native.c_resolve(request_json) -> String or nil
  *
@@ -32,12 +40,24 @@ resolve_nogvl(void *arg)
 static VALUE
 native_resolve(VALUE self, VALUE request_json)
 {
+    return native_dispatch(request_json, resolve_nogvl);
+}
+
+static VALUE
+native_call(VALUE self, VALUE request_json)
+{
+    return native_dispatch(request_json, call_nogvl);
+}
+
+static VALUE
+native_dispatch(VALUE request_json, void *(*dispatch)(void *))
+{
     char *request = strdup(StringValueCStr(request_json));
     if (request == NULL) {
         return Qnil;
     }
     char *result = rb_thread_call_without_gvl(
-        resolve_nogvl, request, RUBY_UBF_IO, NULL);
+        dispatch, request, RUBY_UBF_IO, NULL);
     free(request);
     if (result == NULL) {
         return Qnil;
@@ -60,5 +80,6 @@ Init_secretspec_ext(void)
     VALUE mod = rb_define_module("Secretspec");
     VALUE native = rb_define_module_under(mod, "Native");
     rb_define_singleton_method(native, "c_resolve", native_resolve, 1);
+    rb_define_singleton_method(native, "c_call", native_call, 1);
     rb_define_singleton_method(native, "c_abi_version", native_abi_version, 0);
 }

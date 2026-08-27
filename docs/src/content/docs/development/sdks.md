@@ -89,7 +89,7 @@ Notes:
 
 Swift interoperates with C directly through Clang modules, and SwiftPM
 distributes native Apple binaries as XCFramework binary targets. That fits the
-existing `secretspec-ffi` boundary exactly: three ownership-audited C functions
+existing `secretspec-ffi` boundary exactly: ownership-audited C functions
 carry one already-versioned JSON contract.
 
 [UniFFI](https://mozilla.github.io/uniffi-rs/latest/) is a good default for a
@@ -99,6 +99,26 @@ shared by several SDKs, and introducing UniFFI would create a second exported
 ABI, generated Rust scaffolding, and another schema to version. The hand-written
 Swift layer is limited to `Codable` request/response models and idiomatic errors;
 resolution remains entirely in Rust.
+
+## Versioned native calls (0.20+)
+
+`secretspec_resolve` remains the compatibility request for path and search
+resolution. SDKs that need a declaration held in application code call the new
+`secretspec_call` symbol with request version 1 instead. A separately versioned
+`source` is exactly one of `search`, `path`, or `inline`; an inline source also
+carries a logical `base_dir`, used for relative provider paths as
+`Secrets::from_spec_at` does.
+
+The inline specification is strict JSON, not the private Rust `Config` or a
+serialized compiled manifest. Its v1 shape contains `project`, `profiles`, and
+a `secrets` object per profile, with optional provider aliases, scopes, and
+the normal secret declaration fields. `project.extends` uses paths relative to
+the inline declaration's `base_dir`, so the full configuration model—including
+inheritance—is supported. Unknown request and declaration fields, unsupported
+versions, and unsupported operations are rejected. SDKs bind `secretspec_call`
+only when using inline specs: an older library therefore reports the missing
+capability instead of silently ignoring an unknown field and loading a
+filesystem manifest.
 
 `scripts/build-swift-xcframework.sh` changes Cargo's target-local dylib install
 name to `@rpath`, merges the native slices into a universal dylib, adds the C

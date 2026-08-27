@@ -5,7 +5,9 @@
 use std::ffi::{CStr, CString, c_char};
 use std::fs;
 
-use secretspec_ffi::{secretspec_abi_version, secretspec_free, secretspec_resolve};
+use secretspec_ffi::{
+    secretspec_abi_version, secretspec_call, secretspec_free, secretspec_resolve,
+};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -15,6 +17,16 @@ fn resolve(request: &str) -> Value {
     let c_request = CString::new(request).unwrap();
     let ptr: *mut c_char = unsafe { secretspec_resolve(c_request.as_ptr()) };
     assert!(!ptr.is_null(), "resolve returned null");
+    let json = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap().to_string();
+    unsafe { secretspec_free(ptr) };
+    serde_json::from_str(&json).unwrap()
+}
+
+/// Call the versioned operation API through its real exported C symbol.
+fn call(request: &str) -> Value {
+    let c_request = CString::new(request).unwrap();
+    let ptr: *mut c_char = unsafe { secretspec_call(c_request.as_ptr()) };
+    assert!(!ptr.is_null(), "call returned null");
     let json = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap().to_string();
     unsafe { secretspec_free(ptr) };
     serde_json::from_str(&json).unwrap()
@@ -60,6 +72,186 @@ fn abi_version_is_nonempty() {
     let version = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap();
     assert!(!version.is_empty());
     // Static string: no free.
+}
+
+#[test]
+fn call_resolves_a_strict_inline_spec_at_its_logical_base_directory() {
+    let dir = TempDir::new().unwrap();
+    let env_path = dir.path().join("inline.env");
+    fs::write(&env_path, "TOKEN=from-inline\n").unwrap();
+    let request = serde_json::json!({
+        "request_version": 1,
+        "operation": "resolve",
+        "source": {
+            "kind": "inline",
+            "spec_version": 1,
+            "base_dir": dir.path(),
+            "spec": {
+                "project": { "name": "inline-ffi" },
+                "providers": { "env": "dotenv://inline.env" },
+                "profiles": {
+                    "default": {
+                        "secrets": {
+                            "TOKEN": { "description": "inline token", "providers": ["env"] }
+                        }
+                    }
+                }
+            }
+        },
+        "options": { "reason": "ffi inline test" }
+    })
+    .to_string();
+
+    let env = call(&request);
+    assert_eq!(env["ok"], true, "envelope: {env}");
+    assert_eq!(env["response"]["secrets"]["TOKEN"]["value"], "from-inline");
+}
+
+#[test]
+fn call_inline_spec_resolves_extends_relative_to_base_directory() {
+    let dir = TempDir::new().unwrap();
+    let parent = dir.path().join("parent");
+    fs::create_dir(&parent).unwrap();
+    fs::write(parent.join("parent.env"), "TOKEN=from-parent\n").unwrap();
+    fs::write(
+        parent.join("secretspec.toml"),
+        r#"
+[project]
+name = "parent"
+revision = "1.0"
+
+[providers]
+env = "dotenv://parent/parent.env"
+
+[profiles.default]
+TOKEN = { description = "inherited token", providers = ["env"] }
+"#,
+    )
+    .unwrap();
+    let request = serde_json::json!({
+        "request_version": 1,
+        "operation": "resolve",
+        "source": {
+            "kind": "inline",
+            "spec_version": 1,
+            "base_dir": dir.path(),
+            "spec": {
+                "project": { "name": "child", "extends": ["parent"] },
+                "profiles": {}
+            }
+        },
+        "options": { "reason": "ffi inline inheritance test" }
+    })
+    .to_string();
+
+    let env = call(&request);
+    assert_eq!(env["ok"], true, "envelope: {env}");
+    assert_eq!(env["response"]["secrets"]["TOKEN"]["value"], "from-parent");
+}
+
+#[test]
+fn call_rejects_unknown_versions_operations_and_source_combinations() {
+    let cases = [
+        serde_json::json!({
+            "request_version": 2, "operation": "resolve", "source": { "kind": "search" }
+        }),
+        serde_json::json!({
+            "request_version": 1, "operation": "inspect", "source": { "kind": "search" }
+        }),
+        serde_json::json!({
+            "request_version": 1, "operation": "resolve",
+            "source": { "kind": "inline", "spec_version": 2, "base_dir": ".", "spec": {} }
+        }),
+        serde_json::json!({
+            "request_version": 1, "operation": "resolve",
+            "source": { "kind": "path", "path": "secretspec.toml", "spec": {} }
+        }),
+    ];
+    for request in cases {
+        let env = call(&request.to_string());
+        assert_eq!(
+            env["ok"], false,
+            "request unexpectedly succeeded: {request}"
+        );
+    }
+}
+
+#[test]
+fn call_rejects_unknown_inline_declaration_fields() {
+    let request = serde_json::json!({
+        "request_version": 1,
+        "operation": "resolve",
+        "source": {
+            "kind": "inline", "spec_version": 1, "base_dir": ".",
+            "spec": {
+                "project": { "name": "inline" },
+                "profiles": { "default": { "secrets": {
+                    "TOKEN": { "description": "token", "required": true, "unknown": true }
+                }}}
+            }
+        }
+    })
+    .to_string();
+    let env = call(&request);
+    assert_eq!(env["ok"], false);
+    assert_eq!(env["error"]["kind"], "invalid_request");
+}
+
+#[test]
+fn call_accepts_scalar_required_group_names() {
+    let dir = TempDir::new().unwrap();
+    let env_path = dir.path().join("inline-groups.env");
+    fs::write(&env_path, "").unwrap();
+    let request = serde_json::json!({
+        "request_version": 1,
+        "operation": "resolve",
+        "source": {
+            "kind": "inline", "spec_version": 1, "base_dir": ".",
+            "spec": {
+                "project": { "name": "inline-groups" },
+                "profiles": { "default": { "secrets": {
+                    "USERNAME": {
+                        "description": "username", "required": { "at_least_one": "account_auth" },
+                        "default": "alice"
+                    },
+                    "PASSWORD": {
+                        "description": "password", "required": { "at_least_one": "account_auth" },
+                        "default": "secret"
+                    }
+                }}}
+            }
+        },
+        "options": {
+            "provider": format!("dotenv://{}", env_path.display()),
+            "reason": "ffi inline groups test"
+        }
+    })
+    .to_string();
+
+    let env = call(&request);
+    assert_eq!(env["ok"], true, "envelope: {env}");
+}
+
+#[test]
+fn call_rejects_empty_required_groups() {
+    let request = serde_json::json!({
+        "request_version": 1,
+        "operation": "resolve",
+        "source": {
+            "kind": "inline", "spec_version": 1, "base_dir": ".",
+            "spec": {
+                "project": { "name": "inline-groups" },
+                "profiles": { "default": { "secrets": {
+                    "TOKEN": { "description": "token", "required": {} }
+                }}}
+            }
+        }
+    })
+    .to_string();
+
+    let env = call(&request);
+    assert_eq!(env["ok"], false, "envelope: {env}");
+    assert_eq!(env["error"]["kind"], "invalid_request");
 }
 
 #[test]

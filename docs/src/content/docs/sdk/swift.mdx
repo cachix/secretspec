@@ -81,6 +81,12 @@ let builder = SecretSpec.builder().withCaller(CallerContext(
 Caller context identifies the invoking integration in audit records but never
 satisfies `require_reason`. Do not put credentials or secret values in it.
 
+## Inline specifications (0.20+)
+
+Use `try builder.withInlineSpec(spec, baseDir: ...)` with an `Encodable`
+declaration to resolve strict inline-spec v1 JSON. The base directory resolves
+relative provider paths; an older XCFramework fails to link the versioned call.
+
 ## Scopes
 
 Use `withScope("api")` to resolve only a named `[scopes.api]` subset. The

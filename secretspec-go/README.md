@@ -38,6 +38,27 @@ func main() {
 A missing required secret returns `*MissingRequiredError`; any other failure
 returns `*Error` (with a stable `.Kind`).
 
+## Inline specifications (0.20+)
+
+Use `WithInlineSpec(spec, baseDir)` to resolve a strict JSON declaration held
+in application code. `baseDir` resolves relative provider paths, and an older
+native library fails with a capability error rather than searching for a
+filesystem manifest. The inline v1 document uses `project`, `profiles`, and a
+`secrets` object in each profile. `project.extends` resolves parent manifests
+relative to the supplied logical base directory.
+
+```go
+spec := map[string]any{
+	"project": map[string]any{"name": "my-app"},
+	"profiles": map[string]any{"default": map[string]any{
+		"secrets": map[string]any{
+			"API_TOKEN": map[string]any{"description": "API token"},
+		},
+	}},
+}
+resolved, err := secretspec.New().WithInlineSpec(spec, "/logical/project").Load()
+```
+
 ## Scopes (0.17+)
 
 Use `WithScope("api")` to resolve only a named `[scopes.api]` subset. Both

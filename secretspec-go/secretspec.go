@@ -171,7 +171,13 @@ func ABIVersion() (string, error) {
 
 // Builder configures a resolution, mirroring the derive crate's SecretSpec::builder().
 type Builder struct {
-	req map[string]any
+	req    map[string]any
+	inline *inlineSource
+}
+
+type inlineSource struct {
+	baseDir string
+	spec    any
 }
 
 // New starts a resolution builder.
@@ -190,7 +196,13 @@ func (b *Builder) set(key string, value any) *Builder {
 	return b
 }
 
-func (b *Builder) WithPath(path string) *Builder  { return b.set("path", path) }
+func (b *Builder) WithPath(path string) *Builder {
+	// Sources are a tagged union in the native request. Choosing a path after
+	// an inline source deliberately selects the legacy path source instead of
+	// serializing an ambiguous request.
+	b.inline = nil
+	return b.set("path", path)
+}
 func (b *Builder) WithProvider(p string) *Builder { return b.set("provider", p) }
 func (b *Builder) WithProfile(p string) *Builder  { return b.set("profile", p) }
 
@@ -201,6 +213,21 @@ func (b *Builder) WithCaller(caller CallerContext) *Builder {
 	return b.set("caller", caller)
 }
 func (b *Builder) WithNoValues(v bool) *Builder { return b.set("no_values", v) }
+
+// WithInlineSpec resolves a strict, versioned inline declaration instead of a
+// filesystem manifest. `spec` is serialized as the native inline-spec v1
+// document (project/profiles/secrets); `baseDir` resolves relative provider
+// paths just like the directory of a manifest. Available since SecretSpec 0.20.
+//
+// The native library must export `secretspec_call`. If it is older, Load and
+// Report return a capability error rather than falling back to a manifest search.
+func (b *Builder) WithInlineSpec(spec any, baseDir string) *Builder {
+	if b.req != nil {
+		delete(b.req, "path")
+	}
+	b.inline = &inlineSource{baseDir: baseDir, spec: spec}
+	return b
+}
 
 // envelope is the response wrapper shared by the resolve and report paths,
 // generic over its inner response type R.
@@ -264,21 +291,13 @@ func parseEnvelope[R any](raw, kind string, expected int, schemaOf func(*R) int)
 // Load resolves the secrets. It returns *MissingRequiredError if a required
 // secret is missing, and *Error for any other failure.
 func (b *Builder) Load() (*Resolved, error) {
-	if err := ensureLoaded(); err != nil {
-		return nil, err
-	}
 	// A zero-value Builder (var b Builder; b.Load()) has a nil req, which marshals
 	// to the literal `null` that serde rejects as an invalid JsonRequest. The WithX
 	// setters lazily allocate req, but Load may run before any of them.
 	if b.req == nil {
 		b.req = map[string]any{}
 	}
-	payload, err := json.Marshal(b.req)
-	if err != nil {
-		return nil, err
-	}
-
-	raw, err := nativeResolve(string(payload))
+	raw, err := b.execute("")
 	if err != nil {
 		return nil, err
 	}
@@ -361,20 +380,7 @@ type reportResponseJSON struct {
 // *MissingRequiredError: a missing required secret appears as a SecretReport
 // with Status "missing_required". It returns *Error for a genuine failure.
 func (b *Builder) Report() (*Report, error) {
-	if err := ensureLoaded(); err != nil {
-		return nil, err
-	}
-	req := make(map[string]any, len(b.req)+1)
-	for k, v := range b.req {
-		req[k] = v
-	}
-	req["mode"] = "report"
-	payload, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-
-	raw, err := nativeResolve(string(payload))
+	raw, err := b.execute("report")
 	if err != nil {
 		return nil, err
 	}
@@ -394,4 +400,46 @@ func (b *Builder) Report() (*Report, error) {
 		Scope:    resp.Scope,
 		Secrets:  secrets,
 	}, nil
+}
+
+// execute keeps the legacy request exactly as it was for path/search callers.
+// Inline callers use the separate C symbol, making an old runtime's missing
+// capability an explicit load error instead of a filesystem fallback.
+func (b *Builder) execute(mode string) (string, error) {
+	if b.req == nil {
+		b.req = map[string]any{}
+	}
+	options := make(map[string]any, len(b.req)+1)
+	for k, v := range b.req {
+		options[k] = v
+	}
+	if mode != "" {
+		options["mode"] = mode
+	}
+	if b.inline == nil {
+		if err := ensureLoaded(); err != nil {
+			return "", err
+		}
+		payload, err := json.Marshal(options)
+		if err != nil {
+			return "", err
+		}
+		return nativeResolve(string(payload))
+	}
+	if err := ensureCallLoaded(); err != nil {
+		return "", err
+	}
+	payload, err := json.Marshal(map[string]any{
+		"request_version": 1,
+		"operation":       "resolve",
+		"source": map[string]any{
+			"kind": "inline", "spec_version": 1,
+			"base_dir": b.inline.baseDir, "spec": b.inline.spec,
+		},
+		"options": options,
+	})
+	if err != nil {
+		return "", err
+	}
+	return nativeCall(string(payload))
 }

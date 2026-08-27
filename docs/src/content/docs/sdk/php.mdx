@@ -118,6 +118,12 @@ $builder = SecretSpec::builder()->withCaller(new CallerContext(
 Caller context identifies the invoking integration in audit records but never
 satisfies `require_reason`. Do not put credentials or secret values in it.
 
+## Inline specifications (0.20+)
+
+Use `withInlineSpec($spec, $baseDir)` to resolve a strict inline-spec v1 PHP
+array. The embedded extension or FFI fallback uses the versioned native call;
+an older cdylib raises a capability error instead of searching for a manifest.
+
 ## Scopes (0.17+)
 
 Use `withScope('api')` to resolve only a named `[scopes.api]` subset. The

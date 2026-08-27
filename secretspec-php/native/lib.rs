@@ -28,6 +28,13 @@ pub fn secretspec_native_resolve(request_json: &str) -> String {
     secretspec::resolve_json(request_json)
 }
 
+/// Process a versioned native operation request. Exposed as
+/// `secretspec_native_call()` for inline-spec resolution.
+#[php_function]
+pub fn secretspec_native_call(request_json: &str) -> String {
+    secretspec::call_json(request_json)
+}
+
 /// The extension's version (tracks the crate version). Exposed to PHP as
 /// `secretspec_native_abi_version()`.
 #[php_function]
@@ -39,5 +46,6 @@ pub fn secretspec_native_abi_version() -> String {
 pub fn get_module(module: ModuleBuilder) -> ModuleBuilder {
     module
         .function(wrap_function!(secretspec_native_resolve))
+        .function(wrap_function!(secretspec_native_call))
         .function(wrap_function!(secretspec_native_abi_version))
 }

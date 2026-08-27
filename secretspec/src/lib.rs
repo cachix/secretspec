@@ -53,6 +53,7 @@ mod error;
 pub(crate) mod generator;
 pub(crate) mod ini_field;
 pub(crate) mod json_field;
+mod native;
 mod plan;
 mod report;
 mod resolve;
@@ -102,6 +103,7 @@ pub use config::{
     ProviderCache, RequireReason, SecretEncoding, SecretExtract,
 };
 pub use error::{Result, SecretSpecError};
+pub use native::{INLINE_SPEC_SCHEMA_VERSION, NATIVE_CALL_REQUEST_VERSION, call_json};
 pub use provider::{DiscoveryContext, ProducedValuePersistence, Provider};
 pub use report::{
     RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus, SecretResolution,

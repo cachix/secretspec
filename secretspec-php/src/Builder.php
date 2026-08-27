@@ -26,10 +26,23 @@ final class Builder
     /** @var array<string, mixed> */
     private array $request = [];
 
+    /** @var array{spec: array<string, mixed>, base_dir: string}|null */
+    private ?array $inline = null;
+
     /** Path to a `secretspec.toml`; omit to walk up from the working directory. */
     public function withPath(?string $path): self
     {
+        $this->inline = null;
         return $this->set('path', $path);
+    }
+
+    /** Resolve strict inline-spec v1 at its logical base directory (0.20+). */
+    public function withInlineSpec(array $spec, string $baseDir): self
+    {
+        unset($this->request['path']);
+        $this->inline = ['spec' => $spec, 'base_dir' => $baseDir];
+
+        return $this;
     }
 
     /** Provider address, e.g. `keyring://` or `dotenv://.env.production`. */
@@ -92,7 +105,8 @@ final class Builder
      */
     public function load(): Resolved
     {
-        $response = $this->checkedResponse($this->request, 'resolve', self::RESOLVE_SCHEMA_VERSION);
+        [$request, $versioned] = $this->nativeRequest();
+        $response = $this->checkedResponse($request, $versioned, 'resolve', self::RESOLVE_SCHEMA_VERSION);
 
         $missing = $response['missing_required'] ?? [];
         if (!empty($missing)) {
@@ -129,9 +143,8 @@ final class Builder
      */
     public function report(): Report
     {
-        $request = $this->request;
-        $request['mode'] = 'report';
-        $response = $this->checkedResponse($request, 'report', self::REPORT_SCHEMA_VERSION);
+        [$request, $versioned] = $this->nativeRequest('report');
+        $response = $this->checkedResponse($request, $versioned, 'report', self::REPORT_SCHEMA_VERSION);
 
         $secrets = [];
         foreach ($response['secrets'] ?? [] as $s) {
@@ -163,12 +176,13 @@ final class Builder
      *
      * @return array<string, mixed>
      */
-    private function checkedResponse(array $request, string $kind, int $expectedVersion): array
+    private function checkedResponse(array $request, bool $versioned, string $kind, int $expectedVersion): array
     {
         // An empty request must serialize as a JSON object `{}`, not an array
         // `[]`; cast to object so the resolver parses it either way.
         $payload = \json_encode((object) $request, \JSON_THROW_ON_ERROR);
-        $envelope = \json_decode(Native::resolve($payload), true, 512, \JSON_THROW_ON_ERROR);
+        $raw = $versioned ? Native::call($payload) : Native::resolve($payload);
+        $envelope = \json_decode($raw, true, 512, \JSON_THROW_ON_ERROR);
 
         if (empty($envelope['ok'])) {
             $err = $envelope['error'] ?? [];
@@ -191,5 +205,27 @@ final class Builder
         }
 
         return $response;
+    }
+
+    /** @return array{0: array<string, mixed>, 1: bool} */
+    private function nativeRequest(?string $mode = null): array
+    {
+        $options = $this->request;
+        if ($mode !== null) {
+            $options['mode'] = $mode;
+        }
+        if ($this->inline === null) {
+            return [$options, false];
+        }
+
+        return [[
+            'request_version' => 1,
+            'operation' => 'resolve',
+            'source' => [
+                'kind' => 'inline', 'spec_version' => 1,
+                'base_dir' => $this->inline['base_dir'], 'spec' => $this->inline['spec'],
+            ],
+            'options' => $options,
+        ], true];
     }
 }

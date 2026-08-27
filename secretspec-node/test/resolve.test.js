@@ -90,6 +90,19 @@ test('load returns values and provenance', () => {
   assert.ok(!('SENTRY_DSN' in resolved.secrets));
 });
 
+test('withInlineSpec resolves at its logical base directory', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-node-inline-'));
+  fs.writeFileSync(path.join(dir, 'inline.env'), 'TOKEN=inline-node\n');
+  const resolved = SecretSpec.builder().withInlineSpec({
+    project: { name: 'node-inline' },
+    providers: { env: 'dotenv://inline.env' },
+    profiles: { default: { secrets: {
+      TOKEN: { description: 'token', providers: ['env'] },
+    } } },
+  }, dir).withReason('node inline test').load();
+  assert.equal(resolved.secrets.TOKEN.get(), 'inline-node');
+});
+
 test('scope is selected and returned', () => {
   const { manifestPath, provider } = project(
     'DATABASE_URL=postgres://db\nSENTRY_DSN=https://sentry\n',

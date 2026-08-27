@@ -14,15 +14,29 @@ internal static partial class Native
     }
 
     internal static string Resolve(string requestJson)
+        => Invoke(secretspec_resolve, requestJson, "secretspec_resolve", false);
+
+    internal static string Call(string requestJson)
+        => Invoke(secretspec_call, requestJson, "secretspec_call", true);
+
+    private static string Invoke(
+        Func<string, IntPtr> function,
+        string requestJson,
+        string symbol,
+        bool missingSymbolIsCapability)
     {
         IntPtr response = IntPtr.Zero;
         try
         {
-            response = secretspec_resolve(requestJson);
+            response = function(requestJson);
             if (response == IntPtr.Zero)
-                throw new SecretSpecException("ffi", "secretspec_resolve returned null");
+                throw new SecretSpecException("ffi", $"{symbol} returned null");
             return Marshal.PtrToStringUTF8(response)
                 ?? throw new SecretSpecException("ffi", "secretspec_resolve returned invalid UTF-8");
+        }
+        catch (EntryPointNotFoundException error) when (missingSymbolIsCapability)
+        {
+            throw new SecretSpecException("capability", error.Message, error);
         }
         catch (Exception error) when (
             error is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
@@ -107,6 +121,10 @@ internal static partial class Native
     [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     private static partial IntPtr secretspec_resolve(string requestJson);
+
+    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial IntPtr secretspec_call(string requestJson);
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

@@ -92,8 +92,11 @@ pub enum SecretSpecError {
     NoProjectName,
     #[error("Provider operation failed: {0}")]
     ProviderOperationFailed(String),
-    #[error("Provider protocol error: {0}")]
-    ProviderProtocol(secretspec_ipc::ErrorKind),
+    #[error("Provider protocol error: {kind}")]
+    ProviderProtocol {
+        kind: secretspec_ipc::ErrorKind,
+        interaction: Option<secretspec_ipc::InteractionReference>,
+    },
     #[error("User interaction error: {0}")]
     InquireError(#[from] inquire::InquireError),
     #[error("JSON error: {0}")]
@@ -153,7 +156,7 @@ impl SecretSpecError {
             SecretSpecError::ExtendedConfigNotFound(_) => "extended_config_not_found",
             SecretSpecError::NoProjectName => "no_project_name",
             SecretSpecError::ProviderOperationFailed(_) => "provider_operation_failed",
-            SecretSpecError::ProviderProtocol(kind) => kind.as_str(),
+            SecretSpecError::ProviderProtocol { kind, .. } => kind.as_str(),
             SecretSpecError::InquireError(_) => "inquire",
             SecretSpecError::Json(_) => "json",
             SecretSpecError::InvalidProfile(_) => "invalid_profile",
@@ -163,6 +166,15 @@ impl SecretSpecError {
             SecretSpecError::GenerationFailed(_) => "generation_failed",
             SecretSpecError::DecodeFailed { .. } => "decode_failed",
             SecretSpecError::ReasonRequired => "reason_required",
+        }
+    }
+
+    /// Opaque pending interaction associated with a provider failure, when
+    /// the provider supplied one (SecretSpec 0.20+).
+    pub fn interaction(&self) -> Option<&secretspec_ipc::InteractionReference> {
+        match self {
+            Self::ProviderProtocol { interaction, .. } => interaction.as_ref(),
+            _ => None,
         }
     }
 }
@@ -278,7 +290,10 @@ mod tests {
                 "provider_operation_failed",
             ),
             (
-                SecretSpecError::ProviderProtocol(secretspec_ipc::ErrorKind::InteractionRequired),
+                SecretSpecError::ProviderProtocol {
+                    kind: secretspec_ipc::ErrorKind::InteractionRequired,
+                    interaction: None,
+                },
                 "interaction_required",
             ),
             (

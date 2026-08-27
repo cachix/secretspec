@@ -703,18 +703,22 @@ fn map_source(source: ResolvedSource) -> Source {
 }
 
 fn map_resolver_error(error: SecretSpecError) -> RpcError {
-    let kind = match error {
-        SecretSpecError::ProviderProtocol(kind) => kind,
+    let (kind, interaction) = match error {
+        SecretSpecError::ProviderProtocol { kind, interaction } => (kind, interaction),
         SecretSpecError::PromptUnavailable(_) | SecretSpecError::ReasonRequired => {
-            ErrorKind::InteractionRequired
+            (ErrorKind::InteractionRequired, None)
         }
         // Not a provider refusal and not a missing value: this session was
         // configured without the authority to store what the read would have
         // produced, which is the caller's answer.
-        SecretSpecError::ProducedValueWriteRefused(_) => ErrorKind::PermissionDenied,
-        _ => ErrorKind::OperationFailed,
+        SecretSpecError::ProducedValueWriteRefused(_) => (ErrorKind::PermissionDenied, None),
+        _ => (ErrorKind::OperationFailed, None),
     };
-    RpcError::new(kind)
+    if kind == ErrorKind::InteractionRequired {
+        RpcError::interaction_required(interaction)
+    } else {
+        RpcError::new(kind)
+    }
 }
 
 pub(crate) async fn run_stdio(read_only: bool) -> secretspec_ipc::Result<()> {
@@ -757,10 +761,26 @@ mod tests {
             ErrorKind::Conflict,
             ErrorKind::Unavailable,
         ] {
-            let mapped = map_resolver_error(SecretSpecError::ProviderProtocol(kind));
+            let mapped = map_resolver_error(SecretSpecError::ProviderProtocol {
+                kind,
+                interaction: None,
+            });
             assert_eq!(mapped.data.kind, kind);
             assert_eq!(mapped.message, kind.message());
         }
+    }
+
+    #[test]
+    fn provider_interaction_reaches_the_client_boundary() {
+        let interaction = secretspec_ipc::InteractionReference::authorization(
+            "apr_7K3M",
+            Some(1_786_766_405_000),
+        );
+        let mapped = map_resolver_error(SecretSpecError::ProviderProtocol {
+            kind: ErrorKind::InteractionRequired,
+            interaction: Some(interaction.clone()),
+        });
+        assert_eq!(mapped.data.interaction, Some(interaction));
     }
 
     #[tokio::test]

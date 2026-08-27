@@ -952,6 +952,8 @@ struct AuditFields<'a> {
     reference: Option<&'a NativeAddress>,
     /// Stable error-variant token when the outcome is an error.
     error_kind: Option<&'a str>,
+    /// Opaque provider interaction correlation for actionable failures.
+    interaction: Option<&'a secretspec_ipc::InteractionReference>,
 }
 
 #[derive(Clone)]
@@ -1913,6 +1915,7 @@ impl Secrets {
                     reference: fields.reference.map(NativeAddress::render),
                     outcome,
                     error_kind: fields.error_kind,
+                    interaction: fields.interaction,
                     reason: self.reason.as_deref(),
                     caller: self.caller.as_ref(),
                     purpose,
@@ -1936,9 +1939,9 @@ impl Secrets {
         reference: Option<&NativeAddress>,
         command: Option<&str>,
     ) {
-        let (outcome, error_kind) = match result {
-            Ok(()) => (AuditOutcome::Written, None),
-            Err(e) => (AuditOutcome::Error, Some(e.kind())),
+        let (outcome, error_kind, interaction) = match result {
+            Ok(()) => (AuditOutcome::Written, None, None),
+            Err(e) => (AuditOutcome::Error, Some(e.kind()), e.interaction()),
         };
         self.record(
             AuditAction::Set,
@@ -1950,6 +1953,7 @@ impl Secrets {
                 provider_uri,
                 reference,
                 error_kind,
+                interaction,
                 ..Default::default()
             },
         );
@@ -1966,10 +1970,10 @@ impl Secrets {
         provider_uri: Option<String>,
         reference: Option<&NativeAddress>,
     ) {
-        let (outcome, error_kind) = match result {
-            Ok(true) => (AuditOutcome::Deleted, None),
-            Ok(false) => (AuditOutcome::Missing, None),
-            Err(error) => (AuditOutcome::Error, Some(error.kind())),
+        let (outcome, error_kind, interaction) = match result {
+            Ok(true) => (AuditOutcome::Deleted, None, None),
+            Ok(false) => (AuditOutcome::Missing, None, None),
+            Err(error) => (AuditOutcome::Error, Some(error.kind()), error.interaction()),
         };
         self.record(
             AuditAction::Delete,
@@ -1980,6 +1984,7 @@ impl Secrets {
                 provider_uri,
                 reference,
                 error_kind,
+                interaction,
                 ..Default::default()
             },
         );
@@ -2008,6 +2013,7 @@ impl Secrets {
                 provider_uri,
                 reference,
                 error_kind: Some(err.kind()),
+                interaction: err.interaction(),
                 ..Default::default()
             },
         );

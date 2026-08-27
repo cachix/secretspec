@@ -75,6 +75,7 @@ and how to turn it off.
 | `outcome` | `found`, `missing`, `default`, `written`, `deleted` (0.17+ cache clear), `started` (a `run` launched its command), or `error` |
 | | A cached route writing its local entry is recorded as `cache_refresh`/`written`, never as `set`: no authoritative store was written. Dropping an entry — `cache clear`, or an entry a write superseded — is `cache_clear`/`deleted`. |
 | `error_kind` | A non-sensitive tag when `outcome` is `error` |
+| `interaction` | Opaque provider interaction kind, ID, and optional expiry for an actionable failure (SecretSpec 0.20+); correlation only, never authorization material |
 | `reason` | The reason supplied via `--reason` / `SECRETSPEC_REASON` / the SDK, if any |
 | `caller` | Caller-asserted software integration context: `name`, and optional `version`, `operation`, and non-secret `resource` (SecretSpec 0.20+) |
 | `purpose` | Structured resolver-client attribution (`consumer`, `operation`, and optional `host`/`path`); present only for resolver resolution in SecretSpec 0.20+. It is audit context, never identity or authorization input. |

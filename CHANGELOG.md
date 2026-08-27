@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Provider failures now preserve opaque interaction references in SecretSpec's
+  local audit log, allowing CLI and GUI approval surfaces to correlate an
+  actionable request without treating its ID as authorization material.
+
 - Bitwarden convention item names now preserve project and profile isolation
   when either contains `/`, and `secretspec init --from bw://` recognizes
   existing convention names case-insensitively while retaining legacy items'

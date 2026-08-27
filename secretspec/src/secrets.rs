@@ -31,6 +31,7 @@ use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::{Handle as SignalHandle, Signals};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
+use std::hash::Hash;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
@@ -353,9 +354,7 @@ impl CredentialSource {
 }
 
 type ProviderCredentialsKey = (String, String);
-type ProviderCredentialsSlot = Arc<Mutex<Option<ProviderCredentials>>>;
 type ProviderKey = (String, String);
-type ProviderSlot = Arc<Mutex<Option<Arc<dyn ProviderTrait>>>>;
 type GroupFetch<'a> = (
     Option<&'a str>,
     Vec<&'a PlannedSecret>,
@@ -381,24 +380,35 @@ struct ImportAliasDivergence {
     affected_secrets: Vec<String>,
 }
 
-/// Memoized provider credentials with single-flight population per key.
+type SingleFlightSlot<V> = Arc<Mutex<Option<V>>>;
+
+/// A retry-on-error, single-flight value cache.
 ///
-/// The outer mutex protects only the key-to-slot map. Resolution runs while
-/// holding the selected slot, so callers for the same alias/profile wait for
-/// its first fetch while unrelated keys can populate concurrently.
-#[derive(Default)]
-struct ProviderCredentialsCache {
-    entries: Mutex<HashMap<ProviderCredentialsKey, ProviderCredentialsSlot>>,
+/// Population for one key runs while holding that key's slot, so concurrent
+/// callers share the first successful value. Different keys initialize
+/// independently because the outer map lock is released before initialization.
+/// Failed attempts remove their slot instead of being memoized, allowing a
+/// later call to retry after an external dependency becomes available.
+struct RetryingOnceMap<K, V> {
+    entries: Mutex<HashMap<K, SingleFlightSlot<V>>>,
 }
 
-impl ProviderCredentialsCache {
-    fn get_or_try_init<F>(
-        &self,
-        key: ProviderCredentialsKey,
-        resolve: F,
-    ) -> Result<ProviderCredentials>
+impl<K, V> Default for RetryingOnceMap<K, V> {
+    fn default() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl<K, V> RetryingOnceMap<K, V>
+where
+    K: Clone + Eq + Hash,
+    V: Clone,
+{
+    fn get_or_try_init<E, F>(&self, key: K, initialize: F) -> std::result::Result<V, E>
     where
-        F: FnOnce() -> Result<ProviderCredentials>,
+        F: FnOnce() -> std::result::Result<V, E>,
     {
         let slot = {
             let mut entries = self.entries.lock().unwrap();
@@ -410,18 +420,16 @@ impl ProviderCredentialsCache {
         };
 
         let mut cached = slot.lock().unwrap();
-        if let Some(credentials) = cached.as_ref() {
-            return Ok(credentials.clone());
+        if let Some(value) = cached.as_ref() {
+            return Ok(value.clone());
         }
 
-        match resolve() {
-            Ok(credentials) => {
-                *cached = Some(credentials.clone());
-                Ok(credentials)
+        match initialize() {
+            Ok(value) => {
+                *cached = Some(value.clone());
+                Ok(value)
             }
-            Err(err) => {
-                // Do not memoize failures: a later operation may succeed after
-                // credentials or provider availability change.
+            Err(error) => {
                 drop(cached);
                 let mut entries = self.entries.lock().unwrap();
                 if entries
@@ -430,7 +438,7 @@ impl ProviderCredentialsCache {
                 {
                     entries.remove(&key);
                 }
-                Err(err)
+                Err(error)
             }
         }
     }
@@ -438,6 +446,34 @@ impl ProviderCredentialsCache {
     #[cfg(any(feature = "cli", test))]
     fn clear(&self) {
         self.entries.lock().unwrap().clear();
+    }
+}
+
+/// Memoized provider credentials with single-flight population per key.
+///
+/// The outer mutex protects only the key-to-slot map. Resolution runs while
+/// holding the selected slot, so callers for the same alias/profile wait for
+/// its first fetch while unrelated keys can populate concurrently.
+#[derive(Default)]
+struct ProviderCredentialsCache {
+    entries: RetryingOnceMap<ProviderCredentialsKey, ProviderCredentials>,
+}
+
+impl ProviderCredentialsCache {
+    fn get_or_try_init<F>(
+        &self,
+        key: ProviderCredentialsKey,
+        resolve: F,
+    ) -> Result<ProviderCredentials>
+    where
+        F: FnOnce() -> Result<ProviderCredentials>,
+    {
+        self.entries.get_or_try_init(key, resolve)
+    }
+
+    #[cfg(any(feature = "cli", test))]
+    fn clear(&self) {
+        self.entries.clear();
     }
 }
 
@@ -452,7 +488,7 @@ impl ProviderCredentialsCache {
 /// provider-local snapshots cannot leak into a later operation.
 #[derive(Default)]
 struct ProviderCache {
-    entries: Mutex<HashMap<ProviderKey, ProviderSlot>>,
+    entries: RetryingOnceMap<ProviderKey, Arc<dyn ProviderTrait>>,
 }
 
 impl ProviderCache {
@@ -460,41 +496,7 @@ impl ProviderCache {
     where
         F: FnOnce() -> Result<Box<dyn ProviderTrait>>,
     {
-        let slot = {
-            let mut entries = self.entries.lock().unwrap();
-            Arc::clone(
-                entries
-                    .entry(key.clone())
-                    .or_insert_with(|| Arc::new(Mutex::new(None))),
-            )
-        };
-
-        let mut cached = slot.lock().unwrap();
-        if let Some(provider) = cached.as_ref() {
-            return Ok(Arc::clone(provider));
-        }
-
-        match build() {
-            Ok(provider) => {
-                let provider: Arc<dyn ProviderTrait> = Arc::from(provider);
-                *cached = Some(Arc::clone(&provider));
-                Ok(provider)
-            }
-            Err(err) => {
-                // Do not memoize failures, for the same reason the credentials
-                // cache does not: a later operation may succeed once provider
-                // availability or credentials change.
-                drop(cached);
-                let mut entries = self.entries.lock().unwrap();
-                if entries
-                    .get(&key)
-                    .is_some_and(|current| Arc::ptr_eq(current, &slot))
-                {
-                    entries.remove(&key);
-                }
-                Err(err)
-            }
-        }
+        self.entries.get_or_try_init(key, || build().map(Arc::from))
     }
 }
 

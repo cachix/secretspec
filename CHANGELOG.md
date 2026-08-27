@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Infisical provider now uses a separate HTTP connection for Universal Auth
   login, keeping the connection pool used for subsequent secret reads reliable.
 
+- Provider and credential initialization now share the same single-flight
+  retry behavior, so concurrent resolutions continue to avoid duplicate work
+  while a failed initialization remains retryable.
+
 - The value-free resolution surfaces — `secretspec check --json`,
   `check --explain`, and the SDKs' report and no-values resolutions — no longer
   report a **required** `generate` secret as resolved while no provider holds

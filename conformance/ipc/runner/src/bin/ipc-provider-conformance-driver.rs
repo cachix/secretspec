@@ -901,7 +901,7 @@ async fn run_endpoint_errors(endpoint: &Path) -> Result<Vec<Value>, String> {
 
 fn provider_protocol_kind(error: SecretSpecError) -> Option<ErrorKind> {
     match error {
-        SecretSpecError::ProviderProtocol(kind) => Some(kind),
+        SecretSpecError::ProviderProtocol { kind, .. } => Some(kind),
         _ => None,
     }
 }

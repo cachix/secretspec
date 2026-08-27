@@ -1245,9 +1245,18 @@ fn map_persistence(value: Persistence) -> ProducedValuePersistence {
 }
 
 fn ipc_error(error: secretspec_ipc::Error) -> SecretSpecError {
-    match error.rpc_kind() {
-        Some(kind) => SecretSpecError::ProviderProtocol(kind),
-        None => SecretSpecError::ProviderOperationFailed(error.stable_message().to_string()),
+    match error {
+        secretspec_ipc::Error::Remote(error) => SecretSpecError::ProviderProtocol {
+            kind: error.data.kind,
+            interaction: error.data.interaction,
+        },
+        error => match error.rpc_kind() {
+            Some(kind) => SecretSpecError::ProviderProtocol {
+                kind,
+                interaction: None,
+            },
+            None => SecretSpecError::ProviderOperationFailed(error.stable_message().to_string()),
+        },
     }
 }
 

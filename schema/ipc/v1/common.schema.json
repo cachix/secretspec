@@ -90,6 +90,32 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 18446744073709551615
+        },
+        "interaction": { "$ref": "#/$defs/InteractionReference" }
+      },
+      "allOf": [
+        {
+          "if": { "required": ["interaction"] },
+          "then": { "properties": { "kind": { "const": "interaction_required" } } }
+        }
+      ]
+    },
+    "InteractionReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "expires_at_unix_ms"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["authorization"] },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "expires_at_unix_ms": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 18446744073709551615
         }
       }
     },

@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 use secretspec_ipc::client::Client;
 use secretspec_ipc::protocol::provider::{
-    self as wire, Address, AddressParams, GetResult, InitializeApplication, InitializedApplication,
-    Metadata, Persistence, ReflectParams, ReflectResult, ResolveAddressResult, SetParams,
+    self as wire, Address, AddressParams, ApplicationContext, GetResult, InitializeApplication,
+    InitializedApplication, Metadata, Persistence, ReflectParams, ReflectResult,
+    ResolveAddressResult, SetParams,
 };
 use secretspec_ipc::protocol::{
     InitializeParams, Limits, PROTOCOL_VERSION, PROVIDER_PROTOCOL, Product,
@@ -189,9 +190,13 @@ async fn typed_provider_handler_covers_naming_reads_mutations_and_reflection() {
         application: InitializeApplication {
             scheme: "memory".into(),
             uri: "memory://default".into(),
-            base_dir: None,
+            context: ApplicationContext {
+                project: Some("payments".into()),
+                profile: Some("production".into()),
+                base_dir: None,
+                reason: Some("test".into()),
+            },
             credentials: BTreeMap::new(),
-            reason: Some("test".into()),
         },
     };
     let (raw, initialized) = Client::connect::<_, _, _, InitializedApplication>(

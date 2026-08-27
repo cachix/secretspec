@@ -511,6 +511,16 @@ pub trait Provider: Send + Sync {
     /// Available since SecretSpec 0.20.
     fn set_caller(&self, _caller: Option<crate::CallerContext>) {}
 
+    /// Records the declared project for this provider session. Available
+    /// starting with SecretSpec 0.20.
+    ///
+    /// This is resolver-declared context for provider policy, audit, and
+    /// approval surfaces. It is not an authenticated application identity and
+    /// must not be used as one. Convention addresses carry the same project;
+    /// native addresses need this session context because their coordinates do
+    /// not.
+    fn set_project(&self, _project: &str) {}
+
     /// Records the profile this session resolves under. Available starting with
     /// SecretSpec 0.20.
     ///
@@ -910,6 +920,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     }
     fn set_caller(&self, caller: Option<crate::CallerContext>) {
         (**self).set_caller(caller);
+    }
+    fn set_project(&self, project: &str) {
+        (**self).set_project(project);
     }
     fn set_profile(&self, profile: &str) {
         (**self).set_profile(profile);

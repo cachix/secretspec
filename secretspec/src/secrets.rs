@@ -1585,7 +1585,8 @@ impl Secrets {
 
     /// The shared construction body behind generic, routed, and credential
     /// source providers: alias expansion, error enrichment, and the
-    /// base-dir/reason/caller hooks live only here, so those paths cannot drift.
+    /// base-dir/reason/caller/project/profile hooks live only here, so those
+    /// paths cannot drift.
     fn build_provider_with_credentials(
         &self,
         spec: &str,
@@ -1607,6 +1608,7 @@ impl Secrets {
         provider.with_base_dir(&self.config_dir);
         provider.set_reason(self.reason.clone());
         provider.set_caller(self.caller.clone());
+        provider.set_project(&self.config.project.name);
         // Context a native address cannot carry: a `ref` names coordinates only,
         // so a provider whose store is partitioned by something outside them
         // (Infisical's environment) reads the operation's profile here. It is

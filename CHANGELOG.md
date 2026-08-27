@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accept forward-compatible result fields, correlate callbacks with their
   parent requests, tolerate notification races, and drain accepted work during
   graceful shutdown.
+- External provider sessions now carry one structured declared project context
+  for consistent approval and audit displays, including native addresses.
+  `interaction_required` errors can include an opaque authorization reference
+  so a provider-owned CLI or notification can identify the pending decision
+  without exposing remediation text or treating project metadata as identity.
 - IPC subprocess sessions now reap children after startup timeouts, preserve a
   buffered shutdown response when an endpoint exits immediately, and remain
   usable after the terminal response from an expired callback arrives. Callback

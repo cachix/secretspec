@@ -6,16 +6,26 @@
     "InitializeApplication": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["scheme", "uri", "base_dir", "credentials", "reason"],
+      "required": ["scheme", "uri", "context", "credentials"],
       "properties": {
         "scheme": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
         "uri": { "type": "string", "minLength": 1, "maxLength": 32768 },
-        "base_dir": { "type": ["string", "null"], "maxLength": 32768 },
+        "context": { "$ref": "#/$defs/ApplicationContext" },
         "credentials": {
           "type": "object",
           "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 256 },
           "additionalProperties": { "type": "string" }
-        },
+        }
+      }
+    },
+    "ApplicationContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project", "profile", "base_dir", "reason"],
+      "properties": {
+        "project": { "type": ["string", "null"], "minLength": 1, "maxLength": 4096 },
+        "profile": { "type": ["string", "null"], "minLength": 1, "maxLength": 4096 },
+        "base_dir": { "type": ["string", "null"], "maxLength": 32768 },
         "reason": { "type": ["string", "null"], "maxLength": 4096 }
       }
     },

@@ -844,20 +844,29 @@ pub mod provider {
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
-    pub struct InitializeApplication {
-        pub scheme: String,
-        pub uri: String,
+    /// Resolver-declared provider session context. Available starting with
+    /// SecretSpec 0.20.
+    pub struct ApplicationContext {
+        #[serde(deserialize_with = "deserialize_required_nullable")]
+        pub project: Option<String>,
+        #[serde(deserialize_with = "deserialize_required_nullable")]
+        pub profile: Option<String>,
         #[serde(deserialize_with = "deserialize_required_nullable")]
         pub base_dir: Option<String>,
-        pub credentials: BTreeMap<String, String>,
         #[serde(deserialize_with = "deserialize_required_nullable")]
         pub reason: Option<String>,
     }
 
-    impl InitializeApplication {
+    impl ApplicationContext {
         pub fn validate(&self) -> Result<()> {
-            validate_scheme(&self.scheme)?;
-            validate_nonempty_bytes("provider URI has an invalid byte length", &self.uri, 32768)?;
+            for (label, value) in [
+                ("provider project", self.project.as_deref()),
+                ("provider profile", self.profile.as_deref()),
+            ] {
+                if let Some(value) = value {
+                    validate_nonempty_bytes(label, value, 4096)?;
+                }
+            }
             validate_optional_bytes(
                 "provider base directory is too long",
                 self.base_dir.as_deref(),
@@ -869,6 +878,24 @@ pub mod provider {
             {
                 return Err(Error::Protocol("provider base directory must be absolute"));
             }
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct InitializeApplication {
+        pub scheme: String,
+        pub uri: String,
+        pub context: ApplicationContext,
+        pub credentials: BTreeMap<String, String>,
+    }
+
+    impl InitializeApplication {
+        pub fn validate(&self) -> Result<()> {
+            validate_scheme(&self.scheme)?;
+            validate_nonempty_bytes("provider URI has an invalid byte length", &self.uri, 32768)?;
+            self.context.validate()?;
             for name in self.credentials.keys() {
                 validate_semantic_name(name)?;
             }
@@ -1338,9 +1365,13 @@ mod tests {
         let application = provider::InitializeApplication {
             scheme: "factorseal".into(),
             uri: "other://default".into(),
-            base_dir: None,
+            context: provider::ApplicationContext {
+                project: Some("demo".into()),
+                profile: Some("default".into()),
+                base_dir: None,
+                reason: None,
+            },
             credentials: BTreeMap::new(),
-            reason: None,
         };
         assert!(application.validate().is_err());
     }
@@ -1398,7 +1429,11 @@ mod tests {
             serde_json::from_value::<provider::InitializeApplication>(serde_json::json!({
                 "scheme": "factorseal",
                 "uri": "factorseal://default",
-                "base_dir": null,
+                "context": {
+                    "project": "demo",
+                    "profile": "default",
+                    "base_dir": null
+                },
                 "credentials": {}
             }))
             .is_err()

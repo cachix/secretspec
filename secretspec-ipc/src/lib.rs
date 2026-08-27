@@ -26,7 +26,9 @@ pub mod resolver;
 pub mod server;
 
 pub use deadline::unix_ms_after as deadline_unix_ms_after;
-pub use error::{Error, ErrorData, ErrorKind, Result, RpcError};
+pub use error::{
+    Error, ErrorData, ErrorKind, InteractionKind, InteractionReference, Result, RpcError,
+};
 pub use jsonrpc::{Envelope, Notification, Request, RequestId, Response};
 pub use protocol::{Limits, Product};
 

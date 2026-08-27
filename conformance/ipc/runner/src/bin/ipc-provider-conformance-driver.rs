@@ -5,9 +5,9 @@ use secretspec::{
 };
 use secretspec_ipc::lifecycle::{Environment, LaunchOptions, ProviderSession};
 use secretspec_ipc::protocol::provider::{
-    self as wire, Address, AddressParams, ClearParams, ClearScope, GetManyParams, GetManyResult,
-    GetResult, InitializeApplication, NamedRequest, ReflectParams, ReflectResult,
-    ResolveAddressResult, SetExpiringParams, SetParams,
+    self as wire, Address, AddressParams, ApplicationContext, ClearParams, ClearScope,
+    GetManyParams, GetManyResult, GetResult, InitializeApplication, NamedRequest, ReflectParams,
+    ReflectResult, ResolveAddressResult, SetExpiringParams, SetParams,
 };
 use secretspec_ipc::protocol::{
     InitializeParams, Limits, PROTOCOL_VERSION, PROVIDER_PROTOCOL, Product,
@@ -243,9 +243,13 @@ fn initialize_params() -> InitializeParams<InitializeApplication> {
         application: InitializeApplication {
             scheme: "memory".into(),
             uri: "memory://conformance".into(),
-            base_dir: None,
+            context: ApplicationContext {
+                project: Some("conformance".into()),
+                profile: Some("default".into()),
+                base_dir: None,
+                reason: Some("conformance".into()),
+            },
             credentials: BTreeMap::new(),
-            reason: Some("conformance".into()),
         },
     }
 }

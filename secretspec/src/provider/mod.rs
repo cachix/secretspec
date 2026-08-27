@@ -108,7 +108,9 @@ pub use macros::{
 pub use registry::ProviderInfo;
 #[cfg(feature = "cli")]
 pub use registry::providers;
-pub use traits::{DiscoveryContext, ProducedValuePersistence, Provider};
+#[cfg(test)]
+pub(crate) use traits::get_each;
+pub use traits::{DiscoveryContext, ProducedValuePersistence, Provider, ProviderValue};
 
 /// Validates a value at a provider boundary that only accepts text.
 pub(crate) fn require_utf8<'a>(
@@ -166,9 +168,8 @@ pub(crate) use registry::{
 pub(crate) use runtime::block_on;
 #[cfg(test)]
 pub(crate) use traits::GET_EACH_CONCURRENCY_ENV;
-#[cfg(any(feature = "infisical", feature = "openbao", feature = "vault"))]
+pub(crate) use traits::exists_each;
 pub(crate) use traits::get_each_with;
-pub(crate) use traits::{exists_each, get_each};
 pub(crate) use traits::{
     get_each_concurrency, map_concurrently, same_configured_entries, same_storage_container,
 };

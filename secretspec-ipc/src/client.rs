@@ -1,6 +1,6 @@
 use crate::deadline::instant_from_unix_ms;
 use crate::error::{ErrorKind, RpcError};
-use crate::frame::{read_frame, write_frame};
+use crate::frame::{AsyncFrameReader, write_frame};
 use crate::jsonrpc::{Envelope, Notification, Request, RequestId, Response};
 use crate::protocol::{CancelParams, InitializeParams, InitializeResult, Limits, rpc};
 use crate::{ABSOLUTE_MAX_FRAME_BYTES, Error, Result};
@@ -101,7 +101,7 @@ impl Client {
     /// waiting out its deadline on a request nothing answers, so the two are
     /// checked against each other here rather than at the first callback.
     pub async fn connect_with_callbacks<R, W, A, B>(
-        mut reader: R,
+        reader: R,
         mut writer: W,
         initialize: InitializeParams<A>,
         startup_deadline_unix_ms: u64,
@@ -139,6 +139,7 @@ impl Client {
 
         let (writer_tx, mut writer_rx) =
             mpsc::channel::<WriterCommand>(offered_limits.max_in_flight.saturating_add(2));
+        let mut reader = AsyncFrameReader::new(reader);
         let inner = Arc::new(Inner {
             writer: writer_tx,
             callbacks,
@@ -184,7 +185,7 @@ impl Client {
                 };
                 let limit = inner.max_frame_bytes.load(Ordering::Acquire);
                 drop(inner);
-                let frame = match read_frame(&mut reader, limit).await {
+                let frame = match reader.read_frame(limit).await {
                     Ok(Some(frame)) => frame,
                     Ok(None) | Err(_) => {
                         fail_session_weak(&reader_inner);

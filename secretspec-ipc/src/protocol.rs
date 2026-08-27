@@ -283,8 +283,6 @@ pub mod resolver {
     pub mod method {
         pub const GET: &str = "resolver.get";
         pub const RELEASE: &str = "resolver.release";
-        /// Report that a resolved value was refused by its consumer (0.20+).
-        pub const REJECT: &str = "resolver.reject";
         /// Store one declared name (0.20+).
         pub const SET: &str = "resolver.set";
         /// Remove one declared name's stored value (0.20+).
@@ -293,19 +291,14 @@ pub mod resolver {
         /// Every method version 1 defines. What an endpoint advertises is a
         /// subset of this: see [`super::CAPABILITIES`] and
         /// [`super::MUTATION_CAPABILITIES`].
-        pub const ALL: &[&str] = &[GET, RELEASE, REJECT, SET, DELETE];
+        pub const ALL: &[&str] = &[GET, RELEASE, SET, DELETE];
     }
 
     /// Methods every version 1 endpoint answers. A client that negotiates a
     /// session without all of them is talking to something that is not a
     /// resolver, so it refuses the endpoint rather than degrading.
     ///
-    /// `reject` is required rather than optional because it is how a cached
-    /// value that was revoked before it expired gets discarded. An endpoint
-    /// that cannot be told its cache is wrong serves the dead value until the
-    /// entry ages out, and a read-only consumer has no other way to recover:
-    /// that is exactly the case the method exists for.
-    pub const CAPABILITIES: &[&str] = &[method::GET, method::RELEASE, method::REJECT];
+    pub const CAPABILITIES: &[&str] = &[method::GET, method::RELEASE];
 
     /// Methods that write to the store (0.20+).
     ///
@@ -560,6 +553,8 @@ pub mod resolver {
         pub source_provider: Option<String>,
         #[serde(deserialize_with = "deserialize_required_nullable")]
         pub expires_at_unix_ms: Option<u64>,
+        #[serde(deserialize_with = "deserialize_required_nullable")]
+        pub refresh_at_unix_ms: Option<u64>,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -576,6 +571,8 @@ pub mod resolver {
         pub source_provider: Option<String>,
         #[serde(deserialize_with = "deserialize_required_nullable")]
         pub expires_at_unix_ms: Option<u64>,
+        #[serde(deserialize_with = "deserialize_required_nullable")]
+        pub refresh_at_unix_ms: Option<u64>,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -603,40 +600,6 @@ pub mod resolver {
         Missing(MissingResult),
         Value(ResolvedValueResult),
         Path(ResolvedPathResult),
-    }
-
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    pub struct RejectParams {
-        pub name: String,
-        pub purpose: Purpose,
-    }
-
-    impl RejectParams {
-        pub fn validate(&self) -> Result<()> {
-            validate_nonempty_bytes("secret name has an invalid byte length", &self.name, 4096)?;
-            self.purpose.validate()
-        }
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
-    pub enum RejectedStatus {
-        Rejected,
-    }
-
-    /// Reject always succeeds. The caller is reporting what already happened to
-    /// it, not asking for an operation that could be refused, and every reason
-    /// there was nothing to discard — no cached copy, no cached route, a name
-    /// this session cannot see — leaves the resolver in the state the caller
-    /// wants. Reporting those apart would also make a scope disclose the names
-    /// it hides, which is the same reason a hidden name reads as `undeclared`.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    pub struct RejectResult {
-        pub status: RejectedStatus,
-        /// `true` when a cached copy was discarded. `false` means there was
-        /// nothing to discard, which is also a success.
-        pub invalidated: bool,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1080,7 +1043,11 @@ pub mod provider {
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(tag = "status", rename_all = "snake_case")]
     pub enum GetResult {
-        Found { value: String },
+        Found {
+            value: String,
+            #[serde(deserialize_with = "deserialize_required_nullable")]
+            expires_at_unix_ms: Option<u64>,
+        },
         Missing,
     }
 
@@ -1135,6 +1102,8 @@ pub mod provider {
                 name: String,
                 status: FoundStatus,
                 value: String,
+                #[serde(deserialize_with = "deserialize_required_nullable")]
+                expires_at_unix_ms: Option<u64>,
             }
 
             #[derive(Deserialize)]
@@ -1167,9 +1136,13 @@ pub mod provider {
                     name,
                     status: FoundStatus::Found,
                     value,
+                    expires_at_unix_ms,
                 }) => Ok(Self {
                     name,
-                    outcome: GetResult::Found { value },
+                    outcome: GetResult::Found {
+                        value,
+                        expires_at_unix_ms,
+                    },
                 }),
                 Repr::Missing(Missing {
                     name,
@@ -1377,7 +1350,8 @@ mod tests {
         let found = serde_json::from_value::<provider::NamedGetResult>(serde_json::json!({
             "name": "token",
             "status": "found",
-            "value": "secret"
+            "value": "secret",
+            "expires_at_unix_ms": null
         }))
         .unwrap();
         assert_eq!(
@@ -1385,7 +1359,8 @@ mod tests {
             provider::NamedGetResult {
                 name: "token".into(),
                 outcome: provider::GetResult::Found {
-                    value: "secret".into()
+                    value: "secret".into(),
+                    expires_at_unix_ms: None,
                 }
             }
         );
@@ -1425,6 +1400,24 @@ mod tests {
                 "uri": "factorseal://default",
                 "base_dir": null,
                 "credentials": {}
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<provider::GetResult>(serde_json::json!({
+                "status": "found",
+                "value": "secret"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<resolver::ResolvedValueResult>(serde_json::json!({
+                "status": "resolved",
+                "representation": "value",
+                "value": "secret",
+                "source": "provider",
+                "source_provider": null,
+                "expires_at_unix_ms": null
             }))
             .is_err()
         );

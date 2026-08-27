@@ -409,20 +409,6 @@ impl ResolverSession {
             .await
     }
 
-    /// Report that a resolved value was refused by whatever it was presented
-    /// to (0.20+), so a cached copy revoked before its expiry is discarded
-    /// rather than served again. Every endpoint answers this.
-    pub async fn reject(
-        &self,
-        params: &resolver_protocol::RejectParams,
-        deadline_unix_ms: u64,
-    ) -> Result<resolver_protocol::RejectResult> {
-        self.child
-            .client()
-            .call(resolver_protocol::method::REJECT, params, deadline_unix_ms)
-            .await
-    }
-
     /// Store one declared name (0.20+). Only endpoints that advertise
     /// `resolver.set` accept it, so check [`Self::supports`] first when the
     /// caller can explain a read-only endpoint better than the wire error does.

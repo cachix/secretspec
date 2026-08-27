@@ -12,7 +12,7 @@ use crate::error::{Result, SecretSpecError};
 use crate::plan::{PlannedSecret, ResolutionPlan, ResolvedCache, Route};
 use crate::provider::{
     Address, OwnedAddress, ProducedValuePersistence, Provider as ProviderTrait,
-    ProviderCredentials, same_storage_container,
+    ProviderCredentials, ProviderValue, same_storage_container,
 };
 use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
 use crate::resolve::{
@@ -264,8 +264,8 @@ fn group_names(group: &[&PlannedSecret]) -> String {
 enum CachedEntry {
     /// Fresh, and written for this route: serve it.
     Fresh {
-        value: SecretBytes,
-        expires_at_unix_ms: Option<u64>,
+        value: ProviderValue,
+        refresh_at_unix_ms: Option<u64>,
     },
     /// A SecretSpec entry no read will serve: expired regardless of owner, or
     /// ours but unreadable or written for another route or freshness policy.
@@ -300,10 +300,11 @@ fn cached_entry(
     ) {
         Ok(CacheEntryStatus::Fresh {
             value,
+            refresh_at_unix_ms,
             expires_at_unix_ms,
         }) => CachedEntry::Fresh {
-            value,
-            expires_at_unix_ms,
+            value: ProviderValue::new(value, expires_at_unix_ms),
+            refresh_at_unix_ms,
         },
         Ok(CacheEntryStatus::Stale) => CachedEntry::Stale,
         Ok(CacheEntryStatus::OursUnreadable) => {
@@ -390,7 +391,7 @@ struct FallbackReadRequest<'a> {
 }
 
 struct FallbackRead {
-    value: Option<SecretBytes>,
+    value: Option<ProviderValue>,
     provider_uri: Option<String>,
     native_address: Option<NativeAddress>,
 }
@@ -1727,6 +1728,8 @@ pub(crate) enum OwnedNamedResolution {
         source_provider: Option<String>,
         #[cfg_attr(not(feature = "cli"), allow(dead_code))]
         expires_at_unix_ms: Option<u64>,
+        #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+        refresh_at_unix_ms: Option<u64>,
         supporting_files: Vec<tempfile::NamedTempFile>,
     },
     File {
@@ -1735,6 +1738,8 @@ pub(crate) enum OwnedNamedResolution {
         source_provider: Option<String>,
         #[cfg_attr(not(feature = "cli"), allow(dead_code))]
         expires_at_unix_ms: Option<u64>,
+        #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+        refresh_at_unix_ms: Option<u64>,
         supporting_files: Vec<tempfile::NamedTempFile>,
     },
 }
@@ -2340,8 +2345,7 @@ impl Secrets {
     /// after a person answers. An operator who withheld the mutation methods
     /// means those writes too, so this closes the paths that would otherwise
     /// let a read reach the store. It does not touch SecretSpec's own cache:
-    /// populating a derived copy is not a change to the secret, which is the
-    /// same line `resolver.reject` draws.
+    /// populating a derived copy is not a change to the secret.
     #[cfg(feature = "cli")]
     pub(crate) fn refuse_produced_writes(&mut self) {
         self.refuse_produced_writes = true;
@@ -3867,7 +3871,7 @@ impl Secrets {
         group: &[&PlannedSecret],
         project: &str,
         profile: &str,
-    ) -> Result<HashMap<String, SecretBytes>> {
+    ) -> Result<HashMap<String, ProviderValue>> {
         let addresses = group
             .iter()
             .map(|planned| self.address_for_spec(planned, provider_spec, project, profile))
@@ -3877,7 +3881,7 @@ impl Secrets {
             .zip(&addresses)
             .map(|(planned, address)| (planned.name.as_str(), address.as_address()))
             .collect();
-        provider.get_many(&requests)
+        provider.get_many_with_metadata(&requests)
     }
 
     /// Cache-first read for a whole plan: one provider per distinct cache store,
@@ -3893,7 +3897,7 @@ impl Secrets {
         &self,
         plan: &ResolutionPlan,
         profile: &str,
-    ) -> HashMap<String, (SecretBytes, String, Option<u64>)> {
+    ) -> HashMap<String, (ProviderValue, String, Option<u64>)> {
         // Grouped by cache spec (not URI) so an alias's `credentials` stays
         // reachable at build time, and sorted so warnings come out in a stable
         // order.
@@ -3943,11 +3947,11 @@ impl Secrets {
                 match cached_entry(planned, cache, stored, &self.config.project.name, profile) {
                     CachedEntry::Fresh {
                         value,
-                        expires_at_unix_ms,
+                        refresh_at_unix_ms,
                     } => {
                         cached.insert(
                             planned.name.clone(),
-                            (value, uri.clone(), expires_at_unix_ms),
+                            (value, uri.clone(), refresh_at_unix_ms),
                         );
                     }
                     CachedEntry::Stale => {
@@ -3981,6 +3985,7 @@ impl Secrets {
         route: &Route,
         profile: &str,
         value: &SecretBytes,
+        expires_at_unix_ms: Option<u64>,
     ) {
         let Some(cache) = route.cache() else {
             return;
@@ -4006,6 +4011,7 @@ impl Secrets {
             cache.max_age_secs,
             planned.cache_fingerprint(cache, &self.config.project.name, profile),
             value,
+            expires_at_unix_ms,
         ) {
             Ok(serialized) => serialized,
             Err(error) => {
@@ -4218,7 +4224,7 @@ impl Secrets {
         value: &SecretBytes,
     ) {
         if route.cache().is_some() {
-            self.write_cached_secret(planned, route, profile, value);
+            self.write_cached_secret(planned, route, profile, value, None);
             return;
         }
         // Only re-plan when the declared routing could name a cached route at
@@ -4526,7 +4532,7 @@ impl Secrets {
                 request.profile,
             )?;
             last_reference = address.native().cloned();
-            match provider.get(address.as_address()) {
+            match provider.get_with_metadata(address.as_address()) {
                 Ok(Some(value)) => {
                     return Ok(FallbackRead {
                         value: Some(value),
@@ -6097,43 +6103,6 @@ impl Secrets {
         })
     }
 
-    /// Resolver-mode report that a resolved value was refused by its consumer
-    /// (0.20+), returning whether a cached copy was discarded.
-    ///
-    /// Expiry only covers a value that aged out. A token revoked at its issuer
-    /// stays fresh by the clock, so without this the cache serves a dead value
-    /// until the entry ages out and the consumer has no way to say otherwise.
-    /// Only the derived copy is dropped: the authoritative store behind the
-    /// cached route still holds the secret, which is why this is not a
-    /// mutation and a read-only endpoint answers it too.
-    ///
-    /// Every "nothing to discard" reason reports the same success. A name this
-    /// session's scope does not offer is one of them, so that a scope does not
-    /// disclose the names it hides, exactly as a hidden name reads as
-    /// undeclared on the read path.
-    #[cfg(feature = "cli")]
-    pub(crate) fn reject_named_for_ipc(
-        &self,
-        name: &str,
-        purpose: IpcAuditPurpose,
-    ) -> Result<bool> {
-        with_ipc_audit_purpose(purpose, || {
-            self.ensure_reason_for(AuditAction::CacheClear, Some(name))?;
-            let profile = self.resolve_profile_name(None);
-            let visible = Surface::Scoped.names(self, &profile)?;
-            if !visible.iter().any(|declared| declared == name) {
-                return Ok(false);
-            }
-            let Some(planned) = self.plan_declared_secret(name, &profile)? else {
-                return Ok(false);
-            };
-            let Some(route) = &planned.route else {
-                return Ok(false);
-            };
-            self.invalidate_cached_secret(&planned, route, &profile)
-        })
-    }
-
     /// Rejects a mutation of a name the session's scope does not offer, and
     /// audits the attempt the way a read of a hidden name is audited.
     #[cfg(feature = "cli")]
@@ -6291,7 +6260,8 @@ impl Secrets {
                 );
                 let source = resolved_source(&entry);
                 let source_provider = entry.source_provider;
-                let expires_at_unix_ms = validated.expiries.remove(name);
+                let expires_at_unix_ms = validated.secret_expiries.remove(name);
+                let refresh_at_unix_ms = validated.refreshes.remove(name);
                 let mut supporting_files = std::mem::take(&mut validated.temp_files);
                 if entry.as_path {
                     // Every resolution branch materializes an `as_path` value
@@ -6314,6 +6284,7 @@ impl Secrets {
                         source,
                         source_provider,
                         expires_at_unix_ms,
+                        refresh_at_unix_ms,
                         supporting_files,
                     })
                 } else {
@@ -6322,6 +6293,7 @@ impl Secrets {
                         source,
                         source_provider,
                         expires_at_unix_ms,
+                        refresh_at_unix_ms,
                         supporting_files,
                     })
                 }

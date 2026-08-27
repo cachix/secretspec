@@ -13,7 +13,7 @@ use secretspec_ipc::protocol::{Limits, Product};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn deadline_after(duration: Duration) -> u64 {
     let now = SystemTime::now()
@@ -194,6 +194,21 @@ fn a_silent_endpoint_does_not_hang_the_caller() {
     session
         .close(deadline_after(Duration::from_secs(5)))
         .unwrap();
+}
+
+#[test]
+fn an_inherited_stdout_pipe_does_not_extend_the_deadline() {
+    let mut session = session(&["--descendant-holds-pipes"]);
+    let started = Instant::now();
+    let error = session
+        .get(
+            &resolve_params("SILENT"),
+            deadline_after(Duration::from_millis(250)),
+        )
+        .unwrap_err();
+    assert!(matches!(error, Error::DeadlineExceeded));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(session.is_closed());
 }
 
 #[test]

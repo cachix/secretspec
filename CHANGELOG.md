@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Provider failures now preserve opaque interaction references in SecretSpec's
+  local audit log, allowing CLI and GUI approval surfaces to correlate an
+  actionable request without treating its ID as authorization material.
+
 - `libsecretspec-resolver` now links yyjson from the system instead of building
   a vendored copy. Building it from source needs yyjson installed, discovered
   through pkg-config for Meson or through `find_package(yyjson CONFIG)` for

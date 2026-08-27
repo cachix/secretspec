@@ -195,6 +195,7 @@ async fn typed_provider_handler_covers_naming_reads_mutations_and_reflection() {
                 profile: Some("production".into()),
                 base_dir: None,
                 reason: Some("test".into()),
+                requested_authorization_duration_ms: None,
             },
             credentials: BTreeMap::new(),
         },

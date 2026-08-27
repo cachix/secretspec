@@ -251,6 +251,10 @@ impl Provider for PreflightGuard {
         self.inner.set_reason(reason);
     }
 
+    fn set_requested_authorization_duration(&self, duration: Option<std::time::Duration>) {
+        self.inner.set_requested_authorization_duration(duration);
+    }
+
     fn set_caller(&self, caller: Option<crate::CallerContext>) {
         self.inner.set_caller(caller);
     }

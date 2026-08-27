@@ -300,6 +300,7 @@ impl Provider for SlowTestProvider {
 pub(crate) struct StatefulTestProvider {
     snapshot: std::sync::OnceLock<HashMap<String, String>>,
     reason: Mutex<Option<String>>,
+    requested_authorization_duration: Mutex<Option<std::time::Duration>>,
     caller: Mutex<Option<crate::CallerContext>>,
 }
 pub(crate) struct StatefulTestConfig;
@@ -308,6 +309,9 @@ static STATEFUL_REASON_READS: std::sync::LazyLock<Mutex<HashMap<String, Vec<Opti
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 static STATEFUL_CALLER_READS: std::sync::LazyLock<
     Mutex<HashMap<String, Vec<Option<crate::CallerContext>>>>,
+> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static STATEFUL_AUTHORIZATION_DURATION_READS: std::sync::LazyLock<
+    Mutex<HashMap<String, Vec<Option<std::time::Duration>>>>,
 > = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 impl TryFrom<&super::ProviderUrl> for StatefulTestConfig {
@@ -323,6 +327,7 @@ impl StatefulTestProvider {
         Self {
             snapshot: std::sync::OnceLock::new(),
             reason: Mutex::new(None),
+            requested_authorization_duration: Mutex::new(None),
             caller: Mutex::new(None),
         }
     }
@@ -362,6 +367,12 @@ impl Provider for StatefulTestProvider {
             .entry(item.clone())
             .or_default()
             .push(self.caller.lock().unwrap().clone());
+        STATEFUL_AUTHORIZATION_DURATION_READS
+            .lock()
+            .unwrap()
+            .entry(item.clone())
+            .or_default()
+            .push(*self.requested_authorization_duration.lock().unwrap());
         let snapshot = self
             .snapshot
             .get_or_init(|| MEM_STORE.lock().unwrap().clone());
@@ -390,6 +401,10 @@ impl Provider for StatefulTestProvider {
         *self.reason.lock().unwrap() = reason;
     }
 
+    fn set_requested_authorization_duration(&self, duration: Option<std::time::Duration>) {
+        *self.requested_authorization_duration.lock().unwrap() = duration;
+    }
+
     fn set_caller(&self, caller: Option<crate::CallerContext>) {
         *self.caller.lock().unwrap() = caller;
     }
@@ -405,6 +420,16 @@ pub(crate) fn take_stateful_reason_reads(item: &str) -> Vec<Option<String>> {
 
 pub(crate) fn take_stateful_caller_reads(item: &str) -> Vec<Option<crate::CallerContext>> {
     STATEFUL_CALLER_READS
+        .lock()
+        .unwrap()
+        .remove(item)
+        .unwrap_or_default()
+}
+
+pub(crate) fn take_stateful_authorization_duration_reads(
+    item: &str,
+) -> Vec<Option<std::time::Duration>> {
+    STATEFUL_AUTHORIZATION_DURATION_READS
         .lock()
         .unwrap()
         .remove(item)

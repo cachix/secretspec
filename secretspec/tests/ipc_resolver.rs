@@ -109,6 +109,7 @@ UNRELATED = { description = "named resolution must not read this", required = tr
         profile: Some("default".into()),
         scope: None,
         reason: None,
+        requested_authorization_duration_ms: None,
     };
     let session = ResolverSession::launch(
         LaunchOptions {
@@ -282,6 +283,7 @@ CARGO_REGISTRY_TOKEN = { description = "Cargo registry token", required = false 
             profile: Some("default".into()),
             scope: None,
             reason: None,
+            requested_authorization_duration_ms: None,
         },
         deadline(Duration::from_secs(5)),
     )
@@ -419,6 +421,7 @@ DEPLOY_PASSWORD = { description = "deploy password", prompt = true }
         profile: Some("default".into()),
         scope: None,
         reason: None,
+        requested_authorization_duration_ms: None,
     };
     let purpose = Purpose {
         consumer: "integration-test".into(),
@@ -547,6 +550,7 @@ SESSION_TOKEN = { description = "session token", type = "password", generate = t
         profile: Some("default".into()),
         scope: None,
         reason: None,
+        requested_authorization_duration_ms: None,
     };
 
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_secretspec"))

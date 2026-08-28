@@ -3474,3 +3474,69 @@
 .landing-cta-card > * {
   position: relative;
 }
+
+/* ── Partner spotlight ── */
+
+.landing-partner-section {
+  padding-top: 2rem;
+}
+
+.landing-partner-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+  padding: 2rem;
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 1.25rem;
+  background: var(--sl-color-bg-nav);
+}
+
+.landing-partner-copy {
+  max-width: 48rem;
+}
+
+.landing-partner-title {
+  margin: 0.45rem 0 0.75rem;
+  color: var(--color-gray-900);
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  line-height: 1.15;
+}
+
+[data-theme='dark'] .landing-partner-title {
+  color: #fff;
+}
+
+.landing-partner-description,
+.landing-partner-recommendation {
+  margin: 0;
+  color: var(--color-gray-500);
+  line-height: 1.65;
+}
+
+[data-theme='dark'] .landing-partner-description,
+[data-theme='dark'] .landing-partner-recommendation {
+  color: var(--color-gray-400);
+}
+
+.landing-partner-recommendation {
+  margin-top: 0.65rem;
+  color: var(--color-gray-900);
+  font-weight: 600;
+}
+
+[data-theme='dark'] .landing-partner-recommendation {
+  color: #fff;
+}
+
+.landing-partner-link {
+  flex-shrink: 0;
+  text-align: center;
+}
+
+@media (max-width: 48rem) {
+  .landing-partner-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Secret imports now run through explicit preparation, collision-check, copy,
+  verification, and source-cleanup phases, preserving the guarantee that
+  `--delete-source` only removes values after every destination write succeeds.
+
 - The Infisical provider now uses a separate HTTP connection for Universal Auth
   login, keeping the connection pool used for subsequent secret reads reliable.
 

@@ -380,6 +380,442 @@ struct ImportAliasDivergence {
     affected_secrets: Vec<String>,
 }
 
+#[derive(Default)]
+struct ImportSummary {
+    imported: usize,
+    already_exists: usize,
+    not_found: usize,
+    deleted_from_source: usize,
+    kept_in_source: usize,
+}
+
+impl ImportSummary {
+    fn audit_outcome(&self) -> AuditOutcome {
+        if self.imported > 0 {
+            AuditOutcome::Written
+        } else if self.already_exists > 0 {
+            AuditOutcome::Found
+        } else {
+            AuditOutcome::Missing
+        }
+    }
+}
+
+/// Stateful import operation whose methods mirror the mutation boundary:
+/// prepare first, copy second, verify third, and only then delete sources.
+struct ImportPlan<'a> {
+    secrets: &'a Secrets,
+    from_provider: &'a str,
+    profile: String,
+    delete_source: bool,
+    source_provider: Option<Arc<dyn ProviderTrait>>,
+    source_uri: Option<String>,
+    source_display: Option<String>,
+    entries: Vec<PreparedImport>,
+    read_names: Vec<String>,
+    summary: ImportSummary,
+}
+
+impl<'a> ImportPlan<'a> {
+    fn new(
+        secrets: &'a Secrets,
+        from_provider: &'a str,
+        profile: String,
+        delete_source: bool,
+    ) -> Self {
+        Self {
+            secrets,
+            from_provider,
+            profile,
+            delete_source,
+            source_provider: None,
+            source_uri: None,
+            source_display: None,
+            entries: Vec::new(),
+            read_names: Vec::new(),
+            summary: ImportSummary::default(),
+        }
+    }
+
+    fn run(&mut self) -> Result<()> {
+        self.prepare_source()?;
+        self.prepare_entries()?;
+        self.validate_target_collisions()?;
+        if self.delete_source {
+            self.validate_cleanup_collisions()?;
+        }
+        self.copy_missing_targets()?;
+        if self.delete_source {
+            self.verify_copied_targets()?;
+            self.delete_matching_sources()?;
+        }
+        self.report_entries();
+        Ok(())
+    }
+
+    fn prepare_source(&mut self) -> Result<()> {
+        let source = self
+            .secrets
+            .build_provider(self.from_provider.to_string(), Some(&self.profile))?;
+        let provider_uri = source.uri();
+        self.source_uri = Some(provider_uri.clone());
+        self.source_display = Some(
+            if self
+                .secrets
+                .lookup_provider_alias_entry(self.from_provider)
+                .is_some()
+            {
+                format!("provider alias '{}' ({provider_uri})", self.from_provider)
+            } else {
+                provider_uri.clone()
+            },
+        );
+
+        if self.delete_source
+            && !crate::provider::spec_provider_deletes(
+                &self
+                    .secrets
+                    .resolve_provider_spec(self.from_provider.to_string()),
+            )
+        {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "provider '{}' does not support deleting secrets and cannot be used with import --delete-source",
+                source.name()
+            )));
+        }
+
+        eprintln!(
+            "Importing secrets from {} (profile: {})...\n",
+            self.source_display
+                .as_deref()
+                .expect("source display is set with the provider URI")
+                .blue(),
+            self.profile.cyan()
+        );
+        self.source_provider = Some(Arc::from(source));
+        Ok(())
+    }
+
+    fn prepare_entries(&mut self) -> Result<()> {
+        let source_provider = Arc::clone(
+            self.source_provider
+                .as_ref()
+                .expect("the source provider is prepared first"),
+        );
+        let import_names = self
+            .secrets
+            .profile_secret_names_unscoped(Some(&self.profile))?;
+        let mut planned_imports = Vec::new();
+
+        for name in import_names {
+            let planned = self
+                .secrets
+                .plan_secret(&name, &self.profile, None)?
+                .expect("Secret should exist since we're iterating over it");
+            if planned.route.is_none() {
+                continue;
+            }
+            if planned.extract().is_some() {
+                return Err(SecretSpecError::ExtractedSecretReadOnly(
+                    planned.name.clone(),
+                ));
+            }
+            planned_imports.push(planned);
+        }
+
+        let divergences = self.secrets.literal_import_alias_divergences(
+            self.from_provider,
+            source_provider.as_ref(),
+            &planned_imports,
+            &self.profile,
+        );
+        Secrets::warn_literal_import_alias_divergences(
+            self.source_uri
+                .as_deref()
+                .expect("the source URI is prepared first"),
+            &divergences,
+        );
+
+        for planned in planned_imports {
+            let route = planned
+                .route
+                .as_ref()
+                .expect("planned imports are provider-backed");
+
+            self.read_names.push(planned.name.clone());
+            let source_address = self.secrets.address_for_spec(
+                &planned,
+                Some(self.from_provider),
+                &self.secrets.config.project.name,
+                &self.profile,
+            )?;
+            let target_address = self.secrets.address_for_spec(
+                &planned,
+                route.group_key(),
+                &self.secrets.config.project.name,
+                &self.profile,
+            )?;
+            let target_provider = self
+                .secrets
+                .write_provider_for_route(route, Some(&self.profile))?;
+
+            if self.delete_source
+                && source_provider.same_entries(
+                    source_address.as_address(),
+                    target_provider.as_ref(),
+                    target_address.as_address(),
+                )?
+            {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "refusing to delete '{}' from the import source because source and destination resolve to the same provider entry ({})",
+                    planned.name,
+                    source_provider.uri()
+                )));
+            }
+
+            let source_value = source_provider.get(source_address.as_address())?;
+            let target_value = target_provider.get(target_address.as_address())?;
+            if let Some(value) = &source_value {
+                Secrets::validate_import_value(&planned, &planned.name, value)?;
+                if target_value.is_none() {
+                    target_provider.check_writable(target_address.as_address())?;
+                }
+                let target_will_match = target_value
+                    .as_ref()
+                    .is_none_or(|existing| existing.expose_secret() == value.expose_secret());
+                if self.delete_source && target_will_match {
+                    source_provider.check_deletable(source_address.as_address())?;
+                }
+            }
+
+            self.entries.push(PreparedImport {
+                planned,
+                target_provider,
+                source_address,
+                target_address,
+                source_value,
+                target_value,
+                copied: false,
+                source_deleted: false,
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_target_collisions(&self) -> Result<()> {
+        for left_index in 0..self.entries.len() {
+            let left = &self.entries[left_index];
+            for right in &self.entries[left_index + 1..] {
+                if left.target_provider.same_entries(
+                    left.target_address.as_address(),
+                    right.target_provider.as_ref(),
+                    right.target_address.as_address(),
+                )? {
+                    return Err(SecretSpecError::ProviderOperationFailed(format!(
+                        "refusing to import '{}' and '{}' because they resolve to the same destination provider entry ({})",
+                        left.planned.name,
+                        right.planned.name,
+                        left.target_provider.uri()
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_cleanup_collisions(&self) -> Result<()> {
+        let source_provider = self
+            .source_provider
+            .as_ref()
+            .expect("the source provider is prepared first");
+        for (source_index, source) in self.entries.iter().enumerate() {
+            let Some(source_value) = &source.source_value else {
+                continue;
+            };
+            let source_will_be_deleted = source.target_value.as_ref().is_none_or(|target_value| {
+                source_value.expose_secret() == target_value.expose_secret()
+            });
+            if !source_will_be_deleted {
+                continue;
+            }
+
+            for (target_index, target) in self.entries.iter().enumerate() {
+                if source_index == target_index {
+                    continue;
+                }
+                if source_provider.same_entries(
+                    source.source_address.as_address(),
+                    target.target_provider.as_ref(),
+                    target.target_address.as_address(),
+                )? {
+                    return Err(SecretSpecError::ProviderOperationFailed(format!(
+                        "refusing to delete '{}' from the import source because it resolves to the destination provider entry for '{}' ({})",
+                        source.planned.name,
+                        target.planned.name,
+                        target.target_provider.uri()
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn copy_missing_targets(&mut self) -> Result<()> {
+        for entry in &mut self.entries {
+            let (Some(value), None) = (&entry.source_value, &entry.target_value) else {
+                continue;
+            };
+            let route = entry
+                .planned
+                .route
+                .as_ref()
+                .expect("prepared imports are provider-backed");
+            let set_result = entry
+                .target_provider
+                .set(entry.target_address.as_address(), value);
+            self.secrets.audit_write_result(
+                &set_result,
+                &entry.planned.name,
+                &self.profile,
+                Some(entry.target_provider.uri()),
+                entry.target_address.native(),
+                None,
+            );
+            set_result?;
+            self.secrets
+                .sync_cache_after_write(&entry.planned, route, &self.profile, value);
+            entry.copied = true;
+            self.summary.imported += 1;
+        }
+        Ok(())
+    }
+
+    fn verify_copied_targets(&mut self) -> Result<()> {
+        for entry in self.entries.iter_mut().filter(|entry| entry.copied) {
+            let expected = entry
+                .source_value
+                .as_ref()
+                .expect("copied entries have source values");
+            let stored = entry
+                .target_provider
+                .get(entry.target_address.as_address())?
+                .ok_or_else(|| {
+                    SecretSpecError::ProviderOperationFailed(format!(
+                        "destination verification failed for '{}'; the source value was retained",
+                        entry.planned.name
+                    ))
+                })?;
+            if stored.expose_secret() != expected.expose_secret() {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "destination verification failed for '{}'; the source value was retained",
+                    entry.planned.name
+                )));
+            }
+            Secrets::validate_import_value(&entry.planned, &entry.planned.name, &stored)?;
+            entry.target_value = Some(stored);
+        }
+        Ok(())
+    }
+
+    fn delete_matching_sources(&mut self) -> Result<()> {
+        let source_provider = Arc::clone(
+            self.source_provider
+                .as_ref()
+                .expect("the source provider is prepared first"),
+        );
+        for entry in &mut self.entries {
+            let (Some(source), Some(target)) = (&entry.source_value, &entry.target_value) else {
+                continue;
+            };
+            if source.expose_secret() != target.expose_secret() {
+                continue;
+            }
+            let delete_result = source_provider.delete(entry.source_address.as_address());
+            self.secrets.audit_delete_result(
+                &delete_result,
+                &entry.planned.name,
+                &self.profile,
+                Some(source_provider.uri()),
+                entry.source_address.native(),
+            );
+            entry.source_deleted = delete_result?;
+            self.summary.deleted_from_source += usize::from(entry.source_deleted);
+        }
+        Ok(())
+    }
+
+    fn report_entries(&mut self) {
+        for entry in &self.entries {
+            let name = &entry.planned.name;
+            let label = format_secret_label(name, entry.planned.config().description.as_deref());
+            let target_name = entry.target_provider.name().blue();
+
+            if entry.copied {
+                if self.delete_source && entry.source_deleted {
+                    eprintln!(
+                        "{} {} (→ {}; deleted from source)",
+                        "✓".green(),
+                        label,
+                        target_name
+                    );
+                } else {
+                    eprintln!("{} {} (→ {})", "✓".green(), label, target_name);
+                }
+                continue;
+            }
+
+            match (&entry.source_value, &entry.target_value) {
+                (Some(source), Some(target)) => {
+                    self.summary.already_exists += 1;
+                    if self.delete_source && source.expose_secret() != target.expose_secret() {
+                        self.summary.kept_in_source += 1;
+                        eprintln!(
+                            "{} {} {} (→ {}; source retained)",
+                            "○".yellow(),
+                            label,
+                            "(target value differs)".yellow(),
+                            target_name
+                        );
+                    } else if self.delete_source && entry.source_deleted {
+                        eprintln!(
+                            "{} {} {} (→ {}; deleted from source)",
+                            "✓".green(),
+                            label,
+                            "(already exists in target)".yellow(),
+                            target_name
+                        );
+                    } else {
+                        eprintln!(
+                            "{} {} {} (→ {})",
+                            "○".yellow(),
+                            label,
+                            "(already exists in target)".yellow(),
+                            target_name
+                        );
+                    }
+                }
+                (None, Some(_)) => {
+                    self.summary.already_exists += 1;
+                    eprintln!(
+                        "{} {} {} (→ {})",
+                        "○".blue(),
+                        label,
+                        "(already in target, not in source)".blue(),
+                        target_name
+                    );
+                }
+                (None, None) => {
+                    self.summary.not_found += 1;
+                    eprintln!("{} {} {}", "✗".red(), label, "(not found in source)".red());
+                }
+                (Some(_), None) => {
+                    unreachable!("a prepared missing target was copied or returned an error")
+                }
+            }
+        }
+    }
+}
+
 type SingleFlightSlot<V> = Arc<Mutex<Option<V>>>;
 
 /// A retry-on-error, single-flight value cache.
@@ -4066,410 +4502,60 @@ impl Secrets {
 
     fn import_internal(&self, from_provider: &str, delete_source: bool) -> Result<()> {
         self.ensure_reason_for(AuditAction::Import, None)?;
-        let profile_display = self.resolve_profile_name(None);
 
-        let mut imported = 0;
-        let mut already_exists = 0;
-        let mut not_found = 0;
-        let mut deleted_from_source = 0;
-        let mut kept_in_source = 0;
-        let mut read_names: Vec<String> = Vec::new();
-        let mut source_uri: Option<String> = None;
-        let mut source_display: Option<String> = None;
-
-        let copy_result = (|| -> Result<()> {
-            let from_provider_instance =
-                self.build_provider(from_provider.to_string(), Some(&profile_display))?;
-            let provider_uri = from_provider_instance.uri();
-            source_uri = Some(provider_uri.clone());
-            source_display = Some(
-                if self.lookup_provider_alias_entry(from_provider).is_some() {
-                    format!("provider alias '{from_provider}' ({provider_uri})")
-                } else {
-                    provider_uri.clone()
-                },
-            );
-
-            if delete_source
-                && !crate::provider::spec_provider_deletes(
-                    &self.resolve_provider_spec(from_provider.to_string()),
-                )
-            {
-                return Err(SecretSpecError::ProviderOperationFailed(format!(
-                    "provider '{}' does not support deleting secrets and cannot be used with import --delete-source",
-                    from_provider_instance.name()
-                )));
-            }
-
-            eprintln!(
-                "Importing secrets from {} (profile: {})...\n",
-                source_display
-                    .as_deref()
-                    .expect("source display is set with the provider URI")
-                    .blue(),
-                profile_display.cyan()
-            );
-
-            let import_names = self.profile_secret_names_unscoped(Some(&profile_display))?;
-            let mut planned_imports = Vec::new();
-
-            // Resolve every effective secret before looking in either store so
-            // the literal-vs-alias diagnostic reflects the complete import and
-            // can be emitted before the first provider read.
-            for name in import_names {
-                let planned = self
-                    .plan_secret(&name, &profile_display, None)?
-                    .expect("Secret should exist since we're iterating over it");
-                if planned.route.is_none() {
-                    continue;
-                }
-
-                if planned.extract().is_some() {
-                    return Err(SecretSpecError::ExtractedSecretReadOnly(
-                        planned.name.clone(),
-                    ));
-                }
-                planned_imports.push(planned);
-            }
-
-            let divergences = self.literal_import_alias_divergences(
-                from_provider,
-                from_provider_instance.as_ref(),
-                &planned_imports,
-                &profile_display,
-            );
-            Self::warn_literal_import_alias_divergences(&provider_uri, &divergences);
-
-            // Resolve and read every endpoint before mutating either store.
-            // This makes failures in a later secret harmless to earlier source
-            // entries and gives --delete-source one destructive preflight.
-            let mut prepared = Vec::new();
-            for planned in planned_imports {
-                let route = planned
-                    .route
-                    .as_ref()
-                    .expect("planned imports are provider-backed");
-
-                read_names.push(planned.name.clone());
-                let source_address = self.address_for_spec(
-                    &planned,
-                    Some(from_provider),
-                    &self.config.project.name,
-                    &profile_display,
-                )?;
-                let target_address = self.address_for_spec(
-                    &planned,
-                    route.group_key(),
-                    &self.config.project.name,
-                    &profile_display,
-                )?;
-                let target_provider =
-                    self.write_provider_for_route(route, Some(&profile_display))?;
-
-                if delete_source
-                    && from_provider_instance.same_entries(
-                        source_address.as_address(),
-                        target_provider.as_ref(),
-                        target_address.as_address(),
-                    )?
-                {
-                    return Err(SecretSpecError::ProviderOperationFailed(format!(
-                        "refusing to delete '{}' from the import source because source and destination resolve to the same provider entry ({})",
-                        planned.name,
-                        from_provider_instance.uri()
-                    )));
-                }
-                let source_value = from_provider_instance.get(source_address.as_address())?;
-                let target_value = target_provider.get(target_address.as_address())?;
-
-                if let Some(value) = &source_value {
-                    Self::validate_import_value(&planned, &planned.name, value)?;
-                    if target_value.is_none() {
-                        target_provider.check_writable(target_address.as_address())?;
-                    }
-                    let target_will_match = target_value
-                        .as_ref()
-                        .is_none_or(|existing| existing.expose_secret() == value.expose_secret());
-                    if delete_source && target_will_match {
-                        from_provider_instance.check_deletable(source_address.as_address())?;
-                    }
-                }
-
-                prepared.push(PreparedImport {
-                    planned,
-                    target_provider,
-                    source_address,
-                    target_address,
-                    source_value,
-                    target_value,
-                    copied: false,
-                    source_deleted: false,
-                });
-            }
-
-            // A destination is one physical entry, even when aliases, URI
-            // spellings, or templates make the configured endpoints look
-            // different. Reject collisions before copying so two logical
-            // secrets cannot both act on the same stale target snapshot.
-            for left_index in 0..prepared.len() {
-                let left = &prepared[left_index];
-                for right in &prepared[left_index + 1..] {
-                    if left.target_provider.same_entries(
-                        left.target_address.as_address(),
-                        right.target_provider.as_ref(),
-                        right.target_address.as_address(),
-                    )? {
-                        return Err(SecretSpecError::ProviderOperationFailed(format!(
-                            "refusing to import '{}' and '{}' because they resolve to the same destination provider entry ({})",
-                            left.planned.name,
-                            right.planned.name,
-                            left.target_provider.uri()
-                        )));
-                    }
-                }
-            }
-
-            if delete_source {
-                // Cleanup must not remove any destination in this import. The
-                // per-secret check above protects each source from its own
-                // destination; this cross-product protects it from every other
-                // secret's destination before the first write or deletion.
-                for (source_index, source) in prepared.iter().enumerate() {
-                    let Some(source_value) = &source.source_value else {
-                        continue;
-                    };
-                    let source_will_be_deleted =
-                        source.target_value.as_ref().is_none_or(|target_value| {
-                            source_value.expose_secret() == target_value.expose_secret()
-                        });
-                    if !source_will_be_deleted {
-                        continue;
-                    }
-
-                    for (target_index, target) in prepared.iter().enumerate() {
-                        if source_index == target_index {
-                            continue;
-                        }
-                        if from_provider_instance.same_entries(
-                            source.source_address.as_address(),
-                            target.target_provider.as_ref(),
-                            target.target_address.as_address(),
-                        )? {
-                            return Err(SecretSpecError::ProviderOperationFailed(format!(
-                                "refusing to delete '{}' from the import source because it resolves to the destination provider entry for '{}' ({})",
-                                source.planned.name,
-                                target.planned.name,
-                                target.target_provider.uri()
-                            )));
-                        }
-                    }
-                }
-            }
-
-            // Copy every missing target. No source is deleted in this phase.
-            for entry in &mut prepared {
-                let (Some(value), None) = (&entry.source_value, &entry.target_value) else {
-                    continue;
-                };
-                let route = entry
-                    .planned
-                    .route
-                    .as_ref()
-                    .expect("prepared imports are provider-backed");
-                let set_result = entry
-                    .target_provider
-                    .set(entry.target_address.as_address(), value);
-                self.audit_write_result(
-                    &set_result,
-                    &entry.planned.name,
-                    &profile_display,
-                    Some(entry.target_provider.uri()),
-                    entry.target_address.native(),
-                    None,
-                );
-                set_result?;
-                self.sync_cache_after_write(&entry.planned, route, &profile_display, value);
-                entry.copied = true;
-                imported += 1;
-            }
-
-            // Verify all writes and validate their readable representation
-            // before beginning source cleanup.
-            if delete_source {
-                for entry in prepared.iter_mut().filter(|entry| entry.copied) {
-                    let expected = entry
-                        .source_value
-                        .as_ref()
-                        .expect("copied entries have source values");
-                    let stored = entry
-                        .target_provider
-                        .get(entry.target_address.as_address())?
-                        .ok_or_else(|| {
-                            SecretSpecError::ProviderOperationFailed(format!(
-                                "destination verification failed for '{}'; the source value was retained",
-                                entry.planned.name
-                            ))
-                        })?;
-                    if stored.expose_secret() != expected.expose_secret() {
-                        return Err(SecretSpecError::ProviderOperationFailed(format!(
-                            "destination verification failed for '{}'; the source value was retained",
-                            entry.planned.name
-                        )));
-                    }
-                    Self::validate_import_value(&entry.planned, &entry.planned.name, &stored)?;
-                    entry.target_value = Some(stored);
-                }
-
-                // Deletion is last: every planned target write has succeeded and
-                // every copied value has been read back successfully.
-                for entry in &mut prepared {
-                    let (Some(source), Some(target)) = (&entry.source_value, &entry.target_value)
-                    else {
-                        continue;
-                    };
-                    if source.expose_secret() != target.expose_secret() {
-                        continue;
-                    }
-                    let delete_result =
-                        from_provider_instance.delete(entry.source_address.as_address());
-                    self.audit_delete_result(
-                        &delete_result,
-                        &entry.planned.name,
-                        &profile_display,
-                        Some(from_provider_instance.uri()),
-                        entry.source_address.native(),
-                    );
-                    entry.source_deleted = delete_result?;
-                    deleted_from_source += usize::from(entry.source_deleted);
-                }
-            }
-
-            // Emit stable per-secret results only after the operation phases
-            // above have completed.
-            for entry in &prepared {
-                let name = &entry.planned.name;
-                let label =
-                    format_secret_label(name, entry.planned.config().description.as_deref());
-                let target_name = entry.target_provider.name().blue();
-
-                if entry.copied {
-                    if delete_source && entry.source_deleted {
-                        eprintln!(
-                            "{} {} (→ {}; deleted from source)",
-                            "✓".green(),
-                            label,
-                            target_name
-                        );
-                    } else {
-                        eprintln!("{} {} (→ {})", "✓".green(), label, target_name);
-                    }
-                    continue;
-                }
-
-                match (&entry.source_value, &entry.target_value) {
-                    (Some(source), Some(target)) => {
-                        already_exists += 1;
-                        if delete_source && source.expose_secret() != target.expose_secret() {
-                            kept_in_source += 1;
-                            eprintln!(
-                                "{} {} {} (→ {}; source retained)",
-                                "○".yellow(),
-                                label,
-                                "(target value differs)".yellow(),
-                                target_name
-                            );
-                        } else if delete_source && entry.source_deleted {
-                            eprintln!(
-                                "{} {} {} (→ {}; deleted from source)",
-                                "✓".green(),
-                                label,
-                                "(already exists in target)".yellow(),
-                                target_name
-                            );
-                        } else {
-                            eprintln!(
-                                "{} {} {} (→ {})",
-                                "○".yellow(),
-                                label,
-                                "(already exists in target)".yellow(),
-                                target_name
-                            );
-                        }
-                    }
-                    (None, Some(_)) => {
-                        already_exists += 1;
-                        eprintln!(
-                            "{} {} {} (→ {})",
-                            "○".blue(),
-                            label,
-                            "(already in target, not in source)".blue(),
-                            target_name
-                        );
-                    }
-                    (None, None) => {
-                        not_found += 1;
-                        eprintln!("{} {} {}", "✗".red(), label, "(not found in source)".red());
-                    }
-                    (Some(_), None) => {
-                        unreachable!("a prepared missing target was copied or returned an error")
-                    }
-                }
-            }
-            Ok(())
-        })();
-
-        if let Err(e) = copy_result {
+        let mut plan = ImportPlan::new(
+            self,
+            from_provider,
+            self.resolve_profile_name(None),
+            delete_source,
+        );
+        if let Err(error) = plan.run() {
             self.record(
                 AuditAction::Import,
-                &profile_display,
+                &plan.profile,
                 AuditOutcome::Error,
                 AuditFields {
-                    keys: &read_names,
-                    provider_uri: source_uri,
-                    error_kind: Some(e.kind()),
+                    keys: &plan.read_names,
+                    provider_uri: plan.source_uri.clone(),
+                    error_kind: Some(error.kind()),
                     ..Default::default()
                 },
             );
-            return Err(e);
+            return Err(error);
         }
 
         eprintln!(
             "\nSummary: {} imported, {} already exists, {} not found in source",
-            imported.to_string().green(),
-            already_exists.to_string().yellow(),
-            not_found.to_string().red()
+            plan.summary.imported.to_string().green(),
+            plan.summary.already_exists.to_string().yellow(),
+            plan.summary.not_found.to_string().red()
         );
         if delete_source {
             eprintln!(
                 "Source cleanup: {} deleted, {} retained because the target differs",
-                deleted_from_source.to_string().green(),
-                kept_in_source.to_string().yellow()
+                plan.summary.deleted_from_source.to_string().green(),
+                plan.summary.kept_in_source.to_string().yellow()
             );
         }
 
-        if imported > 0 {
+        if plan.summary.imported > 0 {
             eprintln!(
                 "\n{} Successfully imported {} secrets from {}",
                 "✓".green(),
-                imported,
-                source_display.as_deref().unwrap_or("configured provider"),
+                plan.summary.imported,
+                plan.source_display
+                    .as_deref()
+                    .unwrap_or("configured provider"),
             );
         }
 
-        let outcome = if imported > 0 {
-            AuditOutcome::Written
-        } else if already_exists > 0 {
-            AuditOutcome::Found
-        } else {
-            AuditOutcome::Missing
-        };
         self.record(
             AuditAction::Import,
-            &profile_display,
-            outcome,
+            &plan.profile,
+            plan.summary.audit_outcome(),
             AuditFields {
-                keys: &read_names,
-                provider_uri: source_uri,
+                keys: &plan.read_names,
+                provider_uri: plan.source_uri.clone(),
                 ..Default::default()
             },
         );

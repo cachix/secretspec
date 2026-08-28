@@ -360,7 +360,32 @@ type GroupFetch<'a> = (
     Vec<&'a PlannedSecret>,
     Box<dyn ProviderTrait>,
 );
-type FallbackReadResult = Result<(Option<SecretString>, Option<String>, Option<NativeAddress>)>;
+
+struct FallbackReadRequest<'a> {
+    planned: &'a PlannedSecret,
+    diagnostic_name: &'a str,
+    provider_specs: &'a [String],
+    project: &'a str,
+    profile: &'a str,
+}
+
+struct FallbackRead {
+    value: Option<SecretString>,
+    provider_uri: Option<String>,
+    native_address: Option<NativeAddress>,
+}
+
+impl FallbackRead {
+    fn missing(provider_uri: Option<String>, native_address: Option<NativeAddress>) -> Self {
+        Self {
+            value: None,
+            provider_uri,
+            native_address,
+        }
+    }
+}
+
+type FallbackReadResult = Result<FallbackRead>;
 
 struct PreparedImport {
     planned: PlannedSecret,
@@ -985,6 +1010,660 @@ impl Materialize {
 
     fn prompts(self) -> bool {
         self == Self::Run
+    }
+}
+
+type ExecutionResult = Result<std::result::Result<ValidatedSecrets, ValidationErrors>>;
+
+/// Mutable state for one resolution pass.
+///
+/// The phase methods keep provider I/O, value decisions, composition, and
+/// validation ordered without forcing [`Secrets::execute_plan`] to carry every
+/// intermediate map and output collection in one method.
+struct ResolutionExecution<'secrets, 'plan, 'filter, 'addresses> {
+    manager: &'secrets Secrets,
+    plan: &'plan ResolutionPlan,
+    materialize: Materialize,
+    output_filter: Option<&'filter HashSet<String>>,
+    read_addresses: Option<&'addresses mut HashMap<String, NativeAddress>>,
+    values: HashMap<String, SecretString>,
+    missing_required: Vec<String>,
+    missing_optional: Vec<String>,
+    with_defaults: Vec<(String, String)>,
+    temp_files: Vec<tempfile::NamedTempFile>,
+    resolution: Vec<SecretResolution>,
+    group_uris: HashMap<Option<&'plan str>, String>,
+    fetched_values: HashMap<String, SecretString>,
+    failed_primary_uris: HashMap<Option<&'plan str>, SecretSpecError>,
+    cached_uris: HashMap<String, String>,
+    fallback_results: HashMap<String, FallbackReadResult>,
+}
+
+impl<'secrets, 'plan, 'filter, 'addresses>
+    ResolutionExecution<'secrets, 'plan, 'filter, 'addresses>
+{
+    fn new(
+        manager: &'secrets Secrets,
+        plan: &'plan ResolutionPlan,
+        materialize: Materialize,
+        output_filter: Option<&'filter HashSet<String>>,
+        read_addresses: Option<&'addresses mut HashMap<String, NativeAddress>>,
+    ) -> Self {
+        Self {
+            manager,
+            plan,
+            materialize,
+            output_filter,
+            read_addresses,
+            values: HashMap::new(),
+            missing_required: Vec::new(),
+            missing_optional: Vec::new(),
+            with_defaults: Vec::new(),
+            temp_files: Vec::new(),
+            resolution: Vec::new(),
+            group_uris: HashMap::new(),
+            fetched_values: HashMap::new(),
+            failed_primary_uris: HashMap::new(),
+            cached_uris: HashMap::new(),
+            fallback_results: HashMap::new(),
+        }
+    }
+
+    fn run(mut self) -> ExecutionResult {
+        if self.plan.secrets.is_empty() {
+            return Ok(Ok(ValidatedSecrets {
+                resolved: Resolved::new(HashMap::new(), String::new(), self.plan.profile.clone()),
+                missing_optional: Vec::new(),
+                with_defaults: Vec::new(),
+                resolution: Vec::new(),
+                temp_files: Vec::new(),
+            }));
+        }
+
+        self.read_cached_values();
+        self.fetch_primary_values()?;
+        self.fetch_fallback_values();
+        self.resolve_provider_backed_values()?;
+        self.resolve_composed_values()?;
+        self.finish()
+    }
+
+    fn read_cached_values(&mut self) {
+        for (name, (value, uri)) in self
+            .manager
+            .read_cached_group(self.plan, &self.plan.profile)
+        {
+            self.cached_uris.insert(name.clone(), uri);
+            self.fetched_values.insert(name, value);
+        }
+    }
+
+    fn fetch_primary_values(&mut self) -> Result<()> {
+        let plan = self.plan;
+        let project = self.manager.config.project.name.as_str();
+        let profile = plan.profile.as_str();
+        let mut group_fetches: Vec<GroupFetch<'plan>> = Vec::new();
+
+        // Construction stays on this thread so every single-store ref can be
+        // checked before any provider is contacted.
+        for (provider_uri, group) in plan.groups() {
+            let group: Vec<&PlannedSecret> = group
+                .into_iter()
+                .filter(|planned| !self.cached_uris.contains_key(&planned.name))
+                .collect();
+            if group.is_empty() {
+                continue;
+            }
+            match self
+                .manager
+                .get_route_provider(provider_uri, Some(&plan.profile))
+            {
+                Ok(provider) => {
+                    self.group_uris.insert(provider_uri, provider.uri());
+                    group_fetches.push((provider_uri, group, provider));
+                }
+                Err(error) => {
+                    let shown = provider_uri.map(crate::audit::redact_uri_strict);
+                    warn_primary_provider_failure(shown.as_deref(), &error);
+                    self.failed_primary_uris.insert(provider_uri, error);
+                }
+            }
+        }
+
+        for (provider_spec, group, provider) in &group_fetches {
+            self.manager.check_single_store_ref_coords(
+                *provider_spec,
+                group,
+                provider.as_ref(),
+                project,
+                profile,
+            )?;
+        }
+
+        fn fetch_group<'a>(
+            manager: &Secrets,
+            (provider_uri, group, provider): GroupFetch<'a>,
+            project: &str,
+            profile: &str,
+        ) -> (Option<&'a str>, Result<HashMap<String, SecretString>>) {
+            let result = manager.fetch_group(&*provider, provider_uri, &group, project, profile);
+            (provider_uri, result)
+        }
+
+        let fetch_results: Vec<(Option<&'plan str>, Result<_>)> = if group_fetches.len() <= 1 {
+            group_fetches
+                .into_iter()
+                .map(|group| fetch_group(self.manager, group, project, profile))
+                .collect()
+        } else {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = group_fetches
+                    .into_iter()
+                    .map(|group| scope.spawn(|| fetch_group(self.manager, group, project, profile)))
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join().expect("group fetch thread panicked"))
+                    .collect()
+            })
+        };
+
+        for (provider_uri, result) in fetch_results {
+            match result {
+                Ok(batch_results) => self.fetched_values.extend(batch_results),
+                Err(error) => {
+                    let display_uri = self.group_uris.get(&provider_uri).map(String::as_str);
+                    warn_primary_provider_failure(display_uri, &error);
+                    self.failed_primary_uris.insert(provider_uri, error);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn fetch_fallback_values(&mut self) {
+        let project = self.manager.config.project.name.as_str();
+        let profile = self.plan.profile.as_str();
+        let provider_cache = ProviderCache::default();
+        let pending_fallbacks: Vec<&PlannedSecret> = self
+            .plan
+            .secrets
+            .iter()
+            .filter(|planned| {
+                !self.fetched_values.contains_key(&planned.name)
+                    && planned
+                        .route
+                        .as_ref()
+                        .and_then(Route::fallback_specs)
+                        .is_some()
+            })
+            .collect();
+
+        self.fallback_results = crate::provider::map_concurrently(
+            &pending_fallbacks,
+            crate::provider::get_each_concurrency(),
+            |planned| {
+                let route = planned
+                    .route
+                    .as_ref()
+                    .expect("pending fallback has a provider route");
+                let fallback = route
+                    .fallback_specs()
+                    .expect("pending fallback has fallback specs");
+                let result = self.manager.read_fallback_chain(
+                    &provider_cache,
+                    FallbackReadRequest {
+                        planned,
+                        diagnostic_name: Secrets::diagnostic_secret_name(
+                            &planned.name,
+                            self.output_filter,
+                        ),
+                        provider_specs: fallback,
+                        project,
+                        profile,
+                    },
+                );
+                (planned.name.clone(), result)
+            },
+        )
+        .into_iter()
+        .collect();
+    }
+
+    fn resolve_provider_backed_values(&mut self) -> Result<()> {
+        let manager = self.manager;
+        let plan = self.plan;
+        let materialize = self.materialize;
+        let output_filter = self.output_filter;
+        let project = manager.config.project.name.as_str();
+        let profile = plan.profile.as_str();
+
+        for planned in &plan.secrets {
+            let Some(route) = &planned.route else {
+                continue;
+            };
+            let name = &planned.name;
+            let required = planned.required();
+            let diagnostic_name = Secrets::diagnostic_secret_name(name, output_filter);
+            let primary_uri = route.group_key();
+
+            let status;
+            let mut source_provider = None;
+            let mut default_applied = false;
+            let mut generated = false;
+
+            match self.fetched_values.remove(name.as_str()) {
+                Some(value) => {
+                    let was_cached = self.cached_uris.contains_key(name);
+                    source_provider = self
+                        .cached_uris
+                        .remove(name)
+                        .or_else(|| self.group_uris.get(&primary_uri).cloned());
+                    if !was_cached
+                        && let Some(addresses) = self.read_addresses.as_deref_mut()
+                        && let Ok(address) =
+                            manager.address_for_spec(planned, primary_uri, project, profile)
+                        && let Some(native) = address.native()
+                    {
+                        addresses.insert(name.clone(), native.clone());
+                    }
+                    if !was_cached && materialize.values() {
+                        manager.write_cached_secret(planned, route, profile, &value);
+                    }
+                    if materialize.values() {
+                        manager.insert_resolved(
+                            &mut self.values,
+                            &mut self.temp_files,
+                            planned,
+                            diagnostic_name,
+                            value,
+                            ResolvedRepresentation::Stored,
+                        )?;
+                    }
+                    status = ResolutionStatus::Resolved;
+                }
+                None => {
+                    let primary_failed = self.failed_primary_uris.contains_key(&primary_uri);
+
+                    if let Some(addresses) = self.read_addresses.as_deref_mut()
+                        && let Ok(address) =
+                            manager.address_for_spec(planned, primary_uri, project, profile)
+                        && let Some(native) = address.native()
+                    {
+                        addresses.insert(name.clone(), native.clone());
+                    }
+
+                    let fallback_result = match route.fallback_specs() {
+                        Some(_) => {
+                            let resolved = self
+                                .fallback_results
+                                .remove(name)
+                                .expect("primary miss with fallback was prefetched")?;
+                            if resolved.value.is_none() && primary_failed {
+                                let error = self
+                                    .failed_primary_uris
+                                    .remove(&primary_uri)
+                                    .expect("primary_failed implies entry present");
+                                return Err(error);
+                            }
+                            resolved
+                        }
+                        None if primary_failed => {
+                            let error = self
+                                .failed_primary_uris
+                                .remove(&primary_uri)
+                                .expect("primary_failed implies entry present");
+                            return Err(error);
+                        }
+                        None => FallbackRead::missing(None, None),
+                    };
+                    let FallbackRead {
+                        value: fallback_value,
+                        provider_uri: fallback_uri,
+                        native_address: fallback_reference,
+                    } = fallback_result;
+
+                    if let Some(addresses) = self.read_addresses.as_deref_mut()
+                        && let Some(reference) = fallback_reference
+                    {
+                        addresses.insert(name.clone(), reference);
+                    }
+                    if let Some(value) = fallback_value {
+                        source_provider = fallback_uri;
+                        if materialize.values() {
+                            manager.write_cached_secret(planned, route, profile, &value);
+                            manager.insert_resolved(
+                                &mut self.values,
+                                &mut self.temp_files,
+                                planned,
+                                diagnostic_name,
+                                value,
+                                ResolvedRepresentation::Stored,
+                            )?;
+                        }
+                        status = ResolutionStatus::Resolved;
+                    } else {
+                        match planned.secret.missing {
+                            MissingPolicy::Prompt => {
+                                if materialize.prompts()
+                                    && output_filter.is_none_or(|filter| filter.contains(name))
+                                {
+                                    let prompted = manager.try_prompt_secret(planned, profile)?;
+                                    manager.insert_resolved(
+                                        &mut self.values,
+                                        &mut self.temp_files,
+                                        planned,
+                                        diagnostic_name,
+                                        prompted,
+                                        ResolvedRepresentation::Logical,
+                                    )?;
+                                    status = ResolutionStatus::Resolved;
+                                } else if required {
+                                    self.missing_required.push(name.clone());
+                                    status = ResolutionStatus::MissingRequired;
+                                } else {
+                                    self.missing_optional.push(name.clone());
+                                    status = ResolutionStatus::MissingOptional;
+                                }
+                            }
+                            MissingPolicy::Generate => {
+                                if materialize.values() {
+                                    generated = true;
+                                    let generated_value = manager
+                                        .try_generate_secret(planned, profile)?
+                                        .expect("compiled Generate policy has a generator");
+                                    manager.insert_resolved(
+                                        &mut self.values,
+                                        &mut self.temp_files,
+                                        planned,
+                                        diagnostic_name,
+                                        generated_value,
+                                        ResolvedRepresentation::Logical,
+                                    )?;
+                                    status = ResolutionStatus::Resolved;
+                                } else if required
+                                    && manager.generated_value_is_stored(planned, profile)
+                                {
+                                    self.missing_required.push(name.clone());
+                                    status = ResolutionStatus::MissingRequired;
+                                } else {
+                                    generated = true;
+                                    status = ResolutionStatus::Resolved;
+                                }
+                            }
+                            MissingPolicy::UseDefault => {
+                                let default_value = planned
+                                    .config()
+                                    .default
+                                    .as_ref()
+                                    .expect("compiled UseDefault policy has a default");
+                                default_applied = true;
+                                if materialize.values() {
+                                    manager.insert_resolved(
+                                        &mut self.values,
+                                        &mut self.temp_files,
+                                        planned,
+                                        diagnostic_name,
+                                        SecretString::new(default_value.clone().into()),
+                                        ResolvedRepresentation::Logical,
+                                    )?;
+                                    self.with_defaults
+                                        .push((name.clone(), default_value.clone()));
+                                }
+                                status = ResolutionStatus::Resolved;
+                            }
+                            MissingPolicy::Error => {
+                                self.missing_required.push(name.clone());
+                                status = ResolutionStatus::MissingRequired;
+                            }
+                            MissingPolicy::Omit => {
+                                self.missing_optional.push(name.clone());
+                                status = ResolutionStatus::MissingOptional;
+                            }
+                        }
+                    }
+                }
+            }
+
+            self.resolution.push(SecretResolution {
+                name: name.clone(),
+                status,
+                required,
+                source_provider,
+                default_applied,
+                generated,
+                composed: false,
+                as_path: planned.as_path(),
+            });
+        }
+        Ok(())
+    }
+
+    fn resolve_composed_values(&mut self) -> Result<()> {
+        fn composition_order<'a>(
+            planned: &'a PlannedSecret,
+            composed: &HashMap<&str, &'a PlannedSecret>,
+            visited: &mut HashSet<&'a str>,
+            ordered: &mut Vec<&'a PlannedSecret>,
+        ) {
+            if !visited.insert(planned.name.as_str()) {
+                return;
+            }
+            let template = planned
+                .composition()
+                .expect("only composed nodes are ordered");
+            for dependency in template.dependencies() {
+                if let Some(dependency) = composed.get(dependency.as_str()) {
+                    composition_order(dependency, composed, visited, ordered);
+                }
+            }
+            ordered.push(planned);
+        }
+
+        let composed: HashMap<&str, &PlannedSecret> = self
+            .plan
+            .secrets
+            .iter()
+            .filter(|secret| secret.is_composed())
+            .map(|secret| (secret.name.as_str(), secret))
+            .collect();
+        let mut ordered = Vec::with_capacity(composed.len());
+        let mut visited = HashSet::new();
+        for planned in self
+            .plan
+            .secrets
+            .iter()
+            .filter(|secret| secret.is_composed())
+        {
+            composition_order(planned, &composed, &mut visited, &mut ordered);
+        }
+
+        if ordered.is_empty() {
+            return Ok(());
+        }
+
+        let mut statuses: HashMap<String, ResolutionStatus> = self
+            .resolution
+            .iter()
+            .map(|entry| (entry.name.clone(), entry.status.clone()))
+            .collect();
+        for planned in ordered {
+            let template = planned
+                .composition()
+                .expect("only composed nodes are ordered");
+            let dependencies_resolved = template
+                .dependencies()
+                .iter()
+                .all(|dependency| statuses.get(dependency) == Some(&ResolutionStatus::Resolved));
+            let status = if dependencies_resolved {
+                if self.materialize.values() {
+                    let rendered = template
+                        .render(|dependency| {
+                            self.values
+                                .get(dependency)
+                                .map(|value| value.expose_secret())
+                        })
+                        .map_err(SecretSpecError::CompositionFailed)?;
+                    self.manager.insert_resolved(
+                        &mut self.values,
+                        &mut self.temp_files,
+                        planned,
+                        Secrets::diagnostic_secret_name(&planned.name, self.output_filter),
+                        SecretString::new(rendered.into()),
+                        ResolvedRepresentation::Logical,
+                    )?;
+                }
+                ResolutionStatus::Resolved
+            } else {
+                match planned.secret.missing {
+                    MissingPolicy::Error => {
+                        self.missing_required.push(planned.name.clone());
+                        ResolutionStatus::MissingRequired
+                    }
+                    MissingPolicy::Omit => {
+                        self.missing_optional.push(planned.name.clone());
+                        ResolutionStatus::MissingOptional
+                    }
+                    MissingPolicy::Generate | MissingPolicy::UseDefault | MissingPolicy::Prompt => {
+                        unreachable!("composed source conflicts are rejected at load time")
+                    }
+                }
+            };
+
+            statuses.insert(planned.name.clone(), status.clone());
+            self.resolution.push(SecretResolution {
+                name: planned.name.clone(),
+                status,
+                required: planned.required(),
+                source_provider: None,
+                default_applied: false,
+                generated: false,
+                composed: true,
+                as_path: planned.as_path(),
+            });
+        }
+        Ok(())
+    }
+
+    fn apply_output_filter(&mut self) {
+        let Some(filter) = self.output_filter else {
+            return;
+        };
+        self.values.retain(|name, _| filter.contains(name));
+        self.resolution.retain(|entry| filter.contains(&entry.name));
+        self.missing_required.retain(|name| filter.contains(name));
+        self.missing_optional.retain(|name| filter.contains(name));
+        self.with_defaults.retain(|(name, _)| filter.contains(name));
+    }
+
+    fn constraint_violations(&self) -> Vec<ConstraintViolation> {
+        let resolved_names: HashSet<&str> = self
+            .resolution
+            .iter()
+            .filter(|entry| entry.status == ResolutionStatus::Resolved)
+            .map(|entry| entry.name.as_str())
+            .collect();
+        let compiled_profile = self
+            .manager
+            .manifest
+            .profile(&self.plan.profile)
+            .expect("profile is validated before execution");
+        let constraints = (self.output_filter.is_some()
+            || self.plan.secrets.len() == compiled_profile.secrets.len())
+        .then_some(&compiled_profile.constraints);
+        let Some(constraints) = constraints else {
+            return Vec::new();
+        };
+
+        let visible_members = |members: &Vec<String>| -> Vec<String> {
+            match self.output_filter {
+                Some(filter) => members
+                    .iter()
+                    .filter(|name| filter.contains(name.as_str()))
+                    .cloned()
+                    .collect(),
+                None => members.clone(),
+            }
+        };
+        let mut violations = Vec::new();
+        for group in &constraints.at_least_one {
+            let members = visible_members(&group.members);
+            if members.is_empty() {
+                continue;
+            }
+            let present: Vec<String> = members
+                .iter()
+                .filter(|name| resolved_names.contains(name.as_str()))
+                .cloned()
+                .collect();
+            if present.is_empty() {
+                violations.push(ConstraintViolation {
+                    kind: ConstraintKind::AtLeastOne,
+                    group: group.name.clone(),
+                    secrets: members,
+                    present,
+                });
+            }
+        }
+        for group in &constraints.exactly_one {
+            let members = visible_members(&group.members);
+            if members.is_empty() {
+                continue;
+            }
+            let present: Vec<String> = members
+                .iter()
+                .filter(|name| resolved_names.contains(name.as_str()))
+                .cloned()
+                .collect();
+            if present.len() != 1 {
+                violations.push(ConstraintViolation {
+                    kind: ConstraintKind::ExactlyOne,
+                    group: group.name.clone(),
+                    secrets: members,
+                    present,
+                });
+            }
+        }
+        violations
+    }
+
+    fn finish(mut self) -> ExecutionResult {
+        let report_provider_uri = self.manager.validation_report_provider_uri(
+            self.plan.override_uri.as_deref(),
+            self.plan
+                .secrets
+                .iter()
+                .filter_map(|secret| secret.route.as_ref())
+                .map(|route| route.primary()),
+            Some(&self.plan.profile),
+        )?;
+
+        self.apply_output_filter();
+        let constraint_violations = self.constraint_violations();
+        if !self.missing_required.is_empty() || !constraint_violations.is_empty() {
+            let mut errors = ValidationErrors::new(
+                self.missing_required,
+                self.missing_optional,
+                self.with_defaults,
+                report_provider_uri,
+                self.plan.profile.clone(),
+            );
+            errors.resolution = self.resolution;
+            errors.constraint_violations = constraint_violations;
+            Ok(Err(errors))
+        } else {
+            Ok(Ok(ValidatedSecrets {
+                resolved: Resolved::new(
+                    self.values,
+                    report_provider_uri,
+                    self.plan.profile.clone(),
+                ),
+                missing_optional: self.missing_optional,
+                with_defaults: self.with_defaults,
+                resolution: self.resolution,
+                temp_files: self.temp_files,
+            }))
+        }
     }
 }
 
@@ -3459,152 +4138,86 @@ impl Secrets {
 
     /// Gets a secret from a chain of provider specs with fallback.
     ///
-    /// Tries each provider in order until one has the secret. Each spec is
-    /// resolved to a URI **only when the chain reaches it** — every earlier
-    /// provider having missed. A spec that fails to resolve (an undefined
-    /// alias) is a broken link, not a reason to abandon the chain: like a
-    /// provider that fails to construct or read (authentication failure,
-    /// network error), it is warned about and the next link is tried. If every
-    /// provider errored without any reporting a healthy "not found", the last
-    /// error is returned so the user sees why the secret could not be
-    /// retrieved.
+    /// Walks one secret's fallback chain lazily until a provider answers.
     ///
-    /// If no provider specs are supplied, falls back to the default provider.
-    ///
-    /// # Arguments
-    ///
-    /// * `secret_name` - What a warning may call this secret. Diagnostics only —
-    ///   the read is addressed from `planned` and each selected provider spec —
-    ///   so a caller resolving a secret the
-    ///   active scope hides passes [`HIDDEN_SECRET_LABEL`] instead of the real
-    ///   name (see [`Secrets::diagnostic_secret_name`])
-    /// * `planned` - The logical secret and provider-scoped refs used to derive
-    ///   each endpoint's address
-    /// * `provider_specs` - Optional chain of provider specs (aliases or inline
-    ///   URIs) to try in order, resolved lazily per entry
-    /// * `planned_primary_uri` - The already-resolved URI of the first entry
-    ///   when it is a planned route primary. Its presence selects route-aware
-    ///   construction for that entry; fallback-only walks pass `None`.
-    /// * `profile` - The profile the read is addressed under; scopes any
-    ///   provider credentials fetched when a chain link is built
-    ///
-    /// # Returns
-    ///
-    /// A tuple of the secret value (or `None` if not found in any provider), the
-    /// URI of the provider to attribute the access to, and that endpoint's
-    /// expanded native ref (if any). On a hit, attribution names the serving
-    /// provider; on a chain miss/error, the last provider tried.
-    fn get_secret_from_providers(
+    /// A broken alias, provider construction failure, or read error warns and
+    /// advances to the next link. If every attempted provider errored without
+    /// any healthy "not found" response, the last error is returned so an
+    /// outage is not silently downgraded to a missing secret.
+    fn read_fallback_chain(
         &self,
         provider_cache: &ProviderCache,
-        planned: &PlannedSecret,
-        secret_name: &str,
-        provider_specs: Option<&[String]>,
-        project: &str,
-        profile: &str,
-        planned_primary_uri: Option<&str>,
-    ) -> Result<(Option<SecretString>, Option<String>, Option<NativeAddress>)> {
-        // If a provider chain is supplied, try it in order.
-        if let Some(specs) = provider_specs {
-            let mut last_error: Option<SecretSpecError> = None;
-            let mut any_healthy = false;
-            let mut last_uri: Option<String> = None;
-            let mut last_reference: Option<NativeAddress> = None;
-            for (index, spec) in specs.iter().enumerate() {
-                let is_planned_primary = index == 0 && planned_primary_uri.is_some();
-                // Resolve this link only now, as the chain reaches it. An
-                // undefined alias is one broken link, treated exactly like a
-                // provider that fails to construct or read: warn and try the
-                // next, so a working provider later in the chain still answers.
-                // A planned primary was already resolved and validated while
-                // building the route. Reuse that URI: an inline cached alias is
-                // deliberately rejected by the generic leaf-only resolver.
-                let resolved = match planned_primary_uri.filter(|_| is_planned_primary) {
-                    Some(uri) => Ok(uri.to_string()),
-                    None => self.resolve_one_provider(spec),
-                };
-                let uri = match resolved {
-                    Ok(uri) => uri,
-                    Err(e) => {
-                        // Resolution failed, so only the raw spec exists; redact it.
-                        warn_provider_failure(
-                            &crate::audit::redact_uri_strict(spec),
-                            secret_name,
-                            &e,
-                        );
-                        last_error = Some(e);
-                        continue;
-                    }
-                };
-                // Build from the raw spec (not the resolved URI) so an alias's
-                // `credentials` is applied to this chain link too. A planned
-                // primary uses the same route-aware construction as batch
-                // execution, allowing an inline cached alias to unwrap to its
-                // authoritative leaf while keeping generic uses leaf-only. The
-                // provider is shared across this operation's per-secret walks.
-                let provider = match self.shared_provider(
-                    provider_cache,
-                    spec,
-                    Some(profile),
-                    is_planned_primary,
-                ) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        // Construction failed after resolution, so redact the
-                        // resolved URI (it may carry an inline credential).
+        request: FallbackReadRequest<'_>,
+    ) -> Result<FallbackRead> {
+        let mut last_error: Option<SecretSpecError> = None;
+        let mut any_healthy = false;
+        let mut last_uri: Option<String> = None;
+        let mut last_reference: Option<NativeAddress> = None;
+
+        for spec in request.provider_specs {
+            // Resolve each link only when the preceding providers have missed.
+            let uri = match self.resolve_one_provider(spec) {
+                Ok(uri) => uri,
+                Err(error) => {
+                    warn_provider_failure(
+                        &crate::audit::redact_uri_strict(spec),
+                        request.diagnostic_name,
+                        &error,
+                    );
+                    last_error = Some(error);
+                    continue;
+                }
+            };
+
+            // Build from the raw spec so alias credentials are applied. The
+            // operation-scoped cache shares provider connection state between
+            // concurrent per-secret fallback walks.
+            let provider =
+                match self.shared_provider(provider_cache, spec, Some(request.profile), false) {
+                    Ok(provider) => provider,
+                    Err(error) => {
                         warn_provider_failure(
                             &crate::audit::redact_uri_strict(&uri),
-                            secret_name,
-                            &e,
+                            request.diagnostic_name,
+                            &error,
                         );
-                        last_error = Some(e);
+                        last_error = Some(error);
                         continue;
                     }
                 };
-                // Attribute the access to the provider's own redacted `uri()`, never
-                // the raw configured alias: a per-secret alias may embed credentials
-                // (e.g. `vault+token:s3cr3t@host`) that the provider strips from
-                // `uri()` but that `redact_uri` cannot remove from an opaque URI.
-                let provider_uri = provider.uri();
-                last_uri = Some(provider_uri.clone());
-                let address = self.address_for_spec(planned, Some(spec), project, profile)?;
-                last_reference = address.native().cloned();
-                match provider.get(address.as_address()) {
-                    Ok(Some(value)) => {
-                        return Ok((Some(value), Some(provider_uri), last_reference));
-                    }
-                    Ok(None) => {
-                        any_healthy = true;
-                        continue;
-                    }
-                    Err(e) => {
-                        // A provider was built, so attribute the warning to its own
-                        // credential-free `uri()` rather than the raw alias.
-                        warn_provider_failure(&provider_uri, secret_name, &e);
-                        last_error = Some(e);
-                        continue;
-                    }
+
+            let provider_uri = provider.uri();
+            last_uri = Some(provider_uri.clone());
+            let address = self.address_for_spec(
+                request.planned,
+                Some(spec),
+                request.project,
+                request.profile,
+            )?;
+            last_reference = address.native().cloned();
+            match provider.get(address.as_address()) {
+                Ok(Some(value)) => {
+                    return Ok(FallbackRead {
+                        value: Some(value),
+                        provider_uri: Some(provider_uri),
+                        native_address: last_reference,
+                    });
+                }
+                Ok(None) => {
+                    any_healthy = true;
+                }
+                Err(error) => {
+                    warn_provider_failure(&provider_uri, request.diagnostic_name, &error);
+                    last_error = Some(error);
                 }
             }
-            // Surface the last error only if no provider in the chain returned
-            // a healthy "not found" — otherwise the secret is genuinely missing.
-            match last_error {
-                Some(e) if !any_healthy => Err(e),
-                _ => Ok((None, last_uri, last_reference)),
-            }
-        } else {
-            // No per-secret providers, use default provider
-            let backend = self.get_provider(None, Some(profile))?;
-            let uri = backend.uri();
-            let address = self.address_for_spec(planned, None, project, profile)?;
-            backend
-                .get(address.as_address())
-                .map(|opt| (opt, Some(uri), address.native().cloned()))
+        }
+
+        match last_error {
+            Some(error) if !any_healthy => Err(error),
+            _ => Ok(FallbackRead::missing(last_uri, last_reference)),
         }
     }
-
-    /// Delete cached values for the active profile. Available since SecretSpec
-    /// 0.17.
     ///
     /// When `name` is `None`, every declared secret using a cached route is
     /// cleared. A named secret must exist and use a cached route.
@@ -5525,664 +6138,9 @@ impl Secrets {
         plan: &ResolutionPlan,
         materialize: Materialize,
         output_filter: Option<&HashSet<String>>,
-        mut read_addresses: Option<&mut HashMap<String, NativeAddress>>,
-    ) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
-        let project = self.config.project.name.as_str();
-        let profile = plan.profile.as_str();
-
-        // An empty plan — the common cause is an empty scope intersection —
-        // resolves to nothing and must **not** initialize or contact any
-        // provider (naming the report provider alone would build the default
-        // provider, which can fetch credentials). Return an empty successful
-        // resolution attributed to no provider.
-        if plan.secrets.is_empty() {
-            return Ok(Ok(ValidatedSecrets {
-                resolved: Resolved::new(HashMap::new(), String::new(), profile.to_string()),
-                missing_optional: Vec::new(),
-                with_defaults: Vec::new(),
-                resolution: Vec::new(),
-                temp_files: Vec::new(),
-            }));
-        }
-
-        let mut secrets: HashMap<String, SecretString> = HashMap::new();
-        let mut missing_required = Vec::new();
-        let mut missing_optional = Vec::new();
-        let mut with_defaults = Vec::new();
-        // Not filtered by the output filter, deliberately: an `as_path` secret's
-        // resolved value is its temp-file path, so a visible composition built
-        // from a hidden `as_path` input embeds that path in its own value.
-        // Dropping the file would delete it and hand the consumer a dangling
-        // path. Keeping it is consistent with composition's existing contract —
-        // a composed DSN already carries its inputs' content in derived form —
-        // while the input itself stays out of the environment.
-        let mut temp_files: Vec<tempfile::NamedTempFile> = Vec::new();
-        // Per-secret provenance for the value-free resolution report.
-        let mut resolution: Vec<SecretResolution> = Vec::new();
-        // Credential-free `uri()` of each successfully built primary provider
-        // group, keyed by the group's primary URI, so a primary hit can be
-        // attributed to the provider that answered.
-        let mut group_uris: HashMap<Option<&str>, String> = HashMap::new();
-
-        // Batch fetch from each provider group. A failure here (e.g. an
-        // unauthenticated vault) does not abort resolution: secrets that declare
-        // a fallback chain are retried per-secret below, and secrets in the
-        // failed group with no fallback surface the original error rather than
-        // being reported as missing.
-        let mut fetched_values: HashMap<String, SecretString> = HashMap::new();
-        let mut failed_primary_uris: HashMap<Option<&str>, SecretSpecError> = HashMap::new();
-        let mut cached_uris: HashMap<String, String> = HashMap::new();
-
-        // Consult caches before constructing source providers. Cache hits are
-        // inserted into the same fetched-values map, and their names are
-        // filtered out of source groups below. This ordering is what makes a
-        // cached route useful when its remote provider is slow or unavailable.
-        for (name, (value, uri)) in self.read_cached_group(plan, profile) {
-            cached_uris.insert(name.clone(), uri);
-            fetched_values.insert(name, value);
-        }
-
-        // Construction stays on this thread: the up-front single-store `ref`
-        // check below must see every built provider before any store is
-        // contacted. Building a credential-backed alias's provider already fetches
-        // its provider credentials here (memoized per spec); only the group
-        // fetches run concurrently below.
-        let mut group_fetches: Vec<GroupFetch<'_>> = Vec::new();
-        for (provider_uri, group) in plan.groups() {
-            let group: Vec<&PlannedSecret> = group
-                .into_iter()
-                .filter(|planned| !cached_uris.contains_key(&planned.name))
-                .collect();
-            if group.is_empty() {
-                continue;
-            }
-            match self.get_route_provider(provider_uri, Some(&plan.profile)) {
-                Ok(provider) => {
-                    // Attribute primary hits to the provider's own credential-free
-                    // `uri()`, never the raw configured alias (which may embed a
-                    // token). Recorded before the fetch so attribution survives a
-                    // partial batch.
-                    group_uris.insert(provider_uri, provider.uri());
-                    group_fetches.push((provider_uri, group, provider));
-                }
-                Err(e) => {
-                    // Construction failed: only the raw alias exists, so redact it.
-                    let shown = provider_uri.map(crate::audit::redact_uri_strict);
-                    warn_primary_provider_failure(shown.as_deref(), &e);
-                    failed_primary_uris.insert(provider_uri, e);
-                }
-            }
-        }
-
-        // Reject up front, before any store is contacted, a `ref` routed at
-        // exactly one store that cannot honor its coordinates: with no fallback
-        // to answer instead, the failure is definite and better surfaced now
-        // than mid-fetch.
-        for (provider_spec, group, provider) in &group_fetches {
-            self.check_single_store_ref_coords(
-                *provider_spec,
-                group,
-                provider.as_ref(),
-                project,
-                profile,
-            )?;
-        }
-
-        // Fetch the groups concurrently: each group is at least one provider
-        // round-trip. One thread per group mirrors the per-item threading
-        // providers already do inside `get_many`. A single group (the common
-        // case) stays on this thread.
-        fn fetch_group<'a>(
-            secrets: &Secrets,
-            (provider_uri, group, provider): GroupFetch<'a>,
-            project: &str,
-            profile: &str,
-        ) -> (Option<&'a str>, Result<HashMap<String, SecretString>>) {
-            let result = secrets.fetch_group(&*provider, provider_uri, &group, project, profile);
-            (provider_uri, result)
-        }
-
-        let fetch_results: Vec<(Option<&str>, Result<_>)> = if group_fetches.len() <= 1 {
-            group_fetches
-                .into_iter()
-                .map(|group| fetch_group(self, group, project, profile))
-                .collect()
-        } else {
-            std::thread::scope(|scope| {
-                let handles: Vec<_> = group_fetches
-                    .into_iter()
-                    .map(|group| scope.spawn(|| fetch_group(self, group, project, profile)))
-                    .collect();
-                handles
-                    .into_iter()
-                    .map(|handle| handle.join().expect("group fetch thread panicked"))
-                    .collect()
-            })
-        };
-
-        for (provider_uri, result) in fetch_results {
-            match result {
-                Ok(batch_results) => fetched_values.extend(batch_results),
-                Err(e) => {
-                    // A provider was built; attribute to its credential-free
-                    // `uri()`, already recorded in `group_uris` above.
-                    let display_uri = group_uris.get(&provider_uri).map(String::as_str);
-                    warn_primary_provider_failure(display_uri, &e);
-                    failed_primary_uris.insert(provider_uri, e);
-                }
-            }
-        }
-
-        // Primary misses walk their fallback chains independently, so resolve
-        // those chains concurrently instead of paying one provider round-trip
-        // per secret in series. Each worker still calls
-        // `get_secret_from_providers`, preserving provider order, lazy alias
-        // resolution, warnings, and the healthy-miss/error distinction for its
-        // own secret. Providers themselves are shared through `ProviderCache`.
-        let provider_cache = ProviderCache::default();
-        let pending_fallbacks: Vec<&PlannedSecret> = plan
-            .secrets
-            .iter()
-            .filter(|planned| {
-                !fetched_values.contains_key(&planned.name)
-                    && planned
-                        .route
-                        .as_ref()
-                        .and_then(Route::fallback_specs)
-                        .is_some()
-            })
-            .collect();
-        let mut fallback_results: HashMap<String, FallbackReadResult> =
-            crate::provider::map_concurrently(
-                &pending_fallbacks,
-                crate::provider::get_each_concurrency(),
-                |planned| {
-                    let route = planned
-                        .route
-                        .as_ref()
-                        .expect("pending fallback has a provider route");
-                    let fallback = route
-                        .fallback_specs()
-                        .expect("pending fallback has fallback specs");
-                    let result = self.get_secret_from_providers(
-                        &provider_cache,
-                        planned,
-                        Self::diagnostic_secret_name(&planned.name, output_filter),
-                        Some(fallback),
-                        project,
-                        profile,
-                        None,
-                    );
-                    (planned.name.clone(), result)
-                },
-            )
-            .into_iter()
-            .collect();
-
-        // Process each planned secret: apply the fetched value, its fallback
-        // chain, generation, or default, and record a value-free provenance entry
-        // for the resolution report.
-        for planned in &plan.secrets {
-            // Composed secrets have no route; they render after this loop,
-            // once their dependencies are decided.
-            let Some(route) = &planned.route else {
-                continue;
-            };
-            let name = &planned.name;
-            let required = planned.required();
-            let as_path = planned.as_path();
-            let diagnostic_name = Self::diagnostic_secret_name(name, output_filter);
-            // The group key (primary spec), matching how `group_uris` and
-            // `failed_primary_uris` were keyed from `plan.groups()` above.
-            let primary_uri = route.group_key();
-
-            let status;
-            let mut source_provider = None;
-            let mut default_applied = false;
-            let mut generated = false;
-
-            match fetched_values.remove(name.as_str()) {
-                Some(value) => {
-                    let was_cached = cached_uris.contains_key(name);
-                    source_provider = cached_uris
-                        .remove(name)
-                        .or_else(|| group_uris.get(&primary_uri).cloned());
-                    if !was_cached && let Some(addresses) = read_addresses.as_deref_mut() {
-                        // The primary answered, so it was addressed with the
-                        // coordinates the group fetch computed for this spec.
-                        if let Ok(address) =
-                            self.address_for_spec(planned, primary_uri, project, profile)
-                            && let Some(native) = address.native()
-                        {
-                            addresses.insert(name.clone(), native.clone());
-                        }
-                    }
-                    if !was_cached && materialize.values() {
-                        self.write_cached_secret(planned, route, profile, &value);
-                    }
-                    // Copy the value into the response only on a full pass; a
-                    // value-free pass has the status it needs and never
-                    // materializes a value or writes a temp file.
-                    if materialize.values() {
-                        self.insert_resolved(
-                            &mut secrets,
-                            &mut temp_files,
-                            planned,
-                            diagnostic_name,
-                            value,
-                            ResolvedRepresentation::Stored,
-                        )?;
-                    }
-                    status = ResolutionStatus::Resolved;
-                }
-                None => {
-                    let primary_failed = failed_primary_uris.contains_key(&primary_uri);
-
-                    // The primary was addressed even though it did not answer.
-                    // An audited failed read has to name the coordinates it
-                    // attempted, so record them before the error paths below
-                    // return. A fallback that answers overwrites this with the
-                    // address that did.
-                    if let Some(addresses) = read_addresses.as_deref_mut()
-                        && let Ok(address) =
-                            self.address_for_spec(planned, primary_uri, project, profile)
-                        && let Some(native) = address.native()
-                    {
-                        addresses.insert(name.clone(), native.clone());
-                    }
-
-                    // The primary missed, so consume the fallback result fetched
-                    // concurrently above. Each chain was still tried in order
-                    // and received the diagnostic label rather than a hidden
-                    // composition input's raw name.
-                    let (fallback_value, fallback_uri, fallback_reference) =
-                        match route.fallback_specs() {
-                            Some(_) => {
-                                let resolved = fallback_results
-                                    .remove(name)
-                                    .expect("primary miss with fallback was prefetched")?;
-                                // A primary that errored plus an exhausted fallback
-                                // chain is not "missing": the authoritative provider
-                                // is unreachable and might hold the value. Surface the
-                                // primary error, exactly as the no-fallback arm below.
-                                if resolved.0.is_none() && primary_failed {
-                                    let err = failed_primary_uris
-                                        .remove(&primary_uri)
-                                        .expect("primary_failed implies entry present");
-                                    return Err(err);
-                                }
-                                resolved
-                            }
-                            // No alternative chain and the primary failed: surface the
-                            // original error rather than reporting a spurious missing.
-                            None if primary_failed => {
-                                let err = failed_primary_uris
-                                    .remove(&primary_uri)
-                                    .expect("primary_failed implies entry present");
-                                return Err(err);
-                            }
-                            None => (None, None, None),
-                        };
-
-                    if let Some(addresses) = read_addresses.as_deref_mut()
-                        && let Some(reference) = fallback_reference
-                    {
-                        // Recorded for a miss too: the attempted coordinates are
-                        // what an audited failed read has to name.
-                        addresses.insert(name.clone(), reference);
-                    }
-                    if let Some(value) = fallback_value {
-                        source_provider = fallback_uri;
-                        if materialize.values() {
-                            self.write_cached_secret(planned, route, profile, &value);
-                            self.insert_resolved(
-                                &mut secrets,
-                                &mut temp_files,
-                                planned,
-                                diagnostic_name,
-                                value,
-                                ResolvedRepresentation::Stored,
-                            )?;
-                        }
-                        status = ResolutionStatus::Resolved;
-                    } else {
-                        match planned.secret.missing {
-                            MissingPolicy::Prompt => {
-                                // Prompt only for names the active scope exposes.
-                                // A hidden composition dependency must never be
-                                // disclosed merely because a visible derived
-                                // secret depends on it.
-                                if materialize.prompts()
-                                    && output_filter.is_none_or(|filter| filter.contains(name))
-                                {
-                                    let prompted = self.try_prompt_secret(planned, profile)?;
-                                    self.insert_resolved(
-                                        &mut secrets,
-                                        &mut temp_files,
-                                        planned,
-                                        diagnostic_name,
-                                        prompted,
-                                        ResolvedRepresentation::Logical,
-                                    )?;
-                                    status = ResolutionStatus::Resolved;
-                                } else if required {
-                                    missing_required.push(name.clone());
-                                    status = ResolutionStatus::MissingRequired;
-                                } else {
-                                    missing_optional.push(name.clone());
-                                    status = ResolutionStatus::MissingOptional;
-                                }
-                            }
-                            MissingPolicy::Generate => {
-                                // A full pass mints and stores.
-                                //
-                                // A value-free pass must not answer for a value
-                                // nobody has provisioned. A required secret whose
-                                // store keeps what it mints has no value until
-                                // some pass writes one, so the preflight reports
-                                // it missing instead of promising it resolves —
-                                // otherwise `check --no-prompt` passes while the
-                                // store is still empty. Where generation *is* how
-                                // the value is meant to appear — an optional
-                                // secret, or a store that never retains a
-                                // generated value — resolution genuinely succeeds
-                                // and the report says so.
-                                if materialize.values() {
-                                    generated = true;
-                                    let generated_value = self
-                                        .try_generate_secret(planned, profile)?
-                                        .expect("compiled Generate policy has a generator");
-                                    self.insert_resolved(
-                                        &mut secrets,
-                                        &mut temp_files,
-                                        planned,
-                                        diagnostic_name,
-                                        generated_value,
-                                        ResolvedRepresentation::Logical,
-                                    )?;
-                                    status = ResolutionStatus::Resolved;
-                                } else if required
-                                    && self.generated_value_is_stored(planned, profile)
-                                {
-                                    missing_required.push(name.clone());
-                                    status = ResolutionStatus::MissingRequired;
-                                } else {
-                                    generated = true;
-                                    status = ResolutionStatus::Resolved;
-                                }
-                            }
-                            MissingPolicy::UseDefault => {
-                                let default_value = planned
-                                    .config()
-                                    .default
-                                    .as_ref()
-                                    .expect("compiled UseDefault policy has a default");
-                                default_applied = true;
-                                if materialize.values() {
-                                    self.insert_resolved(
-                                        &mut secrets,
-                                        &mut temp_files,
-                                        planned,
-                                        diagnostic_name,
-                                        SecretString::new(default_value.clone().into()),
-                                        ResolvedRepresentation::Logical,
-                                    )?;
-                                    with_defaults.push((name.clone(), default_value.clone()));
-                                }
-                                status = ResolutionStatus::Resolved;
-                            }
-                            MissingPolicy::Error => {
-                                missing_required.push(name.clone());
-                                status = ResolutionStatus::MissingRequired;
-                            }
-                            MissingPolicy::Omit => {
-                                missing_optional.push(name.clone());
-                                status = ResolutionStatus::MissingOptional;
-                            }
-                        }
-                    }
-                }
-            }
-
-            resolution.push(SecretResolution {
-                name: name.clone(),
-                status,
-                required,
-                source_provider,
-                default_applied,
-                generated,
-                composed: false,
-                as_path,
-            });
-        }
-
-        // Render composed secrets after every provider-backed secret has been
-        // decided, dependencies before dependents. Load-time graph validation
-        // guarantees acyclicity, so a depth-first post-order over the composed
-        // nodes is a topological order; rooting the walk at the plan's
-        // name-sorted secrets keeps the report order deterministic.
-        fn composition_order<'a>(
-            planned: &'a PlannedSecret,
-            composed: &HashMap<&str, &'a PlannedSecret>,
-            visited: &mut HashSet<&'a str>,
-            ordered: &mut Vec<&'a PlannedSecret>,
-        ) {
-            if !visited.insert(planned.name.as_str()) {
-                return;
-            }
-            let template = planned
-                .composition()
-                .expect("only composed nodes are ordered");
-            for dependency in template.dependencies() {
-                if let Some(dependency) = composed.get(dependency.as_str()) {
-                    composition_order(dependency, composed, visited, ordered);
-                }
-            }
-            ordered.push(planned);
-        }
-        let composed: HashMap<&str, &PlannedSecret> = plan
-            .secrets
-            .iter()
-            .filter(|secret| secret.is_composed())
-            .map(|secret| (secret.name.as_str(), secret))
-            .collect();
-        let mut ordered = Vec::with_capacity(composed.len());
-        let mut visited = HashSet::new();
-        for planned in plan.secrets.iter().filter(|secret| secret.is_composed()) {
-            composition_order(planned, &composed, &mut visited, &mut ordered);
-        }
-
-        if !ordered.is_empty() {
-            // Statuses of the already-decided secrets, extended as each
-            // composition renders so nested compositions see derived
-            // dependencies. Built only when the plan has composed secrets.
-            let mut statuses: HashMap<String, ResolutionStatus> = resolution
-                .iter()
-                .map(|entry| (entry.name.clone(), entry.status.clone()))
-                .collect();
-            for planned in ordered {
-                let template = planned
-                    .composition()
-                    .expect("only composed nodes are ordered");
-                let dependencies_resolved = template.dependencies().iter().all(|dependency| {
-                    statuses.get(dependency) == Some(&ResolutionStatus::Resolved)
-                });
-                let status = if dependencies_resolved {
-                    if materialize.values() {
-                        let rendered = template
-                            .render(|dependency| {
-                                secrets.get(dependency).map(|value| value.expose_secret())
-                            })
-                            .map_err(SecretSpecError::CompositionFailed)?;
-                        self.insert_resolved(
-                            &mut secrets,
-                            &mut temp_files,
-                            planned,
-                            Self::diagnostic_secret_name(&planned.name, output_filter),
-                            SecretString::new(rendered.into()),
-                            ResolvedRepresentation::Logical,
-                        )?;
-                    }
-                    ResolutionStatus::Resolved
-                } else {
-                    match planned.secret.missing {
-                        MissingPolicy::Error => {
-                            missing_required.push(planned.name.clone());
-                            ResolutionStatus::MissingRequired
-                        }
-                        MissingPolicy::Omit => {
-                            missing_optional.push(planned.name.clone());
-                            ResolutionStatus::MissingOptional
-                        }
-                        MissingPolicy::Generate
-                        | MissingPolicy::UseDefault
-                        | MissingPolicy::Prompt => {
-                            unreachable!("composed source conflicts are rejected at load time")
-                        }
-                    }
-                };
-
-                statuses.insert(planned.name.clone(), status.clone());
-                resolution.push(SecretResolution {
-                    name: planned.name.clone(),
-                    status,
-                    required: planned.required(),
-                    source_provider: None,
-                    default_applied: false,
-                    generated: false,
-                    composed: true,
-                    as_path: planned.as_path(),
-                });
-            }
-        }
-
-        // Composed secrets carry no route; the stores their leaves route to
-        // name the report, exactly as for ordinary secrets.
-        let report_provider_uri = self.validation_report_provider_uri(
-            plan.override_uri.as_deref(),
-            plan.secrets
-                .iter()
-                .filter_map(|secret| secret.route.as_ref())
-                .map(|route| route.primary()),
-            Some(&plan.profile),
-        )?;
-
-        // Restrict the output to the visible set. The plan resolved the wider
-        // *accessed* set (visible plus the composed-secret dependency closure) so
-        // in-scope compositions could render; their out-of-scope inputs are now
-        // dropped from every output surface — the value map, the temp files
-        // backing `as_path` values, the per-secret report, and the missing/default
-        // lists — so the scope exposes exactly what it declares and nothing more.
-        // `None` (no scope active) leaves everything untouched.
-        if let Some(filter) = output_filter {
-            secrets.retain(|name, _| filter.contains(name));
-            resolution.retain(|entry| filter.contains(&entry.name));
-            missing_required.retain(|name| filter.contains(name));
-            missing_optional.retain(|name| filter.contains(name));
-            with_defaults.retain(|(name, _)| filter.contains(name));
-        }
-
-        // Note that `temp_files` is not filtered alongside these; see its
-        // declaration for why a hidden `as_path` input must keep its file.
-
-        // Constraints are evaluated after scope filtering, so an out-of-scope
-        // dependency resolved only to build a composition never counts as
-        // "present" for a presence group.
-        let resolved_names: HashSet<&str> = resolution
-            .iter()
-            .filter(|entry| entry.status == ResolutionStatus::Resolved)
-            .map(|entry| entry.name.as_str())
-            .collect();
-        let compiled_profile = self
-            .manifest
-            .profile(profile)
-            .expect("profile is validated before execution");
-        // `get` executes a deliberately partial plan for a composed secret and
-        // its dependencies. Profile constraints govern whole-profile
-        // validation (`check`, `run`, and SDK resolution), not that least-access
-        // read. A *scoped* resolution is also partial, but it is a whole-profile
-        // validation of a declared subset, so constraints still apply — narrowed
-        // to the visible set below rather than skipped.
-        let constraints = (output_filter.is_some()
-            || plan.secrets.len() == compiled_profile.secrets.len())
-        .then_some(&compiled_profile.constraints);
-        let mut constraint_violations = Vec::new();
-        if let Some(constraints) = constraints {
-            // Under a scope a group is judged on the members the consumer can
-            // actually see: a group with no visible member is not this
-            // consumer's concern, and one with some is enforced over those. The
-            // reported member list is narrowed the same way, so a violation
-            // message never names a secret the scope hides.
-            let visible_members = |members: &Vec<String>| -> Vec<String> {
-                match output_filter {
-                    Some(filter) => members
-                        .iter()
-                        .filter(|name| filter.contains(name.as_str()))
-                        .cloned()
-                        .collect(),
-                    None => members.clone(),
-                }
-            };
-            for group in &constraints.at_least_one {
-                let members = visible_members(&group.members);
-                if members.is_empty() {
-                    continue;
-                }
-                let present: Vec<String> = members
-                    .iter()
-                    .filter(|name| resolved_names.contains(name.as_str()))
-                    .cloned()
-                    .collect();
-                if present.is_empty() {
-                    constraint_violations.push(ConstraintViolation {
-                        kind: ConstraintKind::AtLeastOne,
-                        group: group.name.clone(),
-                        secrets: members,
-                        present,
-                    });
-                }
-            }
-            for group in &constraints.exactly_one {
-                let members = visible_members(&group.members);
-                if members.is_empty() {
-                    continue;
-                }
-                let present: Vec<String> = members
-                    .iter()
-                    .filter(|name| resolved_names.contains(name.as_str()))
-                    .cloned()
-                    .collect();
-                if present.len() != 1 {
-                    constraint_violations.push(ConstraintViolation {
-                        kind: ConstraintKind::ExactlyOne,
-                        group: group.name.clone(),
-                        secrets: members,
-                        present,
-                    });
-                }
-            }
-        }
-
-        if !missing_required.is_empty() || !constraint_violations.is_empty() {
-            let mut errors = ValidationErrors::new(
-                missing_required,
-                missing_optional,
-                with_defaults,
-                report_provider_uri,
-                profile.to_string(),
-            );
-            errors.resolution = resolution;
-            errors.constraint_violations = constraint_violations;
-            Ok(Err(errors))
-        } else {
-            Ok(Ok(ValidatedSecrets {
-                resolved: Resolved::new(secrets, report_provider_uri, profile.to_string()),
-                missing_optional,
-                with_defaults,
-                resolution,
-                temp_files,
-            }))
-        }
+        read_addresses: Option<&mut HashMap<String, NativeAddress>>,
+    ) -> ExecutionResult {
+        ResolutionExecution::new(self, plan, materialize, output_filter, read_addresses).run()
     }
 
     /// Runs a command with secrets injected as environment variables

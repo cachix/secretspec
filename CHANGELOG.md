@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Secret resolution now applies provider fallbacks, generated and default
+  values, compositions, scopes, and presence constraints through one ordered
+  pipeline, keeping CLI and SDK resolution behavior aligned.
+
 - The Infisical provider now uses a separate HTTP connection for Universal Auth
   login, keeping the connection pool used for subsequent secret reads reliable.
 

@@ -3,7 +3,8 @@ title: File Provider
 description: Store each secret in one plaintext file beneath a local directory
 ---
 
-The file provider reads and writes one plaintext UTF-8 file per secret.
+The [file](https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap04.html)
+provider reads and writes one plaintext UTF-8 file per secret.
 
 :::caution[Version compatibility]
 The `file` provider is added in SecretSpec 0.19.

@@ -3,7 +3,8 @@ title: AWS Secrets Manager Provider
 description: AWS Secrets Manager integration
 ---
 
-The AWS Secrets Manager provider integrates with AWS for centralized secret management.
+The [AWS Secrets Manager](https://aws.amazon.com/secrets-manager/) provider
+integrates with AWS for centralized secret management.
 
 ## At a glance
 

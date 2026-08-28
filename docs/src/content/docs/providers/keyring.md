@@ -3,7 +3,9 @@ title: Keyring Provider
 description: Secure system credential store integration
 ---
 
-The Keyring provider stores secrets in your system's native credential store. Recommended for local development.
+The [Keyring](https://github.com/open-source-cooperative/keyring-rs) provider
+stores secrets in your system's native credential store. Recommended for local
+development.
 
 ## At a glance
 

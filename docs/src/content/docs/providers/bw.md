@@ -3,8 +3,8 @@ title: Bitwarden Password Manager Provider
 description: Bitwarden Password Manager secrets management integration
 ---
 
-The `bw` provider reads and writes secrets in Bitwarden Password Manager by
-using the official `bw` CLI.
+The [Bitwarden Password Manager](https://bitwarden.com/products/)
+(`bw`) provider reads and writes secrets by using the official `bw` CLI.
 
 :::note[Version compatibility]
 The Bitwarden Password Manager provider was added in SecretSpec 0.18.

@@ -3,7 +3,9 @@ title: Gopass Provider
 description: GPG-encrypted, git-synced password store integration
 ---
 
-The Gopass provider integrates with [gopass](https://www.gopass.pw/), a multi-user, multi-store abstraction layer on top of `pass` that keeps secrets GPG-encrypted and syncs them via git.
+The [Gopass](https://www.gopass.pw/) provider integrates with gopass, a
+multi-user, multi-store abstraction layer on top of `pass` that keeps secrets
+GPG-encrypted and syncs them via git.
 
 :::note[Version compatibility]
 Available since SecretSpec 0.15.

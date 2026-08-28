@@ -3,7 +3,9 @@ title: Pass Provider
 description: Unix password manager integration with GPG encryption
 ---
 
-The Pass provider stores secrets using the Unix password manager `pass` (password-store). Secrets are GPG-encrypted for secure local development.
+The [Pass](https://www.passwordstore.org/) provider stores secrets using the
+Unix password manager `pass` (password-store). Secrets are GPG-encrypted for
+secure local development.
 
 ## At a glance
 

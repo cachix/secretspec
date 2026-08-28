@@ -7,7 +7,8 @@ description: Use committed defaults, ephemeral generation, or run-time prompts w
 The `null` provider is added in SecretSpec 0.19.
 :::
 
-The null provider always reports that a value is missing. SecretSpec can then
+The [null](https://man7.org/linux/man-pages/man4/null.4.html) provider always
+reports that a value is missing. SecretSpec can then
 use the declaration's committed `default`, generate a fresh value, or—in
 SecretSpec 0.19+—ask the operator during `run` when `prompt = true`. This is
 useful for non-sensitive environment configuration and values that should exist

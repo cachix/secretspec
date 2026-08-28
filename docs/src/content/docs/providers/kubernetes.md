@@ -3,8 +3,8 @@ title: Kubernetes Provider
 description: Kubernetes ConfigMap & Secerts
 ---
 
-The Kubernetes provider reads from and writes to Kubernetes ConfigMaps or
-Secrets.
+The [Kubernetes](https://kubernetes.io/) provider reads from and writes to
+Kubernetes ConfigMaps or Secrets.
 
 :::caution[Version compatibility]
 The `kubernetes` provider is added in SecretSpec 0.20.

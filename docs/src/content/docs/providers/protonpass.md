@@ -28,7 +28,8 @@ publishes a stable API, an SDK, or a compatibility policy for `pass-cli`, we
 would build on it instead.
 :::
 
-The Proton Pass provider integrates with [Proton Pass](https://proton.me/pass) for end-to-end encrypted cloud secret storage.
+The [Proton Pass](https://proton.me/pass) provider integrates with Proton Pass
+for end-to-end encrypted cloud secret storage.
 
 ## At a glance
 

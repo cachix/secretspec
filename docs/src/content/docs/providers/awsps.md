@@ -8,7 +8,8 @@ The AWS Systems Manager Parameter Store provider is available in SecretSpec
 0.18+.
 :::
 
-The AWS Parameter Store provider stores secrets as encrypted
+The [AWS Systems Manager Parameter Store](https://aws.amazon.com/systems-manager/features/#Parameter_Store)
+provider stores secrets as encrypted
 [`SecureString`](https://docs.aws.amazon.com/systems-manager/latest/userguide/secure-string-parameter-kms-encryption.html)
 parameters.
 

@@ -3,7 +3,8 @@ title: Google Cloud Secret Manager Provider
 description: Google Cloud Secret Manager integration
 ---
 
-The Google Cloud Secret Manager provider integrates with GCP for centralized secret management.
+The [Google Cloud Secret Manager](https://cloud.google.com/security/products/secret-manager)
+provider integrates with GCP for centralized secret management.
 
 ## At a glance
 

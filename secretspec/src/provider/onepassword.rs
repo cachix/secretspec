@@ -1485,19 +1485,22 @@ impl OnePasswordProvider {
             return Ok(HashMap::new());
         }
 
-        // `op item get` treats each stdin line as an item specifier and emits
-        // one JSON document per item. Do not pass `-`: current CLI versions can
-        // interpret it as an additional literal item. This keeps desktop-app
-        // authentication to one connection instead of spawning one `op`
-        // process per secret.
-        let mut input = to_fetch
-            .iter()
-            .map(|(item_id, _)| item_id.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        input.push('\n');
+        // Use the CLI's documented structured-input form. Raw newline-separated
+        // IDs are not interpreted consistently across CLI versions, while a
+        // JSON array of objects with an `id` key and an explicit `-` works for
+        // every supported batch size. The CLI emits one JSON document per item.
+        #[derive(Serialize)]
+        struct ItemSpecifier<'a> {
+            id: &'a str,
+        }
+        let input = serde_json::to_string(
+            &to_fetch
+                .iter()
+                .map(|(item_id, _)| ItemSpecifier { id: item_id })
+                .collect::<Vec<_>>(),
+        )?;
         let output = self.execute_op_command(
-            &["item", "get", "--vault", vault, "--format", "json"],
+            &["item", "get", "-", "--vault", vault, "--format", "json"],
             Some(&input),
         )?;
 
@@ -2933,15 +2936,23 @@ mod tests {
                 [command, list, ..] if command == "item" && list == "list" => {
                     Ok(r#"[{"id":"whole-id","title":"Whole Item"}]"#.to_string())
                 }
-                [command, get, vault_flag, vault, format_flag, format]
-                    if command == "item"
-                        && get == "get"
-                        && vault_flag == "--vault"
-                        && vault == "Personal"
-                        && format_flag == "--format"
-                        && format == "json" =>
+                [
+                    command,
+                    get,
+                    stdin_arg,
+                    vault_flag,
+                    vault,
+                    format_flag,
+                    format,
+                ] if command == "item"
+                    && get == "get"
+                    && stdin_arg == "-"
+                    && vault_flag == "--vault"
+                    && vault == "Personal"
+                    && format_flag == "--format"
+                    && format == "json" =>
                 {
-                    assert_eq!(stdin, Some("whole-id\n"));
+                    assert_eq!(stdin, Some(r#"[{"id":"whole-id"}]"#));
                     Ok(r#"{"id":"whole-id","fields":[{"id":"value","type":"STRING","label":"value","value":"whole value"}]}"#.to_string())
                 }
                 [command] if command == "inject" => Ok(stdin
@@ -3043,13 +3054,21 @@ mod tests {
                     assert!(stdin.is_none());
                     Ok(listed.clone())
                 }
-                [command, get, vault_flag, vault, format_flag, format]
-                    if command == "item"
-                        && get == "get"
-                        && vault_flag == "--vault"
-                        && vault == "Personal"
-                        && format_flag == "--format"
-                        && format == "json" =>
+                [
+                    command,
+                    get,
+                    stdin_arg,
+                    vault_flag,
+                    vault,
+                    format_flag,
+                    format,
+                ] if command == "item"
+                    && get == "get"
+                    && stdin_arg == "-"
+                    && vault_flag == "--vault"
+                    && vault == "Personal"
+                    && format_flag == "--format"
+                    && format == "json" =>
                 {
                     assert!(stdin.is_some());
                     Ok(fetched.clone())
@@ -3077,13 +3096,16 @@ mod tests {
         assert_eq!(calls.len(), 2, "one list process and one get process");
         assert_eq!(
             calls[1].0,
-            ["item", "get", "--vault", "Personal", "--format", "json"]
+            [
+                "item", "get", "-", "--vault", "Personal", "--format", "json"
+            ]
         );
         let batch_input = calls[1].1.as_deref().expect("batch item IDs on stdin");
-        assert_eq!(batch_input.lines().count(), 10);
+        let batch_input: Vec<serde_json::Value> = serde_json::from_str(batch_input).unwrap();
+        assert_eq!(batch_input.len(), 10);
         for index in 0..10 {
             let item_id = format!("item-{index}");
-            assert!(batch_input.lines().any(|line| line == item_id));
+            assert!(batch_input.iter().any(|entry| entry["id"] == item_id));
             assert!(secret_matches(
                 &results,
                 &format!("SECRET_{index}"),

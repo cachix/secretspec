@@ -212,8 +212,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 1Password convention-secret batches now retrieve all matching items through
   one `op item get` process instead of starting one process per secret, avoiding
-  desktop-app connection timeouts when resolving larger manifests and working
-  with current 1Password CLI releases ([#398]).
+  desktop-app connection timeouts when resolving larger manifests. Batch input
+  uses the CLI's structured JSON interface so reads work consistently across
+  1Password CLI releases ([#398]).
 
   [#398]: https://github.com/cachix/secretspec/issues/398
 

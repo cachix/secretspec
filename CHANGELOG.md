@@ -129,6 +129,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Kubernetes provider** (`k8s+<configmap|secret>://`, 0.20+): store and read
   values from a Kubernetes ConfigMap or Secret using the current cluster.
+
+- **EJSON provider** (`ejson:`, 0.20+): read string values from an encrypted
+  EJSON file with RFC 6901 JSON Pointer references. The private key comes from
+  an explicit `private_key` provider credential, so an existing provider such
+  as Google Cloud Secret Manager can supply an exact key without putting it in
+  the URI, environment, process arguments, or a local key file. Batch
+  resolution decrypts each file once, and the initial provider is intentionally
+  read-only.
+
 - **Azure App Configuration provider** (`aac://`, 0.20+): select direct
   values and Azure Key Vault references by label, prefix, and tags, with Entra
   ID or connection-string authentication and guarded writes, deletion, and

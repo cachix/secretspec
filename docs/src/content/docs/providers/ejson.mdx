@@ -1,0 +1,164 @@
+---
+title: EJSON Provider
+description: Read secrets from EJSON encrypted files
+tableOfContents:
+  maxHeadingLevel: 3
+---
+
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
+The `ejson` provider reads string values from EJSON encrypted files.
+
+:::note[Version compatibility]
+The EJSON provider is added in SecretSpec 0.20.
+:::
+
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `ejson` |
+| URI | `ejson:PATH` |
+| Access | Read-only |
+| Best for | Existing EJSON files stored with application source |
+| Authentication | A `private_key` SecretSpec provider credential |
+| Build feature | `ejson` |
+| Default storage | JSON Pointer `/{project}/{profile}/{key}` in one encrypted file |
+
+## Quick start
+
+Configure an existing EJSON file and supply its private key from an exact Google Cloud Secret Manager reference:
+
+```toml title="secretspec.toml"
+[providers.ejson_keys]
+uri = "gcsm://ejson-private-keys"
+
+[providers.app_ejson]
+uri = "ejson:config/secrets.production.ejson"
+
+[providers.app_ejson.credentials.private_key]
+provider = "ejson_keys"
+ref = { item = "EJSON_PRIVATE_KEY", version = "1" }
+
+[profiles.production]
+API_TOKEN = { description = "Application API token", providers = ["app_ejson"], ref = { item = "/api_token" } }
+```
+
+Read the value or resolve it through an SDK:
+
+```bash
+$ secretspec get API_TOKEN --profile production
+```
+
+```bash
+$ secretspec run --profile production -- your-command
+```
+
+## Setup
+
+### Prerequisites
+
+- EJSON 1.1.0 or later available as `ejson` on `PATH`; 1.1.0 introduced `--key-from-stdin`
+- An existing encrypted EJSON file
+- The matching 64-character hexadecimal private key
+- Build SecretSpec with `--features ejson` when the provider is not included by your package
+
+Install the EJSON CLI through your package manager.
+
+Keep the encrypted file in source control if that matches its owning workflow. Keep the private key in a provider such as Google Cloud Secret Manager, keyring, or another store that can supply an exact SecretSpec credential reference.
+
+## Provider credentials
+
+The private key belongs in the provider alias's `credentials` map. It must not appear in the EJSON URI, application environment, or command arguments.
+
+<ProviderCredentials provider="ejson" />
+
+A configured source is authoritative. SecretSpec reads it before constructing the EJSON provider and passes the resulting value only to the EJSON child process through stdin.
+
+## Configuration
+
+### URI format
+
+```text
+ejson:PATH
+```
+
+`PATH` is the encrypted EJSON file. Relative paths resolve from the directory containing `secretspec.toml`, not the shell's current directory. The default path is `secrets.ejson`.
+
+User information, ports, query options, and fragments are rejected. In particular, the private key cannot be added to the URI.
+
+### URI examples
+
+```text
+ejson:secrets.ejson
+ejson:config/secrets.production.ejson
+ejson:///var/run/application/secrets.ejson
+```
+
+### Project configuration
+
+Use one alias for the key source and one for the EJSON file:
+
+```toml title="secretspec.toml"
+[providers.keys]
+uri = "gcsm://my-key-project"
+
+[providers.encrypted]
+uri = "ejson:config/secrets.production.ejson"
+
+[providers.encrypted.credentials.private_key]
+provider = "keys"
+ref = { item = "EJSON_PRIVATE_KEY", version = "1" }
+```
+
+The public key remains embedded in the EJSON file. The credential reference names the Google Cloud Secret Manager secret and version that store its matching private key. No public-key URI option is needed.
+
+## Storage model
+
+Convention-addressed secrets use an RFC 6901 JSON Pointer with project and profile isolation:
+
+```text
+/{project}/{profile}/{key}
+```
+
+For project `my-app`, profile `production`, and secret `API_TOKEN`, the decrypted JSON shape is:
+
+```json
+{
+  "my-app": {
+    "production": {
+      "API_TOKEN": "secret-value"
+    }
+  }
+}
+```
+
+`~` and `/` inside a component are escaped as `~0` and `~1`. The selected value must be a JSON string. Missing pointers are treated as missing secrets; numbers, booleans, objects, arrays, and null are rejected as secret values.
+
+## Use existing secrets
+
+Use `ref.item` to name any existing string with an RFC 6901 JSON Pointer:
+
+```toml
+[profiles.production]
+DATABASE_PASSWORD = { description = "Existing EJSON database password", providers = ["app_ejson"], ref = { item = "/database/password" } }
+```
+
+The provider supports only `item`. Extra coordinates such as `field` and `version` are rejected. The provider is read-only, so `secretspec set`, generated-value persistence, and import destinations are unavailable.
+
+## Private-key source
+
+The private key can come from any SecretSpec provider that can read the configured reference. The Google Cloud Secret Manager example uses Application Default Credentials; configure those credentials for the runtime environment and grant access only to the referenced private-key secret.
+
+## Security considerations and limitations
+
+- The current EJSON CLI decrypts the complete document before SecretSpec selects requested JSON Pointers. Each nonempty `get_many` call decrypts once for its complete batch; later calls decrypt again.
+- Encrypted input and decrypted output are each limited to 16 MiB. Full-document buffering creates multiple transient copies, so use smaller, trusted files.
+- The private key and decrypted document exist transiently in process memory. The provider does not write a decrypted file or export values to the environment itself.
+- Treat the `ejson` executable and the process `PATH` as trusted. The executable receives the private key on stdin and writes the complete decrypted document to stdout.
+- On Unix, the configured final path is opened with no-follow and nonblocking semantics. SecretSpec copies the ciphertext into an anonymous file descriptor inherited by EJSON, so later path or temporary-name replacement cannot change the document. Other platforms use a private named ciphertext snapshot. Parent-directory resolution still requires a trusted path.
+- Private-key delivery, EJSON execution, and output collection share one 30-second deadline. On Unix, cleanup stops the CLI process group on every exit.
+- EJSON leaves string properties whose names begin with `_` unencrypted. Treat them as public metadata, never secrets.
+- A SecretSpec scope limits returned values but is not an authorization boundary. Anyone with the private key can decrypt the complete EJSON file.
+- Use separate EJSON files and keypairs when workloads have different trust boundaries or rotation requirements.
+- SecretSpec does not watch the file or reload application clients automatically. A caller must perform another resolution and replace its own credential consumers.

@@ -651,6 +651,29 @@ folders remain unset so provider fallback continues.
 Values are read with Infisical's secret references expanded, matching its own CLI, so a value of
 `postgres://${DB_USER}@host` arrives resolved.
 
+## EJSON Provider (0.20+)
+
+:::note[Version compatibility]
+The `ejson` provider is added in SecretSpec 0.20.
+:::
+
+**URI**: `ejson:PATH` - Reads string values from one EJSON encrypted file
+
+```text
+ejson:secrets.ejson
+ejson:config/secrets.production.ejson
+ejson:///var/run/application/secrets.ejson
+```
+
+**Features (0.20+)**: Read-only, RFC 6901 JSON Pointer references, project/profile convention pointers, exact provider-credential key sources, and one decryption per batch
+**Prerequisites (0.20+)**: EJSON 1.1.0 or later, an encrypted EJSON file, and its matching private key; build with `--features ejson`
+**Authentication (0.20+)**: The `private_key` provider credential. It has no environment or URI fallback; source it from an exact provider reference such as a Google Cloud Secret Manager secret and version.
+**Storage (0.20+)**: Convention reads use `/{project}/{profile}/{key}` in the decrypted JSON document. A native `ref.item` is any RFC 6901 JSON Pointer selecting a string.
+
+The provider decrypts the complete EJSON document in memory through the current official CLI, then returns only requested values. Encrypted input and decrypted output are each limited to 16 MiB. It writes no decrypted value to a file itself. On Unix, SecretSpec opens the configured path with no-follow and nonblocking semantics, copies ciphertext into an anonymous inherited descriptor, and stops the CLI process group after a 30-second timeout. Other platforms use a private named ciphertext snapshot. Parent-directory resolution still requires a trusted path. The provider rejects writes, non-string selected values, URI credentials, ports, query options, fragments, and native coordinates other than `item`. EJSON properties beginning with `_` are plaintext metadata and must not contain secrets.
+
+See the [EJSON provider guide](/providers/ejson/) for exact Google Cloud Secret Manager credential configuration and security limitations.
+
 ## age Provider (0.17+)
 
 > **Version compatibility:** The age provider is added in SecretSpec 0.17.
@@ -778,6 +801,7 @@ $ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
 | Azure App Configuration (0.20+) | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
 | Infisical | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |
+| EJSON (0.20+) | ✅ EJSON encryption | Local encrypted file; private key from configured provider | Depends on private-key provider |
 | age (0.17+) | ✅ age encryption | Local filesystem | ❌ No |
 | SOPS (0.17+) | ✅ Configured SOPS encryption | Local filesystem | Depends on configured key service |
 | Kubernetes (0.20+) | ❌ ConfigMap ✅ Secret if configured | Kubernetes server | ✅ Yes |

@@ -44,6 +44,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [dotenv](/providers/dotenv/) | A `.env` file | ✓ | ✓ | ✗ | — |
 | [file](/providers/file/) (0.19+) | One plaintext UTF-8 file per secret | ✓ | ✓ | ✗ | — |
 | [env](/providers/env/) | Current process environment | ✓ | ✗ | ✗ | — |
+| [ejson](/providers/ejson/) (0.20+) | EJSON encrypted file (requires the `ejson` build feature and EJSON CLI) | ✓ | ✗ | ✓ | — |
 | [null](/providers/null/) (0.19+) | No storage; uses a manifest default, ephemeral generation, or an ephemeral run prompt | ✗ | ✗ | N/A | — |
 | [systemd-credential](/providers/systemd-credential/) (0.17+) | Credentials passed to the current systemd service | ✓ | ✗ | Depends on the unit's credential source | [Via systemd-creds](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html) |
 | [fly](/providers/fly/) (0.20+) | Fly.io application secrets through `flyctl` | ✗ | ✓ | ✓ | — |

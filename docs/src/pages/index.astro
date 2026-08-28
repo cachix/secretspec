@@ -58,6 +58,7 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'microsoftazure', slug: 'akv', label: 'Azure Key Vault' },
   { icon: 'microsoftazure', slug: 'aac', label: 'Azure App Configuration (0.20+)' },
   { slug: 'infisical', label: 'Infisical' },
+  { slug: 'ejson', label: 'EJSON (0.20+)' },
   { slug: 'age', label: 'age (0.17+)' },
   { slug: 'gopass', label: 'Gopass' },
   { slug: 'protonpass', label: 'Proton Pass' },
@@ -154,6 +155,7 @@ const providerColors: Record<string, SyntaxColorName> = {
   akv: 'blue',
   aac: 'blue',
   infisical: 'cyan',
+  ejson: 'yellow',
   age: 'yellow',
   gopass: 'green',
   protonpass: 'magenta',
@@ -572,6 +574,7 @@ const reelScriptData = {
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-blue)" href="/providers/aac/"><span class="provider-name">aac</span>: Azure App Configuration (0.20+)</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/infisical/"><span class="provider-name">infisical</span>: Infisical secret management</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/openbao/"><span class="provider-name">openbao</span>: OpenBao secret management (0.17+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/ejson/"><span class="provider-name">ejson</span>: EJSON encrypted files, read-only (0.20+)</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/age/"><span class="provider-name">age</span>: age-encrypted file (0.17+)</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-magenta)" href="/providers/sops/"><span class="provider-name">sops</span>: SOPS encrypted files (0.17+)</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-blue)" href="/providers/systemd-credential/"><span class="provider-name">systemd-credential</span>: Read-only systemd service credentials (0.17+)</a>

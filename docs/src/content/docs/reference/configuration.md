@@ -880,6 +880,7 @@ entry declares neither, it inherits whichever form `[profiles.default]` uses.
 | [dotenv](/providers/dotenv/#use-existing-secrets) | `.env` key | Rejected | Reads the key | ✅ |
 | [file (0.19+)](/providers/file/#use-existing-files) | Relative file path beneath the configured root | Rejected | Reads the complete UTF-8 file | ✅ |
 | [env](/providers/env/#use-existing-secrets) | Variable name | Rejected | Reads the variable | — (read-only) |
+| [EJSON (0.20+)](/providers/ejson/#use-existing-secrets) | RFC 6901 JSON Pointer | Rejected | Reads the selected JSON string | — (read-only) |
 | [systemd credentials (0.17+)](/providers/systemd-credential/#use-an-existing-credential-name) | Credential filename | Rejected | Reads the credential | — (read-only) |
 | [Fly.io secrets (0.20+)](/providers/fly/#use-existing-secrets) | Fly app secret name | Rejected | Error: Fly.io does not expose plaintext values | ✅ write-only via `flyctl secrets set` |
 | [Cloudflare Secrets Store (0.20+)](/providers/cloudflare/#use-existing-secrets-020) | Account-secret name in the selected store | Rejected | Error: Cloudflare's management API does not expose plaintext values | ✅ write-only via the Cloudflare API |

@@ -5574,7 +5574,9 @@ dependencies = [
  "toml_edit 0.23.10+spec-1.0.0",
  "url",
  "uuid",
+ "wait-timeout",
  "whoami",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

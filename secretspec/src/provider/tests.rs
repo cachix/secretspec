@@ -1163,6 +1163,8 @@ fn test_provider_names_with_special_characters() {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
+    #[cfg(feature = "ejson")]
+    use crate::config::{CredentialSource, NativeAddress};
 
     fn generate_test_project_name() -> String {
         use std::time::{SystemTime, UNIX_EPOCH};
@@ -1183,6 +1185,72 @@ mod integration_tests {
             .collect()
     }
 
+    #[cfg(feature = "ejson")]
+    fn create_ejson_provider() -> (Box<dyn Provider>, Option<TempDir>) {
+        let temp_dir = TempDir::new().expect("Create EJSON integration directory");
+        let keygen = std::process::Command::new("ejson")
+            .arg("keygen")
+            .output()
+            .expect("Testing ejson requires the official CLI on PATH");
+        assert!(keygen.status.success(), "ejson keygen failed");
+        let output = String::from_utf8(keygen.stdout).expect("ejson keygen output must be UTF-8");
+        let keys: Vec<&str> = output
+            .lines()
+            .filter(|line| line.len() == 64 && line.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .collect();
+        assert_eq!(
+            keys.len(),
+            2,
+            "ejson keygen must print one public and private key"
+        );
+
+        let encrypted = temp_dir.path().join("integration.ejson");
+        std::fs::write(
+            &encrypted,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "_public_key": keys[0],
+                "TOKEN": "official-cli-value",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let encrypt = std::process::Command::new("ejson")
+            .arg("encrypt")
+            .arg(&encrypted)
+            .output()
+            .expect("run ejson encrypt");
+        assert!(encrypt.status.success(), "ejson encrypt failed");
+
+        let key_file = temp_dir.path().join("keys.env");
+        std::fs::write(&key_file, format!("PRIVATE_KEY={}\n", keys[1])).unwrap();
+        let target =
+            crate::provider::ejson::EjsonProvider::new(crate::provider::ejson::EjsonConfig {
+                path: encrypted,
+            });
+        let target_uri = crate::provider::Provider::uri(&target);
+        let key_source =
+            crate::provider::dotenv::DotEnvProvider::new(crate::provider::dotenv::DotEnvConfig {
+                path: key_file,
+            });
+        let secrets = crate::tests::secrets_with_credential_alias(
+            &target_uri,
+            HashMap::from([(
+                "private_key".to_string(),
+                CredentialSource {
+                    provider: crate::provider::Provider::uri(&key_source),
+                    reference: Some(NativeAddress {
+                        item: "PRIVATE_KEY".to_string(),
+                        ..Default::default()
+                    }),
+                },
+            )]),
+        );
+        let provider = secrets
+            .get_provider(Some("target"), Some("default"))
+            .expect("the sourced private key should build the EJSON provider");
+        (provider, Some(temp_dir))
+    }
+
     fn create_provider_with_temp_path(provider_name: &str) -> (Box<dyn Provider>, Option<TempDir>) {
         match provider_name {
             "dotenv" => {
@@ -1200,6 +1268,8 @@ mod integration_tests {
                     .expect("Should create file provider with path");
                 (provider, Some(temp_dir))
             }
+            #[cfg(feature = "ejson")]
+            "ejson" => create_ejson_provider(),
             "pass" => {
                 let provider =
                     Box::<dyn Provider>::try_from("pass").expect("Should create pass provider");
@@ -1426,6 +1496,27 @@ mod integration_tests {
                 "[{provider_name}] unexpected delete failure: {error}"
             ),
         }
+    }
+
+    #[cfg(feature = "ejson")]
+    #[test]
+    fn test_ejson_official_cli_and_sourced_credential() {
+        if !get_test_providers()
+            .iter()
+            .any(|provider| provider == "ejson")
+        {
+            eprintln!("skipping: SECRETSPEC_TEST_PROVIDERS does not name ejson");
+            return;
+        }
+        let (provider, _temp_dir) = create_ejson_provider();
+        let value = provider
+            .get(Address::Native(&NativeAddress {
+                item: "/TOKEN".to_string(),
+                ..Default::default()
+            }))
+            .expect("official EJSON decrypt should succeed")
+            .expect("the encrypted TOKEN should exist");
+        assert_eq!(value.expose_secret(), "official-cli-value");
     }
 
     #[test]

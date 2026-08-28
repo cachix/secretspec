@@ -1,12 +1,16 @@
 # secretspec (Go SDK)
 
 Go bindings for [SecretSpec](https://secretspec.dev/), a declarative secrets
-manager. A thin client over the `secretspec-ffi` C ABI. Resolution happens in the
+manager. A thin client over the `libsecretspec` C ABI. Resolution happens in the
 Rust core, so the SDK inherits every provider with no Go-side logic. By default
 the resolver is loaded at runtime via
 [purego](https://github.com/ebitengine/purego) (dlopen, no cgo), keeping `go get`
 toolchain-free. Use `-tags static` to stage and embed the archive, or
 `-tags pkgconfig` (0.19+) to link an installed library (see below).
+
+> The embedded ABI is named `libsecretspec` in SecretSpec 0.20+. It was named
+> `secretspec-ffi` through 0.19; the 0.20+ loader accepts both shared-library
+> filename families.
 
 ```go
 package main
@@ -92,7 +96,7 @@ for _, s := range report.Secrets {
 
 ### Default: purego (dlopen, no cgo)
 
-The `secretspec-ffi` cdylib is resolved at runtime, in order:
+The `libsecretspec` cdylib is resolved at runtime, in order:
 
 1. The `SECRETSPEC_FFI_LIB` environment variable (an explicit path).
 2. A library embedded at build time with `-tags embed_lib`.
@@ -110,7 +114,7 @@ does not carry binary assets); they are attached to GitHub releases.
 
 For a self-contained binary with no runtime library to locate, link the resolver
 statically. This uses **cgo** (a C toolchain is required) and links
-`libsecretspec_ffi.a` directly into the Go binary:
+`libsecretspec.a` directly into the Go binary:
 
 ```bash
 # Stage the archive + header + generated cgo LDFLAGS, then build with cgo.
@@ -138,7 +142,7 @@ Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 
 ```bash
 # Use "static" (the default) or "shared"; use separate prefixes for both.
-bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
+bash libsecretspec/scripts/cinstall.sh "$PREFIX" static
 ```
 
 Then use the same build command for either type:

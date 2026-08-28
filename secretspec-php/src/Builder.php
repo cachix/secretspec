@@ -12,7 +12,7 @@ namespace Secretspec;
 final class Builder
 {
     /**
-     * Response wire-format version this SDK understands. Tracks secretspec-ffi's
+     * Response wire-format version this SDK understands. Tracks libsecretspec's
      * RESOLVE_SCHEMA_VERSION; a mismatch means the loaded library is incompatible.
      */
     private const RESOLVE_SCHEMA_VERSION = 2;
@@ -199,7 +199,7 @@ final class Builder
             throw new SecretSpecException(
                 'version',
                 "unsupported {$kind} schema version " . \var_export($version, true)
-                . " (expected {$expectedVersion}); the secretspec-ffi library and this SDK "
+                . " (expected {$expectedVersion}); the libsecretspec library and this SDK "
                 . 'are out of sync',
             );
         }

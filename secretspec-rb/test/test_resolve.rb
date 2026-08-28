@@ -4,7 +4,7 @@ require "json"
 require "tmpdir"
 require "minitest/autorun"
 
-# Compile the native extension (statically linking libsecretspec_ffi.a) unless it
+# Compile the native extension (statically linking libsecretspec.a) unless it
 # is already built. ci-sdks.sh builds it explicitly; this covers standalone runs.
 def ensure_ext
   pkg = File.expand_path("..", __dir__)

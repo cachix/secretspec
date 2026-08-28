@@ -15,8 +15,8 @@ namespace Secretspec;
  *     embeds the resolver and exposes `secretspec_native_resolve()`. This is the
  *     production path: it needs no `ffi.enable` and works under FPM/web like any
  *     other PHP extension. Preferred whenever it is loaded.
- *  2. A runtime `ext-ffi` fallback that dlopens the `secretspec-ffi` cdylib and
- *     calls the stable C entry points from `secretspec-ffi/include/secretspec.h`
+ *  2. A runtime `ext-ffi` fallback that dlopens the `libsecretspec` cdylib and
+ *     calls the stable C entry points from `libsecretspec/include/secretspec.h`
  *     and binds the optional versioned-call entry point only when needed.
  *     Zero-config for CLI and local dev; requires the FFI extension.
  *
@@ -110,7 +110,7 @@ final class Native
             }
             throw new SecretSpecException(
                 'capability',
-                'the loaded secretspec-ffi library does not support inline specs (missing secretspec_call): '
+                'the loaded libsecretspec library does not support inline specs (missing secretspec_call): '
                 . $error->getMessage(),
             );
         }
@@ -185,7 +185,7 @@ final class Native
     }
 
     /**
-     * Find `libsecretspec_ffi`: the `SECRETSPEC_FFI_LIB` override first, then a
+     * Find `libsecretspec`: the `SECRETSPEC_FFI_LIB` override first, then a
      * copy bundled in the package's `lib/` directory (the installed layout), then
      * the nearest Cargo `target/` directory (a source checkout).
      *
@@ -198,12 +198,15 @@ final class Native
             return $env;
         }
 
-        $name = self::libraryFileName();
+        $names = self::libraryFileNames();
 
         // A copy bundled alongside the package (distribution layout).
-        $bundled = \dirname(__DIR__) . \DIRECTORY_SEPARATOR . 'lib' . \DIRECTORY_SEPARATOR . $name;
-        if (\is_file($bundled)) {
-            return $bundled;
+        foreach ($names as $name) {
+            $bundled = \dirname(__DIR__) . \DIRECTORY_SEPARATOR . 'lib'
+                . \DIRECTORY_SEPARATOR . $name;
+            if (\is_file($bundled)) {
+                return $bundled;
+            }
         }
 
         // Walk up from the package looking for a Cargo target dir; pick the most
@@ -214,13 +217,15 @@ final class Native
             $best = null;
             $bestMtime = -1;
             foreach (['release', 'debug'] as $profile) {
-                $candidate = $dir . \DIRECTORY_SEPARATOR . 'target'
-                    . \DIRECTORY_SEPARATOR . $profile . \DIRECTORY_SEPARATOR . $name;
-                if (\is_file($candidate)) {
-                    $mtime = \filemtime($candidate);
-                    if ($mtime !== false && $mtime > $bestMtime) {
-                        $best = $candidate;
-                        $bestMtime = $mtime;
+                foreach ($names as $name) {
+                    $candidate = $dir . \DIRECTORY_SEPARATOR . 'target'
+                        . \DIRECTORY_SEPARATOR . $profile . \DIRECTORY_SEPARATOR . $name;
+                    if (\is_file($candidate)) {
+                        $mtime = \filemtime($candidate);
+                        if ($mtime !== false && $mtime > $bestMtime) {
+                            $best = $candidate;
+                            $bestMtime = $mtime;
+                        }
                     }
                 }
             }
@@ -236,21 +241,27 @@ final class Native
 
         throw new SecretSpecException(
             'load',
-            'could not locate the secretspec-ffi library; set SECRETSPEC_FFI_LIB to its path',
+            'could not locate the libsecretspec library; set SECRETSPEC_FFI_LIB to its path',
         );
     }
 
     /**
-     * The platform-specific `libsecretspec_ffi` file name the loader looks for.
+     * The platform-specific `libsecretspec` file name the loader looks for.
      * Shared with the `secretspec-install-lib` script so the downloaded copy and
      * the loader agree on one name.
      */
     public static function libraryFileName(): string
     {
+        return self::libraryFileNames()[0];
+    }
+
+    /** @return list<string> New public name followed by the pre-0.20 name. */
+    private static function libraryFileNames(): array
+    {
         return match (\PHP_OS_FAMILY) {
-            'Darwin' => 'libsecretspec_ffi.dylib',
-            'Windows' => 'secretspec_ffi.dll',
-            default => 'libsecretspec_ffi.so',
+            'Darwin' => ['libsecretspec.dylib', 'libsecretspec_ffi.dylib'],
+            'Windows' => ['libsecretspec.dll', 'secretspec.dll', 'secretspec_ffi.dll'],
+            default => ['libsecretspec.so', 'libsecretspec_ffi.so'],
         };
     }
 }

@@ -6,6 +6,9 @@ The `SecretSpec` Swift package resolves the same `secretspec.toml` manifests as
 the CLI and every other SDK. It supports macOS 12 or later on Intel and Apple
 silicon; the SwiftPM package includes the Rust resolver in an XCFramework.
 
+> The embedded ABI packaged by the XCFramework is named `libsecretspec` in
+> SecretSpec 0.20+. It was named `secretspec-ffi` through 0.19.
+
 ```swift
 import SecretSpec
 
@@ -29,11 +32,11 @@ Build the Rust cdylib on macOS, turn it into the local XCFramework, and run the
 Swift tests:
 
 ```bash
-cargo build -p secretspec-ffi
+cargo build -p libsecretspec
 mkdir -p secretspec-swift/Artifacts
 bash scripts/build-swift-xcframework.sh \
   secretspec-swift/Artifacts/CSecretSpec.xcframework \
-  target/debug/libsecretspec_ffi.dylib
+  target/debug/libsecretspec.dylib
 swift test
 ```
 
@@ -41,7 +44,7 @@ The checked-in `Package.swift` selects that ignored local artifact when it
 exists. Otherwise it downloads the checksummed release XCFramework.
 
 The SDK deliberately wraps SecretSpec's existing, versioned JSON-over-C ABI
-instead of adding UniFFI. The core already presents only three C functions and
+instead of adding UniFFI. The core already presents only four C functions and
 all other language SDKs conform to its JSON schema; a generated object ABI would
 duplicate that contract without removing meaningful Swift code. Swift imports
 the C header as a Clang module, while the public package exposes only idiomatic

@@ -1,6 +1,6 @@
 # Releasing the language SDKs
 
-Each SDK is a thin client over the Rust core (the `secretspec-ffi` C ABI, a
+Each SDK is a thin client over the Rust core (the `libsecretspec` C ABI, a
 pyo3 extension for Python, or the napi-rs addon for Node). A release builds the
 native artifact per platform and publishes it through that ecosystem's
 registry or as a checksummed SwiftPM binary, so users install with no native
@@ -9,6 +9,29 @@ build.
 Version tags are `vX.Y.Z`; the publish jobs trigger on them. After the Go
 release build succeeds, CI also creates the submodule tag
 `secretspec-go/vX.Y.Z`, which is the version the Go module proxy resolves.
+
+## SecretSpec 0.20 native-library rename
+
+SecretSpec 0.20 renames the embedded native library from `secretspec-ffi` /
+`secretspec_ffi` to `libsecretspec` without renaming its exported C symbols.
+Before tagging 0.20:
+
+1. Run the SDK workflow and every platform packaging workflow from the release
+   commit, including the Windows native assets.
+2. Verify Go purego, .NET, and PHP FFI discover the pre-0.20 shared-library
+   filenames for legacy operations. Static-link SDKs must use the matching 0.20
+   archive because their source references the new `secretspec_call` symbol.
+3. Verify newly packaged artifacts contain only the new public filename and
+   that `SECRETSPEC_FFI_LIB` can explicitly select either compatible library.
+4. Test one clean install per SDK without a source checkout or Cargo `target/`
+   directory present, so development fallback discovery cannot hide a missing
+   packaged asset.
+5. Keep `libsecretspec` and each SDK at the same release version. Filename
+   fallback preserves loading, not newer request fields or behavior in an old
+   library.
+
+The detailed compatibility matrix is maintained in
+[`libsecretspec/README.md`](libsecretspec/README.md).
 
 ## After every release
 
@@ -200,7 +223,7 @@ published release tag for recovery or retry. Prerelease tags are skipped.
 ## Ruby (RubyGems) — `ruby-gems.yml`
 
 - **Build:** a platform gem (`Gem::Platform::CURRENT`) bundling the
-  `secretspec-ffi` staticlib in `vendor/`. At `gem install`, mkmf compiles a tiny
+  `libsecretspec` staticlib in `vendor/`. At `gem install`, mkmf compiles a tiny
   C glue and statically links that archive, so the resolver is embedded in the
   extension and one platform gem serves every Ruby ABI (install needs a C
   compiler and Ruby headers).
@@ -224,7 +247,7 @@ history permanently and ships every platform's lib in the module zip.)
 
 So the Go SDK follows the purego norm: the cdylib is provided at runtime, not
 shipped through the module. Consumers either set `SECRETSPEC_FFI_LIB` to an
-installed/built `libsecretspec_ffi`, or build with `-tags embed_lib` after
+installed/built `libsecretspec`, or build with `-tags embed_lib` after
 staging the per-platform library into `secretspec-go/lib/` themselves (a
 self-contained, vendored build — not a module-proxy install).
 
@@ -241,7 +264,7 @@ self-contained, vendored build — not a module-proxy install).
 
 ## Haskell (Hackage) — `haskell-build.yml`
 
-- **Build:** statically links the `secretspec-ffi` archive at build time via
+- **Build:** statically links the `libsecretspec` archive at build time via
   the GHC FFI, so the Rust resolver is embedded in the binary with no runtime
   loader path.
 - **Publish:** `cabal upload --publish` with the `HACKAGE_TOKEN` secret — see
@@ -256,7 +279,7 @@ self-contained, vendored build — not a module-proxy install).
 ## Swift (0.18+, SwiftPM + XCFramework) — `swift-package.yml`
 
 - **Build:** native Intel and Apple-silicon macOS runners build the
-  `secretspec-ffi` cdylib with a macOS 12 deployment target.
+  `libsecretspec` cdylib with a macOS 12 deployment target.
   `scripts/build-swift-xcframework.sh` gives each dylib an `@rpath` install
   name, combines the slices into a universal dylib, adds the public header and
   Clang module map, and wraps it with `xcodebuild -create-xcframework`.
@@ -308,7 +331,7 @@ through Composer.
   attached to the release. Users install it by dropping the `.so` in and
   `extension=` / `docker-php-ext-enable`, or by building from source with cargo.
 - **ext-ffi fallback library.** For the no-extension path, `ffi-build.yml`
-  attaches the per-target `secretspec-ffi` library (with a `.sha256`) to the
+  attaches the per-target `libsecretspec` library (with a `.sha256`) to the
   release; the client's `vendor/bin/secretspec-install-lib` command downloads the
   right one on demand. It is a deliberate opt-in command, not a Composer
   post-install hook (a dependency's install scripts do not run in the consumer
@@ -354,7 +377,7 @@ In order:
   managed package dependencies. It invokes the stable JSON C ABI through
   source-generated P/Invoke and exposes the same builder, resolved value,
   report, and typed-error vocabulary as the other SDKs.
-- **Native assets:** one NuGet package carries `secretspec-ffi` under the
+- **Native assets:** one NuGet package carries `libsecretspec` under the
   standard `runtimes/<rid>/native/` layout for glibc and musl Linux x64/Arm64,
   macOS x64/Arm64, and Windows x64/Arm64. Glibc builds use a manylinux 2.28
   baseline, and Windows builds statically link the MSVC runtime.

@@ -10,6 +10,10 @@ thin client over the shared Rust resolver, so every provider, fallback chain,
 profile, generator, and `as_path` secret behaves exactly like the CLI and the
 other language SDKs.
 
+> The embedded ABI is named `libsecretspec` in SecretSpec 0.20+. It was named
+> `secretspec-ffi` through 0.19; the 0.20+ native loader accepts both shared
+> library filename families.
+
 ```bash
 dotnet add package Cachix.SecretSpec
 ```
@@ -89,5 +93,5 @@ dotnet publish -c Release -r linux-x64 --self-contained \
 ```
 
 During local SDK development, `SECRETSPEC_FFI_LIB` can point to an explicit
-`libsecretspec_ffi` build; the SDK also discovers a Cargo `target` directory
+`libsecretspec` build; the SDK also discovers a Cargo `target` directory
 when used from a SecretSpec source checkout.

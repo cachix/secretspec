@@ -24,7 +24,7 @@ enum Native {
         guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "secretspec_call") else {
             throw SecretSpecError(
                 kind: "capability",
-                message: "the loaded secretspec-ffi library does not support inline specs "
+                message: "the loaded libsecretspec library does not support inline specs "
                     + "(missing secretspec_call)"
             )
         }

@@ -3833,6 +3833,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "libsecretspec"
+version = "0.19.1"
+dependencies = [
+ "secretspec",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "linkme"
 version = "0.3.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5593,15 +5602,6 @@ dependencies = [
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "trybuild",
-]
-
-[[package]]
-name = "secretspec-ffi"
-version = "0.19.1"
-dependencies = [
- "secretspec",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]

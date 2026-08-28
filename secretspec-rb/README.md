@@ -1,9 +1,13 @@
 # secretspec (Ruby SDK)
 
 Ruby bindings for [SecretSpec](https://secretspec.dev/), a declarative secrets
-manager. A thin client over the `secretspec-ffi` C ABI, linked into a native C
+manager. A thin client over the `libsecretspec` C ABI, linked into a native C
 extension at build time. Resolution happens in the Rust core, so the SDK
 inherits every provider with no Ruby-side logic.
+
+> The embedded ABI is named `libsecretspec` in SecretSpec 0.20+. It was named
+> `secretspec-ffi` through 0.19. Static-link SDK source and the archive must be
+> upgraded together because 0.20 adds the `secretspec_call` symbol.
 
 ```ruby
 require "secretspec"
@@ -51,7 +55,7 @@ report.secrets.each { |s| puts [s.name, s.status, s.required].join(" ") }
 
 ## Building
 
-The extension links the `secretspec-ffi` archive statically. In a development
+The extension links the `libsecretspec` archive statically. In a development
 checkout:
 
 ```bash
@@ -64,7 +68,7 @@ Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 
 ```bash
 # Use "static" (the default) or "shared"; use separate prefixes for both.
-bash secretspec-ffi/scripts/cinstall.sh "$PREFIX" static
+bash libsecretspec/scripts/cinstall.sh "$PREFIX" static
 ```
 
 Then use the same extension flag for either type:

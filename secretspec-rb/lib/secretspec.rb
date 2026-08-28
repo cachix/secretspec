@@ -2,7 +2,7 @@
 
 # Ruby SDK for SecretSpec, a declarative secrets manager.
 #
-# A thin client over the secretspec-ffi C ABI. The Rust resolver is statically
+# A thin client over the libsecretspec C ABI. The Rust resolver is statically
 # linked into a native extension (secretspec_ext), so the SDK inherits every
 # provider with no Ruby-side logic and there is nothing to locate at runtime.
 # Mirrors the Rust derive crate's vocabulary.
@@ -17,7 +17,7 @@ $LOAD_PATH.unshift(__dir__) unless $LOAD_PATH.include?(__dir__)
 require "secretspec/secretspec_ext"
 
 module Secretspec
-  # Response wire-format version this SDK understands. Tracks secretspec-ffi's
+  # Response wire-format version this SDK understands. Tracks libsecretspec's
   # RESOLVE_SCHEMA_VERSION; a mismatch means the loaded library is incompatible.
   RESOLVE_SCHEMA_VERSION = 2
 
@@ -280,7 +280,7 @@ module Secretspec
       unless version == expected_version
         raise Error.new("version",
                         "unsupported #{kind} schema version #{version} " \
-                        "(expected #{expected_version}); the secretspec-ffi " \
+                        "(expected #{expected_version}); the libsecretspec " \
                         "library and this SDK are out of sync")
       end
 

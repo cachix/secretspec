@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values, compositions, scopes, and presence constraints through one ordered
   pipeline, keeping CLI and SDK resolution behavior aligned.
 
+- The embedded C ABI is named `libsecretspec` in 0.20+, replacing the
+  `secretspec-ffi` crate, `secretspec_ffi` library filenames, and
+  `secretspec_ffi.pc`. Its exported `secretspec_*` symbols and
+  `SECRETSPEC_FFI_LIB` override are unchanged. Runtime-loading SDKs retain
+  pre-0.20 shared-library filename fallbacks where supported.
+
 - The Infisical provider now uses a separate HTTP connection for Universal Auth
   login, keeping the connection pool used for subsequent secret reads reliable.
 

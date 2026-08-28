@@ -4,23 +4,28 @@ description: How the language SDKs are built, packaged, and released, and which 
 ---
 
 SecretSpec ships SDKs for Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell,
-PHP, C#, and Swift (0.18+). This page is for contributors: how the SDKs are put
-together, how each one is packaged and released, which platforms each artifact
-covers, and what to update when adding a platform or a new SDK. For the
-user-facing architecture and API, see the [SDK overview](/sdk/overview).
+PHP, C#, Swift (0.18+), and JVM languages (0.20+). This page is for
+contributors: how the SDKs are put together, how each one is packaged and
+released, which platforms each artifact covers, and what to update when adding
+a platform or a new SDK. For the user-facing architecture and API, see the
+[SDK overview](/sdk/overview).
 
 ## One resolver, many packages
 
 All resolution logic lives in the `secretspec` Rust crate. The SDKs reach it
 two ways:
 
-- **Through the C ABI** (`secretspec-ffi`, which builds a `cdylib` for dynamic
+- **Through the C ABI** (`libsecretspec`, which builds a `cdylib` for dynamic
   loading and a `staticlib` for embedding): Ruby (mkmf extension statically
   links the archive), Go (purego `dlopen` of the cdylib, or cgo against the
   archive with `-tags static`), Haskell (GHC FFI against the archive), C#
   (P/Invoke against per-runtime cdylibs in the NuGet package), Swift (0.18+;
-  Clang C import from an XCFramework), and PHP's `ext-ffi` fallback (runtime
-  `dlopen` of the cdylib).
+  Clang C import from an XCFramework), JVM languages (0.20+; JNA against native
+  assets in the JAR), and PHP's `ext-ffi` fallback (runtime `dlopen` of the
+  cdylib).
+
+The C ABI crate and artifacts are named `libsecretspec` in SecretSpec 0.20+;
+they were named `secretspec-ffi` / `secretspec_ffi` through 0.19.
 - **As an embedded extension**: Python ([pyo3](https://pyo3.rs/)), Node.js
   ([napi-rs](https://napi.rs/)), and PHP's preferred backend
   ([ext-php-rs](https://github.com/davidcole1340/ext-php-rs)) compile the
@@ -45,11 +50,11 @@ platform and publishes on a version tag:
 | Rust | `secretspec` on crates.io (source) | `publish.yml` |
 | Python | `secretspec` wheels on PyPI | `python-wheels.yml` |
 | Node.js | `secretspec` + per-platform packages on npm | `node-addon.yml` |
-| Go | Go module (source) + `secretspec-ffi` release assets | `go-embed.yml`, `go-static.yml`, `ffi-build.yml` |
+| Go | Go module (source) + `libsecretspec` release assets | `go-embed.yml`, `go-static.yml`, `ffi-build.yml` |
 | Ruby | `secretspec` platform gems on RubyGems | `ruby-gems.yml` |
 | C# | `Cachix.SecretSpec` on NuGet | `dotnet-package.yml` |
 | Swift (0.18+) | SwiftPM source package + XCFramework release asset | `swift-package.yml` |
-| PHP | Composer package (source) + prebuilt extension binaries and `secretspec-ffi` release assets | `php-ext.yml`, `ffi-build.yml` |
+| PHP | Composer package (source) + prebuilt extension binaries and `libsecretspec` release assets | `php-ext.yml`, `ffi-build.yml` |
 | Haskell | `secretspec` on Hackage (source) | `haskell-build.yml` |
 
 ## Platform support
@@ -78,7 +83,7 @@ Notes:
   The keyring provider uses a Rust-native D-Bus transport on Linux and does not
   require system libdbus.
 - Hackage distributes source only; the Haskell column records which platforms
-  CI builds and tests, since users link `secretspec-ffi` themselves.
+  CI builds and tests, since users link `libsecretspec` themselves.
 - The Swift package targets macOS 12+ only. Its XCFramework contains native
   Intel and Apple-silicon slices; mobile Apple platforms are intentionally out
   of scope for a development-workflow resolver that launches provider CLIs and
@@ -89,7 +94,7 @@ Notes:
 
 Swift interoperates with C directly through Clang modules, and SwiftPM
 distributes native Apple binaries as XCFramework binary targets. That fits the
-existing `secretspec-ffi` boundary exactly: ownership-audited C functions
+existing `libsecretspec` boundary exactly: ownership-audited C functions
 carry one already-versioned JSON contract.
 
 [UniFFI](https://mozilla.github.io/uniffi-rs/latest/) is a good default for a
@@ -157,11 +162,11 @@ GHC's linker at them.
 
 ## Linking through pkg-config (0.19+)
 
-`secretspec-ffi/scripts/cinstall.sh PREFIX static|shared` uses
+`libsecretspec/scripts/cinstall.sh PREFIX static|shared` uses
 [cargo-c](https://github.com/lu-zero/cargo-c) to install one library type, the
-header, and a `secretspec_ffi.pc` carrying its full link line. This lets
+header, and a `libsecretspec.pc` carrying its full link line. This lets
 pkg-config consumers skip the `native-static-libs` capture above. Use separate
-prefixes for the two modes: both metadata files use `-lsecretspec_ffi`, and the
+prefixes for the two modes: both metadata files use `-lsecretspec`, and the
 linker prefers a shared library when both forms are present.
 
 ## Adding a platform to an SDK

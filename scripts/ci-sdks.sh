@@ -20,7 +20,7 @@ echo "==> Building shared Rust SDK artifacts"
 # resolver dependency graph instead of serially rebuilding it for the FFI,
 # Node, and PHP packages after the language suites have started.
 cargo build \
-  -p secretspec-ffi \
+  -p libsecretspec \
   -p secretspec \
   -p secretspec-node-native \
   -p secretspec-php-native
@@ -29,12 +29,12 @@ target_dir="$(cargo metadata --no-deps --format-version 1 \
   | grep -o '"target_directory":"[^"]*"' | head -1 | sed 's/.*:"\(.*\)"/\1/')"
 case "$(uname -s)" in
   Darwin)
-    lib_name="libsecretspec_ffi.dylib"
+    lib_name="libsecretspec.dylib"
     node_native_name="libsecretspec_node_native.dylib"
     php_native_name="libsecretspec_php_native.dylib"
     ;;
   *)
-    lib_name="libsecretspec_ffi.so"
+    lib_name="libsecretspec.so"
     node_native_name="libsecretspec_node_native.so"
     php_native_name="libsecretspec_php_native.so"
     ;;
@@ -46,11 +46,11 @@ export SECRETSPEC_BIN="$target_dir/debug/secretspec"
 # Raw linker flags for the legs that do not call pkg-config. A Rust staticlib
 # does not carry its own native dependency closure; NEVER hardcode this list --
 # it drifts as providers change.
-SECRETSPEC_FFI_NATIVE_LIBS="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \
+SECRETSPEC_FFI_NATIVE_LIBS="$(cargo rustc -q -p libsecretspec --crate-type staticlib -- \
   --print native-static-libs 2>&1 | sed -n 's/^note: native-static-libs: //p' | tail -1)"
 export SECRETSPEC_FFI_NATIVE_LIBS
 
-# Static-link contract: SDKs link libsecretspec_ffi.a (the resolver compiled in)
+# Static-link contract: SDKs link libsecretspec.a (the resolver compiled in)
 # instead of dlopening the cdylib. Stage the artifacts Cargo already built into
 # a test-only prefix. Using cargo-c here would compile the full dependency graph
 # again under target/<host-triple>, adding several minutes without adding test
@@ -61,12 +61,12 @@ export SECRETSPEC_FFI_PREFIX
 mkdir -p \
   "$SECRETSPEC_FFI_PREFIX/lib/pkgconfig" \
   "$SECRETSPEC_FFI_PREFIX/include"
-ln -sfn "$target_dir/debug/libsecretspec_ffi.a" \
-  "$SECRETSPEC_FFI_PREFIX/lib/libsecretspec_ffi.a"
-ln -sfn "$repo_root/secretspec-ffi/include/secretspec.h" \
+ln -sfn "$target_dir/debug/libsecretspec.a" \
+  "$SECRETSPEC_FFI_PREFIX/lib/libsecretspec.a"
+ln -sfn "$repo_root/libsecretspec/include/secretspec.h" \
   "$SECRETSPEC_FFI_PREFIX/include/secretspec.h"
 
-ffi_version="$(cargo pkgid -p secretspec-ffi)"
+ffi_version="$(cargo pkgid -p libsecretspec)"
 ffi_version="${ffi_version##*#}"
 {
   printf 'prefix=%s\n' "$SECRETSPEC_FFI_PREFIX"
@@ -75,17 +75,17 @@ ffi_version="${ffi_version##*#}"
     'libdir=${prefix}/lib' \
     'includedir=${prefix}/include' \
     '' \
-    'Name: secretspec_ffi' \
+    'Name: libsecretspec' \
     'Description: C ABI for SecretSpec: resolve secrets from any language'
   printf 'Version: %s\n' "$ffi_version"
-  printf 'Libs: -L${libdir} -lsecretspec_ffi %s\n' "$SECRETSPEC_FFI_NATIVE_LIBS"
+  printf 'Libs: -L${libdir} -lsecretspec %s\n' "$SECRETSPEC_FFI_NATIVE_LIBS"
   printf 'Cflags: -I${includedir}\n'
   printf 'Libs.private: %s\n' "$SECRETSPEC_FFI_NATIVE_LIBS"
-} > "$SECRETSPEC_FFI_PREFIX/lib/pkgconfig/secretspec_ffi.pc"
+} > "$SECRETSPEC_FFI_PREFIX/lib/pkgconfig/libsecretspec.pc"
 
 export PKG_CONFIG_PATH="$SECRETSPEC_FFI_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-pkg-config --print-errors --exists secretspec_ffi
-export SECRETSPEC_FFI_STATICLIB="$SECRETSPEC_FFI_PREFIX/lib/libsecretspec_ffi.a"
+pkg-config --print-errors --exists libsecretspec
+export SECRETSPEC_FFI_STATICLIB="$SECRETSPEC_FFI_PREFIX/lib/libsecretspec.a"
 export SECRETSPEC_FFI_INCLUDE="$SECRETSPEC_FFI_PREFIX/include"
 echo "==> SECRETSPEC_FFI_LIB=$SECRETSPEC_FFI_LIB"
 echo "==> SECRETSPEC_FFI_PREFIX=$SECRETSPEC_FFI_PREFIX"
@@ -113,7 +113,7 @@ run_go() {
   ( cd secretspec-go && SECRETSPEC_FFI_PROFILE=debug bash scripts/stage-staticlib.sh )
   ( cd secretspec-go && CGO_ENABLED=1 go test -tags static ./... )
 
-  echo "==> Go (-tags pkgconfig: link inputs from secretspec_ffi.pc)"
+  echo "==> Go (-tags pkgconfig: link inputs from libsecretspec.pc)"
   ( cd secretspec-go && CGO_ENABLED=1 go test -tags pkgconfig ./... )
 }
 
@@ -126,7 +126,7 @@ run_ruby() {
   ( cd secretspec-rb && find examples -name '*.rb' -exec ruby -c {} \; )
 
   echo "==> Ruby (pkg-config discovery)"
-  # The same link inputs read from secretspec_ffi.pc in the installed prefix
+  # The same link inputs read from libsecretspec.pc in the installed prefix
   # (PKG_CONFIG_PATH above); rebuild the extension and rerun the resolver plus
   # conformance contract. Codegen and cleanup behavior are independent of link
   # discovery and already ran above; repeating codegen would reinstall its
@@ -148,10 +148,10 @@ run_node() {
 
 run_haskell() {
   echo "==> Haskell"
-  # The Haskell SDK statically links the secretspec-ffi archive at build time: the
+  # The Haskell SDK statically links the libsecretspec archive at build time: the
   # Rust resolver is embedded in the test binary, so there is NO runtime loader path
-  # (no LD_LIBRARY_PATH). Stage libsecretspec_ffi.a alone into an isolated dir so
-  # -lsecretspec_ffi resolves to the archive (target/debug also holds the .so), and
+  # (no LD_LIBRARY_PATH). Stage libsecretspec.a alone into an isolated dir so
+  # -lsecretspec resolves to the archive (target/debug also holds the .so), and
   # pass the archive's transitive native deps as linker options.
   (
     cd secretspec-hs

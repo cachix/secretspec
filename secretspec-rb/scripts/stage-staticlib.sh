@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Stage the secretspec-ffi staticlib (release) into vendor/ so a platform gem
+# Stage the libsecretspec staticlib (release) into vendor/ so a platform gem
 # build bundles it: the archive, the C header, and the archive's transitive
 # native deps. `gem install` then compiles only the tiny C glue and links the
 # bundled archive. Run before `gem build`.
@@ -11,7 +11,7 @@ repo_root="$(cd "$pkg_dir/.." && pwd)"
 
 # Crate-type override: the gem only ships the staticlib, so skip the crate's
 # other types (on windows-gnu this avoids linking the unused cdylib entirely).
-cargo rustc -p secretspec-ffi --release --manifest-path "$repo_root/Cargo.toml" \
+cargo rustc -p libsecretspec --release --manifest-path "$repo_root/Cargo.toml" \
   --crate-type staticlib
 
 # The trailing sed unescapes the JSON-escaped backslashes a Windows target
@@ -24,9 +24,9 @@ target_dir="$(cargo metadata --no-deps --format-version 1 --manifest-path "$repo
 out_dir="$target_dir/${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release"
 
 mkdir -p "$pkg_dir/vendor"
-cp "$out_dir/libsecretspec_ffi.a" "$pkg_dir/vendor/libsecretspec_ffi.a"
-cp "$repo_root/secretspec-ffi/include/secretspec.h" "$pkg_dir/vendor/secretspec.h"
-cargo rustc -q -p secretspec-ffi --release --manifest-path "$repo_root/Cargo.toml" \
+cp "$out_dir/libsecretspec.a" "$pkg_dir/vendor/libsecretspec.a"
+cp "$repo_root/libsecretspec/include/secretspec.h" "$pkg_dir/vendor/secretspec.h"
+cargo rustc -q -p libsecretspec --release --manifest-path "$repo_root/Cargo.toml" \
   --crate-type staticlib -- --print native-static-libs 2>&1 \
   | sed -n 's/^note: native-static-libs: //p' | tail -1 > "$pkg_dir/vendor/native-static-libs.txt"
 
@@ -38,4 +38,4 @@ if [[ "${CARGO_BUILD_TARGET:-}" == *-windows-gnu ]]; then
     "$pkg_dir/vendor/native-static-libs.txt" "$pkg_dir/vendor"
 fi
 
-echo "staged libsecretspec_ffi.a + secretspec.h + native-static-libs.txt into vendor/"
+echo "staged libsecretspec.a + secretspec.h + native-static-libs.txt into vendor/"

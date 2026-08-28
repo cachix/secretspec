@@ -58,9 +58,9 @@ final class NativeResolver {
                 * To ship two binaries targeting the same linux-arch in the Jar we must rename one of them.
                 * We rename the musl library.
                 */
-                return Native.load("secretspec_musl_ffi", SecretSpecFFI.class, OPTIONS);
+                return Native.load("secretspec_musl", SecretSpecFFI.class, OPTIONS);
             } else {
-                return Native.load("secretspec_ffi", SecretSpecFFI.class, OPTIONS);
+                return Native.load("libsecretspec", SecretSpecFFI.class, OPTIONS);
             }
         } catch (UnsatisfiedLinkError error) {
             throw new SecretSpecException("load", error.getMessage(), error);
@@ -115,13 +115,13 @@ final class NativeResolver {
         }
 
         String os = System.getProperty("os.name").toLowerCase(Locale.ROOT);
-        String fileName;
+        String[] fileNames;
         if (os.contains("win")) {
-            fileName = "secretspec_ffi.dll";
+            fileNames = new String[] { "libsecretspec.dll", "secretspec.dll" };
         } else if (os.contains("mac")) {
-            fileName = "libsecretspec_ffi.dylib";
+            fileNames = new String[] { "libsecretspec.dylib" };
         } else {
-            fileName = "libsecretspec_ffi.so";
+            fileNames = new String[] { "libsecretspec.so" };
         }
 
         Path[] starts = new Path[] {
@@ -139,7 +139,8 @@ final class NativeResolver {
             while (directory != null) {
                 var target = directory.resolve("target");
                 var newest = Stream.of("release", "debug")
-                    .map(profile -> target.resolve(Path.of(profile, fileName)))
+                    .flatMap(profile -> Stream.of(fileNames)
+                        .map(fileName -> target.resolve(Path.of(profile, fileName))))
                     .filter(Files::exists)
                     .max(comparingLong(path -> path.toFile().lastModified()))
                     .map(Path::toAbsolutePath);

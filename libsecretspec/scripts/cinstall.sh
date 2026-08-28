@@ -33,7 +33,7 @@ case "$profile" in
     ;;
 esac
 
-cargo cinstall -p secretspec-ffi --manifest-path "$repo_root/Cargo.toml" \
+cargo cinstall -p libsecretspec --manifest-path "$repo_root/Cargo.toml" \
   --library-type "$library_type" \
   --prefix "$prefix" \
   --bindir lib \

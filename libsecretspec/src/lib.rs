@@ -5,7 +5,7 @@
 //! this ABI (Go via purego, Ruby via ffi, Haskell via the GHC FFI) stays a
 //! thin shell: marshal a request string in, get a response string out, free it.
 //! Python (pyo3) and Node (napi-rs) skip this C ABI and call
-//! `secretspec::resolve_json` directly, but share the same JSON envelope
+//! `secretspec_core::resolve_json` directly, but share the same JSON envelope
 //! contract. Resolution logic lives only in the `secretspec` crate; this is a
 //! wrapper.
 //!
@@ -36,9 +36,9 @@
 //!
 //! `mode` selects which shape comes back, and defaults to `"resolve"`:
 //!
-//! - `"resolve"` — the value-carrying [`secretspec::ResolveResponse`]. Set
+//! - `"resolve"` — the value-carrying [`secretspec_core::ResolveResponse`]. Set
 //!   `no_values` to strip the values from it.
-//! - `"report"` — the value-free [`secretspec::ResolutionReport`]: the
+//! - `"report"` — the value-free [`secretspec_core::ResolutionReport`]: the
 //!   inventory/preflight view the CLI exposes as `check --json`.
 //!
 //! Any other value is rejected with an `invalid_request` error.
@@ -81,6 +81,9 @@
 
 use std::ffi::{CStr, CString, c_char};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+
+#[cfg(test)]
+mod tests;
 
 /// ABI version, NUL-terminated for direct return as a C string.
 const ABI_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
@@ -163,11 +166,11 @@ pub unsafe extern "C" fn secretspec_call(request_json: *const c_char) -> *mut c_
 }
 
 fn resolve_inner(request_json: *const c_char) -> String {
-    decode_input(request_json, secretspec::resolve_json)
+    decode_input(request_json, secretspec_core::resolve_json)
 }
 
 fn call_inner(request_json: *const c_char) -> String {
-    decode_input(request_json, secretspec::call_json)
+    decode_input(request_json, secretspec_core::call_json)
 }
 
 fn decode_input(request_json: *const c_char, dispatch: impl FnOnce(&str) -> String) -> String {

@@ -5,9 +5,7 @@
 use std::ffi::{CStr, CString, c_char};
 use std::fs;
 
-use secretspec_ffi::{
-    secretspec_abi_version, secretspec_call, secretspec_free, secretspec_resolve,
-};
+use crate::{secretspec_abi_version, secretspec_call, secretspec_free, secretspec_resolve};
 use serde_json::Value;
 use tempfile::TempDir;
 

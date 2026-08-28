@@ -4,7 +4,7 @@ package secretspec
 
 // Linked binding: cgo links the Rust resolver at build time. The link inputs
 // come from files staged by scripts/stage-staticlib.sh (`-tags static`) or from
-// secretspec_ffi.pc (`-tags pkgconfig`). The installed library selected by the
+// libsecretspec.pc (`-tags pkgconfig`). The installed library selected by the
 // latter may be static or shared.
 
 /*

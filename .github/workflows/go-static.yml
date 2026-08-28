@@ -1,7 +1,7 @@
 name: "Go static lib"
 
 # Builds the fully-static (musl) Go binary for the `-tags static` binding: cgo
-# links libsecretspec_ffi.a directly into the executable, so the Rust resolver is
+# links libsecretspec.a directly into the executable, so the Rust resolver is
 # embedded and the binary has no dynamic dependencies at all. Built via devenv,
 # which provides the musl C cross-toolchain (for the sqlite3/aws-lc-sys build
 # scripts and the cgo link) and static libunwind.
@@ -34,7 +34,7 @@ on:
   pull_request:
     paths:
       - "secretspec-go/**"
-      - "secretspec-ffi/**"
+      - "libsecretspec/**"
       - ".github/workflows/go-static.yml"
 
 permissions:

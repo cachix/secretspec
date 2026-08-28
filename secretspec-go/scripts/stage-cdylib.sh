@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build the secretspec-ffi cdylib (release) and stage it into lib/ under the
+# Build the libsecretspec cdylib (release) and stage it into lib/ under the
 # build-tagged name the embedded_<os>_<arch>.go files reference, so `go build`
 # embeds it. Run before building/releasing the Go module.
 #
@@ -18,7 +18,7 @@ goos="$(go env GOOS)"
 goarch="$(go env GOARCH)"
 
 build_args=(
-  -p secretspec-ffi
+  -p libsecretspec
   --release
   --manifest-path "$repo_root/Cargo.toml"
 )
@@ -28,11 +28,11 @@ target_dir="$(cargo metadata --no-deps --format-version 1 --manifest-path "$repo
   | grep -o '"target_directory":"[^"]*"' | head -1 | sed 's/.*:"\(.*\)"/\1/')"
 
 case "$goos" in
-  darwin)  src="libsecretspec_ffi.dylib"; ext="dylib" ;;
-  windows) src="secretspec_ffi.dll";      ext="dll" ;;
-  *)       src="libsecretspec_ffi.so";    ext="so" ;;
+  darwin)  src="libsecretspec.dylib"; ext="dylib" ;;
+  windows) src="secretspec.dll";      ext="dll" ;;
+  *)       src="libsecretspec.so";    ext="so" ;;
 esac
 
 mkdir -p "$pkg_dir/lib"
-cp "$target_dir/release/$src" "$pkg_dir/lib/secretspec_ffi_${goos}_${goarch}.${ext}"
-echo "staged secretspec_ffi_${goos}_${goarch}.${ext} into lib/"
+cp "$target_dir/release/$src" "$pkg_dir/lib/secretspec_${goos}_${goarch}.${ext}"
+echo "staged secretspec_${goos}_${goarch}.${ext} into lib/"

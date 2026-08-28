@@ -286,8 +286,12 @@ Beyond Rust, SecretSpec ships SDKs for other languages. Each is a thin client
 over the same native core, so every provider, chain, profile, and generator
 works identically with no per-language resolution logic:
 
+The shared embedded ABI is named `libsecretspec` in SecretSpec 0.20+; it was
+named `secretspec-ffi` through 0.19. Its exported `secretspec_*` symbols and the
+`SECRETSPEC_FFI_LIB` override are unchanged.
+
 - [Python](https://secretspec.dev/sdk/python) (via a pyo3 extension)
-- [Go](https://secretspec.dev/sdk/go) (via purego, no cgo, over the `secretspec-ffi` C ABI)
+- [Go](https://secretspec.dev/sdk/go) (via purego, no cgo, over the `libsecretspec` C ABI)
 - [Ruby](https://secretspec.dev/sdk/ruby) (via a native C extension)
 - [Node.js / TypeScript](https://secretspec.dev/sdk/nodejs) (napi-rs addon)
 - [Haskell](https://secretspec.dev/sdk/haskell) (build-time FFI link)

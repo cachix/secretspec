@@ -8,6 +8,8 @@ thin client over the shared Rust resolver, so every provider, fallback chain,
 profile, generator, and `as_path` secret behaves exactly like the CLI and the
 other language SDKs.
 
+The 0.20+ native assets use the `libsecretspec` embedded C ABI name.
+
 
 ```java
 import org.cachix.secretspec.SecretSpec;
@@ -84,5 +86,5 @@ macOS x64/Arm64, and Windows x64/Arm64. Windows builds include the C runtime,
 so users do not need to install the Visual C++ Redistributable.
 
 During local SDK development, `SECRETSPEC_FFI_LIB` can point to an explicit
-`libsecretspec_ffi` build; the SDK also discovers a Cargo `target` directory
+`libsecretspec` build; the SDK also discovers a Cargo `target` directory
 when used from a SecretSpec source checkout.

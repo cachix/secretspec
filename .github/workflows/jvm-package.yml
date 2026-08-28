@@ -1,6 +1,6 @@
 name: "Java Virtual Machine SDK"
 
-# Builds the JVM client and the runtime-specific secretspec-ffi libraries packed
+# Builds the JVM client and the runtime-specific libsecretspec libraries packed
 # into org.cachix.secretspec-jvm. Glibc Linux uses a manylinux_2_28 baseline; Alpine
 # receives separate musl assets.
 
@@ -25,7 +25,7 @@ on:
   pull_request:
     paths:
       - "secretspec-jvm/**"
-      - "secretspec-ffi/**"
+      - "libsecretspec/**"
       - ".github/workflows/jvm-package.yml"
       - "scripts/install-rustup.sh"
       - "scripts/sync-sdk-versions.sh"
@@ -46,40 +46,40 @@ jobs:
             target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             container: quay.io/pypa/manylinux_2_28_x86_64:2026.08.05-1@sha256:e0b40ace8e818e96026eb47714b01998cbca022a6995797d0905474ce3e82ae8
-            library: libsecretspec_ffi.so
+            library: libsecretspec.so
             rustflags: -C strip=symbols -C opt-level=z
             jdk11_distribution: temurin
           - rid: linux-aarch64
             target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
             container: quay.io/pypa/manylinux_2_28_aarch64:2026.08.05-1@sha256:f766b402889e40f439e7a3ee5788eef1aa3ef399d0110107d27419fa2ba9d905
-            library: libsecretspec_ffi.so
+            library: libsecretspec.so
             rustflags: -C strip=symbols -C opt-level=z
             jdk11_distribution: temurin
           - rid: darwin-x86-64
             target: x86_64-apple-darwin
             runner: macos-15-intel
-            library: libsecretspec_ffi.dylib
+            library: libsecretspec.dylib
             deployment_target: "12.0"
             rustflags: -C strip=symbols -C opt-level=z
             jdk11_distribution: temurin
           - rid: darwin-aarch64
             target: aarch64-apple-darwin
             runner: macos-latest
-            library: libsecretspec_ffi.dylib
+            library: libsecretspec.dylib
             deployment_target: "12.0"
             rustflags: -C strip=symbols -C opt-level=z
             jdk11_distribution: temurin
           - rid: win32-x86-64
             target: x86_64-pc-windows-msvc
             runner: windows-latest
-            library: secretspec_ffi.dll
+            library: secretspec.dll
             rustflags: -C strip=symbols -C target-feature=+crt-static -C opt-level=z
             jdk11_distribution: temurin
           - rid: win32-aarch64
             target: aarch64-pc-windows-msvc
             runner: windows-11-arm
-            library: secretspec_ffi.dll
+            library: secretspec.dll
             rustflags: -C strip=symbols -C target-feature=+crt-static -C opt-level=z
             jdk11_distribution: microsoft # temurin does not provide win32-aarch64 builds
 
@@ -118,7 +118,7 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
           RUSTFLAGS: ${{ matrix.rustflags }}
         run: >-
-          cargo build -p secretspec-ffi --release
+          cargo build -p libsecretspec --release
           --target ${{ matrix.target }}
 
       - name: Verify glibc portability (glibc <= 2.28, no libdbus)
@@ -154,8 +154,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p "staged/${{ matrix.rid }}"
+          packaged="${{ matrix.library }}"
+          if [ "$packaged" = "secretspec.dll" ]; then
+            packaged="libsecretspec.dll"
+          fi
           cp "target/${{ matrix.target }}/release/${{ matrix.library }}" \
-             "staged/${{ matrix.rid }}"
+             "staged/${{ matrix.rid }}/$packaged"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -198,15 +202,15 @@ jobs:
               bash scripts/install-rustup.sh
               export PATH="$HOME/.cargo/bin:$PATH"
               rustup toolchain install
-              cargo build -p secretspec-ffi --release \
+              cargo build -p libsecretspec --release \
                 --target "${{ matrix.target }}"
             '
           test -f \
-            "target/${{ matrix.target }}/release/libsecretspec_ffi.so"
+            "target/${{ matrix.target }}/release/libsecretspec.so"
       - name: Verify musl portability
         shell: bash
         run: |
-          library="target/${{ matrix.target }}/release/libsecretspec_ffi.so"
+          library="target/${{ matrix.target }}/release/libsecretspec.so"
           dynamic="$(readelf -d "$library")"
           needed="$(grep NEEDED <<<"$dynamic")"
           case "${{ matrix.target }}" in
@@ -235,8 +239,8 @@ jobs:
           mkdir -p "staged/${{ matrix.rid }}"
           # MUSL and GLIBC libraries must both reside in linux-x86-64 or linux-aarch64
           # Rename the library so they can coexist in the same directory
-          cp "target/${{ matrix.target }}/release/libsecretspec_ffi.so" \
-             "staged/${{ matrix.rid }}/libsecretspec_musl_ffi.so"
+          cp "target/${{ matrix.target }}/release/libsecretspec.so" \
+             "staged/${{ matrix.rid }}/libsecretspec_musl.so"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: jvm-native-${{ matrix.rid }}
@@ -298,7 +302,7 @@ jobs:
             if [ "${rid%-musl}" = "${rid}" ] ; then
               unzip -l "$package" | grep -q "${rid%-musl}/"
             else
-              unzip -l "$package" | grep -q "${rid%-musl}/libsecretspec_musl_ffi.so"
+              unzip -l "$package" | grep -q "${rid%-musl}/libsecretspec_musl.so"
             fi
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

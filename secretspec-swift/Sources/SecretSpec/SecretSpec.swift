@@ -275,7 +275,7 @@ public struct SecretSpecBuilder: Sendable {
             throw SecretSpecError(
                 kind: "version",
                 message: "unsupported \(kind) schema version \(actual) "
-                    + "(expected \(expected)); the secretspec-ffi library "
+                    + "(expected \(expected)); the libsecretspec library "
                     + "and this SDK are out of sync"
             )
         }

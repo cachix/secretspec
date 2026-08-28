@@ -1,9 +1,8 @@
 /*
  * Native glue for the secretspec Ruby SDK.
  *
- * A thin C extension that statically links the secretspec-ffi archive
- * (libsecretspec_ffi.a) and exposes its three C ABI functions to Ruby as
- * Secretspec::Native.c_resolve / c_abi_version. The Rust resolver is embedded in
+ * A thin C extension that statically links the libsecretspec archive
+ * (libsecretspec.a) and exposes its four C ABI functions to Ruby. The Rust resolver is embedded in
  * this extension object, so there is no separate cdylib to ship or dlopen.
  */
 #include <ruby.h>

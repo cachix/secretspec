@@ -211,7 +211,7 @@ public class SecretSpec {
             throw new SecretSpecException(
                     "version",
                     String.format("unsupported %s schema version %d (expected %d); " +
-                            "the secretspec-ffi library and this SDK are out of sync", kind, actual, expected)
+                            "the libsecretspec library and this SDK are out of sync", kind, actual, expected)
             );
         }
     }

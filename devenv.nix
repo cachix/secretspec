@@ -33,11 +33,11 @@
     };
   };
   # Go SDK (secretspec-go): default binding is purego (dlopen, no cgo); the
-  # `-tags static` binding uses cgo to statically link libsecretspec_ffi.a, and on
+  # `-tags static` binding uses cgo to statically link libsecretspec.a, and on
   # Linux is built fully static against musl (see the env block below).
   languages.go.enable = true;
   # Ruby SDK (secretspec-rb) compiles an mkmf C extension that statically links
-  # libsecretspec_ffi.a.
+  # libsecretspec.a.
   languages.ruby.enable = true;
   # Haskell SDK (secretspec-hs) links the C ABI at build time via the FFI.
   # Supply its only non-boot dependency from Nix's binary cache. Otherwise a
@@ -54,7 +54,7 @@
   # PHP SDK (secretspec-php) has two native backends over the same resolver:
   #   * secretspec-php-native, an ext-php-rs extension that embeds the resolver
   #     (the production path: no ffi.enable, works in FPM like ext-redis); and
-  #   * a runtime ext-ffi fallback that dlopens the secretspec-ffi cdylib.
+  #   * a runtime ext-ffi fallback that dlopens the libsecretspec cdylib.
   # The pure-PHP client prefers the extension when loaded. ext-ffi (enabled here)
   # covers the fallback + dev; composer (bundled with languages.php) manages the
   # dev-only phpunit dependency.
@@ -95,7 +95,7 @@
     # For development of the SOPS provider
     pkgs.sops
     pkgs.pkg-config
-    # Installs the secretspec-ffi archive with its header and pkg-config file
+    # Installs the libsecretspec archive with its header and pkg-config file
     pkgs.cargo-c
   ];
 

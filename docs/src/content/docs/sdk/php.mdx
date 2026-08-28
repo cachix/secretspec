@@ -22,9 +22,15 @@ native backends over an identical JSON contract:
   [ext-php-rs](https://github.com/davidcole1340/ext-php-rs)) embeds the resolver
   the way `pdo` or `redis` do. It needs no `ffi.enable` and works under PHP-FPM
   and the web SAPI out of the box — the recommended path for Laravel and Symfony.
-- **`ext-ffi`** dlopens the `secretspec-ffi` shared library at runtime. Nothing
+- **`ext-ffi`** dlopens the `libsecretspec` shared library at runtime. Nothing
   to compile, ideal for CLI tools and local development; requires the FFI
   extension enabled.
+
+:::note[SecretSpec 0.20+ library name]
+`libsecretspec` was named `secretspec-ffi` through SecretSpec 0.19. The PHP
+loader prefers the new artifact name and still accepts pre-0.20 shared
+libraries.
+:::
 
 The SDK prefers the extension whenever it is loaded and transparently falls back
 to `ext-ffi`, so your application code is the same either way.
@@ -69,7 +75,7 @@ automatically.
 
 ### Option B — ext-ffi (quick start / CLI)
 
-The FFI backend dlopens the `secretspec-ffi` library at runtime. Enable the
+The FFI backend dlopens the `libsecretspec` library at runtime. Enable the
 bundled FFI extension — in CLI it is on by default; for the web SAPI set:
 
 ```ini
@@ -84,7 +90,7 @@ not run it automatically):
 $ vendor/bin/secretspec-install-lib
 ```
 
-That downloads the right `secretspec-ffi` library from the matching GitHub
+That downloads the right `libsecretspec` library from the matching GitHub
 release into the package. Alternatively, point `SECRETSPEC_FFI_LIB` at a library
 you built or placed yourself. The SDK looks at `SECRETSPEC_FFI_LIB` first, then
 the downloaded copy, then a local Cargo `target/` directory.
@@ -188,7 +194,7 @@ lifetime. Call `$resolved->close()` when done to remove those temp files:
 
 The SDK chooses a backend automatically: if the `secretspec-php-native` extension
 is loaded it is used directly (no `ffi.enable`, no library to locate); otherwise
-the SDK dlopens the `secretspec-ffi` library via `ext-ffi`, looking first at
+the SDK dlopens the `libsecretspec` library via `ext-ffi`, looking first at
 `SECRETSPEC_FFI_LIB`, then the copy `vendor/bin/secretspec-install-lib` places in
 the package, then a local Cargo `target/` directory. Both backends call the
 identical Rust `resolve_json`, so the result is the same — a cross-language

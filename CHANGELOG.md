@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Interactive prompts now use the Console terminal backend, reducing CLI
+  dependencies and allowing Unix signal handling to use Signal Hook 0.4.
+
 - SecretSpec now builds against Rand 0.10 and the TOML 1.1 ecosystem, improving
   compatibility with current Linux distribution Rust packages.
 

@@ -81,7 +81,10 @@
 //! ```
 
 mod address;
+mod catalog;
 mod credentials;
+// Every item inside is cfg-gated out in an all-features build.
+#[allow(unused_imports, unused_macros)]
 mod disabled;
 mod factory;
 #[macro_use]
@@ -96,7 +99,8 @@ mod url;
 // Public provider API.
 pub use address::Address;
 pub use macros::{
-    PROVIDER_REGISTRY, ProviderRegistration, declared_flag, declared_read_capability,
+    PROVIDER_REGISTRY, ProviderMetadata, ProviderRegistration, declared_flag,
+    declared_read_capability,
 };
 pub use registry::ProviderInfo;
 #[cfg(feature = "cli")]

@@ -178,16 +178,7 @@ pub struct AwspsProvider {
 crate::register_provider! {
     struct: AwspsProvider,
     config: AwspsConfig,
-    name: "awsps",
-    description: "AWS Systems Manager Parameter Store (0.18+)",
-    schemes: ["awsps"],
-    examples: [
-        "awsps://us-east-1",
-        "awsps://production@us-east-1",
-        "awsps://us-east-1?prefix=/myteam",
-        "awsps://us-east-1?template=/{profile}/{project}/{key}",
-        "awsps://us-east-1?kms_key_id=alias/my-key&tier=advanced",
-    ],
+    metadata: &super::catalog::AWSPS,
 }
 
 impl AwspsProvider {

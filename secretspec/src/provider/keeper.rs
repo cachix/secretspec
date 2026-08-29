@@ -129,12 +129,7 @@ pub struct KeeperProvider {
 crate::register_provider! {
     struct: KeeperProvider,
     config: KeeperConfig,
-    name: "keeper",
-    description: "Keeper Secrets Manager (0.18+) via official Rust SDK",
-    schemes: ["keeper"],
-    examples: ["keeper://SHARED_FOLDER_UID"],
-    credential_names: [CONFIG, TOKEN],
-    deletes: true,
+    metadata: &super::catalog::KEEPER,
 }
 
 #[derive(Clone)]

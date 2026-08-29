@@ -124,14 +124,7 @@ pub struct KdbxProvider {
 crate::register_provider! {
     struct: KdbxProvider,
     config: KdbxConfig,
-    name: "kdbx",
-    description: "KeePass KDBX databases (0.17+)",
-    schemes: ["kdbx"],
-    examples: [
-        "kdbx:./secrets.kdbx",
-        "kdbx:./secrets.kdbx?keyfile=./secrets.key",
-    ],
-    credential_names: [PASSWORD_CREDENTIAL],
+    metadata: &super::catalog::KDBX,
 }
 
 impl KdbxProvider {

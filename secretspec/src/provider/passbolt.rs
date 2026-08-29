@@ -917,9 +917,12 @@ esac
         assert_eq!(provider.uri(), "passbolt");
         let registration = crate::provider::PROVIDER_REGISTRY
             .iter()
-            .find(|registration| registration.info.name == "passbolt")
+            .find(|registration| registration.metadata.info.name == "passbolt")
             .unwrap();
-        assert_eq!(registration.credential_names, &[PRIVATE_KEY, PASSPHRASE]);
+        assert_eq!(
+            registration.metadata.credential_names,
+            &[PRIVATE_KEY, PASSPHRASE]
+        );
     }
 
     #[test]

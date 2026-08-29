@@ -184,10 +184,7 @@ pub struct AwssmProvider {
 crate::register_provider! {
     struct: AwssmProvider,
     config: AwssmConfig,
-    name: "awssm",
-    description: "AWS Secrets Manager",
-    schemes: ["awssm"],
-    examples: ["awssm://us-east-1", "awssm://production@us-east-1", "awssm://us-east-1?prefix=myteam", "awssm://prod@us-east-1?kms_key_id=alias/my-key&tag.team=platform"],
+    metadata: &super::catalog::AWSSM,
 }
 
 impl AwssmProvider {

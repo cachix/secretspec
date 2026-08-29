@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Provider names remain registered when their Cargo feature is disabled, so
   selecting one now identifies the feature required by the build instead of
-  incorrectly reporting that the provider does not exist.
+  incorrectly reporting that the provider does not exist. Provider discovery
+  and enabled or disabled builds now share the same metadata catalog.
 
 - Interactive prompts now use the Console terminal backend, reducing CLI
   dependencies and allowing Unix signal handling to use Signal Hook 0.4.

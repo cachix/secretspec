@@ -168,12 +168,7 @@ pub struct AgeProvider {
 crate::register_provider! {
     struct: AgeProvider,
     config: AgeConfig,
-    name: "age",
-    description: "age-encrypted file",
-    schemes: ["age"],
-    examples: ["age://secrets.age", "age://secrets.age?recipients-file=secrets.age.recipients"],
-    credential_names: ["identity"],
-    deletes: true,
+    metadata: &super::catalog::AGE,
 }
 
 impl AgeProvider {

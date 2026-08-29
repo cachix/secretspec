@@ -74,7 +74,7 @@
 //! secretspec check --provider openbao://team-a@bao.example.com:8200/secret
 //! ```
 
-use super::vault_common::{KvConfig, KvProvider, Product, ROLE_ID, SECRET_ID, TOKEN};
+use super::vault_common::{KvConfig, KvProvider, Product};
 use super::{Address, Provider, ProviderCredentials, ProviderUrl};
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
@@ -107,12 +107,7 @@ pub struct OpenBaoProvider {
 crate::register_provider! {
     struct: OpenBaoProvider,
     config: OpenBaoConfig,
-    name: "openbao",
-    description: "OpenBao secret management (0.17+)",
-    schemes: ["openbao"],
-    examples: ["openbao://bao.example.com:8200/secret"],
-    credential_names: [ROLE_ID, SECRET_ID, TOKEN],
-    deletes: true,
+    metadata: &super::catalog::OPENBAO,
 }
 
 impl OpenBaoProvider {

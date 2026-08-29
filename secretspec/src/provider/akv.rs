@@ -386,11 +386,7 @@ fn classify_env_credentials(
 crate::register_provider! {
     struct: AkvProvider,
     config: AkvConfig,
-    name: "akv",
-    description: "Azure Key Vault",
-    schemes: ["akv"],
-    examples: ["akv://myvault", "akv://myvault?auth=managed_identity", "akv://myvault?suffix=vault.azure.cn"],
-    credential_names: [TENANT_ID, CLIENT_ID, CLIENT_SECRET],
+    metadata: &super::catalog::AKV,
 }
 
 impl AkvProvider {

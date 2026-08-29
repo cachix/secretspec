@@ -524,11 +524,7 @@ pub struct EjsonProvider {
 crate::register_provider! {
     struct: EjsonProvider,
     config: EjsonConfig,
-    name: "ejson",
-    description: "EJSON encrypted files (0.20+)",
-    schemes: ["ejson"],
-    examples: ["ejson:config/secrets.production.ejson"],
-    credential_names: [PRIVATE_KEY],
+    metadata: &super::catalog::EJSON,
 }
 
 impl EjsonProvider {

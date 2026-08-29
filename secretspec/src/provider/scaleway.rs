@@ -135,11 +135,7 @@ pub struct ScalewayProvider {
 crate::register_provider! {
     struct: ScalewayProvider,
     config: ScalewayConfig,
-    name: "scaleway",
-    description: "Scaleway Secret Manager",
-    schemes: ["scaleway"],
-    examples: ["scaleway://fr-par", "scaleway://nl-ams?project_id=PROJECT_UUID", "scaleway://fr-par?project_id=PROJECT_UUID&path=/myteam"],
-    credential_names: [SECRET_KEY],
+    metadata: &super::catalog::SCALEWAY,
 }
 
 /// One secret in a `ListSecrets` response (only the fields we consume).
@@ -748,7 +744,7 @@ mod tests {
         assert!(
             super::super::PROVIDER_REGISTRY
                 .iter()
-                .any(|r| r.info.name == "scaleway"),
+                .any(|r| r.metadata.info.name == "scaleway"),
             "scaleway missing from PROVIDER_REGISTRY"
         );
     }

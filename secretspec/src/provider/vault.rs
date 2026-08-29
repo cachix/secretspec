@@ -62,7 +62,7 @@
 //! secretspec check --provider vault://team-a@vault.example.com:8200/secret
 //! ```
 
-use super::vault_common::{KvConfig, KvProvider, Product, ROLE_ID, SECRET_ID, TOKEN};
+use super::vault_common::{KvConfig, KvProvider, Product};
 use super::{Address, Provider, ProviderCredentials, ProviderUrl};
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
@@ -95,12 +95,7 @@ pub struct VaultProvider {
 crate::register_provider! {
     struct: VaultProvider,
     config: VaultConfig,
-    name: "vault",
-    description: "HashiCorp Vault secret management",
-    schemes: ["vault"],
-    examples: ["vault://vault.example.com:8200/secret"],
-    credential_names: [ROLE_ID, SECRET_ID, TOKEN],
-    deletes: true,
+    metadata: &super::catalog::VAULT,
 }
 
 impl VaultProvider {

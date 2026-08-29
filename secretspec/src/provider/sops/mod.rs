@@ -1,11 +1,9 @@
 use super::{Address, Provider, ProviderCredentials, ProviderUrl};
 use crate::config::NativeAddress;
 use crate::provider::sops::config::SopsConfig;
-use crate::provider::sops::fields::{
-    AGE_KEY, AWS_SECRET_ACCESS_KEY, AZURE_CLIENT_SECRET, CREDENTIAL_FIELDS,
-    GOOGLE_OAUTH_ACCESS_TOKEN, HC_VAULT_TOKEN, HUAWEI_SDK_AK, HUAWEI_SDK_SK, PATHBUF_FIELDS,
-    STRING_FIELDS,
-};
+#[cfg(test)]
+use crate::provider::sops::fields::AGE_KEY;
+use crate::provider::sops::fields::{CREDENTIAL_FIELDS, PATHBUF_FIELDS, STRING_FIELDS};
 use crate::provider::sops::format::SopsFormat;
 use crate::provider::sops::pattern::SopsPathPattern;
 use crate::{Result, SecretSpecError};
@@ -46,23 +44,7 @@ pub struct SopsProvider {
 crate::register_provider! {
     struct: SopsProvider,
     config: SopsConfig,
-    name: "sops",
-    description: "SOPS encrypted files (0.17+)",
-    schemes: ["sops"],
-    examples: [
-        "sops://secrets.enc.yaml",
-        "sops://secrets-dir/{project}/{profile}.enc.json",
-        "sops://secrets-dir/{project}/.env.{profile}.enc?format=dotenv",
-    ],
-    credential_names: [
-        AGE_KEY,
-        AWS_SECRET_ACCESS_KEY,
-        AZURE_CLIENT_SECRET,
-        HC_VAULT_TOKEN,
-        HUAWEI_SDK_AK,
-        HUAWEI_SDK_SK,
-        GOOGLE_OAUTH_ACCESS_TOKEN,
-    ],
+    metadata: &super::catalog::SOPS,
 }
 
 struct AddressParts<'a> {

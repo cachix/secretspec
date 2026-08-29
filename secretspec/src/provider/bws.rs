@@ -129,11 +129,7 @@ struct BwsSecret {
 crate::register_provider! {
     struct: BwsProvider,
     config: BwsConfig,
-    name: "bws",
-    description: "Bitwarden Secrets Manager via official bws CLI",
-    schemes: ["bws"],
-    examples: ["bws://a9230ec4-5507-4870-b8b5-b3f500587e4c"],
-    credential_names: [ACCESS_TOKEN],
+    metadata: &super::catalog::BWS,
 }
 
 impl BwsProvider {

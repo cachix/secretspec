@@ -309,11 +309,7 @@ pub struct InfisicalProvider {
 crate::register_provider! {
     struct: InfisicalProvider,
     config: InfisicalConfig,
-    name: "infisical",
-    description: "Infisical secret management",
-    schemes: ["infisical"],
-    examples: ["infisical://app.infisical.com/{project-id}"],
-    credential_names: [CLIENT_ID, CLIENT_SECRET, TOKEN],
+    metadata: &super::catalog::INFISICAL,
 }
 
 impl InfisicalProvider {

@@ -469,13 +469,13 @@ mod tests {
     fn registration_declares_the_provider_capabilities() {
         let registration = crate::provider::PROVIDER_REGISTRY
             .iter()
-            .find(|registration| registration.info.name == "fly")
+            .find(|registration| registration.metadata.info.name == "fly")
             .unwrap();
-        assert_eq!(registration.credential_names, &[ACCESS_TOKEN]);
-        assert!(!registration.reads);
+        assert_eq!(registration.metadata.credential_names, &[ACCESS_TOKEN]);
+        assert!(!registration.metadata.reads);
         assert!(!crate::provider::spec_provider_reads("fly://my-app"));
         assert!(crate::provider::spec_provider_reads("dotenv://.env"));
-        assert!(registration.deletes);
+        assert!(registration.metadata.deletes);
     }
 
     #[test]

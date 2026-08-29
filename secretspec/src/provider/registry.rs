@@ -62,7 +62,7 @@ impl ProviderInfo {
 pub fn providers() -> Vec<ProviderInfo> {
     PROVIDER_REGISTRY
         .iter()
-        .map(|reg| reg.info.clone())
+        .map(|reg| reg.metadata.info.clone())
         .collect()
 }
 
@@ -83,7 +83,7 @@ pub(super) fn split_spec(spec: &str) -> (&str, &str) {
 pub(super) fn registration_for_scheme(scheme: &str) -> Option<&'static ProviderRegistration> {
     PROVIDER_REGISTRY
         .iter()
-        .find(|reg| reg.schemes.contains(&scheme))
+        .find(|reg| reg.metadata.schemes.contains(&scheme))
 }
 
 /// Whether `spec` names a registered provider: a bare name (`keyring`), a
@@ -117,7 +117,7 @@ pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
 /// declaration the provider would silently ignore.
 pub(crate) fn credential_names_for_spec(spec: &str) -> &'static [&'static str] {
     let (scheme, _) = split_spec(spec);
-    registration_for_scheme(scheme).map_or(&[], |reg| reg.credential_names)
+    registration_for_scheme(scheme).map_or(&[], |reg| reg.metadata.credential_names)
 }
 
 /// Whether the provider named by `spec` can return plaintext secret values.
@@ -127,7 +127,7 @@ pub(crate) fn credential_names_for_spec(spec: &str) -> &'static [&'static str] {
 #[cfg_attr(not(any(feature = "cli", test)), allow(dead_code))]
 pub(crate) fn spec_provider_reads(spec: &str) -> bool {
     let (scheme, _) = split_spec(spec);
-    registration_for_scheme(scheme).is_some_and(|reg| reg.reads)
+    registration_for_scheme(scheme).is_some_and(|reg| reg.metadata.reads)
 }
 
 /// Whether the provider `spec` names implements deletion.
@@ -136,7 +136,7 @@ pub(crate) fn spec_provider_reads(spec: &str) -> bool {
 /// store while planning, before a provider is constructed.
 pub(crate) fn spec_provider_deletes(spec: &str) -> bool {
     let (scheme, _) = split_spec(spec);
-    registration_for_scheme(scheme).is_some_and(|reg| reg.deletes)
+    registration_for_scheme(scheme).is_some_and(|reg| reg.metadata.deletes)
 }
 
 /// The names of every provider that implements deletion, sorted. Used to say
@@ -144,8 +144,8 @@ pub(crate) fn spec_provider_deletes(spec: &str) -> bool {
 pub(crate) fn deleting_provider_names() -> Vec<&'static str> {
     let mut names: Vec<&'static str> = PROVIDER_REGISTRY
         .iter()
-        .filter(|reg| reg.deletes)
-        .map(|reg| reg.info.name)
+        .filter(|reg| reg.metadata.deletes)
+        .map(|reg| reg.metadata.info.name)
         .collect();
     names.sort_unstable();
     names
@@ -157,7 +157,7 @@ pub(crate) fn deleting_provider_names() -> Vec<&'static str> {
 pub(crate) fn provider_display_name_for_spec(spec: &str) -> String {
     let (scheme, _) = split_spec(spec);
     registration_for_scheme(scheme)
-        .map(|reg| reg.info.name.to_string())
+        .map(|reg| reg.metadata.info.name.to_string())
         .unwrap_or_else(|| scheme.to_string())
 }
 

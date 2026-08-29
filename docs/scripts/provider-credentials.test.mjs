@@ -61,6 +61,31 @@ crate::register_provider! {
 	]);
 });
 
+test('Rust registration parsing follows shared provider metadata', () => {
+	const sources = new Map([
+		[
+			'/provider/catalog.rs',
+			`metadata! {
+    EXAMPLE,
+    name: "example",
+    description: "Example",
+    schemes: ["example"],
+    examples: ["example://"],
+    credential_names: ["token"],
+}`,
+		],
+		[
+			'/provider/example.rs',
+			`crate::register_provider! {
+    struct: ExampleProvider,
+    config: ExampleConfig,
+    metadata: &super::catalog::EXAMPLE,
+}`,
+		],
+	]);
+	assert.deepEqual(extractRegisteredCredentials(sources).get('example'), ['token']);
+});
+
 test('catalog comparison rejects missing, extra, renamed, and reordered credentials', () => {
 	const catalog = validateCatalog([entry()]);
 	assert.throws(

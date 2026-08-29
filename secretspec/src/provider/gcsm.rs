@@ -271,10 +271,7 @@ impl GcsmBackend for GoogleGcsmBackend<'_> {
 crate::register_provider! {
     struct: GcsmProvider,
     config: GcsmConfig,
-    name: "gcsm",
-    description: "Google Cloud Secret Manager",
-    schemes: ["gcsm"],
-    examples: ["gcsm://my-gcp-project"],
+    metadata: &super::catalog::GCSM,
 }
 
 impl GcsmProvider {

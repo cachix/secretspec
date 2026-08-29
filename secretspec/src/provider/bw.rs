@@ -1174,14 +1174,7 @@ fn declarations_from_items(
 crate::register_provider! {
     struct: BitwardenProvider,
     config: BitwardenConfig,
-    name: "bw",
-    description: "Bitwarden Password Manager",
-    schemes: ["bw"],
-    examples: [
-        "bw://",
-        "bw://collection-id",
-        "bw://org@collection"
-    ],
+    metadata: &super::catalog::BW,
 }
 
 impl BitwardenProvider {

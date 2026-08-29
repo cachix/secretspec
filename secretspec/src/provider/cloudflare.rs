@@ -238,13 +238,7 @@ pub struct CloudflareProvider {
 crate::register_provider! {
     struct: CloudflareProvider,
     config: CloudflareConfig,
-    name: "cloudflare",
-    description: "Cloudflare Secrets Store, write-only (0.20+)",
-    schemes: ["cloudflare"],
-    examples: ["cloudflare://STORE_ID?account_id=ACCOUNT_ID", "cloudflare://STORE_ID?account_id=ACCOUNT_ID&auth=wrangler"],
-    credential_names: [API_TOKEN],
-    reads: false,
-    deletes: true,
+    metadata: &super::catalog::CLOUDFLARE,
 }
 
 impl CloudflareProvider {
@@ -843,11 +837,11 @@ mod tests {
     fn registration_declares_write_only_delete_and_credentials() {
         let registration = crate::provider::PROVIDER_REGISTRY
             .iter()
-            .find(|registration| registration.info.name == "cloudflare")
+            .find(|registration| registration.metadata.info.name == "cloudflare")
             .unwrap();
-        assert_eq!(registration.credential_names, &[API_TOKEN]);
-        assert!(!registration.reads);
-        assert!(registration.deletes);
+        assert_eq!(registration.metadata.credential_names, &[API_TOKEN]);
+        assert!(!registration.metadata.reads);
+        assert!(registration.metadata.deletes);
     }
 
     #[test]

@@ -87,9 +87,6 @@ const DEFAULT_KEY_VAULT_SUFFIX: &str = "vault.azure.net";
 const KEY_VAULT_REFERENCE_TYPE: &str = "application/vnd.microsoft.appconfig.keyvaultref+json";
 const AZURE_SPECIAL_PREFIX: &str = "application/vnd.microsoft.appconfig.";
 const AZURE_APPCONFIG_CONNECTION_STRING_ENV: &str = "AZURE_APPCONFIG_CONNECTION_STRING";
-const TENANT_ID: &str = "tenant_id";
-const CLIENT_ID: &str = "client_id";
-const CLIENT_SECRET: &str = "client_secret";
 const CONNECTION_STRING: &str = "connection_string";
 const MAX_TAG_FILTERS: usize = 5;
 const MAX_VAULT_CLIENTS: usize = 16;
@@ -466,16 +463,7 @@ pub struct AacProvider {
 crate::register_provider! {
     struct: AacProvider,
     config: AacConfig,
-    name: "aac",
-    description: "Azure App Configuration (0.20+)",
-    schemes: ["aac"],
-    examples: [
-        "aac://payments-production",
-        "aac://shared?label=production&prefix=payments:",
-        "aac://shared?tag=app=payments&tag=stage=production",
-    ],
-    credential_names: [TENANT_ID, CLIENT_ID, CLIENT_SECRET, CONNECTION_STRING],
-    deletes: true,
+    metadata: &super::catalog::AAC,
 }
 
 impl AacProvider {

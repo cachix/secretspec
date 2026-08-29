@@ -64,11 +64,7 @@ pub struct KeyringProvider {
 crate::register_provider! {
     struct: KeyringProvider,
     config: KeyringConfig,
-    name: "keyring",
-    description: "Uses system keychain (Recommended)",
-    schemes: ["keyring"],
-    examples: ["keyring://", "keyring://secretspec/shared/{profile}/{key}"],
-    deletes: true,
+    metadata: &super::catalog::KEYRING,
 }
 
 impl KeyringProvider {

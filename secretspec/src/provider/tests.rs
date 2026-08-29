@@ -847,7 +847,7 @@ fn every_scheme_rejects_a_userinfo_password() {
     const SECRET: &str = "leaked_pw_DO_NOT_ECHO";
 
     for reg in super::PROVIDER_REGISTRY {
-        for &scheme in reg.schemes {
+        for &scheme in reg.metadata.schemes {
             let source = format!("{scheme}://attribution:{SECRET}@host/path");
             let Err(error) = Box::<dyn Provider>::try_from(source.as_str()) else {
                 panic!("provider scheme {scheme:?} accepted a URL password");
@@ -860,7 +860,7 @@ fn every_scheme_rejects_a_userinfo_password() {
             // The refusal has to be actionable, so it names the credentials this
             // provider accepts instead. Driven by the registration, so a new
             // provider gets the same quality without touching this test.
-            for credential in reg.credential_names {
+            for credential in reg.metadata.credential_names {
                 assert!(
                     message.contains(credential),
                     "provider scheme {scheme:?} refused a URL password without naming its \
@@ -879,17 +879,17 @@ fn every_scheme_rejects_a_userinfo_password() {
 fn set_profile_preserves_provider_identities_across_the_registry() {
     for reg in super::PROVIDER_REGISTRY {
         assert!(
-            !reg.info.examples.is_empty(),
+            !reg.metadata.info.examples.is_empty(),
             "provider {:?} has no registered example for the set_profile identity invariant",
-            reg.info.name
+            reg.metadata.info.name
         );
 
-        for &example in reg.info.examples {
+        for &example in reg.metadata.info.examples {
             let provider = Box::<dyn Provider>::try_from(example).unwrap_or_else(|error| {
                 panic!(
                     "provider {:?} registered an example that could not be built ({example:?}): \
                      {error}",
-                    reg.info.name
+                    reg.metadata.info.name
                 )
             });
             let uri = provider.uri();
@@ -902,21 +902,21 @@ fn set_profile_preserves_provider_identities_across_the_registry() {
                 provider.uri(),
                 uri,
                 "provider {:?} changed uri() after set_profile (example {example:?})",
-                reg.info.name
+                reg.metadata.info.name
             );
             assert_eq!(
                 provider.storage_identity(),
                 storage_identity,
                 "provider {:?} changed storage_identity() after set_profile (example \
                  {example:?})",
-                reg.info.name
+                reg.metadata.info.name
             );
             assert_eq!(
                 provider.entry_container_identity(),
                 entry_container_identity,
                 "provider {:?} changed entry_container_identity() after set_profile (example \
                  {example:?})",
-                reg.info.name
+                reg.metadata.info.name
             );
         }
     }

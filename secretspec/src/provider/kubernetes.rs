@@ -136,11 +136,7 @@ pub struct KubernetesProvider {
 crate::register_provider! {
     struct: KubernetesProvider,
     config: KubernetesConfig,
-    name: "kubernetes",
-    description: "Kubernetes (0.20+)",
-    schemes: ["k8s+configmap", "k8s+secret"],
-    examples: ["k8s+secret://db-config", "k8s+configmap://db-config@default"],
-    deletes: true,
+    metadata: &super::catalog::KUBERNETES,
 }
 
 impl KubernetesProvider {

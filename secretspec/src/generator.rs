@@ -6,7 +6,7 @@
 use crate::SecretSpecError;
 use crate::config::GenerateConfig;
 use data_encoding::{BASE64, HEXLOWER};
-use rand::Rng;
+use rand::RngExt;
 use rsa::RsaPrivateKey;
 use rsa::pkcs1::EncodeRsaPrivateKey;
 use secrecy::SecretString;

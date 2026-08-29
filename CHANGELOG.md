@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- SecretSpec now builds against Rand 0.10 and the TOML 1.1 ecosystem, improving
+  compatibility with current Linux distribution Rust packages.
+
 - Secret resolution now applies provider fallbacks, generated and default
   values, compositions, scopes, and presence constraints through one ordered
   pipeline, keeping CLI and SDK resolution behavior aligned.

@@ -24,8 +24,8 @@ keeper-secrets-manager-core = { version = "17.3.0", default-features = false, fe
 libc = "0.2"
 signal-hook = "0.3"
 serde = { version = "1.0", features = ["derive"] }
-toml = "0.9"
-toml_edit = { version = "0.23", features = ["serde"] }
+toml = "1.1"
+toml_edit = { version = "0.25", features = ["serde"] }
 thiserror = "2.0"
 etcetera = "0.11"
 colored = "3.0"
@@ -65,7 +65,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 secretspec-derive = { version = "0.19.1", path = "./secretspec-derive" }
 secretspec = { version = "0.19.1", path = "./secretspec" }
 secretspec-core = { package = "secretspec", version = "0.19.1", path = "./secretspec" }
-rand = "0.9"
+rand = "0.10"
 rsa = { version = "0.9", features = ["pem"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 data-encoding = "2"

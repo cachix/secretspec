@@ -60,6 +60,13 @@ pub enum SecretSpecError {
     NoProviderConfigured,
     #[error("Provider backend '{0}' not found")]
     ProviderNotFound(String),
+    #[error(
+        "Provider backend '{provider}' is not available because the '{feature}' feature was not enabled when SecretSpec was built"
+    )]
+    ProviderFeatureDisabled {
+        provider: String,
+        feature: &'static str,
+    },
     #[error("Secret '{0}' not found")]
     SecretNotFound(String),
     #[error("Secret '{0}' is required but not set")]
@@ -135,6 +142,7 @@ impl SecretSpecError {
             SecretSpecError::Dotenv(_) | SecretSpecError::DotenvRender(_) => "dotenv",
             SecretSpecError::NoProviderConfigured => "no_provider_configured",
             SecretSpecError::ProviderNotFound(_) => "provider_not_found",
+            SecretSpecError::ProviderFeatureDisabled { .. } => "provider_feature_disabled",
             SecretSpecError::SecretNotFound(_) => "secret_not_found",
             SecretSpecError::RequiredSecretMissing(_) => "required_secret_missing",
             SecretSpecError::PromptUnavailable(_) => "prompt_unavailable",
@@ -230,6 +238,13 @@ mod tests {
             (
                 SecretSpecError::ProviderNotFound("vault".into()),
                 "provider_not_found",
+            ),
+            (
+                SecretSpecError::ProviderFeatureDisabled {
+                    provider: "vault".into(),
+                    feature: "vault",
+                },
+                "provider_feature_disabled",
             ),
             (
                 SecretSpecError::SecretNotFound("X".into()),

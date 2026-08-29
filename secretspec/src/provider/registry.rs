@@ -54,10 +54,10 @@ impl ProviderInfo {
     }
 }
 
-/// Returns a list of all available providers with their metadata.
+/// Returns a list of all supported providers with their metadata.
 ///
-/// This includes the provider name, description, and example URIs for each
-/// supported provider type.
+/// This includes providers whose implementation was disabled at compile time;
+/// attempting to construct one reports the Cargo feature the build requires.
 #[cfg(feature = "cli")]
 pub fn providers() -> Vec<ProviderInfo> {
     PROVIDER_REGISTRY

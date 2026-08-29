@@ -47,6 +47,47 @@ pub const fn declared_read_capability(values: &[bool]) -> bool {
 #[linkme::distributed_slice]
 pub static PROVIDER_REGISTRY: [ProviderRegistration];
 
+/// Registers the metadata for a provider whose implementation was omitted at
+/// compile time. Keeping these entries in the normal registry lets provider
+/// lookup distinguish a disabled feature from an unknown provider.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! register_disabled_provider {
+    (
+        feature: $feature:literal,
+        name: $name:expr,
+        description: $description:expr,
+        schemes: [$($scheme:expr),* $(,)?],
+        examples: [$($example:expr),* $(,)?]
+        $(, credential_names: [$($credential_name:expr),* $(,)?])?
+        $(, reads: $reads:literal)?
+        $(, deletes: $deletes:literal)? $(,)?
+    ) => {
+        const _: () = {
+            #[linkme::distributed_slice($crate::provider::PROVIDER_REGISTRY)]
+            #[doc(hidden)]
+            static PROVIDER_REGISTRATION: $crate::provider::ProviderRegistration =
+                $crate::provider::ProviderRegistration {
+                    info: $crate::provider::ProviderInfo {
+                        name: $name,
+                        description: $description,
+                        examples: &[$($example,)*],
+                    },
+                    schemes: &[$($scheme,)*],
+                    credential_names: &[$($($credential_name,)*)?],
+                    reads: $crate::provider::declared_read_capability(&[$($reads,)?]),
+                    deletes: $crate::provider::declared_flag(&[$($deletes,)?]),
+                    factory: |_url, _credentials| {
+                        Err($crate::SecretSpecError::ProviderFeatureDisabled {
+                            provider: $name.to_string(),
+                            feature: $feature,
+                        })
+                    },
+                };
+        };
+    };
+}
+
 /// Declarative macro for registering providers.
 ///
 /// This macro handles the boilerplate of registering a provider with the global registry.

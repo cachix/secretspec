@@ -82,6 +82,7 @@
 
 mod address;
 mod credentials;
+mod disabled;
 mod factory;
 #[macro_use]
 pub mod macros;

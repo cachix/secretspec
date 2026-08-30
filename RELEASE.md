@@ -46,7 +46,10 @@ nix-update --version=X.Y.Z --build secretspec
 Commit the generated package change as `secretspec: OLD -> X.Y.Z`, include the
 GitHub release URL in the commit body, and submit it to Nixpkgs.
 
-## Before your first release
+## One-time registry setup
+
+External registry status was last verified on 2026-08-29. Recheck every item
+still marked pending before tagging a release.
 
 Trusted Publishing works differently per registry. PyPI and RubyGems let you
 register a **pending publisher** before anything is published — the first
@@ -65,24 +68,19 @@ GitHub repo is still correct at
 https://crates.io/crates/secretspec/settings if this repo is ever renamed or
 transferred.
 
-### PyPI — pending publisher configured, done
+### PyPI — trusted publishing active, done
 
-The `pypi` GitHub Environment exists and a pending publisher is configured on
-PyPI (project `secretspec`, owner `cachix`, repo `secretspec`, workflow
-`python-wheels.yml`, environment `pypi`). Nothing left to do — the first
-`vX.Y.Z` tag's OIDC-authenticated publish will create the `secretspec` project
-on PyPI automatically and convert the pending publisher into a normal one.
-⚠️ if someone else registers the `secretspec` name on PyPI before that first
-tag, the pending publisher is invalidated and the project would need a
-different name.
+The `pypi` GitHub Environment and PyPI Trusted Publisher are active for project
+`secretspec` (owner `cachix`, repo `secretspec`, workflow
+`python-wheels.yml`, environment `pypi`). OIDC-authenticated releases have
+published through 0.19.1; no token or additional setup is needed.
 
-### RubyGems — pending publisher configured, done
+### RubyGems — trusted publishing active, done
 
-A pending trusted publisher is configured on rubygems.org (gem `secretspec`,
-repository owner `cachix`, repository name `secretspec`, workflow filename
-`ruby-gems.yml`, environment `release`). Nothing left to do — the first
-`vX.Y.Z` tag's push creates the gem and makes the publishing workflow its
-owner automatically.
+The RubyGems Trusted Publisher is active for gem `secretspec` (repository owner
+`cachix`, repository name `secretspec`, workflow filename `ruby-gems.yml`,
+environment `release`). OIDC-authenticated releases have published through
+0.19.1; no token or additional setup is needed.
 
 ### npm — already done
 
@@ -102,8 +100,9 @@ Nothing left to do — every release from here publishes via OIDC.
 ### npm musl packages (0.20+) — bootstrap pending
 
 `secretspec-linux-x64-musl` and `secretspec-linux-arm64-musl` are new package
-names, so each needs the same manual first publish the four older platform
-packages had:
+names. Both were still absent from the public npm registry when this status was
+last verified, so each needs the same manual first publish the four older
+platform packages had:
 
 1. Publish both once with a temporary granular access token, scope "All
    Packages" / "Read and write". A "select packages" scope cannot name a
@@ -122,7 +121,7 @@ Hackage doesn't support OIDC yet (tracked upstream:
 [haskell/hackage-server#1443](https://github.com/haskell/hackage-server/issues/1443),
 open as of this writing), so this stays a long-lived token rather than a
 one-time setup step. The `HACKAGE_TOKEN` repo secret is set. Nothing left to
-do — the first `vX.Y.Z` tag's `haskell-build.yml` publish job uploads with it.
+do — each `vX.Y.Z` tag's `haskell-build.yml` publish job uploads with it.
 
 ### Go — nothing to set up
 
@@ -131,20 +130,21 @@ directly from git. `go-embed.yml` creates that tag after its full platform
 matrix succeeds and attaches the per-platform cdylibs to the GitHub Release for
 the optional self-contained build.
 
-### Packagist (PHP) — not yet set up
+### Packagist (PHP) — configured, done
 
 Packagist has no OIDC/Trusted-Publishing mechanism; it reads a git repo and its
 root `composer.json` directly. This repo publishes the PHP package straight from
 the monorepo — the manifest lives at the repository root (`/composer.json`, with
 `vendor-dir` pointed into `secretspec-php/` and autoload sourcing
-`secretspec-php/src/`), so no split/mirror repo is needed. One-time setup:
+`secretspec-php/src/`), so no split/mirror repo is needed.
 
-1. Submit `https://github.com/cachix/secretspec` on
-   [packagist.org](https://packagist.org) as package `cachix/secretspec`.
-2. Enable the GitHub auto-update hook (the Packagist GitHub app), so each
-   `vX.Y.Z` tag becomes a Composer version automatically.
+The [`cachix/secretspec`](https://packagist.org/packages/cachix/secretspec)
+package and its GitHub auto-update integration are active; Packagist has
+ingested releases through 0.19.1. No split/mirror repository, CI workflow, or
+token is needed. Packagist pulls each `vX.Y.Z` tag automatically.
 
-No CI workflow or token is involved — Packagist pulls from the tag on push.
+For recovery after a missed update, ask Packagist to refresh the package or
+reconnect its GitHub hook.
 
 ### NuGet (.NET) — trusted publishing set up, done
 
@@ -188,18 +188,22 @@ intentionally leaves the checksum alone, making a missing checksum refresh
 visible during release review. There is no Swift registry credential or
 separate repository.
 
-### WinGet — bootstrap submission pending
+### WinGet — bootstrap merged; token access must be confirmed
 
 [`winget-releaser`](https://github.com/vedantmgoyal9/winget-releaser)
 requires one package version in the WinGet Community Repository before it can
-derive future manifests. `Cachix.SecretSpec` 0.18.0 is the manual bootstrap:
+derive future manifests. The manual `Cachix.SecretSpec` 0.18.0 bootstrap was
+merged in
+[microsoft/winget-pkgs#413776](https://github.com/microsoft/winget-pkgs/pull/413776)
+on 2026-08-18.
 
-1. Merge the initial manifest submission in
-   [microsoft/winget-pkgs#413776](https://github.com/microsoft/winget-pkgs/pull/413776).
-2. Create a classic GitHub personal access token for `domenkozar` with only the
-   `public_repo` scope. The action does not support fine-grained tokens.
-3. Store it as the `WINGET_TOKEN` repository secret. The action uses the
-   `domenkozar/winget-pkgs` fork created for the bootstrap submission.
+Before relying on automatic publication, confirm that this repository can
+access a `WINGET_TOKEN` secret. No repository-level secret was visible when
+this status was last verified; an organization-level secret could not be
+verified. If it is not already available, create a classic GitHub personal
+access token for `domenkozar` with only the `public_repo` scope and store it as
+`WINGET_TOKEN`. The action does not support fine-grained tokens and uses the
+`domenkozar/winget-pkgs` fork created for the bootstrap submission.
 
 After this one-time setup, `winget.yml` runs after each successful stable
 `Release` workflow and submits the matching
@@ -217,8 +221,8 @@ published release tag for recovery or retry. Prerelease tags are skipped.
   so no separate `auditwheel` step is needed. macOS builds natively; a Windows
   wheel is a follow-up.
 - **Publish:** `pypa/gh-action-pypi-publish` via **PyPI Trusted Publishing**
-  (OIDC); no token needed. One-time setup already done — see "Before your
-  first release" above.
+  (OIDC); no token needed. One-time setup is complete; see "One-time registry
+  setup" above.
 
 ## Ruby (RubyGems) — `ruby-gems.yml`
 
@@ -229,8 +233,8 @@ published release tag for recovery or retry. Prerelease tags are skipped.
   compiler and Ruby headers).
 - **Publish:** `gem push` for each platform gem, authenticated via **RubyGems
   Trusted Publishing** (OIDC) through `rubygems/configure-rubygems-credentials`
-  — no token stored in CI. One-time setup already done — see "Before your
-  first release" above.
+  — no token stored in CI. One-time setup is complete; see "One-time registry
+  setup" above.
 - **Gap:** the Linux gem currently links the runner's glibc; for a portable gem,
   build the staticlib on an old-glibc baseline (e.g. a `manylinux` container, as
   the Python job does, or `rake-compiler-dock`) and bundle that. Tracked
@@ -268,7 +272,7 @@ self-contained, vendored build — not a module-proxy install).
   the GHC FFI, so the Rust resolver is embedded in the binary with no runtime
   loader path.
 - **Publish:** `cabal upload --publish` with the `HACKAGE_TOKEN` secret — see
-  "Before your first release" above. Hackage has no Trusted Publishing yet
+  "One-time registry setup" above. Hackage has no Trusted Publishing yet
   ([haskell/hackage-server#1443](https://github.com/haskell/hackage-server/issues/1443)),
   so this stays a long-lived token.
 - **Note:** Hackage's own build bots cannot compile this package (it statically
@@ -308,8 +312,8 @@ self-contained, vendored build — not a module-proxy install).
   source of truth for the platform list; `napi pre-publish` derives
   `optionalDependencies` from it at publish time.
 - **One-time setup:** done for the four glibc, macOS, and Windows packages. The
-  two musl packages added in 0.20 still need it — see "Before your first
-  release" above.
+  two musl packages added in 0.20 still need it — see "One-time registry
+  setup" above.
 
 ## PHP (Packagist + extension) — `php-ext.yml`
 
@@ -347,25 +351,21 @@ through Composer.
   phpize, which does not fit a Cargo extension); and the release-asset uploads
   race cargo-dist's release creation, so they wait-then-`--clobber`.
 
-### First PHP release — checklist
+### PHP release verification
 
-Everything through the CI is green, but the live Packagist + release-asset paths
-can only be exercised for real once the package is registered and a tag exists.
-In order:
+The first-release Packagist registration is complete. For each release:
 
-1. **Merge to `main`** so the repo-root `composer.json` is on the default branch.
-2. **Register on Packagist** — the one-time "Packagist (PHP)" setup above.
-3. **Smoke-test off `main` before tagging.** In a scratch project, confirm the
-   manifest resolves:
+1. **Smoke-test off the release commit before tagging.** In a scratch project,
+   confirm the manifest resolves:
 
    ```bash
    composer require cachix/secretspec:dev-main
    ```
 
-4. **Cut the `vX.Y.Z` tag.** Packagist ingests the tag as a version, and
+2. **Cut the `vX.Y.Z` tag.** Packagist ingests the tag as a version, and
    `php-ext.yml` / `ffi-build.yml` attach the extension + cdylib binaries to the
    GitHub Release.
-5. **Verify against the live release** (the one path CI cannot cover): in a clean
+3. **Verify against the live release** (the one path CI cannot cover): in a clean
    project, `composer require cachix/secretspec`, then exercise **both** backends —
    `vendor/bin/secretspec-install-lib` for the ext-ffi path, and a downloaded
    `secretspec-php-native` `.so` (`extension=…`) for the extension path — and

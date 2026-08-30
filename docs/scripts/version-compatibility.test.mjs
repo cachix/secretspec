@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, extname, join, resolve } from 'node:path';
+import { readFileSync, readdirSync } from 'node:fs';
+import { extname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { preserveHeadingIdPlugin } from '../src/lib/preserve-heading-id.mjs';
@@ -35,7 +35,7 @@ test('version notices use the shared component', () => {
 	}
 });
 
-test('component users are MDX files with one resolvable import', () => {
+test('component users are MDX files with one shared-package import', () => {
 	let notices = 0;
 
 	for (const path of files) {
@@ -48,13 +48,14 @@ test('component users are MDX files with one resolvable import', () => {
 
 		const imports = [
 			...source.matchAll(
-				/import VersionCompatibility from ['"]([^'"]+VersionCompatibility\.astro)['"];?/g,
+				/import VersionCompatibility from ['"]([^'"]+)['"];?/g,
 			),
 		];
 		assert.equal(imports.length, 1, `${path} must import VersionCompatibility exactly once`);
-		assert.ok(
-			existsSync(resolve(dirname(path), imports[0][1])),
-			`${path} has an invalid VersionCompatibility import`,
+		assert.equal(
+			imports[0][1],
+			'@cachix/site-kit/ui/VersionCompatibility.astro',
+			`${path} must import the shared VersionCompatibility component`,
 		);
 		for (const opening of openings) {
 			assert.match(

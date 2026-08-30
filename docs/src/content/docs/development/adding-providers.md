@@ -213,7 +213,7 @@ When adding a provider for an upcoming release:
    and renders **New in version 0.16** with no body:
 
    ```mdx
-   import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+   import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
 
    <VersionCompatibility version="0.16" />
    ```

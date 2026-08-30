@@ -1,0 +1,100 @@
+---
+interface Props {
+	/** The first SecretSpec release that includes the documented feature. */
+	version: string;
+	/** Whether the release introduced the feature or changed existing behavior. */
+	kind?: 'new' | 'changed';
+	/** Accessible label describing the purpose of the callout. */
+	label?: string;
+}
+
+const { version, kind = 'new' } = Astro.props;
+const heading = `${kind === 'changed' ? 'Changed' : 'New'} in version ${version}`;
+const label = Astro.props.label ?? heading;
+const hasDetails = Astro.slots.has('default');
+
+if (kind === 'new' && hasDetails) {
+	throw new Error(`New-in-version notices cannot have body content (${version})`);
+}
+if (kind === 'changed' && !hasDetails) {
+	throw new Error(`Changed-in-version notices require body content (${version})`);
+}
+---
+
+<aside class="version-compatibility" aria-label={label}>
+	<div class="version-compatibility__heading">
+		<svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18">
+			{
+				kind === 'changed' ? (
+					<path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25Zm17.71-10.04a1 1 0 0 0 0-1.42l-2.5-2.5a1 1 0 0 0-1.42 0l-1.96 1.96 3.75 3.75 2.13-1.79Z"></path>
+				) : (
+					<>
+						<path d="m12 3 1.55 4.45L18 9l-4.45 1.55L12 15l-1.55-4.45L6 9l4.45-1.55L12 3Z"></path>
+						<path d="m19 15 .78 2.22L22 18l-2.22.78L19 21l-.78-2.22L16 18l2.22-.78L19 15Z"></path>
+					</>
+				)
+			}
+		</svg>
+		<strong>{heading}</strong>
+	</div>
+	{hasDetails && <div class="version-compatibility__content"><slot /></div>}
+</aside>
+
+<style>
+	.version-compatibility {
+		display: grid;
+		gap: 0.45rem;
+		margin-block: 1rem;
+		padding: 0.65rem 0.8rem;
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.5rem;
+		background: var(--sl-color-bg-inline-code);
+		background: color-mix(in srgb, var(--sl-color-gray-6) 24%, transparent);
+		color: var(--sl-color-gray-2);
+		font-size: var(--sl-text-sm);
+		line-height: 1.5;
+	}
+
+	.version-compatibility__heading {
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+		color: var(--sl-color-text-accent);
+	}
+
+	.version-compatibility__heading svg {
+		flex: 0 0 auto;
+		fill: currentColor;
+	}
+
+	.version-compatibility__heading strong {
+		font-weight: 600;
+	}
+
+	.version-compatibility__content {
+		min-width: 0;
+		padding-inline-start: 1.45rem;
+	}
+
+	.version-compatibility__content > :global(:first-child) {
+		margin-block-start: 0;
+	}
+
+	.version-compatibility__content > :global(:last-child) {
+		margin-block-end: 0;
+	}
+
+	.version-compatibility__content :global(p) {
+		color: inherit;
+	}
+
+	.version-compatibility__content :global(code) {
+		font-size: 0.9em;
+	}
+
+	@media (forced-colors: active) {
+		.version-compatibility {
+			border-color: CanvasText;
+		}
+	}
+</style>

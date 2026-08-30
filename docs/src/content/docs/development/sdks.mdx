@@ -3,6 +3,8 @@ title: SDK Development
 description: How the language SDKs are built, packaged, and released, and which platforms each one supports
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 SecretSpec ships SDKs for Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell,
 PHP, C#, Swift (0.18+), and JVM languages (0.20+). This page is for
 contributors: how the SDKs are put together, how each one is packaged and
@@ -105,7 +107,9 @@ ABI, generated Rust scaffolding, and another schema to version. The hand-written
 Swift layer is limited to `Codable` request/response models and idiomatic errors;
 resolution remains entirely in Rust.
 
-## Versioned native calls (0.20+)
+## Versioned native calls {/* #versioned-native-calls-020 */}
+
+<VersionCompatibility version="0.20" />
 
 `secretspec_resolve` remains the compatibility request for path and search
 resolution. SDKs that need a declaration held in application code call the new
@@ -160,7 +164,9 @@ crates (`libwindows.*.a` from `windows_x86_64_gnu`, `libwinapi_*.a` from
 the archive — the Ruby gem bundles them in `vendor/`, the Haskell job points
 GHC's linker at them.
 
-## Linking through pkg-config (0.19+)
+## Linking through pkg-config {/* #linking-through-pkg-config-019 */}
+
+<VersionCompatibility version="0.19" />
 
 `libsecretspec/scripts/cinstall.sh PREFIX static|shared` uses
 [cargo-c](https://github.com/lu-zero/cargo-c) to install one library type, the

@@ -6,10 +6,11 @@
     "dev": "astro dev",
     "start": "astro dev",
     "clean:astro-cache": "node scripts/clean-astro-cache.mjs",
-    "build": "npm run clean:astro-cache && npm run check:provider-credentials && npm run check:terminal-copy && astro check && astro build",
+    "build": "npm run clean:astro-cache && npm run check:provider-credentials && npm run check:terminal-copy && npm run check:version-compatibility && astro check && astro build",
     "check:links": "lychee --root-dir \"$(pwd)/dist\" --remap \"^https://secretspec\\.dev file://$(pwd)/dist\" \"dist/**/*.html\"",
     "check:provider-credentials": "node --test scripts/provider-credentials.test.mjs && node scripts/check-provider-credentials.mjs",
     "check:terminal-copy": "node --test scripts/terminal-copy.test.mjs",
+    "check:version-compatibility": "node --test scripts/version-compatibility.test.mjs",
     "preview": "astro preview",
     "astro": "astro"
   },

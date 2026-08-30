@@ -3,6 +3,8 @@ title: Providers
 description: Choose and configure the storage backends SecretSpec uses for secrets
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 A provider is a storage backend from which SecretSpec reads secrets and, when
 supported, writes them. Providers let one `secretspec.toml` describe the secrets
 an application needs without requiring every environment to use the same secret
@@ -180,12 +182,9 @@ Provider lists may combine aliases, provider names, and inline provider URIs:
 DATABASE_URL = { description = "Production database", providers = ["onepassword://Production", "keyring"] }
 ```
 
-### Alias ref templates (0.19+)
+### Alias ref templates {/* #alias-ref-templates-019 */}
 
-:::caution[Version compatibility]
-Provider-alias `ref` templates and per-secret `refs` are available starting
-with SecretSpec 0.19.
-:::
+<VersionCompatibility version="0.19" />
 
 A leaf alias can map the logical `{project}`, `{profile}`, and `{key}` into its
 provider's native coordinates. This lets every link in a fallback chain—and
@@ -220,9 +219,7 @@ top-level `[providers]` table directly to change project aliases.
 
 ## Provider credentials
 
-:::note
-Provider credentials are supported in version 0.15 and later.
-:::
+<VersionCompatibility version="0.15" />
 
 Some providers need credentials before they can retrieve secrets. Examples
 include an access token for Bitwarden Secrets Manager, a Vault token or AppRole

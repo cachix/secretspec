@@ -3,6 +3,8 @@ title: CLI Commands Reference
 description: Complete reference for SecretSpec CLI commands
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 The SecretSpec CLI provides commands for managing secrets across different providers and profiles.
 
 ## Global Options
@@ -135,16 +137,19 @@ Profile:  development
 ```
 
 ### config global provider add
+
+<VersionCompatibility version="0.17" kind="changed">
+
+The explicit `global` namespace replaces the earlier `config provider add`
+spelling, which remains a hidden alias. Adding aliases was introduced in 0.14,
+and `--credential` followed in 0.15.
+
+</VersionCompatibility>
+
 Add a provider alias to your user-level configuration (`~/.config/secretspec/config.toml`).
 
 To share aliases with your team, declare them in a top-level `[providers]` table in `secretspec.toml` instead — they take precedence over user-level aliases on name conflict.
 
-:::note[Version compatibility]
-SecretSpec 0.14 supports adding aliases with `<ALIAS>` and `<URI>`.
-The `--credential` option is available starting with SecretSpec 0.15.
-The explicit `global` namespace is available starting with SecretSpec 0.17;
-the legacy `config provider add` spelling remains a hidden alias.
-:::
 
 ```bash
 $ secretspec config global provider add <ALIAS> <URI> [--credential NAME=PROVIDER]... # 0.17+
@@ -200,13 +205,17 @@ $ secretspec config global provider remove prod_vault  # 0.17+
 ```
 
 ### config provider login
-Store the [credentials](/reference/provider-credentials/) a provider alias declares. Prompts (hidden input) for each credential and writes it to its source provider at the exact location resolution reads it back from. Runs in a project, like `set` and `check`.
 
-:::note[Version compatibility]
-`config provider login` is available starting with SecretSpec 0.15. In
+<VersionCompatibility version="0.15" kind="changed">
+
+In
 SecretSpec 0.14, supply provider credentials through the provider's existing
 environment variables.
-:::
+
+</VersionCompatibility>
+
+Store the [credentials](/reference/provider-credentials/) a provider alias declares. Prompts (hidden input) for each credential and writes it to its source provider at the exact location resolution reads it back from. Runs in a project, like `set` and `check`.
+
 
 ```bash
 $ secretspec config provider login <ALIAS>
@@ -226,7 +235,9 @@ Run 'secretspec check --provider bws' to verify authentication.
 
 A read-only source provider is rejected. An alias that declares no credentials reports that there is nothing to store.
 
-### docker configure (0.20+)
+### docker configure {/* #docker-configure-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Configure Docker to retrieve credentials for one registry through SecretSpec.
 
@@ -254,7 +265,9 @@ and prints the corresponding `secretspec docker login` command. With `--file`,
 registry-specific `credHelpers` entry to Docker's `config.json`, prompts with a
 default of **No**, and refuses to replace an existing helper.
 
-### docker login (0.20+)
+### docker login {/* #docker-login-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Store a password or token in the embedded Docker credential store:
 
@@ -267,7 +280,9 @@ physical Docker configuration pair uses a separate SecretSpec project identity.
 This command rejects `--file`; use `secretspec set` for custom-manifest
 credentials.
 
-### docker logout (0.20+)
+### docker logout {/* #docker-logout-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Remove a password or token from the embedded Docker credential store:
 
@@ -278,7 +293,9 @@ $ secretspec docker logout <REGISTRY> [--provider <PROVIDER>]
 Use the same provider override supplied to `login`. This does not remove the
 Docker helper registration; use `unconfigure` for that.
 
-### docker unconfigure (0.20+)
+### docker unconfigure {/* #docker-unconfigure-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Remove one or all Docker credentials configured by SecretSpec in the active
 Docker configuration.
@@ -294,7 +311,9 @@ registry helpers, stored authentication entries, and unrelated Docker options.
 See [Docker credentials](/integrations/docker/) for complete setup, custom
 manifest, and ownership details.
 
-### git configure (0.20+)
+### git configure {/* #git-configure-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Configure Git to retrieve an HTTP(S) or SMTP password or token through
 SecretSpec. Repository-local configuration is the default.
@@ -327,7 +346,9 @@ Global changes prompt with a default of **No**. Existing helpers and unrelated
 Git configuration are not replaced. See [Git credentials](/integrations/git/)
 for setup examples and the ownership model.
 
-### git login (0.20+)
+### git login {/* #git-login-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Store an embedded Git password or token, prompting securely on a terminal or
 reading it from piped standard input.
@@ -341,7 +362,9 @@ one passed to `configure`, including a path scope. For SMTP, the username is
 read from managed Git configuration unless passed explicitly. `git login`
 rejects `--file`; use `secretspec set` for custom manifest declarations.
 
-### git logout (0.20+)
+### git logout {/* #git-logout-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Remove the embedded username and password or token for one exact target without
 removing its Git helper configuration.
@@ -354,7 +377,9 @@ For SMTP, the username is read from managed Git configuration unless passed
 explicitly. `git logout` rejects `--file`; use `secretspec delete` for custom
 manifest declarations.
 
-### git unconfigure (0.20+)
+### git unconfigure {/* #git-unconfigure-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Remove one or all Git credentials configured by SecretSpec in the selected
 scope.
@@ -503,11 +528,9 @@ The same pattern works in every SDK: Go `UnmarshalSecretSpec(resolved.FieldsJSON
 TypeScript `Convert.toSecretSpec(resolved.fieldsJson())`, Ruby
 `SecretSpec.from_dynamic!(resolved.fields)`.
 
-### add (0.18+)
+### add {/* #add-018 */}
 
-:::caution[Version compatibility]
-`add` is available starting with SecretSpec 0.18.
-:::
+<VersionCompatibility version="0.18" />
 
 Add a secret declaration to an existing `secretspec.toml`. This edits only the
 selected profile and preserves the manifest's comments, formatting, and
@@ -567,11 +590,9 @@ missing `--profile` visible before the write.
 `set` rejects composed secrets because their values are derived and read-only.
 Available since SecretSpec 0.16.
 
-### delete (0.18+)
+### delete {/* #delete-018 */}
 
-:::caution[Version compatibility]
-`delete` is available starting with SecretSpec 0.18.
-:::
+<VersionCompatibility version="0.18" />
 
 Delete stored provider values without changing their declarations in
 `secretspec.toml`.
@@ -800,11 +821,9 @@ explicitly instead of pretending the migration completed. Source deletion was
 introduced in SecretSpec 0.18; independent endpoint refs and operation-wide
 preflight are available in 0.19+.
 
-### cache clear (0.17+)
+### cache clear {/* #cache-clear-017 */}
 
-:::caution[Version compatibility]
-`cache clear` is available starting with SecretSpec 0.17.
-:::
+<VersionCompatibility version="0.17" />
 
 Delete cached provider values for one secret, or for every cached secret in the
 active profile. Authoritative fallback providers are not modified.
@@ -863,11 +882,9 @@ $ secretspec audit --action get -n 5
 $ secretspec audit --json | jq 'select(.outcome == "missing")'
 ```
 
-### completions (0.20+)
+### completions {/* #completions-020 */}
 
-:::caution[Version compatibility]
-`completions` is available starting with SecretSpec 0.20.
-:::
+<VersionCompatibility version="0.20" />
 
 Generate a completion script that asks the same command definition used by
 `secretspec --help` for suggestions. Completion results include every command,

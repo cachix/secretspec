@@ -3,15 +3,16 @@ title: OpenBao Provider
 description: OpenBao integration, available in SecretSpec 0.17+
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
+<VersionCompatibility version="0.17" />
 
 The [OpenBao](https://openbao.org/) provider integrates with OpenBao's KV
 (Key-Value) secrets engine using OpenBao's own provider identity and
 configuration conventions.
 
-:::caution[Version compatibility]
-The `openbao` provider is added in SecretSpec 0.17.
-:::
 
 ## At a glance
 
@@ -69,6 +70,14 @@ $ export BAO_TOKEN=hvs.your-token-here
 
 ### AppRole authentication
 
+<VersionCompatibility version="0.18" kind="changed">
+
+`BAO_SECRET_ID` (or its `VAULT_SECRET_ID`
+fallback) and the `secret_id` provider credential may be omitted when the
+AppRole is configured with `bind_secret_id=false`. SecretSpec then sends only
+`role_id` and lets OpenBao apply the role's remaining login constraints.
+
+</VersionCompatibility>
 Select AppRole with `?auth=approle`. OpenBao roles bind a SecretID by default,
 so the usual configuration provides both inputs:
 
@@ -91,22 +100,14 @@ role_id = { provider = "onepassword", ref = { vault = "Infra", item = "bao-appro
 secret_id = { provider = "onepassword", ref = { vault = "Infra", item = "bao-approle", field = "secret_id" } }
 ```
 
-:::note[Version compatibility]
-Starting with SecretSpec 0.18, `BAO_SECRET_ID` (or its `VAULT_SECRET_ID`
-fallback) and the `secret_id` provider credential may be omitted when the
-AppRole is configured with `bind_secret_id=false`. SecretSpec then sends only
-`role_id` and lets OpenBao apply the role's remaining login constraints.
-:::
 
 Disabling SecretID binding removes AppRole's usual second credential. Keep the
 server default unless the workload deliberately relies on another trust
 boundary, such as a tightly controlled Agent host and network constraints.
 
-### Custom authentication mounts (0.18+)
+### Custom authentication mounts {/* #custom-authentication-mounts-018 */}
 
-:::note[Version compatibility]
-Custom authentication mounts are available starting with SecretSpec 0.18.
-:::
+<VersionCompatibility version="0.18" />
 
 AppRole and JWT methods mounted somewhere other than their defaults can be
 selected with `?auth_mount=`. The value is relative to `/v1/auth`:

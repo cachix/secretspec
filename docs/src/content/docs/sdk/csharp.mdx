@@ -3,6 +3,8 @@ title: C# SDK
 description: Resolve SecretSpec secrets from C# and .NET
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import { Code } from 'astro:components';
 import quickStartExample from '../../../../../secretspec-dotnet/examples/quick_start/QuickStart.cs?raw';
 import oneShotExample from '../../../../../secretspec-dotnet/examples/one_shot/OneShot.cs?raw';
@@ -12,9 +14,14 @@ import reportExample from '../../../../../secretspec-dotnet/examples/report/Repo
 import typedAccessExample from '../../../../../secretspec-dotnet/examples/typed_access/TypedAccess.cs?raw';
 import asPathExample from '../../../../../secretspec-dotnet/examples/as_path/AsPath.cs?raw';
 
-> **Version compatibility:** Available since SecretSpec 0.16. The 0.15.0
-> NuGet package is an unsupported bootstrap artifact used to reserve the
-> package ID; use version 0.16 or later for the API below.
+<VersionCompatibility version="0.16" kind="changed">
+
+The 0.15.0 NuGet package is an unsupported
+bootstrap artifact used to reserve the package ID; use version 0.16 or later
+for the API below.
+
+</VersionCompatibility>
+
 
 > **Native library name:** SecretSpec 0.20+ packages the embedded C ABI as
 > `libsecretspec` (`libsecretspec.*`). The runtime loader still accepts the
@@ -24,7 +31,9 @@ The C# SDK (`Cachix.SecretSpec`) is a thin client over the same Rust resolver as
 the CLI. Every provider, fallback chain, profile, generator, reference, and
 `as_path` secret therefore works without C#-side resolution logic.
 
-## Install (0.16+)
+## Install {/* #install-016 */}
+
+<VersionCompatibility version="0.16" />
 
 ```bash
 $ dotnet add package Cachix.SecretSpec
@@ -58,7 +67,9 @@ A one-shot form is also available:
 
 <Code code={oneShotExample} lang="csharp" meta='title="OneShot.cs"' />
 
-## Caller context (0.20+)
+## Caller context {/* #caller-context-020 */}
+
+<VersionCompatibility version="0.20" />
 
 ```csharp
 var builder = SecretSpec.Builder().WithCaller(new CallerContext
@@ -73,13 +84,17 @@ var builder = SecretSpec.Builder().WithCaller(new CallerContext
 Caller context identifies the invoking integration in audit records but never
 satisfies `require_reason`. Do not put credentials or secret values in it.
 
-## Inline specifications (0.20+)
+## Inline specifications {/* #inline-specifications-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Use `WithInlineSpec(spec, baseDir)` to resolve strict inline-spec v1 declarations
 from an object serialized by `System.Text.Json`. `baseDir` resolves relative
 provider paths, and an older native library reports a capability error.
 
-## Scopes (0.17+)
+## Scopes {/* #scopes-017 */}
+
+<VersionCompatibility version="0.17" />
 
 Use `WithScope("api")` to resolve only a named `[scopes.api]` subset. The
 selected name is available as `Resolved.Scope` and `ResolutionReport.Scope`:

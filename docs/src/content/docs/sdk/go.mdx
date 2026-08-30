@@ -3,21 +3,26 @@ title: Go SDK
 description: Resolve SecretSpec secrets from Go
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import { Code } from 'astro:components';
 import quickStartExample from '../../../../../secretspec-go/examples/quick_start/main.go?raw';
 import scopesExample from '../../../../../secretspec-go/examples/scopes/main.go?raw';
 import typedAccessExample from '../../../../../secretspec-go/examples/typed_access/main.go?raw';
+
+<VersionCompatibility version="0.20" kind="changed">
+
+`libsecretspec` was named `secretspec-ffi` through SecretSpec 0.19. The current
+Go loader prefers the new artifact name and still accepts pre-0.20 shared
+libraries.
+
+</VersionCompatibility>
 
 The Go SDK (`secretspec-go`) is a thin client over the `libsecretspec` C ABI,
 loaded via [purego](https://github.com/ebitengine/purego) (dlopen, no cgo).
 Resolution happens in the Rust core, so the SDK inherits every provider with no
 Go-side logic.
 
-:::note[SecretSpec 0.20+ library name]
-`libsecretspec` was named `secretspec-ffi` through SecretSpec 0.19. The current
-Go loader prefers the new artifact name and still accepts pre-0.20 shared
-libraries.
-:::
 
 ## Quick start
 
@@ -26,7 +31,9 @@ libraries.
 A missing required secret returns `*MissingRequiredError`; any other failure
 returns `*Error` (with a stable `.Kind`).
 
-## Caller context (0.20+)
+## Caller context {/* #caller-context-020 */}
+
+<VersionCompatibility version="0.20" />
 
 ```go
 builder := secretspec.New().WithCaller(secretspec.CallerContext{
@@ -40,7 +47,9 @@ builder := secretspec.New().WithCaller(secretspec.CallerContext{
 Caller context identifies the invoking integration in audit records but never
 satisfies `require_reason`. Do not put credentials or secret values in it.
 
-## Inline specifications (0.20+)
+## Inline specifications {/* #inline-specifications-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Applications that own their declarations in code can resolve a strict JSON
 inline specification without creating a temporary `secretspec.toml` file. Pass
@@ -70,7 +79,9 @@ The SDK requires the native
 `secretspec_call` capability for inline specs; an older library returns a
 capability error rather than falling back to a filesystem search.
 
-## Scopes (0.17+)
+## Scopes {/* #scopes-017 */}
+
+<VersionCompatibility version="0.17" />
 
 Use `WithScope("api")` to resolve only a named `[scopes.api]` subset. The
 selected name is available as `Resolved.Scope` and `Report.Scope`:
@@ -116,7 +127,9 @@ $ bash scripts/stage-staticlib.sh
 $ CGO_ENABLED=1 go build -tags static ./...
 ```
 
-## Linking with pkg-config (0.19+)
+## Linking with pkg-config {/* #linking-with-pkg-config-019 */}
+
+<VersionCompatibility version="0.19" />
 
 Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 

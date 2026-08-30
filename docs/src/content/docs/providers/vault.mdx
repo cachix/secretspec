@@ -3,6 +3,8 @@ title: Vault Provider
 description: HashiCorp Vault integration
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import ProviderCredentials from '../../../components/ProviderCredentials.astro';
 
 The [Vault](https://developer.hashicorp.com/vault) provider integrates with
@@ -50,6 +52,14 @@ $ export VAULT_TOKEN=hvs.your-token-here
 
 ### AppRole authentication
 
+<VersionCompatibility version="0.18" kind="changed">
+
+`VAULT_SECRET_ID` or the `secret_id` provider
+credential may be omitted when the AppRole is configured with
+`bind_secret_id=false`. SecretSpec then sends only `role_id` and lets Vault
+apply the role's remaining login constraints.
+
+</VersionCompatibility>
 Select AppRole with `?auth=approle`. Vault roles bind a SecretID by default, so
 the usual configuration provides both environment variables:
 
@@ -73,22 +83,14 @@ secret_id = { provider = "onepassword", ref = { vault = "Infra", item = "vault-a
 
 SecretSpec 0.14 supports only `VAULT_ROLE_ID` and `VAULT_SECRET_ID`.
 
-:::note[Version compatibility]
-Starting with SecretSpec 0.18, `VAULT_SECRET_ID` or the `secret_id` provider
-credential may be omitted when the AppRole is configured with
-`bind_secret_id=false`. SecretSpec then sends only `role_id` and lets Vault
-apply the role's remaining login constraints.
-:::
 
 Disabling SecretID binding removes AppRole's usual second credential. Keep the
 server default unless the workload deliberately relies on another trust
 boundary, such as a tightly controlled Agent host and network constraints.
 
-### Custom authentication mounts (0.18+)
+### Custom authentication mounts {/* #custom-authentication-mounts-018 */}
 
-:::note[Version compatibility]
-Custom authentication mounts are available starting with SecretSpec 0.18.
-:::
+<VersionCompatibility version="0.18" />
 
 AppRole and JWT methods mounted somewhere other than their defaults can be
 selected with `?auth_mount=`. The value is relative to `/v1/auth`:
@@ -102,11 +104,9 @@ The provider logs in at `/v1/auth/platform-approle/login` and
 `/v1/auth/ci-jwt/login`, respectively. The KV mount remains the provider URI
 path (`secret` in these examples).
 
-### JWT / OIDC authentication (0.17+)
+### JWT / OIDC authentication {/* #jwt--oidc-authentication-017 */}
 
-:::note[Version compatibility]
-Added in SecretSpec 0.17.
-:::
+<VersionCompatibility version="0.17" />
 
 Select JWT with `?auth=jwt`. The provider performs the `auth/jwt/login`
 exchange itself. The JWT comes from `VAULT_JWT` when set. Otherwise, in a
@@ -188,11 +188,9 @@ configured mount, with its value in a field named `value`.
 For KV v2, `DATABASE_URL` for project `myapp` and profile `production` is read
 from `GET /v1/secret/data/secretspec/myapp/production/DATABASE_URL`.
 
-## Provider caching (0.17+)
+## Provider caching {/* #provider-caching-017 */}
 
-:::caution[Version compatibility]
-Deletion and expiring writes are available starting with SecretSpec 0.17.
-:::
+<VersionCompatibility version="0.17" />
 
 A KV v2 mount can hold a [cached provider route's](/concepts/providers/caching/)
 entries. Vault expires them itself: the cache's `max_age` is written to the

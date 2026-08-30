@@ -3,6 +3,8 @@ title: Swift SDK
 description: Resolve SecretSpec secrets from Swift on macOS
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import { Code } from 'astro:components';
 import quickStartExample from '../../../../../secretspec-swift/Examples/QuickStart.swift?raw';
 import errorsExample from '../../../../../secretspec-swift/Examples/Errors.swift?raw';
@@ -11,14 +13,16 @@ import scopesExample from '../../../../../secretspec-swift/Examples/Scopes.swift
 import reportExample from '../../../../../secretspec-swift/Examples/Report.swift?raw';
 import typedAccessExample from '../../../../../secretspec-swift/Examples/TypedAccess.swift?raw';
 
-> **Version compatibility:** The Swift SDK is available in SecretSpec 0.18+.
+<VersionCompatibility version="0.18" />
 
 The Swift SDK is a thin `Codable` wrapper over the same Rust resolver and
 versioned C ABI as the other language SDKs. Every provider, fallback chain,
 profile, scope, generator, reference, and `as_path` secret therefore works
 without Swift-side resolution logic.
 
-## Install (0.18+)
+## Install {/* #install-018 */}
+
+<VersionCompatibility version="0.18" />
 
 In Xcode, choose **File → Add Package Dependencies** and enter:
 
@@ -67,7 +71,9 @@ A one-shot form is also available:
 
 <Code code={oneShotExample} lang="swift" meta='title="OneShot.swift"' />
 
-## Caller context (0.20+)
+## Caller context {/* #caller-context-020 */}
+
+<VersionCompatibility version="0.20" />
 
 ```swift
 let builder = SecretSpec.builder().withCaller(CallerContext(
@@ -81,7 +87,9 @@ let builder = SecretSpec.builder().withCaller(CallerContext(
 Caller context identifies the invoking integration in audit records but never
 satisfies `require_reason`. Do not put credentials or secret values in it.
 
-## Inline specifications (0.20+)
+## Inline specifications {/* #inline-specifications-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Use `try builder.withInlineSpec(spec, baseDir: ...)` with an `Encodable`
 declaration to resolve strict inline-spec v1 JSON. The base directory resolves

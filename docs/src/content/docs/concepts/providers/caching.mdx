@@ -3,10 +3,9 @@ title: Provider caching
 description: Cache slow provider routes in a local secret store
 ---
 
-:::caution[Version compatibility]
-Provider caching and `secretspec cache clear` are available starting with
-SecretSpec 0.17.
-:::
+import VersionCompatibility from '../../../../components/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.17" />
 
 ## The problem
 
@@ -19,17 +18,18 @@ Latency can also scale with the number of distinct secret addresses. SecretSpec
 groups compatible reads and providers can batch or parallelize them, but the
 remote service, proxy, or provider CLI still determines the cost of each read.
 
-## Cache one provider (0.19+)
+## Cache one provider {/* #cache-one-provider-019 */}
 
+<VersionCompatibility version="0.19" kind="changed">
+
+Use a cached fallback alias on SecretSpec 0.17 and 0.18.
+
+</VersionCompatibility>
 Provider caching places a faster local secret store in front of an
 authoritative provider. A fresh cache entry returns without constructing or
 contacting the remote provider; a miss reads the remote value and stores it
 locally for later SecretSpec invocations.
 
-:::caution[Version compatibility]
-Attaching `cache` directly to a provider URI is available starting with
-SecretSpec 0.19. Use a cached fallback alias on SecretSpec 0.17 and 0.18.
-:::
 
 Add `cache` to the remote provider alias and select that same alias normally:
 
@@ -50,7 +50,9 @@ The alias remains the authoritative provider, so its [provider
 credentials](/concepts/providers/#provider-credentials) stay next to `uri` and
 `cache`.
 
-## Cache a fallback route (0.17+)
+## Cache a fallback route {/* #cache-a-fallback-route-017 */}
+
+<VersionCompatibility version="0.17" />
 
 When more than one provider can authoritatively answer, use a route alias.
 `fallback` lists its providers in read order and `cache.provider` selects the
@@ -289,7 +291,9 @@ Do not merge aliases that intentionally use different identities, endpoints,
 namespaces, or other security settings. Those are distinct routes even if they
 use the same provider type.
 
-### Tune per-address concurrency (0.17+)
+### Tune per-address concurrency {/* #tune-per-address-concurrency-017 */}
+
+<VersionCompatibility version="0.17" />
 
 Providers using SecretSpec's default per-address fetch path read up to eight
 unique addresses concurrently. Test a few caps when latency grows with the

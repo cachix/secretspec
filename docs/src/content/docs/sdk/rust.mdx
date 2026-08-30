@@ -3,6 +3,8 @@ title: Rust SDK
 description: Type-safe Rust integration for SecretSpec
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import { Code } from 'astro:components';
 import basicExample from '../../../../../secretspec-derive/examples/basic.rs?raw';
 import profilesExample from '../../../../../secretspec-derive/examples/profiles.rs?raw';
@@ -19,6 +21,13 @@ Rust types for its profiles and secrets.
 
 ## Quick start
 
+<VersionCompatibility version="0.20" kind="changed">
+
+On 0.19 and earlier, also depend on `secrecy = { version =
+"0.10", features = ["serde"] }` and `serde = { version = "1", features =
+["derive"] }`.
+
+</VersionCompatibility>
 Add the runtime and derive macro from the command line:
 
 ```shell
@@ -33,12 +42,6 @@ secretspec = "0.20"
 secretspec-derive = "0.20"
 ```
 
-:::caution[Version compatibility]
-Generated code reaches `serde` and `secrecy` through `secretspec` starting in
-SecretSpec 0.20. On 0.19 and earlier, also depend on `secrecy = { version =
-"0.10", features = ["serde"] }` and `serde = { version = "1", features =
-["derive"] }`.
-:::
 
 The examples on this page are compiled as Cargo examples in
 `secretspec-derive`. They generate their types from this manifest:
@@ -55,7 +58,9 @@ Required and defaulted secrets are generated as `String`; secrets that may be
 absent are `Option<String>`. Field names use Rust snake case, so `DATABASE_URL`
 becomes `database_url`.
 
-## Describing secrets in Rust (0.20+)
+## Describing secrets in Rust {/* #describing-secrets-in-rust-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Starting with SecretSpec 0.20, `Spec` is the format-independent declaration
 API. Build one directly in Rust when an application owns its secret contract
@@ -126,7 +131,9 @@ profile's effective fields, including fields inherited from
 
 <Code code={profilesExample} lang="rust" meta='title="profiles.rs"' />
 
-## Scopes (0.17+)
+## Scopes {/* #scopes-017 */}
+
+<VersionCompatibility version="0.17" />
 
 A [scope](/concepts/scopes/) resolves only a named subset of a profile. Scopes
 are available through the untyped `Secrets` API:
@@ -143,7 +150,9 @@ would leave that field unfillable. `SecretSpec::builder()` therefore has no
 profile. Use a separate manifest or the untyped API when a component needs a
 narrowed set.
 
-## Resolving one secret (0.19+)
+## Resolving one secret {/* #resolving-one-secret-019 */}
+
+<VersionCompatibility version="0.19" />
 
 `resolve()` answers whether the whole profile can be satisfied, so a single
 missing required secret fails it and returns nothing. When a component needs one
@@ -165,7 +174,9 @@ When a wrapper only needs to identify the software integration, use the separate
 caller context below; unlike a default reason, it cannot satisfy
 `require_reason`.
 
-## Caller context (0.20+)
+## Caller context {/* #caller-context-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Software integrations can record what invoked SecretSpec without replacing the
 user-supplied access reason:
@@ -185,7 +196,9 @@ Generated builders expose the same `with_caller()` method. Caller context is
 caller-asserted audit metadata, not an authenticated identity, and never
 satisfies `require_reason`. Do not put credentials or secret values in it.
 
-## Interactive prompting (0.20+)
+## Interactive prompting {/* #interactive-prompting-020 */}
+
+<VersionCompatibility version="0.20" />
 
 `Secrets::ensure_secrets` prompts for and stores any missing required secret
 when stdin is a real terminal. Generated builders opt into the same behavior

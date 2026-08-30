@@ -3,15 +3,16 @@ title: Fly.io secrets provider
 description: Publish SecretSpec values to Fly.io application secrets through flyctl
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
+<VersionCompatibility version="0.20" />
 
 The [Fly.io](https://fly.io/) provider publishes declared values to an
 application's encrypted secret vault through
 [`flyctl`](https://fly.io/docs/flyctl/).
 
-:::note[Version compatibility]
-The Fly.io `fly` provider is added in SecretSpec 0.20.
-:::
 
 ## At a glance
 

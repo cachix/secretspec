@@ -3,9 +3,9 @@ title: Secret References
 description: Point a secret at one already managed in a provider's store, by the store's own coordinates
 ---
 
-:::note
-Secret references are available since version 0.14.
-:::
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.14" />
 
 By default, SecretSpec owns the naming: it stores each secret under its own
 `{project}/{profile}/{key}` convention. A **secret reference** overrides that for
@@ -80,12 +80,9 @@ file without touching the manifest.
 $ secretspec run --provider dotenv:.env.fixtures -- cargo test
 ```
 
-## Different coordinates per provider (0.19+)
+## Different coordinates per provider {/* #different-coordinates-per-provider-019 */}
 
-:::caution[Version compatibility]
-Provider-scoped `refs` and provider-alias `ref` templates are available
-starting with SecretSpec 0.19.
-:::
+<VersionCompatibility version="0.19" />
 
 The original `ref` remains useful when every provider understands one address.
 When endpoints organize the same logical secret differently, attach a template

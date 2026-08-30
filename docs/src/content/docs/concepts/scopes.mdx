@@ -3,9 +3,9 @@ title: Scopes
 description: Resolve and expose only the secrets a service or task needs
 ---
 
-:::caution[Version compatibility]
-Scopes are available starting with SecretSpec 0.17.
-:::
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.17" />
 
 A profile defines how secrets behave in an environment. A scope selects which
 of those secrets one service, command, or task receives.

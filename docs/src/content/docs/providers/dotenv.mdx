@@ -3,6 +3,8 @@ title: Dotenv Provider
 description: Traditional .env file storage for secrets
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 The [Dotenv](https://github.com/cachix/dotenv-ng) provider stores secrets in
 local `.env` files for development setups and compatibility with existing
 tools.
@@ -70,6 +72,16 @@ DATABASE_URL = { description = "Database URL", providers = ["local"] }
 
 ## Storage model
 
+<VersionCompatibility version="0.20" kind="changed">
+
+Dotenv parsing and rendering use dotenv-ng syntax.
+Dollar signs and expressions such as `$TOKEN` and `${TOKEN}` are literal; the
+provider does not substitute them from the process environment. When writing,
+SecretSpec leaves values unquoted when they already round-trip and otherwise
+double-quotes and escapes them. Keys may include hyphens, leading digits,
+leading dots, and Unicode, but not whitespace, `=`, `#`, or control characters.
+
+</VersionCompatibility>
 Dotenv uses standard `KEY=VALUE` pairs:
 
 ```dotenv
@@ -84,14 +96,6 @@ MIIEpAIBAAKCAQEA...
 -----END RSA PRIVATE KEY-----"
 ```
 
-:::note[Dotenv syntax in SecretSpec 0.20+]
-Starting in SecretSpec 0.20+, dotenv parsing and rendering use dotenv-ng syntax.
-Dollar signs and expressions such as `$TOKEN` and `${TOKEN}` are literal; the
-provider does not substitute them from the process environment. When writing,
-SecretSpec leaves values unquoted when they already round-trip and otherwise
-double-quotes and escapes them. Keys may include hyphens, leading digits,
-leading dots, and Unicode, but not whitespace, `=`, `#`, or control characters.
-:::
 
 The file itself provides the namespace. Project and profile names are not
 included in keys; use a different file when environments need separate values:

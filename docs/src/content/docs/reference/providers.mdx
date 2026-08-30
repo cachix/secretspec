@@ -3,6 +3,8 @@ title: Providers Reference
 description: Complete reference for SecretSpec storage providers and their URI configurations
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 SecretSpec supports multiple storage backends for secrets. Each provider has its own URI format and configuration options.
 
 This page is a compact URI reference. For installation, authentication,
@@ -24,11 +26,9 @@ dotenv://~/.config/app/.env  # Home-relative path (0.18+)
 
 **Features**: Read/write, profiles, human-readable, no encryption
 
-## File Provider (0.19+)
+## File Provider {/* #file-provider-019 */}
 
-:::caution[Version compatibility]
-The `file` provider is added in SecretSpec 0.19.
-:::
+<VersionCompatibility version="0.19" />
 
 **URI**: `file:ROOT` - Stores one plaintext UTF-8 file per secret beneath an
 explicitly configured local directory
@@ -57,11 +57,9 @@ env://                       # Current process environment
 
 **Features**: Read-only, no setup required, no persistence
 
-## Null Provider (0.19+)
+## Null Provider {/* #null-provider-019 */}
 
-:::caution[Version compatibility]
-The `null` provider is added in SecretSpec 0.19.
-:::
+<VersionCompatibility version="0.19" />
 
 **URI**: `null://` - Always reports a missing value so the declaration's
 committed `default`, configured generator, or `prompt = true` run input (0.19+)
@@ -78,11 +76,9 @@ resolution or child invocation
 or ephemeral generated/operator-supplied values that should be fresh for every
 resolution or run
 
-## systemd Credential Provider (0.17+)
+## systemd Credential Provider {/* #systemd-credential-provider-017 */}
 
-:::caution[Version compatibility]
-The `systemd-credential` provider is added in SecretSpec 0.17.
-:::
+<VersionCompatibility version="0.17" />
 
 **URI**: `systemd-credential://` - Reads credentials passed to the current
 service by systemd
@@ -128,11 +124,9 @@ keyring://                   # System default keychain
 **Storage**: Service `secretspec/{project}/{profile}/{key}`, with the current
 operating-system username as the account
 
-## KeePass KDBX Provider (0.17+)
+## KeePass KDBX Provider {/* #keepass-kdbx-provider-017 */}
 
-:::caution[Version compatibility]
-The `kdbx` provider is added in SecretSpec 0.17.
-:::
+<VersionCompatibility version="0.17" />
 
 **URI**: `kdbx:PATH[?keyfile=PATH][&prefix=TEMPLATE]` - Stores secrets in a
 KeePass-compatible encrypted database
@@ -170,7 +164,9 @@ lastpass://Work/SecretSpec/{project}/{profile}/{key} # Custom item template
 item template replaces the default and supports `{project}`, `{profile}`, and
 `{key}` placeholders.
 
-## Dashlane Provider (0.18+)
+## Dashlane Provider {/* #dashlane-provider-018 */}
+
+<VersionCompatibility version="0.18" />
 
 **URI**: `dashlane://[item_type]` - Integrates with Dashlane via the `dcli` CLI
 
@@ -222,11 +218,9 @@ write an existing item's field in place, name it with the `ref` field
 (`SECRET = { description = "…", ref = { item = "…", field = "…" } }`); see
 [Secret References](/reference/configuration/#secret-references).
 
-## Keeper Secrets Manager Provider (0.18+)
+## Keeper Secrets Manager Provider {/* #keeper-secrets-manager-provider-018 */}
 
-:::caution[Version compatibility]
-The `keeper` provider is added in SecretSpec 0.18.
-:::
+<VersionCompatibility version="0.18" />
 
 **URI**: `keeper://FOLDER_UID[?config_file=PATH]` - Stores records in
 Keeper Secrets Manager through Keeper's official Rust SDK
@@ -282,7 +276,9 @@ select it with
 `SECRETSPEC_PROTONPASS_CLI_PATH`. See
 [`pass-cli` compatibility](/providers/protonpass/#pass-cli-compatibility).
 
-## Passbolt provider (0.19+)
+## Passbolt provider {/* #passbolt-provider-019 */}
+
+<VersionCompatibility version="0.19" />
 
 **Availability**: Added in SecretSpec 0.19.
 
@@ -303,7 +299,9 @@ passbolt://?template=teams/{project}/{profile}/{key}   # Replace the convention 
 
 **Write limitation**: `go-passbolt-cli` accepts created/updated values only as flags, so a value being written is visible in the child process argv until it exits. See the [Passbolt provider security notes](/providers/passbolt/#security-considerations-and-limitations).
 
-## Fly.io secrets provider (0.20+)
+## Fly.io secrets provider {/* #flyio-secrets-provider-020 */}
+
+<VersionCompatibility version="0.20" />
 
 **Availability**: Added in SecretSpec 0.20.
 
@@ -336,7 +334,9 @@ and prompting-on-miss cannot use this write-only provider. See the
 rejects leading or trailing whitespace rather than silently publishing a
 different value.
 
-## Cloudflare Secrets Store provider (0.20+)
+## Cloudflare Secrets Store provider {/* #cloudflare-secrets-store-provider-020 */}
+
+<VersionCompatibility version="0.20" />
 
 **Availability**: Added in SecretSpec 0.20 and included in default builds; use
 the `cloudflare` feature for a custom minimal build.
@@ -398,11 +398,9 @@ awssm://                      # SDK default region and credentials
 **Prerequisites**: AWS credentials configured, build with `--features awssm`
 **Storage**: Secret name `secretspec/{project}/{profile}/{key}`
 
-## AWS Systems Manager Parameter Store Provider (0.18+)
+## AWS Systems Manager Parameter Store Provider {/* #aws-systems-manager-parameter-store-provider-018 */}
 
-:::caution[Version compatibility]
-The `awsps` provider is added in SecretSpec 0.18.
-:::
+<VersionCompatibility version="0.18" />
 
 **URI (0.18+)**:
 `awsps://[profile@]REGION[?prefix=PATH&template=TEMPLATE&kms_key_id=KEY&tier=TIER]`
@@ -430,7 +428,9 @@ complete layout and must end in `/{key}`; `kms_key_id` selects a customer-manage
 key, while `tier` accepts `standard`, `advanced`, or `intelligent-tiering`
 **Discovery (0.18+)**: Bounded declaration discovery through `init --from`
 
-## Scaleway Secret Manager Provider (0.17+)
+## Scaleway Secret Manager Provider {/* #scaleway-secret-manager-provider-017 */}
+
+<VersionCompatibility version="0.17" />
 
 **URI**: `scaleway://[REGION][?project_id=UUID&path=/folder]` - Stores secrets in Scaleway Secret Manager
 
@@ -468,11 +468,9 @@ vault://127.0.0.1:8200/secret?tls=false    # Disable TLS (dev mode)
 **Prerequisites**: Vault server, authentication credentials, build with `--features vault`
 **Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
 
-## OpenBao Provider (0.17+)
+## OpenBao Provider {/* #openbao-provider-017 */}
 
-:::caution[Version compatibility]
-The `openbao` provider is added in SecretSpec 0.17.
-:::
+<VersionCompatibility version="0.17" />
 
 **URI**: `openbao://[namespace@]host[:port][/mount][?options]` - Stores secrets in OpenBao's KV engine
 
@@ -492,7 +490,9 @@ openbao://127.0.0.1:8200/secret?kv=1&tls=false
 **Prerequisites**: OpenBao server, authentication credentials, build with `--features openbao` (0.17+)
 **Storage**: KV path `secretspec/{project}/{profile}/{key}` with a `value` field
 
-## Bitwarden Password Manager Provider (0.18+)
+## Bitwarden Password Manager Provider {/* #bitwarden-password-manager-provider-018 */}
+
+<VersionCompatibility version="0.18" />
 
 **URI**: `bw://[COLLECTION]` - Stores secrets in a Bitwarden Password Manager vault via the `bw` CLI
 
@@ -579,11 +579,9 @@ akv://myvault?suffix=vault.azure.cn      # Sovereign cloud (explicit suffix, bar
 **Prerequisites**: An Azure Key Vault instance, authenticated via one of the methods above, build with `--features akv`
 **Storage**: Secret name `secretspec--{base32(project)}--{base32(profile)}--{base32(key)}` (lowercase, unpadded Base32 preserves case and punctuation distinctions within Azure's case-insensitive secret-name namespace)
 
-## Azure App Configuration Provider (0.20+)
+## Azure App Configuration Provider {/* #azure-app-configuration-provider-020 */}
 
-:::caution[Version compatibility]
-The `aac` provider is added in SecretSpec 0.20.
-:::
+<VersionCompatibility version="0.20" />
 
 **URI**:
 `aac://STORE[?auth=METHOD][&label=LABEL][&prefix=PREFIX][&tag=NAME=VALUE]...`
@@ -651,11 +649,9 @@ folders remain unset so provider fallback continues.
 Values are read with Infisical's secret references expanded, matching its own CLI, so a value of
 `postgres://${DB_USER}@host` arrives resolved.
 
-## EJSON Provider (0.20+)
+## EJSON Provider {/* #ejson-provider-020 */}
 
-:::note[Version compatibility]
-The `ejson` provider is added in SecretSpec 0.20.
-:::
+<VersionCompatibility version="0.20" />
 
 **URI**: `ejson:PATH` - Reads string values from one EJSON encrypted file
 
@@ -674,9 +670,9 @@ The provider decrypts the complete EJSON document in memory through the current 
 
 See the [EJSON provider guide](/providers/ejson/) for exact Google Cloud Secret Manager credential configuration and security limitations.
 
-## age Provider (0.17+)
+## age Provider {/* #age-provider-017 */}
 
-> **Version compatibility:** The age provider is added in SecretSpec 0.17.
+<VersionCompatibility version="0.17" />
 
 **URI**: `age://PATH[?identity=FILE][&recipients-file=FILE][&armor=false]` - Stores secrets in a single age-encrypted file committed alongside code
 
@@ -691,11 +687,9 @@ age://secrets.age?recipients-file=secrets.age.recipients # Share with a roster
 **Authentication**: The `identity` credential, `AGE_IDENTITY`, or `?identity=`; recipients from `?recipients-file=` or derived from the identity
 **Storage**: One `KEY=value` entry per secret inside the encrypted blob at PATH
 
-## SOPS Provider (0.17+)
+## SOPS Provider {/* #sops-provider-017 */}
 
-:::caution[Version compatibility]
-The `sops` provider is added in SecretSpec 0.17.
-:::
+<VersionCompatibility version="0.17" />
 
 **URI**: `sops://PATH[?format=yaml|json|dotenv|ini]` - Stores secrets in a
 SOPS-encrypted file or a templated set of files
@@ -720,11 +714,9 @@ as a root key (or a key in `[DEFAULT]` for INI); extra coordinates and refs
 through templated paths are rejected.
 
 
-## Kubernetes Provider (0.20+)
+## Kubernetes Provider {/* #kubernetes-provider-020 */}
 
-:::caution[Version compatibility]
-The `kubernetes` provider is added in SecretSpec 0.20.
-:::
+<VersionCompatibility version="0.20" />
 
 **URI**: `k8s+KIND://NAME[@NAMESPACE]` - Stores secrets in a Kubernetes
 ConfigMap or Secret

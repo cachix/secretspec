@@ -3,6 +3,8 @@ title: PHP SDK
 description: Resolve SecretSpec secrets from PHP, Laravel, and Symfony
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import { Code } from 'astro:components';
 import quickStartExample from '../../../../../secretspec-php/examples/quick_start.php?raw';
 import oneShotExample from '../../../../../secretspec-php/examples/one_shot.php?raw';
@@ -12,6 +14,14 @@ import symfonyExample from '../../../../../secretspec-php/examples/symfony.php?r
 import plainPhpExample from '../../../../../secretspec-php/examples/plain_php.php?raw';
 import typedAccessExample from '../../../../../secretspec-php/examples/typed_access.php?raw';
 import asPathExample from '../../../../../secretspec-php/examples/as_path.php?raw';
+
+<VersionCompatibility version="0.20" kind="changed">
+
+`libsecretspec` was named `secretspec-ffi` through SecretSpec 0.19. The PHP
+loader prefers the new artifact name and still accepts pre-0.20 shared
+libraries.
+
+</VersionCompatibility>
 
 The PHP SDK (`cachix/secretspec`) is a thin client over the same Rust resolver
 every other SecretSpec SDK uses, so it inherits every provider, chain, profile,
@@ -26,11 +36,6 @@ native backends over an identical JSON contract:
   to compile, ideal for CLI tools and local development; requires the FFI
   extension enabled.
 
-:::note[SecretSpec 0.20+ library name]
-`libsecretspec` was named `secretspec-ffi` through SecretSpec 0.19. The PHP
-loader prefers the new artifact name and still accepts pre-0.20 shared
-libraries.
-:::
 
 The SDK prefers the extension whenever it is loaded and transparently falls back
 to `ext-ffi`, so your application code is the same either way.
@@ -107,7 +112,9 @@ There is also a one-shot form using named arguments:
 
 <Code code={oneShotExample} lang="php" meta='title="one_shot.php"' />
 
-## Caller context (0.20+)
+## Caller context {/* #caller-context-020 */}
+
+<VersionCompatibility version="0.20" />
 
 ```php
 use Secretspec\CallerContext;
@@ -124,13 +131,17 @@ $builder = SecretSpec::builder()->withCaller(new CallerContext(
 Caller context identifies the invoking integration in audit records but never
 satisfies `require_reason`. Do not put credentials or secret values in it.
 
-## Inline specifications (0.20+)
+## Inline specifications {/* #inline-specifications-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Use `withInlineSpec($spec, $baseDir)` to resolve a strict inline-spec v1 PHP
 array. The embedded extension or FFI fallback uses the versioned native call;
 an older cdylib raises a capability error instead of searching for a manifest.
 
-## Scopes (0.17+)
+## Scopes {/* #scopes-017 */}
+
+<VersionCompatibility version="0.17" />
 
 Use `withScope('api')` to resolve only a named `[scopes.api]` subset. The
 selected name is available as `$resolved->scope` and `$report->scope`:

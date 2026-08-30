@@ -5,14 +5,15 @@ tableOfContents:
   maxHeadingLevel: 4
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
+<VersionCompatibility version="0.17" />
 
 The [`sops`](https://getsops.io) provider reads and writes secrets in files
 encrypted with SOPS.
 
-:::caution[Version compatibility]
-The `sops` provider was added in SecretSpec 0.17.
-:::
 
 ## At a glance
 

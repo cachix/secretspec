@@ -3,16 +3,17 @@ title: Cloudflare Secrets Store provider
 description: Publish SecretSpec values to Cloudflare account-level Secrets Store
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
+<VersionCompatibility version="0.20" />
 
 The [Cloudflare](https://www.cloudflare.com/) provider publishes declared
 values to an account-level [Cloudflare Secrets
 Store](https://developers.cloudflare.com/secrets-store/) through the Cloudflare
 REST API.
 
-:::note[Version compatibility]
-The Cloudflare `cloudflare` provider is added in SecretSpec 0.20.
-:::
 
 ## At a glance
 
@@ -59,7 +60,9 @@ Keep the authoritative value in a readable provider and select
 
 ## Setup
 
-### Prerequisites (0.20+)
+### Prerequisites {/* #prerequisites-020 */}
+
+<VersionCompatibility version="0.20" />
 
 - SecretSpec 0.20 or newer
 - A Cloudflare account with a Secrets Store
@@ -69,7 +72,9 @@ Keep the authoritative value in a readable provider and select
 The official SecretSpec CLI includes this provider. Custom minimal Rust builds
 enable it with `--features cloudflare`.
 
-### Wrangler authentication (0.20+)
+### Wrangler authentication {/* #wrangler-authentication-020 */}
+
+<VersionCompatibility version="0.20" />
 
 With `auth=wrangler`, SecretSpec runs:
 
@@ -91,7 +96,9 @@ cloudflare://STORE_ID?account_id=ACCOUNT_ID&auth=wrangler&wrangler_profile=produ
 If the executable has another name or location, set
 `SECRETSPEC_WRANGLER_PATH`. SecretSpec never invokes `npx` automatically.
 
-### Authentication with provider credentials (0.20+)
+### Authentication with provider credentials {/* #authentication-with-provider-credentials-020 */}
+
+<VersionCompatibility version="0.20" />
 
 For CI or a machine identity, declare the `api_token`
 [provider credential](/reference/provider-credentials/):
@@ -115,7 +122,9 @@ Enter api_token for provider 'cloudflare_prod' (source: bootstrap): ****
 Use a scoped user or account API token with **Secrets Store Write** on only the
 required account. Do not use the full-access Global API Key for new setups.
 
-### Environment fallback (0.20+)
+### Environment fallback {/* #environment-fallback-020 */}
+
+<VersionCompatibility version="0.20" />
 
 `CLOUDFLARE_API_TOKEN` supplies the `api_token` credential when no explicit
 provider credential exists. `CLOUDFLARE_ACCOUNT_ID` supplies the account ID
@@ -131,7 +140,9 @@ require a token or `auth=wrangler` to require Wrangler credentials.
 
 ## Configuration
 
-### URI format (0.20+)
+### URI format {/* #uri-format-020 */}
+
+<VersionCompatibility version="0.20" />
 
 ```text
 cloudflare://STORE_ID[?account_id=ACCOUNT_ID][&scopes=LIST][&auth=MODE][&wrangler_profile=NAME]
@@ -147,7 +158,9 @@ cloudflare://STORE_ID[?account_id=ACCOUNT_ID][&scopes=LIST][&auth=MODE][&wrangle
 - `wrangler_profile` selects a named Wrangler auth profile and requires
   `auth=wrangler`.
 
-### URI examples (0.20+)
+### URI examples {/* #uri-examples-020 */}
+
+<VersionCompatibility version="0.20" />
 
 ```text
 cloudflare://STORE_ID?account_id=ACCOUNT_ID
@@ -157,7 +170,9 @@ cloudflare://STORE_ID?account_id=ACCOUNT_ID&scopes=workers,containers
 cloudflare://STORE_ID?account_id=ACCOUNT_ID&auth=wrangler&wrangler_profile=production
 ```
 
-## Storage model (0.20+)
+## Storage model {/* #storage-model-020 */}
+
+<VersionCompatibility version="0.20" />
 
 The provider maps a declaration key directly to an account-secret name. For
 example, `DATABASE_URL` maps to:
@@ -175,7 +190,9 @@ two profiles must hold different values for the same key.
 Cloudflare Workers can bind that account secret to any binding name; the
 SecretSpec key does not need to match the Worker's binding variable.
 
-## Use existing secrets (0.20+)
+## Use existing secrets {/* #use-existing-secrets-020 */}
+
+<VersionCompatibility version="0.20" />
 
 A [`ref`](/reference/configuration/#secret-references) changes the Cloudflare
 secret name updated or deleted by SecretSpec:
@@ -191,7 +208,9 @@ DATABASE_URL = {
 The reference remains write-only: it can select an existing name but cannot
 retrieve its plaintext value.
 
-## Discover secret names (0.20+)
+## Discover secret names {/* #discover-secret-names-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Cloudflare's list API exposes names, IDs, scopes, comments, and status without
 returning values. SecretSpec uses that metadata for declaration discovery:
@@ -205,7 +224,9 @@ $ secretspec init \
 The generated manifest contains required declarations for active or pending
 secret names, not defaults or values.
 
-## CI/CD (0.20+)
+## CI/CD {/* #cicd-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Use a short-lived or account-owned token scoped to Secrets Store Write:
 
@@ -218,7 +239,9 @@ Use a short-lived or account-owned token scoped to Secrets Store Write:
 The account ID and store ID are attribution, not credentials, and can stay in
 the checked-in provider URI.
 
-## Security considerations and limitations (0.20+)
+## Security considerations and limitations {/* #security-considerations-and-limitations-020 */}
+
+<VersionCompatibility version="0.20" />
 
 - Cloudflare's management API accepts values for creation and replacement but
   never returns them. Plaintext access exists only inside a Cloudflare service

@@ -3,6 +3,8 @@ title: Profiles
 description: Managing environment-specific secret requirements with profiles
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 ## What Are Profiles?
 
 Profiles are named configurations that define how secrets behave in different environments. They specify which secrets are required vs optional, provide safe defaults for development, and enforce strict requirements for production.
@@ -67,11 +69,9 @@ When using profiles, inheritance works as follows:
 3. **Field-level overrides**: Most explicitly set properties replace the corresponding property from `default`, while omitted properties continue to inherit
 4. **Profile-specific secrets**: Secrets not in the default profile can be added to any profile
 
-### Standalone profiles (0.19+)
+### Standalone profiles {/* #standalone-profiles-019 */}
 
-:::caution[Version compatibility]
-Profile-level `inherit` is available starting with SecretSpec 0.19.
-:::
+<VersionCompatibility version="0.19" />
 
 Set `inherit = false` in a non-default profile's `defaults` table when its
 secret set is unrelated to `[profiles.default]`:
@@ -98,11 +98,9 @@ field-by-field inheritance for secrets explicitly redeclared in the standalone
 profile. Omitting it preserves the existing inheritance behavior. A standalone
 profile must declare at least one secret.
 
-### Switching reference models (0.19+)
+### Switching reference models {/* #switching-reference-models-019 */}
 
-:::caution[Version compatibility]
-Provider-scoped `refs` are available starting with SecretSpec 0.19.
-:::
+<VersionCompatibility version="0.19" />
 
 Legacy `ref` and provider-scoped `refs` are alternative forms of one inherited
 address-model setting. Declaring either one in a profile replaces both forms

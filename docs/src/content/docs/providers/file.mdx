@@ -3,12 +3,13 @@ title: File Provider
 description: Store each secret in one plaintext file beneath a local directory
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.19" />
+
 The [file](https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap04.html)
 provider reads and writes one plaintext UTF-8 file per secret.
 
-:::caution[Version compatibility]
-The `file` provider is added in SecretSpec 0.19.
-:::
 
 ## At a glance
 
@@ -147,12 +148,15 @@ Referenced files are writable when filesystem permissions allow it. Treat
 runtime-managed mounts as read-only unless their owner explicitly permits
 SecretSpec to replace or delete entries.
 
-## Extract from a document (0.19+)
+## Extract from a document {/* #extract-from-a-document-019 */}
 
-:::caution[Version compatibility]
-Structured `extract` is available starting in SecretSpec 0.19.
-INI extraction with `format = "ini"` is available starting in SecretSpec 0.20.
-:::
+<VersionCompatibility version="0.19" />
+
+<VersionCompatibility version="0.20" kind="changed">
+
+Structured extraction now supports INI documents with `format = "ini"`.
+
+</VersionCompatibility>
 
 Several declarations can select values from one JSON file without making JSON
 part of the provider itself:

@@ -3,9 +3,9 @@ title: Null Provider
 description: Use committed defaults, ephemeral generation, or run-time prompts without storage
 ---
 
-:::caution[Version compatibility]
-The `null` provider is added in SecretSpec 0.19.
-:::
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.19" />
 
 The [null](https://man7.org/linux/man-pages/man4/null.4.html) provider always
 reports that a value is missing. SecretSpec can then
@@ -45,10 +45,7 @@ secrets. The same pattern works for values such as `LOCAL_PORT`.
 
 ## Ephemeral generation
 
-:::note[SecretSpec 0.19+]
-Ephemeral generation through `null://` is available starting in SecretSpec
-0.19.
-:::
+<VersionCompatibility version="0.19" />
 
 Route a generated secret to `null` when each materializing resolution should
 receive a fresh value without storing it in a provider:
@@ -63,11 +60,9 @@ and gives that value to the child process. A later `run`, `get`, `check`, or SDK
 value-carrying resolution generates a new value. Value-free reports mark the
 secret as generated without minting it.
 
-## Ephemeral operator input (0.19+)
+## Ephemeral operator input {/* #ephemeral-operator-input-019 */}
 
-:::note[SecretSpec 0.19+]
-Run-time prompting through `null://` is available starting in SecretSpec 0.19.
-:::
+<VersionCompatibility version="0.19" />
 
 Combine `prompt = true` with `null` when the value must always come from the
 operator and must never be stored:

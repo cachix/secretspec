@@ -43,39 +43,39 @@ type ProviderMetadata = {
 
 const providerMetadata: ProviderMetadata[] = [
   { icon: 'apple', slug: 'keyring', label: 'macOS Keychain' },
-  { slug: 'kdbx', label: 'KeePass KDBX (0.17+)' },
+  { slug: 'kdbx', label: 'KeePass KDBX' },
   { icon: '1password', slug: 'onepassword', label: '1Password' },
-  { slug: 'keeper', label: 'Keeper Secrets Manager (0.18+)' },
+  { slug: 'keeper', label: 'Keeper Secrets Manager' },
   { icon: 'lastpass', slug: 'lastpass', label: 'LastPass' },
-  { slug: 'dashlane', label: 'Dashlane (0.18+)' },
-  { icon: 'bitwarden', slug: 'bw', label: 'Bitwarden Password Manager (0.18+)' },
+  { slug: 'dashlane', label: 'Dashlane' },
+  { icon: 'bitwarden', slug: 'bw', label: 'Bitwarden Password Manager' },
   { icon: 'vault', slug: 'vault', label: 'Vault' },
-  { slug: 'openbao', label: 'OpenBao (0.17+)' },
+  { slug: 'openbao', label: 'OpenBao' },
   { slug: 'awssm', label: 'AWS Secrets Manager' },
-  { slug: 'awsps', label: 'AWS Parameter Store (0.18+)' },
-  { slug: 'scaleway', label: 'Scaleway Secret Manager (0.17+)' },
+  { slug: 'awsps', label: 'AWS Parameter Store' },
+  { slug: 'scaleway', label: 'Scaleway Secret Manager' },
   { icon: 'googlecloud', slug: 'gcsm', label: 'Google Cloud Secret Manager' },
   { icon: 'microsoftazure', slug: 'akv', label: 'Azure Key Vault' },
-  { icon: 'microsoftazure', slug: 'aac', label: 'Azure App Configuration (0.20+)' },
+  { icon: 'microsoftazure', slug: 'aac', label: 'Azure App Configuration' },
   { slug: 'infisical', label: 'Infisical' },
-  { slug: 'ejson', label: 'EJSON (0.20+)' },
-  { slug: 'age', label: 'age (0.17+)' },
+  { slug: 'ejson', label: 'EJSON' },
+  { slug: 'age', label: 'age' },
   { slug: 'gopass', label: 'Gopass' },
   { slug: 'protonpass', label: 'Proton Pass' },
-  { slug: 'passbolt', label: 'Passbolt (0.19+)' },
+  { slug: 'passbolt', label: 'Passbolt' },
   { icon: 'gnuprivacyguard', slug: 'pass', label: 'Pass (GPG)' },
   { icon: 'dotenv', slug: 'dotenv', label: '.env files' },
-  { slug: 'file', label: 'Plaintext files (0.19+)' },
+  { slug: 'file', label: 'Plaintext files' },
   { slug: 'env', label: 'Environment variables' },
-  { slug: 'null', label: 'Defaults / ephemeral values (null, 0.19+)' },
-  { icon: 'systemd', slug: 'systemd-credential', label: 'systemd credentials (0.17+)' },
-  { slug: 'fly', label: 'Fly.io secrets (write-only, 0.20+)' },
-  { icon: 'cloudflare', slug: 'cloudflare', label: 'Cloudflare Secrets Store (write-only, 0.20+)' },
+  { slug: 'null', label: 'Defaults / ephemeral values (null)' },
+  { icon: 'systemd', slug: 'systemd-credential', label: 'systemd credentials' },
+  { slug: 'fly', label: 'Fly.io secrets (write-only)' },
+  { icon: 'cloudflare', slug: 'cloudflare', label: 'Cloudflare Secrets Store (write-only)' },
   { icon: 'bitwarden', slug: 'bws', label: 'Bitwarden Secrets Manager' },
   { icon: 'linux', slug: 'keyring', label: 'Secret Service' },
   { slug: 'keyring', label: 'Credential Manager' },
-  { icon: { src: sopsLogo, type: 'bundled' }, slug: 'sops', label: 'SOPS (0.17+)' },
-  { icon: 'kubernetes', slug: 'kubernetes', label: 'Kubernetes (0.20+)' },
+  { icon: { src: sopsLogo, type: 'bundled' }, slug: 'sops', label: 'SOPS' },
+  { icon: 'kubernetes', slug: 'kubernetes', label: 'Kubernetes' },
 ];
 
 type ConsumerMetadata = {
@@ -116,9 +116,9 @@ const consumerMetadata: ConsumerMetadata[] = [
     secrets: ['CONNECTIONSTRINGS__DEFAULT', 'JWT__SECRET', 'API_KEY'] },
   { icon: 'haskell', label: 'Haskell', href: '/sdk/haskell/',
     secrets: ['DATABASE_URL', 'API_KEY', 'SIGNING_KEY'] },
-  { icon: 'swift', label: 'Swift (0.18+)', href: '/sdk/swift/',
+  { icon: 'swift', label: 'Swift', href: '/sdk/swift/',
     secrets: ['DATABASE_URL', 'API_KEY', 'SENTRY_DSN'] },
-  { icon: 'openjdk', label: 'JVM (0.20+)', href: '/sdk/jvm/',
+  { icon: 'openjdk', label: 'JVM', href: '/sdk/jvm/',
     secrets: ['DATABASE_URL', 'API_KEY', 'SENTRY_DSN'] },
   { icon: 'githubactions', label: 'GitHub Actions', href: '/ci/github-actions/',
     secrets: ['NPM_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'CODECOV_TOKEN'] },
@@ -186,8 +186,8 @@ const consumerColors: Record<string, SyntaxColorName> = {
   Symfony: 'comment',
   '.NET / C#': 'blue',
   Haskell: 'magenta',
-  'Swift (0.18+)': 'red',
-  'JVM (0.20+)': 'blue',
+  Swift: 'red',
+  JVM: 'blue',
   'GitHub Actions': 'comment',
   'Forgejo Actions': 'orange',
   'devenv & Nix': 'cyan',
@@ -298,9 +298,9 @@ const languageSdkMetadata = [
   {
     id: 'swift',
     icon: 'swift',
-    label: 'Swift (0.18+)',
+    label: 'Swift',
     href: '/sdk/swift/',
-    color: consumerTone({ label: 'Swift (0.18+)', href: '/sdk/swift/', secrets: [] }),
+    color: consumerTone({ label: 'Swift', href: '/sdk/swift/', secrets: [] }),
     code: `<span class="tok-kw">let</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-kw">try</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
     <span class="tok-pun">.</span><span class="tok-fn">withProvider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
     <span class="tok-pun">.</span><span class="tok-fn">withReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">).</span><span class="tok-fn">load</span><span class="tok-pun">()</span>
@@ -310,9 +310,9 @@ const languageSdkMetadata = [
   {
     id: 'jvm',
     icon: 'openjdk',
-    label: 'JVM (0.20+)',
+    label: 'JVM',
     href: '/sdk/jvm/',
-    color: consumerTone({ label: 'JVM (0.20+)', href: '/sdk/jvm/', secrets: [] }),
+    color: consumerTone({ label: 'JVM', href: '/sdk/jvm/', secrets: [] }),
     code: `<span class="tok-kw">import</span> <span class="tok-var">org</span><span class="tok-pun">.</span><span class="tok-var">cachix</span><span class="tok-pun">.</span><span class="tok-var">secretspec</span><span class="tok-pun">.</span><span class="tok-var">SecretSpec</span><span class="tok-pun">;</span>
 
 <span class="tok-kw">var</span> <span class="tok-var">s</span> <span class="tok-pun">=</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
@@ -561,29 +561,29 @@ const reelScriptData = {
 <span class="landing-prompt">$</span> <span class="landing-cmd"><span class="tok-bin">secretspec</span> <span class="landing-arg">init</span> <span class="landing-flag">--from</span> <span class="landing-arg">dotenv</span></span>
 <span class="landing-ok">✓</span> Created secretspec.toml with 5 secrets</span>
 
-<span class="landing-run-step is-provider-list"><span class="tok-com"># 2. Pick a user-global default (0.17+)</span>
+<span class="landing-run-step is-provider-list"><span class="tok-com"># 2. Pick a user-global default</span>
 <span class="landing-prompt">$</span> <span class="landing-cmd"><span class="tok-bin">secretspec</span> <span class="landing-arg">config global init</span></span>
 ? Select your preferred provider backend:
 <span class="landing-provider-cursor" aria-hidden="true">›</span><a class="landing-provider-line is-selected" style="--provider-line-color: var(--syntax-blue)" href="/providers/keyring/"><span class="provider-name">keyring</span>: Uses system keychain (Recommended)</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/null/"><span class="provider-name">null</span>: Defaults, generation, or run prompts without storage (0.19+)</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/file/"><span class="provider-name">file</span>: Plaintext files, one per secret (0.19+)</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-red)" href="/providers/bw/"><span class="provider-name">bw</span>: Bitwarden Password Manager (0.18+)</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/kdbx/"><span class="provider-name">kdbx</span>: KeePass KDBX databases (0.17+)</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/keeper/"><span class="provider-name">keeper</span>: Keeper Secrets Manager (0.18+) via official Rust SDK</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/passbolt/"><span class="provider-name">passbolt</span>: Passbolt self-hosted password manager (0.19+) via go-passbolt-cli</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-blue)" href="/providers/aac/"><span class="provider-name">aac</span>: Azure App Configuration (0.20+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/null/"><span class="provider-name">null</span>: Defaults, generation, or run prompts without storage</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/file/"><span class="provider-name">file</span>: Plaintext files, one per secret</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-red)" href="/providers/bw/"><span class="provider-name">bw</span>: Bitwarden Password Manager</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/kdbx/"><span class="provider-name">kdbx</span>: KeePass KDBX databases</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/keeper/"><span class="provider-name">keeper</span>: Keeper Secrets Manager via official Rust SDK</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/passbolt/"><span class="provider-name">passbolt</span>: Passbolt self-hosted password manager via go-passbolt-cli</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-blue)" href="/providers/aac/"><span class="provider-name">aac</span>: Azure App Configuration</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/infisical/"><span class="provider-name">infisical</span>: Infisical secret management</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/openbao/"><span class="provider-name">openbao</span>: OpenBao secret management (0.17+)</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/ejson/"><span class="provider-name">ejson</span>: EJSON encrypted files, read-only (0.20+)</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/age/"><span class="provider-name">age</span>: age-encrypted file (0.17+)</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-magenta)" href="/providers/sops/"><span class="provider-name">sops</span>: SOPS encrypted files (0.17+)</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-blue)" href="/providers/systemd-credential/"><span class="provider-name">systemd-credential</span>: Read-only systemd service credentials (0.17+)</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-magenta)" href="/providers/fly/"><span class="provider-name">fly</span>: Fly.io application secrets, write-only (0.20+)</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-orange)" href="/providers/cloudflare/"><span class="provider-name">cloudflare</span>: Cloudflare Secrets Store, write-only (0.20+)</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-orange)" href="/providers/awsps/"><span class="provider-name">awsps</span>: AWS Systems Manager Parameter Store (0.18+)</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-magenta)" href="/providers/scaleway/"><span class="provider-name">scaleway</span>: Scaleway Secret Manager (0.17+)</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/dashlane/"><span class="provider-name">dashlane</span>: Dashlane password manager, read-only (0.18+)</a>
-<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-blue)" href="/providers/kubernetes/"><span class="provider-name">kubernetes</span>: Kubernetes (0.20+)</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/openbao/"><span class="provider-name">openbao</span>: OpenBao secret management</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/ejson/"><span class="provider-name">ejson</span>: EJSON encrypted files, read-only</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/age/"><span class="provider-name">age</span>: age-encrypted file</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-magenta)" href="/providers/sops/"><span class="provider-name">sops</span>: SOPS encrypted files</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-blue)" href="/providers/systemd-credential/"><span class="provider-name">systemd-credential</span>: Read-only systemd service credentials</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-magenta)" href="/providers/fly/"><span class="provider-name">fly</span>: Fly.io application secrets, write-only</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-orange)" href="/providers/cloudflare/"><span class="provider-name">cloudflare</span>: Cloudflare Secrets Store, write-only</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-orange)" href="/providers/awsps/"><span class="provider-name">awsps</span>: AWS Systems Manager Parameter Store</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-magenta)" href="/providers/scaleway/"><span class="provider-name">scaleway</span>: Scaleway Secret Manager</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/dashlane/"><span class="provider-name">dashlane</span>: Dashlane password manager, read-only</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-blue)" href="/providers/kubernetes/"><span class="provider-name">kubernetes</span>: Kubernetes</a>
 <span class="landing-ok">✓</span> Saved to ~/.config/secretspec/config.toml</span>
 
 <span class="landing-run-step"><span class="tok-com"># 3. Run your app with secrets injected</span>
@@ -1153,7 +1153,7 @@ const reelScriptData = {
     <div class="landing-section-centered">
       <h2 class="landing-section-title">Make the declaration your source of truth.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        One manifest defines what your app needs. Profiles choose when, providers where, and scopes (0.17+) which consumer receives it.
+        One manifest defines what your app needs. Profiles choose when, providers where, and scopes which consumer receives it.
       </p>
     </div>
 
@@ -1183,14 +1183,14 @@ const reelScriptData = {
       </a>
 
       <a href="/concepts/scopes/" class="landing-bento-card is-link landing-bento-2">
-        <p class="landing-bento-title">Scopes (0.17+)</p>
+        <p class="landing-bento-title">Scopes</p>
         <p class="landing-bento-desc">Resolve and expose only the declared subset of secrets that each service, command, or task needs.</p>
         <pre is:raw class="landing-bento-mini-code"><code><span class="tok-sec">[scopes.api]</span>
 <span class="tok-key">secrets</span> <span class="tok-pun">= [</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">,</span> <span class="tok-str">"API_KEY"</span><span class="tok-pun">]</span></code></pre>
       </a>
 
       <a href="/concepts/providers/caching/" class="landing-bento-card is-link landing-bento-2">
-        <p class="landing-bento-title">Provider caching (0.17+)</p>
+        <p class="landing-bento-title">Provider caching</p>
         <p class="landing-bento-desc">Reuse a fresh local copy of a slow provider route for a configured window, with explicit invalidation.</p>
         <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">fast_vault</span> <span class="tok-pun">= {</span>
   <span class="tok-key">fallback</span> <span class="tok-pun">= [</span><span class="tok-str">"vault"</span><span class="tok-pun">],</span>
@@ -1202,7 +1202,7 @@ const reelScriptData = {
       </a>
 
       <a href="/reference/configuration/#cross-secret-presence-constraints-017" class="landing-bento-card is-link landing-bento-2">
-        <p class="landing-bento-title">Credential alternatives (0.17+)</p>
+        <p class="landing-bento-title">Credential alternatives</p>
         <p class="landing-bento-desc">Require at least one credential—or exactly one—without treating every alternative as independently required.</p>
         <pre is:raw class="landing-bento-mini-code"><code><span class="tok-key">PASSWORD</span> <span class="tok-pun">= {</span>
   <span class="tok-key">required</span> <span class="tok-pun">= {</span> <span class="tok-key">at_least_one</span> <span class="tok-pun">=</span> <span class="tok-str">"auth"</span> <span class="tok-pun">}</span>
@@ -1392,7 +1392,7 @@ const reelScriptData = {
 <section class="landing-showcase landing-scopes-demo" data-scopes-demo data-active-scope="api">
   <div class="landing-container">
     <div class="landing-showcase-head">
-      <span class="landing-showcase-eyebrow">Scopes · 0.17+</span>
+      <span class="landing-showcase-eyebrow">Scopes</span>
       <h2 class="landing-section-title">Give each service only the secrets it needs.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
         Allowlist secrets for each service, command, or task. Everything else stays out of the child process. <a href="/concepts/scopes/" class="landing-link">Scopes →</a>
@@ -1884,7 +1884,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       <div class="landing-terminal">
         <div class="landing-terminal-header">
           <div class="landing-terminal-dots"><span></span><span></span><span></span></div>
-          <span class="landing-terminal-title">GitHub &amp; Forgejo Actions (0.17+)</span>
+          <span class="landing-terminal-title">GitHub &amp; Forgejo Actions</span>
         </div>
         <pre is:raw class="landing-terminal-body"><code><span class="tok-com"># Resolve only the API deployment scope</span>
 - <span class="tok-key">uses</span><span class="tok-pun">:</span> actions/checkout@v7
@@ -1899,7 +1899,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
     </div>
 
     <p class="landing-chain-result" style="margin-top: 1.5rem;">
-      The 0.17+ action masks every value, fails when a required secret is missing, and exposes the selected scope to later steps. Vault and OpenBao can use the runner's OIDC identity instead of a stored provider credential. <a href="/ci/github-actions/" class="landing-link">Configure Actions →</a>
+      The action masks every value, fails when a required secret is missing, and exposes the selected scope to later steps. Vault and OpenBao can use the runner's OIDC identity instead of a stored provider credential. <a href="/ci/github-actions/" class="landing-link">Configure Actions →</a>
     </p>
   </div>
 </section>
@@ -1911,7 +1911,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       <span class="landing-showcase-eyebrow">Language SDKs</span>
       <h2 class="landing-section-title">Resolve secrets directly from your language.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        One resolver across {sdkCount} SDKs—Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, PHP, C#, Swift (0.18+) and JVM (0.20+). Same profiles. Same providers. <a href="/sdk/overview/" class="landing-link">SDKs →</a>
+        One resolver across {sdkCount} SDKs—Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, PHP, C#, Swift and JVM. Same profiles. Same providers. <a href="/sdk/overview/" class="landing-link">SDKs →</a>
       </p>
     </div>
 
@@ -2065,7 +2065,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
 <section id="remote-secrets" class="landing-showcase landing-remote-demo" data-flow-demo="cache">
   <div class="landing-container">
     <div class="landing-showcase-head">
-      <span class="landing-showcase-eyebrow">Remote secrets · 0.17+</span>
+      <span class="landing-showcase-eyebrow">Remote secrets</span>
       <h2 class="landing-section-title">Remote secrets, local speed.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
         Fetch from Azure once. Serve reads locally until the cache expires. <a href="/concepts/providers/caching/" class="landing-link">Provider caching →</a>
@@ -2175,7 +2175,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
 <section id="credential-bootstrapping" class="landing-showcase landing-remote-demo" data-flow-demo="bootstrap">
   <div class="landing-container">
     <div class="landing-showcase-head">
-      <span class="landing-showcase-eyebrow">Credential bootstrapping · 0.15+</span>
+      <span class="landing-showcase-eyebrow">Credential bootstrapping</span>
       <h2 class="landing-section-title">Start local. Unlock remote.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
         Store credentials locally. Unlock remote providers. Deliver only the secrets your app requests. <a href="/reference/provider-credentials/" class="landing-link">Provider credentials →</a>

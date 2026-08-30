@@ -3,6 +3,8 @@ title: Google Cloud Secret Manager Provider
 description: Google Cloud Secret Manager integration
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 The [Google Cloud Secret Manager](https://cloud.google.com/security/products/secret-manager)
 provider integrates with GCP for centralized secret management.
 
@@ -78,10 +80,11 @@ DATABASE_URL = { description = "Database URL", providers = ["google"] }
 
 ## Storage model
 
-:::caution[Version compatibility]
-The collision-safe convention below is used starting with SecretSpec 0.20.
+<VersionCompatibility version="0.20" kind="changed">
+
 Releases through 0.19 used `secretspec-{project}-{profile}-{key}`.
-:::
+
+</VersionCompatibility>
 
 SecretSpec joins the project, profile, and key with validated `--` boundaries.
 Distinct logical addresses therefore cannot collapse onto one GCSM secret when
@@ -105,7 +108,14 @@ store the value under the new id, or address the secret with an explicit
 [`ref`](/reference/configuration/#secret-references), which is exempt from the
 convention.
 
-### Reading secrets stored by 0.19
+### Reading legacy secrets {/* #reading-secrets-stored-by-019 */}
+
+<VersionCompatibility version="0.20" kind="changed">
+
+Reads now try the collision-safe ID first, then fall back to the 0.19 ID with a
+warning. Writes use only the collision-safe ID.
+
+</VersionCompatibility>
 
 SecretSpec 0.20 reads the new id first. When that secret holds no value, the
 read falls back to the 0.19 `secretspec-{project}-{profile}-{key}` id and

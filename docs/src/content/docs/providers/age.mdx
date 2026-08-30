@@ -3,11 +3,11 @@ title: age Provider
 description: Store secrets in an age-encrypted file committed alongside code
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import ProviderCredentials from '../../../components/ProviderCredentials.astro';
 
-:::note[Version compatibility]
-The age provider is added in SecretSpec 0.17.
-:::
+<VersionCompatibility version="0.17" />
 
 The [age](https://age-encryption.org) provider keeps secrets in a single
 age-encrypted file that you can commit to your repository. The plaintext inside
@@ -101,7 +101,9 @@ post-quantum protection.
 
 ## Configuration
 
-### Discover declarations (0.18+)
+### Discover declarations {/* #discover-declarations-018 */}
+
+<VersionCompatibility version="0.18" />
 
 SecretSpec 0.18+ can initialize a manifest from the key names already in an
 age file. Reflection decrypts the file in memory to enumerate its keys but

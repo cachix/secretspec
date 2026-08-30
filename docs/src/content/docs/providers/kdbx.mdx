@@ -3,14 +3,15 @@ title: KeePass KDBX Provider
 description: Store SecretSpec values in an encrypted KeePass database
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
+<VersionCompatibility version="0.17" />
 
 The [KeePass KDBX](https://keepass.info/) provider reads and writes encrypted
 databases directly, without requiring KeePass or KeePassXC to be installed.
 
-:::note[Version compatibility]
-The KDBX provider is added in SecretSpec 0.17.
-:::
 
 ## At a glance
 

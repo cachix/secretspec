@@ -3,6 +3,8 @@ title: Migration
 description: Bring existing secret declarations and values into SecretSpec
 ---
 
+import VersionCompatibility from '../../components/VersionCompatibility.astro';
+
 SecretSpec can discover declarations from supported providers or copy values
 from another provider. Secret values are never written to
 `secretspec.toml`.
@@ -30,12 +32,9 @@ your configured default provider:
 $ secretspec import dotenv://.env
 ```
 
-### From another provider (0.18+)
+### From another provider {/* #from-another-provider-018 */}
 
-:::caution[Version compatibility]
-Declaration discovery from providers other than dotenv is available starting
-with SecretSpec 0.18.
-:::
+<VersionCompatibility version="0.18" />
 
 Use `init --from` with any provider that supports declaration discovery. For
 example, you can discover declarations from an AWS Parameter Store hierarchy:

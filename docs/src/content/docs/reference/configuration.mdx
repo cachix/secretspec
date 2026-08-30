@@ -3,6 +3,8 @@ title: secretspec.toml Reference
 description: Complete reference for secretspec.toml configuration options
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 ## secretspec.toml Reference
 
 The `secretspec.toml` file defines project-specific secret requirements. This file should be checked into version control.
@@ -122,11 +124,9 @@ redeclared secrets from inheriting omitted fields. The setting has no effect on
 the `default` profile itself. A standalone profile must declare at least one
 secret.
 
-#### Cross-secret presence constraints (0.17+)
+#### Cross-secret presence constraints {/* #cross-secret-presence-constraints-017 */}
 
-:::caution[Version compatibility]
-Added in SecretSpec 0.17.
-:::
+<VersionCompatibility version="0.17" />
 
 A profile can require alternative credentials by assigning secrets to a named
 group:
@@ -188,9 +188,7 @@ Field notes:
 
 #### Composed Secrets
 
-:::caution[Version compatibility]
-Available since SecretSpec 0.16.
-:::
+<VersionCompatibility version="0.16" />
 
 A composed secret derives a value from other secrets in the effective profile.
 See [Composed Secrets](/concepts/composed-secrets/) for the dependency model,
@@ -238,11 +236,7 @@ JSON.
 
 ### [scopes] Section
 
-:::note[Version compatibility]
-Scopes are added in **SecretSpec 0.17** and are unavailable in the current 0.16
-release. With 0.16, give each service its own profile, or its own
-`secretspec.toml`.
-:::
+<VersionCompatibility version="0.17" />
 
 See [Scopes](/concepts/scopes/) for the conceptual model and a focused
 guide to narrowing services and tasks. This section specifies the complete
@@ -296,8 +290,8 @@ Behavior:
   fetched, so no provider is contacted for it.
 - A scope does not change a secret's storage address
   (`{project}/{profile}/{key}`); it only narrows the set.
-- **Presence groups are judged over the visible members.** A `required =
-  { at_least_one = … }` or `{ exactly_one = … }` group (see
+- **Presence groups are judged over the visible members.** A
+  `required = { at_least_one = … }` or `{ exactly_one = … }` group (see
   [Cross-secret presence constraints](#cross-secret-presence-constraints-017))
   is evaluated against the members
   the scope actually exposes. A group with no visible member is not that
@@ -421,6 +415,16 @@ REDIS_URL = { description = "Redis cache connection", required = true }
 
 ### Provider Aliases
 
+<VersionCompatibility version="0.15" kind="changed">
+
+SecretSpec 0.14 accepts only bare URI strings; when using
+0.14, configure provider credentials through the provider's existing
+environment variables, such as `BWS_ACCESS_TOKEN`.
+Provider alias `ref` templates are available starting with SecretSpec 0.19.
+Cached alias tables with `fallback` and `cache` are available since SecretSpec
+0.17.
+
+</VersionCompatibility>
 Provider aliases may be declared in two places:
 
 1. **In `secretspec.toml`** — a top-level `[providers]` table. Check this into version control so every team member and CI runner sees the same mapping out of the box.
@@ -428,15 +432,6 @@ Provider aliases may be declared in two places:
 
 On conflict the project-level alias wins, so a stale local config cannot silently shadow the team's mapping.
 
-:::note[Version compatibility]
-Provider alias tables with `uri` and `credentials` are available since
-SecretSpec 0.15. SecretSpec 0.14 accepts only bare URI strings; when using
-0.14, configure provider credentials through the provider's existing
-environment variables, such as `BWS_ACCESS_TOKEN`.
-Provider alias `ref` templates are available starting with SecretSpec 0.19.
-Cached alias tables with `fallback` and `cache` are available since SecretSpec
-0.17.
-:::
 
 ```toml title="secretspec.toml"
 [providers]
@@ -476,7 +471,14 @@ $ secretspec config global provider remove prod_vault
 These explicitly scoped CLI commands operate on the user-global config only —
 edit `secretspec.toml` by hand to change project-level aliases.
 
-#### SecretSpec 0.15 alias values
+#### Credential-aware alias values {/* #secretspec-015-alias-values */}
+
+<VersionCompatibility version="0.15" kind="changed">
+
+Provider aliases now also accept a table with a `uri` and provider credential
+sources; releases through 0.14 accept only a bare provider URI string.
+
+</VersionCompatibility>
 
 In SecretSpec 0.15 and later, an alias value is either a bare provider URI
 string or a table that also declares the credentials the provider needs. Both
@@ -523,12 +525,14 @@ Templates belong on the leaf aliases in a cached route, not on the cached
 alias itself. Bare provider names and literal URIs have no alias identity, so
 they use provider convention naming unless the secret declares legacy `ref`.
 
-#### SecretSpec 0.19 inline provider cache
+#### Inline provider cache {/* #secretspec-019-inline-provider-cache */}
 
-:::caution[Version compatibility]
-Attaching `cache` directly to an alias with `uri` is available starting with
-SecretSpec 0.19.
-:::
+<VersionCompatibility version="0.19" kind="changed">
+
+Single-provider caches now use `uri` and `cache` on the same alias; versions
+0.17 and 0.18 require a cached fallback alias.
+
+</VersionCompatibility>
 
 Use `uri` and `cache` when one provider is authoritative. `credentials` remains
 optional and configures that same provider:
@@ -557,11 +561,9 @@ providers = ["azure"]
 The alias remains both the selected cached route and the build key for its
 authoritative provider, so its configured credentials apply normally.
 
-#### SecretSpec 0.17 cached fallback alias values
+#### Cached fallback alias values {/* #secretspec-017-cached-fallback-alias-values */}
 
-:::caution[Version compatibility]
-Cached provider aliases are available starting with SecretSpec 0.17.
-:::
+<VersionCompatibility version="0.17" />
 
 A cached fallback alias uses `fallback` and `cache` when more than one provider
 can answer:
@@ -597,7 +599,14 @@ cached fallback alias.
 See [Provider caching](/concepts/providers/caching/)
 for freshness, failure, invalidation, and clearing behavior.
 
-#### SecretSpec 0.14 alias values
+#### Legacy bare-URI alias values {/* #secretspec-014-alias-values */}
+
+<VersionCompatibility version="0.15" kind="changed">
+
+Provider aliases gained table-form values in 0.15. Releases through 0.14 require
+every alias value to be a bare provider URI string.
+
+</VersionCompatibility>
 
 In SecretSpec 0.14, every alias value must be a provider URI string:
 
@@ -661,11 +670,9 @@ rather than the stored textual representation. When combined with `extract`
 | Rust SDK | Files cleaned up when `ValidatedSecrets` is dropped; use `keep_temp_files()` to persist |
 | Rust SDK types | `PathBuf` or `Option<PathBuf>` instead of `String` |
 
-### Secret Encoding (0.19+)
+### Secret Encoding {/* #secret-encoding-019 */}
 
-:::caution[Version compatibility]
-Available starting in SecretSpec 0.19.
-:::
+<VersionCompatibility version="0.19" />
 
 `encoding` (0.19+) defines the textual representation stored by providers and
 the cache. It is independent of `as_path`: decoded UTF-8 remains an ordinary
@@ -697,12 +704,15 @@ composed results are already logical and are not transformed. The
 `secretspec import` command copies the stored representation verbatim, avoiding
 double encoding.
 
-### Structured Extraction (0.19+)
+### Structured Extraction {/* #structured-extraction-019 */}
 
-:::caution[Version compatibility]
-Available starting in SecretSpec 0.19.
-INI extraction with `format = "ini"` is available starting in SecretSpec 0.20.
-:::
+<VersionCompatibility version="0.19" />
+
+<VersionCompatibility version="0.20" kind="changed">
+
+Structured extraction now supports INI documents with `format = "ini"`.
+
+</VersionCompatibility>
 
 `extract` (0.19+) selects one logical secret from structured text read from a
 provider or cache. It supports JSON (0.19+) and INI (0.20+). JSON `pointer`
@@ -829,12 +839,9 @@ Which provider resolves a `ref` follows the ordinary [provider resolution
 order](/concepts/providers/fallback/); a `ref` composes with the `providers` fallback
 chain, and each provider is asked for the same coordinates.
 
-#### Provider-scoped references (0.19+)
+#### Provider-scoped references {/* #provider-scoped-references-019 */}
 
-:::caution[Version compatibility]
-Provider-scoped `refs` and provider-alias `ref` templates are available
-starting with SecretSpec 0.19.
-:::
+<VersionCompatibility version="0.19" />
 
 Use `refs` when one logical secret already has different native coordinates in
 different providers. Keys are leaf provider aliases; they are identity, not a
@@ -931,11 +938,9 @@ vault, and item paths on provider URIs are errors.
 - `check --explain` and `check --json` attribute ref secrets to the store URI
   they resolved from.
 
-### Prompt on missing during run (0.19+)
+### Prompt on missing during run {/* #prompt-on-missing-during-run-019 */}
 
-:::caution[Version compatibility]
-`prompt = true` declarations require SecretSpec 0.19 or newer.
-:::
+<VersionCompatibility version="0.19" />
 
 Use `prompt = true` when `secretspec run` should ask the operator after every
 configured provider has returned missing. Prompting is the value source;
@@ -976,9 +981,7 @@ overrides may set `prompt = false` to return to ordinary missing-value behavior.
 
 ### Secret Generation
 
-:::note
-Secret generation is available since version 0.7.
-:::
+<VersionCompatibility version="0.7" />
 
 When `type` and `generate` are set, missing secrets are automatically generated during `check` or `run` and stored via the configured provider:
 

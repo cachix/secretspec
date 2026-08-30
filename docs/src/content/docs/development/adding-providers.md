@@ -208,12 +208,28 @@ the two sections do not repeat one another.
 
 When adding a provider for an upcoming release:
 
-1. Add a version notice near the top of the provider page:
+1. Add a version notice at the very top of the provider page, after its imports,
+   with the shared component. A new feature always uses the self-closing form
+   and renders **New in version 0.16** with no body:
 
-   ```md
-   :::note[Version compatibility]
-   The MyBackend provider is added in SecretSpec 0.16.
-   :::
+   ```mdx
+   import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
+   <VersionCompatibility version="0.16" />
+   ```
+
+   Place a section-level notice directly after its heading. When a release
+   changes existing behavior, set `kind="changed"` and explain the change in the
+   required body:
+
+   ```mdx
+   ## Advanced authentication
+
+   <VersionCompatibility version="0.16" kind="changed">
+
+   Advanced authentication now requires a token with the `admin` scope.
+
+   </VersionCompatibility>
    ```
 
 2. Mark the provider as `(0.16+)` anywhere it appears in a provider list,
@@ -225,11 +241,10 @@ When adding a provider for an upcoming release:
 
 Update every provider location; names otherwise drift out of sync:
 
-1. `docs/src/content/docs/providers/<provider>.md` (or `.mdx` when it renders
-   the provider credential catalog)
+1. `docs/src/content/docs/providers/<provider>.mdx`
 2. `docs/astro.config.ts` — sidebar and `starlightLlmsTxt` provider summary
 3. `docs/src/content/docs/concepts/providers.mdx` — available providers table
-4. `docs/src/content/docs/reference/providers.md` — provider details and
+4. `docs/src/content/docs/reference/providers.mdx` — provider details and
    security considerations
 5. `docs/src/pages/index.astro` — `providerMetadata` and any provider selector
    examples

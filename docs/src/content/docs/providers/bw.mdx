@@ -3,17 +3,13 @@ title: Bitwarden Password Manager Provider
 description: Bitwarden Password Manager secrets management integration
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.18" />
+
 The [Bitwarden Password Manager](https://bitwarden.com/products/)
 (`bw`) provider reads and writes secrets by using the official `bw` CLI.
 
-:::note[Version compatibility]
-The Bitwarden Password Manager provider was added in SecretSpec 0.18.
-
-SecretSpec 0.20+ isolates convention-managed items by project and profile. It
-stores `DATABASE_URL` under an item title such as
-`secretspec/my-project/default/DATABASE_URL`; releases through 0.19 used the
-bare title `DATABASE_URL`. See [Migrating bare item names](#migrating-bare-item-names-020).
-:::
 
 ## At a glance
 
@@ -131,7 +127,9 @@ bw://?folder=team/{project}/{profile} # 0.20+
   configure the CLI — it is a guard that fails with remediation steps when the
   `bw` CLI is pointed somewhere else. See [Self-hosted servers](#self-hosted-servers).
 
-### Organizations and collections (0.18+)
+### Organizations and collections {/* #organizations-and-collections-018 */}
+
+<VersionCompatibility version="0.18" />
 
 Names and IDs are interchangeable: SecretSpec resolves a name to the ID the
 `bw` CLI requires. Names match case-insensitively, and one containing a space
@@ -191,7 +189,9 @@ providers = ["bw"]
 providers = ["bw"]
 ```
 
-### Discover declarations (0.18+)
+### Discover declarations {/* #discover-declarations-018 */}
+
+<VersionCompatibility version="0.18" />
 
 SecretSpec 0.18+ can initialize a manifest from the items visible through a
 Bitwarden provider URI. Scope discovery to a collection, and optionally an
@@ -252,7 +252,16 @@ way as values in the URI. The complete precedence is:
 
 ## Storage model
 
-### Convention item names (0.20+)
+### Convention item names {/* #convention-item-names-020 */}
+
+<VersionCompatibility version="0.20" kind="changed">
+
+Convention-managed items are now isolated by project and profile. SecretSpec
+stores `DATABASE_URL` under an item title such as
+`secretspec/my-project/default/DATABASE_URL`; releases through 0.19 used the
+bare title `DATABASE_URL`. See [Migrating bare item names](#migrating-bare-item-names-020).
+
+</VersionCompatibility>
 
 SecretSpec-managed convention items use the title
 `secretspec/{project}/{profile}/{key}` by default. Project and profile are part
@@ -362,7 +371,9 @@ SecretSpec uses the first custom field whose name contains the requested text,
 also case-insensitively. Use the complete custom-field name to avoid an
 unintended partial match. `field = "notes"` addresses a Secure Note's body.
 
-### How items are matched (0.18+)
+### How items are matched {/* #how-items-are-matched-018 */}
+
+<VersionCompatibility version="0.18" />
 
 Resolved item titles are matched **in full, case-insensitively** — `test database` finds
 `Test Database`, but `API_KEY` never matches `API_KEY_OLD`. The `bw` CLI itself
@@ -396,7 +407,14 @@ DATABASE_URL = { description = "Application database", ref = { item = "MyApp Dat
 
 `ref.item` is matched against the Bitwarden item name, not its item ID.
 
-### Migrating bare item names (0.20+)
+### Migrating bare item names {/* #migrating-bare-item-names-020 */}
+
+<VersionCompatibility version="0.20" kind="changed">
+
+Convention-managed Bitwarden items now use project- and profile-qualified
+titles. Version 0.20 does not fall back to bare item names.
+
+</VersionCompatibility>
 
 Releases through 0.19 wrote convention secrets under their bare keys. Those
 titles contain no project or profile ownership, so SecretSpec cannot safely

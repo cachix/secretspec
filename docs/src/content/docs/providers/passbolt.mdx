@@ -3,15 +3,16 @@ title: Passbolt Provider
 description: Store and read SecretSpec values in a self-hosted Passbolt server
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
+<VersionCompatibility version="0.19" />
 
 The [Passbolt](https://www.passbolt.com/) provider reads and writes resources
 in a self-hosted Passbolt server through the community-maintained
 [`go-passbolt-cli`](https://github.com/passbolt/go-passbolt-cli).
 
-:::note[Version compatibility]
-The Passbolt provider is added in SecretSpec 0.19.
-:::
 
 ## At a glance
 

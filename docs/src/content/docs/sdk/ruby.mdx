@@ -3,20 +3,25 @@ title: Ruby SDK
 description: Resolve SecretSpec secrets from Ruby
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import { Code } from 'astro:components';
 import quickStartExample from '../../../../../secretspec-rb/examples/quick_start.rb?raw';
 import scopesExample from '../../../../../secretspec-rb/examples/scopes.rb?raw';
 import typedAccessExample from '../../../../../secretspec-rb/examples/typed_access.rb?raw';
 
+<VersionCompatibility version="0.20" kind="changed">
+
+`libsecretspec` was named `secretspec-ffi` through SecretSpec 0.19. Upgrade the
+extension source and `libsecretspec.a` together because 0.20 adds the
+`secretspec_call` symbol.
+
+</VersionCompatibility>
+
 The Ruby SDK (`secretspec`) is a thin client over the `libsecretspec` C ABI,
 linked into a native C extension at build time. Resolution happens in the Rust
 core, so the SDK inherits every provider with no Ruby-side logic.
 
-:::note[SecretSpec 0.20+ library name]
-`libsecretspec` was named `secretspec-ffi` through SecretSpec 0.19. Upgrade the
-extension source and `libsecretspec.a` together because 0.20 adds the
-`secretspec_call` symbol.
-:::
 
 ## Quick start
 
@@ -25,7 +30,9 @@ extension source and `libsecretspec.a` together because 0.20 adds the
 A missing required secret raises `Secretspec::MissingRequiredError`; any other
 failure raises `Secretspec::Error` (with a stable `#kind`).
 
-## Caller context (0.20+)
+## Caller context {/* #caller-context-020 */}
+
+<VersionCompatibility version="0.20" />
 
 ```ruby
 builder = Secretspec::SecretSpec.builder.with_caller(
@@ -41,13 +48,17 @@ builder = Secretspec::SecretSpec.builder.with_caller(
 Caller context identifies the invoking integration in audit records but never
 satisfies `require_reason`. Do not put credentials or secret values in it.
 
-## Inline specifications (0.20+)
+## Inline specifications {/* #inline-specifications-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Use `.with_inline_spec(spec, base_dir)` to resolve a strict inline-spec v1 hash
 at its logical provider-path base directory. The extension links the separate
 native call symbol, so an older archive cannot fall back to a manifest search.
 
-## Scopes (0.17+)
+## Scopes {/* #scopes-017 */}
+
+<VersionCompatibility version="0.17" />
 
 Use `.with_scope("api")` to resolve only a named `[scopes.api]` subset. The
 selected name is available as `resolved.scope` and `report.scope`:
@@ -70,7 +81,9 @@ $ secretspec schema | quicktype -s schema --top-level SecretSpec --lang ruby -o 
 The published platform gems bundle the `libsecretspec` archive and statically
 link it into the mkmf extension at install time.
 
-### Linking with pkg-config (0.19+)
+### Linking with pkg-config {/* #linking-with-pkg-config-019 */}
+
+<VersionCompatibility version="0.19" />
 
 Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 

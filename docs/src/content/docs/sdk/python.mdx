@@ -3,6 +3,8 @@ title: Python SDK
 description: Resolve SecretSpec secrets from Python
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import { Code } from 'astro:components';
 import quickStartExample from '../../../../../secretspec-py/examples/quick_start.py?raw';
 import scopesExample from '../../../../../secretspec-py/examples/scopes.py?raw';
@@ -20,7 +22,9 @@ provider with no Python-side logic.
 A missing required secret raises `MissingRequiredError`; any other failure
 raises `SecretSpecError` (with a stable `.kind`).
 
-## Caller context (0.20+)
+## Caller context {/* #caller-context-020 */}
+
+<VersionCompatibility version="0.20" />
 
 ```python
 from secretspec import CallerContext, SecretSpec
@@ -36,14 +40,18 @@ builder = SecretSpec.builder().with_caller(CallerContext(
 Caller context identifies the invoking integration in audit records but never
 satisfies `require_reason`. Do not put credentials or secret values in it.
 
-## Inline specifications (0.20+)
+## Inline specifications {/* #inline-specifications-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Use `.with_inline_spec(spec, base_dir)` to resolve a strict inline-spec v1
 dictionary without a manifest file. `base_dir` resolves relative provider paths.
 An inline call uses the versioned native entry point, so it cannot fall back to
 a filesystem manifest on an older runtime.
 
-## Scopes (0.17+)
+## Scopes {/* #scopes-017 */}
+
+<VersionCompatibility version="0.17" />
 
 Use `.with_scope("api")` to resolve only a named `[scopes.api]` subset. The
 selected name is available as `resolved.scope` and `report.scope`:

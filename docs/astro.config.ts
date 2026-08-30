@@ -4,6 +4,7 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import starlightLlmsTxt from "starlight-llms-txt";
 import starlightBlog from "starlight-blog";
+import { preserveHeadingIdPlugin } from "./src/lib/preserve-heading-id.mjs";
 import { terminalCopyPlugin } from "./src/lib/terminal-copy.mjs";
 
 const rustSdkBasicExample = readFileSync(
@@ -49,6 +50,9 @@ const devGitHubApi: PluginOption = {
 // https://astro.build/config
 export default defineConfig({
   site: "https://secretspec.dev/",
+  markdown: {
+    remarkPlugins: [preserveHeadingIdPlugin],
+  },
   redirects: {
     "/reference/adding-providers": "/development/adding-providers",
     "/ci": "/ci/github-actions",

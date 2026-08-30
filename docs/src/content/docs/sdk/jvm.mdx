@@ -3,6 +3,8 @@ title: JVM SDK
 description: Resolve SecretSpec secrets from Java Virtual Machine languages
 ---
 
+import VersionCompatibility from '../../../components/VersionCompatibility.astro';
+
 import { Code } from 'astro:components';
 import quickStartExample from '../../../../../secretspec-jvm/examples/src/main/java/org/cachix/examples/QuickStartExample.java?raw';
 import scopesExample from '../../../../../secretspec-jvm/examples/src/main/java/org/cachix/examples/ScopeExample.java?raw';
@@ -11,7 +13,7 @@ import typedAccessExample from '../../../../../secretspec-jvm/examples/src/main/
 import asPathExample from '../../../../../secretspec-jvm/examples/src/main/java/org/cachix/examples/AsPathExample.java?raw';
 import callerExample from '../../../../../secretspec-jvm/examples/src/main/java/org/cachix/examples/CallerExample.java?raw';
 
-> **Version compatibility:** Available since SecretSpec 0.20.
+<VersionCompatibility version="0.20" />
 
 The JVM SDK (`org.cachix.secretspec-jvm`) is a thin client over the same Rust resolver as
 the CLI. Every provider, fallback chain, profile, generator, reference, and
@@ -20,7 +22,9 @@ the CLI. Every provider, fallback chain, profile, generator, reference, and
 The 0.20+ JVM package carries native assets under the `libsecretspec` embedded
 C ABI name.
 
-## Install (0.20+)
+## Install {/* #install-020 */}
+
+<VersionCompatibility version="0.20" />
 
 ### Using gradle
 
@@ -58,7 +62,9 @@ secret. A missing required secret throws `MissingRequiredException`; its
 `missing()` method returns the secret names. Other failures throw
 `SecretSpecException`, whose `kind()` method returns a stable error category.
 
-## Scopes (0.17+)
+## Scopes {/* #scopes-017 */}
+
+<VersionCompatibility version="0.17" />
 
 Use `withScope("api")` to resolve only a named `[scopes.api]` subset. The
 selected name is available as `Resolved.scope()` and `ResolutionReport.scope()`:
@@ -100,7 +106,9 @@ to remove these files deterministically:
 
 <Code code={asPathExample} lang="java" meta='title="AsPathExample.java"' />
 
-## Caller (0.20+)
+## Caller {/* #caller-020 */}
+
+<VersionCompatibility version="0.20" />
 
 Caller context answers *what* invoked SecretSpec (for example, `git`). It is
 deliberately separate from the user-supplied access reason, which answers

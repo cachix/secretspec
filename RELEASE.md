@@ -188,6 +188,22 @@ intentionally leaves the checksum alone, making a missing checksum refresh
 visible during release review. There is no Swift registry credential or
 separate repository.
 
+### Maven Central (JVM, 0.20+) — setup pending
+
+The JVM workflow builds and tests the multi-platform JAR on version tags, but
+does not publish it automatically yet. Before the first Maven Central release:
+
+1. Register and verify the `org.cachix` namespace with Maven Central.
+2. Create a GPG signing key and add `MAVEN_CENTRAL_SIGNING_KEY` and
+   `MAVEN_CENTRAL_SIGNING_PASSPHRASE` as GitHub Actions secrets.
+3. Create a Maven Central publisher token and add
+   `MAVEN_CENTRAL_TOKEN_USERNAME` and `MAVEN_CENTRAL_TOKEN_PASSWORD` as GitHub
+   Actions secrets.
+4. Manually dispatch `jvm-package.yml` from the release tag with
+   `publish: true`. Do not enable tag-triggered publication until this path has
+   successfully published and a clean consumer resolves the package from Maven
+   Central.
+
 ### WinGet — bootstrap merged; token access must be confirmed
 
 [`winget-releaser`](https://github.com/vedantmgoyal9/winget-releaser)

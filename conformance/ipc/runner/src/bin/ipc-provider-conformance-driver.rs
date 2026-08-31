@@ -626,7 +626,6 @@ fn external_provider_with_uri(
 ) -> Result<ExternalProvider, String> {
     ExternalProvider::new(
         ProviderEndpoint {
-            schema_version: 1,
             scheme: "memory".into(),
             executable: endpoint.to_path_buf(),
             arguments,

@@ -489,7 +489,7 @@ forms are accepted in the project `[providers]` and user
 |-------|------|----------|-------------|
 | `uri` | string | Yes (table form) | The provider URI. A bare-string alias is shorthand for `{ uri = "..." }`. |
 | `credentials` | table | No | Maps a semantic [provider credential](/reference/provider-credentials/) name to its source. |
-| `ref` (0.19+) | table | No | Native-address template for this leaf alias. Coordinate strings may contain `{project}`, `{profile}`, and `{key}`. |
+| `ref` (0.19+) | table | No | Native-address template for this leaf alias. Coordinate strings may contain `{project}`, `{profile}`, `{key}`, and, in 0.21+, `{env:NAME}` for a non-secret environment value. |
 
 Each `credentials` value is either a bare provider spec — read at the convention path for the active project and profile — or a table `{ provider = "...", ref = { ... } }` that pins the exact location with the same `ref` coordinates a secret uses.
 

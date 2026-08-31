@@ -104,6 +104,34 @@ fallback reads, writes, and both sides of `import`; the `legacy` ref above can
 therefore describe an import source without adding it to the normal read route.
 Templates support `{project}`, `{profile}`, and `{key}` in every coordinate.
 
+### Environment placeholders {/* #environment-placeholders-021 */}
+
+<VersionCompatibility version="0.21" />
+
+Use `{env:NAME}` when a provider coordinate contains a non-secret value supplied
+by the current environment:
+
+```toml
+[providers]
+personal = {
+  uri = "awsps://developer@us-east-1",
+  ref = { item = "/apps/{project}/developers/{env:DEVELOPER_ID}/{key}" }
+}
+
+[profiles.development]
+DATABASE_PASSWORD = { description = "Personal database password", providers = ["personal"] }
+```
+
+SecretSpec reads `DEVELOPER_ID` when it expands the address. A missing or
+non-UTF-8 value fails before provider access. Expansion is one pass, so braces
+inside the environment value remain literal.
+
+Environment placeholders are for coordinates such as developer names, tenant
+IDs, and namespaces. Expanded coordinates can appear in diagnostics and audit
+records, so do not put a secret value in them. This syntax is separate from
+[composed secrets](/concepts/composed-secrets/): it does not resolve another
+declared secret and does not use `${NAME}` syntax.
+
 Scoped refs deliberately key on aliases, not resolved URIs. Literal provider
 URIs and bare provider names use convention naming because they have no alias
 identity. Cached route aliases cannot own a template or scoped ref; configure

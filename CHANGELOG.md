@@ -80,6 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Provider alias `ref` templates can interpolate non-secret process environment
+  values with `{env:NAME}`. Missing or non-UTF-8 variables fail before provider
+  access, and cached routes are invalidated when an expanded value changes.
+
 - The age provider supports deleting secrets in 0.20+: `secretspec delete`,
   `secretspec import --delete-source`, and cache invalidation now work with it,
   so an age-encrypted file can serve as the local store of a cached provider

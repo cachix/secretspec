@@ -1654,9 +1654,10 @@ impl NativeAddress {
 /// A provider-alias template for native secret coordinates (0.19+).
 ///
 /// Each coordinate accepts the logical placeholders `{project}`, `{profile}`,
-/// and `{key}`. The template belongs to one provider alias, so fallback links
-/// and import endpoints can map the same logical secret into different native
-/// address shapes without sharing provider-specific coordinates.
+/// and `{key}`, plus `{env:NAME}` for non-secret process environment values.
+/// The template belongs to one provider alias, so fallback links and import
+/// endpoints can map the same logical secret into different native address
+/// shapes without sharing provider-specific coordinates.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NativeAddressTemplate {
@@ -1698,7 +1699,10 @@ impl NativeAddressTemplate {
                     "provider ref template coordinate `{name}` cannot be empty or whitespace"
                 ));
             }
-            expand_address_template(value, "project", "profile", "KEY").map_err(|error| {
+            expand_address_template(value, "project", "profile", "KEY", &|variable| {
+                Ok(format!("env-{variable}"))
+            })
+            .map_err(|error| {
                 format!("invalid provider ref template coordinate `{name}`: {error}")
             })?;
         }
@@ -1713,7 +1717,17 @@ impl NativeAddressTemplate {
         key: &str,
     ) -> std::result::Result<NativeAddress, String> {
         self.validate()?;
-        let expand = |value: &str| expand_address_template(value, project, profile, key);
+        let environment = |variable: &str| match std::env::var(variable) {
+            Ok(value) => Ok(value),
+            Err(std::env::VarError::NotPresent) => Err(format!(
+                "environment variable `{variable}` required by provider ref template is not set"
+            )),
+            Err(std::env::VarError::NotUnicode(_)) => Err(format!(
+                "environment variable `{variable}` required by provider ref template is not valid UTF-8"
+            )),
+        };
+        let expand =
+            |value: &str| expand_address_template(value, project, profile, key, &environment);
         Ok(NativeAddress {
             item: expand(&self.item)?,
             field: self.field.as_deref().map(expand).transpose()?,
@@ -1748,6 +1762,7 @@ fn expand_address_template(
     project: &str,
     profile: &str,
     key: &str,
+    environment: &impl Fn(&str) -> std::result::Result<String, String>,
 ) -> std::result::Result<String, String> {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
@@ -1769,16 +1784,30 @@ fn expand_address_template(
             return Err(format!("template '{template}' contains an unmatched `{{`"));
         };
         let placeholder = &after_open[..close];
-        out.push_str(match placeholder {
-            "project" => project,
-            "profile" => profile,
-            "key" => key,
+        match placeholder {
+            "project" => out.push_str(project),
+            "profile" => out.push_str(profile),
+            "key" => out.push_str(key),
             _ => {
-                return Err(format!(
-                    "unknown placeholder `{{{placeholder}}}` in template '{template}'; expected {{project}}, {{profile}}, or {{key}}"
-                ));
+                let Some(variable) = placeholder.strip_prefix("env:") else {
+                    return Err(format!(
+                        "unknown placeholder `{{{placeholder}}}` in template '{template}'; expected {{project}}, {{profile}}, {{key}}, or {{env:NAME}}"
+                    ));
+                };
+                let mut characters = variable.chars();
+                let valid_name = characters
+                    .next()
+                    .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
+                    && characters
+                        .all(|character| character == '_' || character.is_ascii_alphanumeric());
+                if !valid_name {
+                    return Err(format!(
+                        "invalid environment variable name `{variable}` in template '{template}'"
+                    ));
+                }
+                out.push_str(&environment(variable)?);
             }
-        });
+        }
         rest = &after_open[close + 1..];
     }
     Ok(out)
@@ -4352,12 +4381,51 @@ mod provider_alias_tests {
     }
 
     #[test]
+    fn alias_ref_template_expands_non_secret_environment_values() {
+        let _environment_lock = crate::tests::scrub_resolution_env();
+        let variable = "SECRETSPEC_TEST_REF_OWNER";
+        let value = crate::tests::EnvVarGuard::set(variable, "alice_{key}");
+        let map = parse(
+            r#"remote = { uri = "keyring://", ref = { item = "{project}/{env:SECRETSPEC_TEST_REF_OWNER}/{key}" } }"#,
+        );
+        let template = map["remote"].reference_template().unwrap();
+
+        assert_eq!(
+            template
+                .expand("payments", "prod", "DATABASE_URL")
+                .unwrap()
+                .item,
+            "payments/alice_{key}/DATABASE_URL",
+            "inserted environment values must not be interpreted as placeholders"
+        );
+
+        drop(value);
+        let _missing = crate::tests::EnvVarGuard::remove(variable);
+        let error = template
+            .expand("payments", "prod", "DATABASE_URL")
+            .unwrap_err();
+        assert!(error.contains(variable), "{error}");
+        assert!(error.contains("is not set"), "{error}");
+    }
+
+    #[test]
     fn alias_ref_template_rejects_invalid_placeholders_and_cached_aliases() {
         let error = toml::from_str::<HashMap<String, ProviderAlias>>(
             r#"op = { uri = "onepassword://Production", ref = { item = "{secret}" } }"#,
         )
         .unwrap_err();
         assert!(error.to_string().contains("unknown placeholder"), "{error}");
+
+        let error = toml::from_str::<HashMap<String, ProviderAlias>>(
+            r#"op = { uri = "onepassword://Production", ref = { item = "{env:INVALID-NAME}" } }"#,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("invalid environment variable name"),
+            "{error}"
+        );
 
         let error = toml::from_str::<HashMap<String, ProviderAlias>>(
             r#"route = { fallback = ["remote"], cache = { provider = "local", max_age = "1h" }, ref = { item = "{key}" } }"#,

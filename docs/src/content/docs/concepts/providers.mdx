@@ -187,8 +187,9 @@ DATABASE_URL = { description = "Production database", providers = ["onepassword:
 <VersionCompatibility version="0.19" />
 
 A leaf alias can map the logical `{project}`, `{profile}`, and `{key}` into its
-provider's native coordinates. This lets every link in a fallback chain—and
-each side of an import—use a different address:
+provider's native coordinates. SecretSpec 0.21+ also supports `{env:NAME}` for
+non-secret values supplied by the current environment. This lets every link in
+a fallback chain—and each side of an import—use a different address:
 
 ```toml title="secretspec.toml"
 [providers]
@@ -201,7 +202,8 @@ API_KEY = { description = "API key", providers = ["remote", "local"] }
 
 Use per-secret `refs = { alias = { item = "..." } }` for exceptions. See
 [Secret References](/concepts/references/#different-coordinates-per-provider-019)
-for precedence, import-only source aliases, and cached-route restrictions.
+for precedence, environment placeholders, import-only source aliases, and
+cached-route restrictions.
 
 Use the CLI to manage user-level aliases:
 

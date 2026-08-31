@@ -627,14 +627,30 @@ impl Secrets {
             .iter()
             .zip(&source_route_uris)
             .map(|(spec, uri)| {
-                let template = self
+                let template = match self
                     .lookup_provider_alias_entry(spec)
                     .and_then(|alias| alias.reference_template())
-                    .map(|template| coordinate_fingerprint("ref-template", template.coordinates()))
-                    .unwrap_or_else(|| "convention".to_string());
-                stable_fingerprint(["source-route", spec, uri, template.as_str()])
+                {
+                    Some(template) => {
+                        let expanded = template.expand("project", "profile", "KEY").map_err(
+                            |error| {
+                                SecretSpecError::ProviderOperationFailed(format!(
+                                    "provider alias '{spec}' could not expand its ref template: {error}"
+                                ))
+                            },
+                        )?;
+                        coordinate_fingerprint("ref-template", expanded.coordinates())
+                    }
+                    None => "convention".to_string(),
+                };
+                Ok(stable_fingerprint([
+                    "source-route",
+                    spec,
+                    uri,
+                    template.as_str(),
+                ]))
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         let cache_identity = self.canonical_storage_identity(&cache_uri)?;
 
         // The cache entry lives at the same logical address the authoritative
@@ -786,7 +802,7 @@ mod tests {
     use super::*;
     use crate::config::{NativeAddressTemplate, ProviderAlias, ProviderCache};
     use crate::error::SecretSpecError;
-    use crate::tests::{global_config_with_aliases, scrub_resolution_env};
+    use crate::tests::{EnvVarGuard, global_config_with_aliases, scrub_resolution_env};
     use std::collections::HashMap;
 
     /// Build a secret with a description and optional per-secret provider chain.
@@ -1491,6 +1507,28 @@ mod tests {
             template_fingerprint(embedded_field),
             template_fingerprint(separate_field),
             "different template coordinates must not collide through display rendering"
+        );
+    }
+
+    #[test]
+    fn environment_template_changes_invalidate_the_cache() {
+        let _environment_lock = scrub_resolution_env();
+        let variable = "SECRETSPEC_TEST_REF_NAMESPACE";
+        let template = || NativeAddressTemplate {
+            item: format!("{{env:{variable}}}/{{key}}"),
+            ..Default::default()
+        };
+
+        let first_value = EnvVarGuard::set(variable, "team-a");
+        let first = template_fingerprint(template());
+        drop(first_value);
+
+        let _second_value = EnvVarGuard::set(variable, "team-b");
+        let second = template_fingerprint(template());
+
+        assert_ne!(
+            first, second,
+            "the cached route must follow the environment-backed address"
         );
     }
 

@@ -13,6 +13,8 @@
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
+#include <fcntl.h>
+#include <io.h>
 #include <windows.h>
 #else
 #include <sys/types.h>
@@ -159,6 +161,13 @@ static peer_mode parse_mode(int argc, char **argv) {
 int main(int argc, char **argv) {
     peer_mode mode = parse_mode(argc, argv);
     int expired_prompt_sent = 0;
+#ifdef _WIN32
+    /* The wire format requires LF; Windows text mode expands it to CRLF. */
+    if (_setmode(_fileno(stdin), _O_BINARY) == -1 ||
+        _setmode(_fileno(stdout), _O_BINARY) == -1) {
+        return EXIT_FAILURE;
+    }
+#endif
     if (mode == MODE_HOLD_PIPES) {
         pause_for_backpressure();
         return EXIT_SUCCESS;

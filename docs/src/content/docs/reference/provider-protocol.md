@@ -46,31 +46,26 @@ SecretSpec binary always selects that in-tree provider; an external
 registration must not shadow it. Every other scheme is resolved in this order:
 
 1. an endpoint supplied directly through the embedding API;
-2. a user registration named `<scheme>.json`;
-3. a system registration named `<scheme>.json`;
+2. a user claim named `<scheme>.secretspec.json`;
+3. a system claim named `<scheme>.secretspec.json`;
 4. a `PATH` executable named `secretspec-provider-<scheme>` (or
    `secretspec-provider-<scheme>.exe` on Windows), only when PATH discovery is
    explicitly allowed.
 
-The registration document has the same format on every platform:
+The public provider claim has the same format on every platform:
 
 ```json
 {
-  "schema_version": 1,
-  "scheme": "example",
-  "executable": "/absolute/path/to/secretspec-provider-example",
-  "arguments": [],
-  "credential_names": []
+  "executable": "/absolute/path/to/secretspec-provider-example"
 }
 ```
 
-`executable` MUST be absolute. `arguments` are fixed non-secret strings; the
-launcher invokes the executable directly without a shell. A registration must
-not contain a provider URI, credential, secret address, or secret value.
-`credential_names` contains distinct semantic names accepted in a provider
-alias's `credentials` map. It lets SecretSpec perform its existing pure
-credential-source validation before resolving those values; the endpoint must
-reject any key not registered here.
+`executable` MUST be absolute. SecretSpec invokes it directly as `<executable>
+provider`, without a shell. The filename supplies the provider scheme. A claim
+must not contain a provider URI, credential, secret address, or secret value.
+The document has no schema version: discovery only establishes the executable,
+while the launched IPC session negotiates the protocol version. Future claim
+fields are additive and older clients ignore fields they do not understand.
 
 Default registration directories are:
 
@@ -80,12 +75,11 @@ Default registration directories are:
 | macOS | `$HOME/Library/Application Support/SecretSpec/providers.d` | `/Library/Application Support/SecretSpec/providers.d` |
 | Windows | `%APPDATA%\SecretSpec\providers.d` | `%PROGRAMDATA%\SecretSpec\providers.d` |
 
-The loader MUST validate the file name against `scheme`, reject unknown
-registration fields, resolve the executable to an absolute canonical path, and
-check that registration and executable ownership/ACLs are appropriate for the
-trust domain. A privileged resolver MUST disable PATH discovery. A manifest may
-select a registered scheme and URI but must never supply an executable path or
-arguments.
+The loader MUST validate the claim filename against `scheme`, resolve the
+executable to an absolute canonical path, and check that claim and executable
+ownership/ACLs are appropriate for the trust domain. A privileged resolver MUST
+disable PATH discovery. A manifest may select a registered scheme and URI but
+must never supply an executable path or launch arguments.
 
 On Unix the ownership and permission checks apply to every directory above the
 endpoint, not only its immediate parent: a single writable ancestor lets an

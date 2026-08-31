@@ -29,17 +29,28 @@ const REGISTRATION_MAX_BYTES: u64 = 64 * 1024;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A closed provider registration and its fixed executable identity.
+/// A resolved provider endpoint and its fixed executable identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ProviderEndpoint {
-    pub schema_version: u32,
     pub scheme: String,
     pub executable: PathBuf,
+    /// Explicit embedders may select a mode directly. Filesystem-discovered
+    /// providers always receive the fixed `provider` argument.
     #[serde(default)]
     pub arguments: Vec<String>,
     #[serde(default)]
     pub credential_names: Vec<String>,
+}
+
+/// Public discovery claim written by an installed provider.
+///
+/// The filename supplies the scheme and the launch contract is always
+/// `<executable> provider`. Unknown fields are deliberately ignored so future
+/// SecretSpec releases can extend the claim without versioning this small
+/// discovery document.
+#[derive(Deserialize)]
+struct ProviderClaim {
+    executable: PathBuf,
 }
 
 /// Explicit inputs to external-provider discovery.
@@ -133,7 +144,7 @@ impl ProviderDiscovery {
             (self.system_directory.as_deref(), RegistrationScope::System),
         ] {
             let Some(directory) = directory else { continue };
-            let path = directory.join(format!("{scheme}.json"));
+            let path = directory.join(format!("{scheme}.secretspec.json"));
             if path.try_exists().map_err(discovery_io)? {
                 return load_registration(&path, scheme, scope, security).map(Some);
             }
@@ -156,10 +167,9 @@ impl ProviderDiscovery {
         };
         validate_endpoint(
             ProviderEndpoint {
-                schema_version: 1,
                 scheme: scheme.to_string(),
                 executable: path,
-                arguments: Vec::new(),
+                arguments: vec!["provider".to_string()],
                 credential_names: Vec::new(),
             },
             scheme,
@@ -234,15 +244,25 @@ fn load_registration(
     if bytes.len() as u64 > REGISTRATION_MAX_BYTES {
         return Err(discovery_error("provider registration exceeds 64 KiB"));
     }
-    let endpoint: ProviderEndpoint = serde_json::from_slice(&bytes)
+    let claim: ProviderClaim = serde_json::from_slice(&bytes)
         .map_err(|_| discovery_error("invalid provider registration"))?;
-    let file_stem = path.file_stem().and_then(|value| value.to_str());
-    if file_stem != Some(scheme) {
+    let expected_filename = format!("{scheme}.secretspec.json");
+    if path.file_name().and_then(|value| value.to_str()) != Some(&expected_filename) {
         return Err(discovery_error(
             "provider registration filename does not match its scheme",
         ));
     }
-    validate_endpoint(endpoint, scheme, scope, security)
+    validate_endpoint(
+        ProviderEndpoint {
+            scheme: scheme.to_string(),
+            executable: claim.executable,
+            arguments: vec!["provider".to_string()],
+            credential_names: Vec::new(),
+        },
+        scheme,
+        scope,
+        security,
+    )
 }
 
 fn validate_endpoint(
@@ -251,9 +271,9 @@ fn validate_endpoint(
     scope: RegistrationScope,
     security: &dyn EndpointSecurity,
 ) -> Result<ProviderEndpoint> {
-    if endpoint.schema_version != 1 || endpoint.scheme != expected_scheme {
+    if endpoint.scheme != expected_scheme {
         return Err(discovery_error(
-            "provider registration schema or scheme does not match",
+            "provider registration scheme does not match",
         ));
     }
     validate_scheme(&endpoint.scheme)?;
@@ -1287,7 +1307,6 @@ mod tests {
         let executable = directory.join(name);
         std::fs::write(&executable, name).unwrap();
         ProviderEndpoint {
-            schema_version: 1,
             scheme: "example".into(),
             executable,
             arguments: vec![argument.into()],
@@ -1298,8 +1317,11 @@ mod tests {
     fn write_registration(directory: &Path, endpoint: &ProviderEndpoint) {
         std::fs::create_dir_all(directory).unwrap();
         std::fs::write(
-            directory.join("example.json"),
-            serde_json::to_vec(endpoint).unwrap(),
+            directory.join("example.secretspec.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "executable": endpoint.executable,
+            }))
+            .unwrap(),
         )
         .unwrap();
     }
@@ -1345,20 +1367,17 @@ mod tests {
     }
 
     #[test]
-    fn discovery_precedence_and_closed_registration() {
+    fn discovery_precedence_and_extensible_registration() {
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("endpoint");
         std::fs::write(&executable, "endpoint").unwrap();
         let registration_dir = directory.path().join("providers.d");
         std::fs::create_dir(&registration_dir).unwrap();
         std::fs::write(
-            registration_dir.join("example.json"),
+            registration_dir.join("example.secretspec.json"),
             serde_json::json!({
-                "schema_version": 1,
-                "scheme": "example",
                 "executable": executable,
-                "arguments": ["--stdio"],
-                "credential_names": ["access_token"]
+                "future_field": true
             })
             .to_string(),
         )
@@ -1373,15 +1392,12 @@ mod tests {
             .resolve_with_security("example", &AllowAll)
             .unwrap()
             .unwrap();
-        assert_eq!(endpoint.arguments, ["--stdio"]);
+        assert_eq!(endpoint.arguments, ["provider"]);
 
         std::fs::write(
-            registration_dir.join("bad.json"),
+            registration_dir.join("bad.secretspec.json"),
             serde_json::json!({
-                "schema_version": 1,
-                "scheme": "bad",
-                "executable": endpoint.executable,
-                "unexpected": true
+                "executable": "relative/provider"
             })
             .to_string(),
         )
@@ -1447,7 +1463,7 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        assert_eq!(selected.arguments, ["user"]);
+        assert_eq!(selected.arguments, ["provider"]);
     }
 
     #[test]
@@ -1474,7 +1490,7 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        assert_eq!(selected.arguments, ["system"]);
+        assert_eq!(selected.arguments, ["provider"]);
     }
 
     #[test]
@@ -1539,8 +1555,8 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(first.arguments, ["first"]);
-        assert_eq!(second.arguments, ["second"]);
+        assert_eq!(first.arguments, ["provider"]);
+        assert_eq!(second.arguments, ["provider"]);
         assert_ne!(first.executable, second.executable);
     }
 
@@ -1587,7 +1603,6 @@ mod tests {
             explicit: BTreeMap::from([(
                 "example".into(),
                 ProviderEndpoint {
-                    schema_version: 1,
                     scheme: "example".into(),
                     executable,
                     arguments: Vec::new(),
@@ -1616,15 +1631,11 @@ mod tests {
         std::fs::create_dir(&registration_dir).unwrap();
         std::fs::set_permissions(&registration_dir, std::fs::Permissions::from_mode(0o700))
             .unwrap();
-        let registration = registration_dir.join("example.json");
+        let registration = registration_dir.join("example.secretspec.json");
         std::fs::write(
             &registration,
             serde_json::json!({
-                "schema_version": 1,
-                "scheme": "example",
-                "executable": executable,
-                "arguments": [],
-                "credential_names": []
+                "executable": executable
             })
             .to_string(),
         )
@@ -1648,15 +1659,11 @@ mod tests {
         std::fs::create_dir_all(&registration_dir).unwrap();
         std::fs::set_permissions(&registration_dir, std::fs::Permissions::from_mode(0o700))
             .unwrap();
-        let registration = registration_dir.join("example.json");
+        let registration = registration_dir.join("example.secretspec.json");
         std::fs::write(
             &registration,
             serde_json::json!({
-                "schema_version": 1,
-                "scheme": "example",
-                "executable": executable,
-                "arguments": [],
-                "credential_names": []
+                "executable": executable
             })
             .to_string(),
         )

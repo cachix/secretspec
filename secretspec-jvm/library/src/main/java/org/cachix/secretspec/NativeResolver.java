@@ -60,7 +60,13 @@ final class NativeResolver {
                 */
                 return Native.load("secretspec_musl", SecretSpecFFI.class, OPTIONS);
             } else {
-                return Native.load("libsecretspec", SecretSpecFFI.class, OPTIONS);
+                // JNA adds the platform prefix and suffix to a library base name.
+                // Unix needs "secretspec" so JNA adds exactly one "lib" prefix.
+                // Windows does not add that prefix, so use the packaged
+                // libsecretspec.dll base name there explicitly.
+                return Native.load(
+                    libraryBaseName(System.getProperty("os.name")), SecretSpecFFI.class, OPTIONS
+                );
             }
         } catch (UnsatisfiedLinkError error) {
             throw new SecretSpecException("load", error.getMessage(), error);
@@ -69,6 +75,10 @@ final class NativeResolver {
 
     private NativeResolver() {
         // No instances.
+    }
+
+    static String libraryBaseName(String osName) {
+        return osName.toLowerCase(Locale.ROOT).contains("win") ? "libsecretspec" : "secretspec";
     }
 
     static String resolve(String requestJson) {

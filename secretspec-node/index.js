@@ -323,7 +323,7 @@ class Builder {
     return {
       request_version: 1,
       operation: 'resolve',
-      source: { kind: 'inline', spec_version: 1, base_dir: this._inline.baseDir, spec: this._inline.spec },
+      source: { kind: 'inline', spec_version: 2, base_dir: this._inline.baseDir, spec: this._inline.spec },
       options,
     };
   }

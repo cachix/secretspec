@@ -151,6 +151,34 @@ $ secretspec run --provider "onepassword://Development" -- npm start
 $ secretspec run --provider "dotenv:/home/user/work/.env" -- npm test
 ```
 
+## Configure a project default provider chain (0.21+)
+
+<VersionCompatibility version="0.21" />
+
+Use project `[defaults].providers` when every profile should use the same
+provider chain unless a profile or secret overrides it. The chain can name a
+user-global alias, allowing each developer to supply personal provider-native
+coordinates while the committed manifest stays the same:
+
+```toml title="secretspec.toml"
+[defaults]
+providers = ["developer"]
+
+[profiles.staging]
+DATABASE_PASSWORD = { description = "Personal staging database password" }
+```
+
+```toml title="~/.config/secretspec/config.toml"
+[defaults.providers.developer]
+uri = "awsps://developer@us-east-1"
+ref = { item = "/{project}/{profile}/developers/alice/{key}" }
+```
+
+The alias's existing `{project}`, `{profile}`, and `{key}` placeholders expand
+in the project that selects it. Only `alice` is user-specific. Do not also
+declare `developer` in the project's `[providers]` table, because a project
+alias with the same name takes precedence over the user-global alias.
+
 ## Configure provider aliases
 
 Provider aliases can be declared at either project or user scope:

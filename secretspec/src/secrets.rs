@@ -7313,6 +7313,7 @@ mod report_provider_tests {
     fn report_provider_uri_redacts_credentials() {
         let spec = Secrets::new(
             Config {
+                defaults: None,
                 project: crate::config::Project {
                     name: "redact-test".to_string(),
                     ..Default::default()
@@ -7493,6 +7494,7 @@ mod reference_routing_tests {
     fn spec_with_provider(provider: Option<&str>) -> Secrets {
         Secrets::new(
             Config {
+                defaults: None,
                 project: crate::config::Project {
                     name: "ref-test".to_string(),
                     ..Default::default()

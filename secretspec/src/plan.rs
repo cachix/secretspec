@@ -784,7 +784,7 @@ fn coordinate_fingerprint<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{NativeAddressTemplate, ProviderAlias, ProviderCache};
+    use crate::config::{NativeAddressTemplate, ProjectDefaults, ProviderAlias, ProviderCache};
     use crate::error::SecretSpecError;
     use crate::tests::{global_config_with_aliases, scrub_resolution_env};
     use std::collections::HashMap;
@@ -1074,6 +1074,41 @@ mod tests {
             spec.address_for_spec(planned, Some("dotenv://other.env"), "app", "prod")
                 .unwrap(),
             OwnedAddress::convention("app", "prod", "API_KEY")
+        );
+    }
+
+    #[test]
+    fn project_default_uses_a_global_alias_template_with_logical_placeholders() {
+        let _env = scrub_resolution_env();
+        let mut config = crate::tests::resolve_test_config(HashMap::from([(
+            "API_KEY".to_string(),
+            secret(None),
+        )]));
+        config.project.name = "payments".to_string();
+        config.defaults = Some(ProjectDefaults {
+            providers: vec!["developer".to_string()],
+        });
+
+        let developer = ProviderAlias::from("env://")
+            .with_reference_template(NativeAddressTemplate {
+                item: "/{project}/{profile}/developers/alice/{key}".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut global = global_config_with_aliases(&[]);
+        global.defaults.providers = Some(HashMap::from([("developer".to_string(), developer)]));
+        let spec = Secrets::new(config, Some(global), None, None);
+
+        let plan = spec.build_plan(None).unwrap();
+        let planned = find(&plan, "API_KEY");
+        assert_eq!(route(planned).group_key(), Some("developer"));
+        assert_eq!(
+            spec.address_for_spec(planned, route(planned).group_key(), "payments", "default")
+                .unwrap(),
+            OwnedAddress::Native(NativeAddress {
+                item: "/payments/default/developers/alice/API_KEY".to_string(),
+                ..Default::default()
+            })
         );
     }
 

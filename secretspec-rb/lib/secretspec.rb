@@ -293,7 +293,7 @@ module Secretspec
       return [options, false] unless @inline
 
       [{ "request_version" => 1, "operation" => "resolve",
-         "source" => { "kind" => "inline", "spec_version" => 1,
+         "source" => { "kind" => "inline", "spec_version" => 2,
                        "base_dir" => @inline["base_dir"], "spec" => @inline["spec"] },
          "options" => options }, true]
     end

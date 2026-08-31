@@ -180,8 +180,13 @@ impl CompiledSpec {
                 .map(|name| {
                     let current = profile.secrets.get(name);
                     let default = inherited.and_then(|p| p.secrets.get(name));
-                    let effective = Secret::resolved(current, default, profile.defaults.as_ref())
-                        .expect("an effective name comes from current or default");
+                    let effective = Secret::resolved(
+                        current,
+                        default,
+                        profile.defaults.as_ref(),
+                        config.defaults.as_ref(),
+                    )
+                    .expect("an effective name comes from current or default");
                     (name.clone(), effective)
                 })
                 .collect();

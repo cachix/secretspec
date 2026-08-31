@@ -657,6 +657,9 @@ pub struct Config {
     pub project: Project,
     /// Map of profile names to their configurations (e.g., "default", "production", "staging")
     pub profiles: HashMap<String, Profile>,
+    /// Project-wide defaults applied to every provider-backed secret (0.21+).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defaults: Option<ProjectDefaults>,
     /// Project-level provider aliases that map alias names to provider URIs.
     ///
     /// Take precedence over aliases in the user-global config
@@ -704,6 +707,10 @@ impl Config {
             return Err(ParseError::Validation(
                 "At least one profile must be defined".into(),
             ));
+        }
+
+        if let Some(defaults) = &self.defaults {
+            defaults.validate().map_err(ParseError::Validation)?;
         }
 
         // Raw syntax checks stay on the document model; effective semantic
@@ -840,6 +847,10 @@ impl Config {
                     self.profiles.insert(profile_name, later_profile);
                 }
             }
+        }
+
+        if later.defaults.is_some() {
+            self.defaults = later.defaults;
         }
 
         if let Some(later_providers) = later.providers {
@@ -1360,6 +1371,35 @@ pub struct Profile {
     /// Map of secret names to their configurations, flattened in TOML for cleaner syntax
     #[serde(flatten)]
     pub secrets: HashMap<String, Secret>,
+}
+
+/// Project-wide defaults for provider-backed secrets (0.21+).
+///
+/// This is deliberately narrower than [`ProfileDefaults`]: a project can
+/// select one provider chain without assigning the same fallback value or
+/// requiredness policy to every secret in every profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectDefaults {
+    /// Provider aliases, names, or URIs used when neither a secret nor its
+    /// profile declares a provider chain.
+    pub providers: Vec<String>,
+}
+
+impl ProjectDefaults {
+    fn validate(&self) -> Result<(), String> {
+        if self.providers.is_empty() {
+            return Err("project defaults must name at least one provider".to_string());
+        }
+        if self
+            .providers
+            .iter()
+            .any(|provider| provider.trim().is_empty())
+        {
+            return Err("project default providers cannot be empty or whitespace".to_string());
+        }
+        Ok(())
+    }
 }
 
 /// A named, membership-only subset of a profile's secrets.
@@ -2159,8 +2199,10 @@ pub struct Secret {
     pub composed: Option<String>,
     /// Optional list of provider aliases for retrieving this secret.
     /// Providers are tried in order until one has the secret.
-    /// If not specified, uses the profile defaults.providers or global provider.
-    /// Each alias is resolved against the providers map in GlobalConfig.
+    /// If not specified, uses the profile defaults, project defaults in 0.21+,
+    /// or the user-global provider.
+    /// Aliases resolve against the project's provider map first, then the
+    /// user-global provider map.
     /// Example: providers = ["keyring", "env"] will try keyring first, then env.
     pub providers: Option<Vec<String>>,
     /// Native coordinates naming one externally managed secret (see
@@ -2655,14 +2697,16 @@ impl Secret {
     /// acts on.
     ///
     /// Precedence (highest to lowest): the current profile's entry, the
-    /// default profile's entry, then the current profile's `[defaults]` table
-    /// (for the fields it can supply). Shared by secret resolution
+    /// default profile's entry, the current profile's `[defaults]` table, then
+    /// project `[defaults].providers` in 0.21+ (for the fields each can supply).
+    /// Shared by secret resolution
     /// (`Secrets::resolve_secret_config`) and `Config::validate` so the two
     /// can never disagree about what a merged secret looks like.
     pub(crate) fn resolved(
         current: Option<&Secret>,
         default: Option<&Secret>,
         defaults: Option<&ProfileDefaults>,
+        project_defaults: Option<&ProjectDefaults>,
     ) -> Option<Secret> {
         if current.is_none() && default.is_none() {
             return None;
@@ -2695,9 +2739,14 @@ impl Secret {
         } else {
             (defaults.and_then(|d| d.required), None, None)
         };
-        // A composed secret's source is its dependency graph, so the
-        // `[defaults]` storage fields (`default`, `providers`) do not apply.
+        // A composed secret's source is its dependency graph, so neither the
+        // profile's storage defaults nor project default providers apply.
         let storage_defaults = if composed.is_some() { None } else { defaults };
+        let project_providers = if composed.is_none() {
+            project_defaults.map(|defaults| defaults.providers.clone())
+        } else {
+            None
+        };
         // `ref` and `refs` are two serialized forms of one address-model
         // setting. Select the pair from one profile entry so an explicit switch
         // in either direction replaces, rather than combines with, the inherited
@@ -2719,7 +2768,8 @@ impl Secret {
                 .or_else(|| storage_defaults.and_then(|d| d.default.clone())),
             composed,
             providers: inherit(current, default, |s| s.providers.clone())
-                .or_else(|| storage_defaults.and_then(|d| d.providers.clone())),
+                .or_else(|| storage_defaults.and_then(|d| d.providers.clone()))
+                .or(project_providers),
             reference,
             refs,
             as_path: inherit(current, default, |s| s.as_path),
@@ -3120,6 +3170,7 @@ mod require_reason_tests {
     fn extends_inherits_parent_require_reason_when_unspecified() {
         use std::collections::HashMap;
         let cfg = |rr: Option<RequireReason>| Config {
+            defaults: None,
             project: Project {
                 name: "t".to_string(),
                 require_reason: rr,
@@ -3324,6 +3375,7 @@ mod validation_tests {
             })
             .collect();
         Config {
+            defaults: None,
             project: Project {
                 name: name.to_string(),
                 ..Default::default()
@@ -3776,6 +3828,122 @@ providers = ["keyring"]
     }
 
     #[test]
+    fn project_default_providers_apply_with_narrow_precedence() {
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "payments"
+revision = "1.0"
+
+[defaults]
+providers = ["project"]
+
+[profiles.default]
+SHARED = { description = "Shared secret" }
+
+[profiles.production.defaults]
+providers = ["profile"]
+
+[profiles.production]
+DIRECT = { description = "Direct secret", providers = ["secret"] }
+"#,
+        )
+        .unwrap();
+
+        let compiled = config.validate_and_compile().unwrap();
+        let default = compiled.profile("default").unwrap();
+        assert_eq!(
+            default.secrets["SHARED"].config.providers.as_deref(),
+            Some(["project".to_string()].as_slice())
+        );
+
+        let production = compiled.profile("production").unwrap();
+        assert_eq!(
+            production.secrets["SHARED"].config.providers.as_deref(),
+            Some(["profile".to_string()].as_slice())
+        );
+        assert_eq!(
+            production.secrets["DIRECT"].config.providers.as_deref(),
+            Some(["secret".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn project_defaults_accept_only_a_nonempty_provider_chain() {
+        for body in [
+            "[defaults]\nproviders = []",
+            "[defaults]\nproviders = [\"  \"]",
+        ] {
+            let source = format!(
+                r#"
+[project]
+name = "payments"
+revision = "1.0"
+
+{body}
+
+[profiles.default]
+TOKEN = {{ description = "Token" }}
+"#
+            );
+            let config: Config = toml::from_str(&source).unwrap();
+            assert!(config.validate().is_err(), "{source}");
+        }
+
+        let error = toml::from_str::<Config>(
+            r#"
+[project]
+name = "payments"
+revision = "1.0"
+
+[defaults]
+default = "same value for every secret"
+
+[profiles.default]
+TOKEN = { description = "Token" }
+"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("unknown field `default`"), "{error}");
+    }
+
+    #[test]
+    fn later_documents_override_project_defaults_only_when_present() {
+        let parse = |providers: Option<&str>| {
+            let defaults = providers
+                .map(|provider| format!("[defaults]\nproviders = [\"{provider}\"]\n"))
+                .unwrap_or_default();
+            toml::from_str::<Config>(&format!(
+                r#"
+[project]
+name = "payments"
+revision = "1.0"
+
+{defaults}
+[profiles.default]
+TOKEN = {{ description = "Token" }}
+"#
+            ))
+            .unwrap()
+        };
+
+        let mut inherited = parse(Some("parent"));
+        inherited.overlay_with(parse(None));
+        assert_eq!(
+            inherited.defaults.unwrap().providers,
+            vec!["parent".to_string()]
+        );
+
+        let mut overridden = parse(Some("parent"));
+        overridden.overlay_with(parse(Some("child")));
+        assert_eq!(
+            overridden.defaults.unwrap().providers,
+            vec!["child".to_string()]
+        );
+    }
+
+    #[test]
     fn config_validate_allows_profile_override_to_inherit_description() {
         // required = true in the default profile plus a default value from
         // the override is also fine: only that combination within a single
@@ -3969,7 +4137,7 @@ default = "placeholder"
         let rendered = toml::to_string(&parsed).unwrap();
         assert!(rendered.contains("prompt = true"), "{rendered}");
 
-        let inherited = Secret::resolved(None, Some(&parsed), None).unwrap();
+        let inherited = Secret::resolved(None, Some(&parsed), None, None).unwrap();
         assert_eq!(inherited.prompt, Some(true));
         let disabled = Secret::resolved(
             Some(&Secret {
@@ -3977,6 +4145,7 @@ default = "placeholder"
                 ..Default::default()
             }),
             Some(&parsed),
+            None,
             None,
         )
         .unwrap();
@@ -4100,7 +4269,7 @@ refs = { remote = { item = "scoped" } }"#,
             ..Default::default()
         };
 
-        let resolved = Secret::resolved(Some(&scoped), Some(&legacy), None).unwrap();
+        let resolved = Secret::resolved(Some(&scoped), Some(&legacy), None, None).unwrap();
         assert!(
             resolved.reference.is_none(),
             "an explicit `refs` override must replace an inherited legacy `ref`"
@@ -4108,7 +4277,7 @@ refs = { remote = { item = "scoped" } }"#,
         assert_eq!(resolved.refs, scoped.refs);
         resolved.validate().unwrap();
 
-        let resolved = Secret::resolved(Some(&legacy), Some(&scoped), None).unwrap();
+        let resolved = Secret::resolved(Some(&legacy), Some(&scoped), None, None).unwrap();
         assert_eq!(resolved.reference, legacy.reference);
         assert!(
             resolved.refs.is_none(),
@@ -4247,6 +4416,7 @@ refs = { remote = { item = "scoped" } }"#,
                 ..Default::default()
             }),
             None,
+            None,
         )
         .unwrap();
         assert_eq!(inherited.encoding, Some(SecretEncoding::Base64));
@@ -4290,6 +4460,7 @@ encoding = "rot13""#,
                 extract: secret.extract.clone(),
                 ..Default::default()
             }),
+            None,
             None,
         )
         .unwrap();

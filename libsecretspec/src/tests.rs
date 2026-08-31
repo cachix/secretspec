@@ -73,7 +73,7 @@ fn abi_version_is_nonempty() {
 }
 
 #[test]
-fn call_resolves_a_strict_inline_spec_at_its_logical_base_directory() {
+fn call_resolves_inline_project_defaults_at_its_logical_base_directory() {
     let dir = TempDir::new().unwrap();
     let env_path = dir.path().join("inline.env");
     fs::write(&env_path, "TOKEN=from-inline\n").unwrap();
@@ -82,15 +82,16 @@ fn call_resolves_a_strict_inline_spec_at_its_logical_base_directory() {
         "operation": "resolve",
         "source": {
             "kind": "inline",
-            "spec_version": 1,
+            "spec_version": 2,
             "base_dir": dir.path(),
             "spec": {
                 "project": { "name": "inline-ffi" },
+                "defaults": { "providers": ["env"] },
                 "providers": { "env": "dotenv://inline.env" },
                 "profiles": {
                     "default": {
                         "secrets": {
-                            "TOKEN": { "description": "inline token", "providers": ["env"] }
+                            "TOKEN": { "description": "inline token" }
                         }
                     }
                 }
@@ -131,7 +132,7 @@ TOKEN = { description = "inherited token", providers = ["env"] }
         "operation": "resolve",
         "source": {
             "kind": "inline",
-            "spec_version": 1,
+            "spec_version": 2,
             "base_dir": dir.path(),
             "spec": {
                 "project": { "name": "child", "extends": ["parent"] },
@@ -158,7 +159,7 @@ fn call_rejects_unknown_versions_operations_and_source_combinations() {
         }),
         serde_json::json!({
             "request_version": 1, "operation": "resolve",
-            "source": { "kind": "inline", "spec_version": 2, "base_dir": ".", "spec": {} }
+            "source": { "kind": "inline", "spec_version": 3, "base_dir": ".", "spec": {} }
         }),
         serde_json::json!({
             "request_version": 1, "operation": "resolve",
@@ -180,7 +181,7 @@ fn call_rejects_unknown_inline_declaration_fields() {
         "request_version": 1,
         "operation": "resolve",
         "source": {
-            "kind": "inline", "spec_version": 1, "base_dir": ".",
+            "kind": "inline", "spec_version": 2, "base_dir": ".",
             "spec": {
                 "project": { "name": "inline" },
                 "profiles": { "default": { "secrets": {
@@ -204,7 +205,7 @@ fn call_accepts_scalar_required_group_names() {
         "request_version": 1,
         "operation": "resolve",
         "source": {
-            "kind": "inline", "spec_version": 1, "base_dir": ".",
+            "kind": "inline", "spec_version": 2, "base_dir": ".",
             "spec": {
                 "project": { "name": "inline-groups" },
                 "profiles": { "default": { "secrets": {
@@ -236,7 +237,7 @@ fn call_rejects_empty_required_groups() {
         "request_version": 1,
         "operation": "resolve",
         "source": {
-            "kind": "inline", "spec_version": 1, "base_dir": ".",
+            "kind": "inline", "spec_version": 2, "base_dir": ".",
             "spec": {
                 "project": { "name": "inline-groups" },
                 "profiles": { "default": { "secrets": {

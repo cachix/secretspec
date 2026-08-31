@@ -90,6 +90,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Projects can select a default provider chain in 0.21+ with
+  `[defaults].providers`. Secret and profile provider chains retain precedence,
+  and the project default can name a user-global alias whose `ref` template
+  expands `{project}`, `{profile}`, and `{key}` for the active project. Native
+  SDK inline declarations expose the same setting through inline schema v2.
+
 - The age provider supports deleting secrets in 0.20+: `secretspec delete`,
   `secretspec import --delete-source`, and cache invalidation now work with it,
   so an age-encrypted file can serve as the local store of a cached provider

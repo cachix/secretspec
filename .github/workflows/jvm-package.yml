@@ -282,7 +282,11 @@ jobs:
           done
       - name: Pack
         run: |
-          ( cd secretspec-jvm && ./gradlew build --no-daemon )
+          # Native tests already ran once per build target above. At this point
+          # the libraries are staged as resources for the JAR, not in Cargo's
+          # target directory, so run packaging only; the consumer matrix below
+          # tests the assembled JAR on every supported runtime.
+          ( cd secretspec-jvm && ./gradlew assemble --no-daemon )
           mkdir -p artifacts/
           cp secretspec-jvm/library/build/libs/*.jar artifacts/
       - name: Verify runtime assets are present

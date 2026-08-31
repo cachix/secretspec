@@ -29,7 +29,7 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken}
 
 const GENERIC_WRITE: u32 = 0x4000_0000;
 const GENERIC_ALL: u32 = 0x1000_0000;
-const MUTATING_RIGHTS: u32 = FILE_WRITE_DATA
+const FILE_MUTATING_RIGHTS: u32 = FILE_WRITE_DATA
     | FILE_APPEND_DATA
     | FILE_WRITE_EA
     | FILE_WRITE_ATTRIBUTES
@@ -40,7 +40,39 @@ const MUTATING_RIGHTS: u32 = FILE_WRITE_DATA
     | GENERIC_WRITE
     | GENERIC_ALL;
 
-pub(crate) fn path_acl_is_trusted(path: &Path, system_scope: bool) -> io::Result<bool> {
+// FILE_WRITE_DATA and FILE_APPEND_DATA are FILE_ADD_FILE and
+// FILE_ADD_SUBDIRECTORY on directories. Creating a new sibling cannot alter an
+// existing canonical path, so directory ancestors only reject rights that can
+// mutate or replace an existing component.
+const DIRECTORY_MUTATING_RIGHTS: u32 = FILE_WRITE_EA
+    | FILE_WRITE_ATTRIBUTES
+    | FILE_DELETE_CHILD
+    | DELETE
+    | WRITE_DAC
+    | WRITE_OWNER
+    | GENERIC_WRITE
+    | GENERIC_ALL;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AclObjectKind {
+    File,
+    Directory,
+}
+
+impl AclObjectKind {
+    fn mutating_rights(self) -> u32 {
+        match self {
+            Self::File => FILE_MUTATING_RIGHTS,
+            Self::Directory => DIRECTORY_MUTATING_RIGHTS,
+        }
+    }
+}
+
+pub(crate) fn path_acl_is_trusted(
+    path: &Path,
+    object_kind: AclObjectKind,
+    system_scope: bool,
+) -> io::Result<bool> {
     let path = wide_path(path);
     let mut owner: PSID = null_mut();
     let mut dacl: *mut ACL = null_mut();
@@ -105,7 +137,7 @@ pub(crate) fn path_acl_is_trusted(path: &Path, system_scope: bool) -> io::Result
                     return Ok(false);
                 }
                 let ace = unsafe { &*(raw_ace as *const ACCESS_ALLOWED_ACE) };
-                if ace.Mask & MUTATING_RIGHTS != 0 {
+                if ace.Mask & object_kind.mutating_rights() != 0 {
                     let sid = addr_of!(ace.SidStart) as PSID;
                     if unsafe { IsValidSid(sid) } == 0 || !sids.is_trusted(sid, system_scope) {
                         return Ok(false);
@@ -134,12 +166,31 @@ pub fn make_path_private(path: &Path) -> io::Result<()> {
 }
 
 fn set_path_dacl(path: &Path, principals: &[PSID]) -> io::Result<()> {
+    let entries = principals
+        .iter()
+        .copied()
+        .map(|sid| AclEntry {
+            flags: 0,
+            mask: FILE_ALL_ACCESS,
+            sid,
+        })
+        .collect::<Vec<_>>();
+    set_path_dacl_entries(path, &entries)
+}
+
+struct AclEntry {
+    flags: u32,
+    mask: u32,
+    sid: PSID,
+}
+
+fn set_path_dacl_entries(path: &Path, entries: &[AclEntry]) -> io::Result<()> {
     let acl_bytes = size_of::<ACL>()
-        + principals
+        + entries
             .iter()
-            .map(|sid| {
+            .map(|entry| {
                 size_of::<ACCESS_ALLOWED_ACE>() - size_of::<u32>()
-                    + unsafe { GetLengthSid(*sid) as usize }
+                    + unsafe { GetLengthSid(entry.sid) as usize }
             })
             .sum::<usize>();
     let mut storage = vec![0_u32; acl_bytes.div_ceil(size_of::<u32>())];
@@ -148,10 +199,12 @@ fn set_path_dacl(path: &Path, principals: &[PSID]) -> io::Result<()> {
     if unsafe { InitializeAcl(acl, acl_bytes as u32, ACL_REVISION) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    for sid in principals.iter().copied() {
+    for entry in entries {
         // SAFETY: the ACL was initialized with enough capacity for every ACE,
         // and every SID comes from a validated Windows API.
-        if unsafe { AddAccessAllowedAceEx(acl, ACL_REVISION, 0, FILE_ALL_ACCESS, sid) } == 0 {
+        if unsafe { AddAccessAllowedAceEx(acl, ACL_REVISION, entry.flags, entry.mask, entry.sid) }
+            == 0
+        {
             return Err(io::Error::last_os_error());
         }
     }
@@ -326,31 +379,117 @@ impl Drop for LocalSid {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows_sys::Win32::Security::{
+        CONTAINER_INHERIT_ACE, INHERIT_ONLY_ACE, OBJECT_INHERIT_ACE, WinWorldSid,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
+        FILE_GENERIC_WRITE,
+    };
+
+    fn set_world_access(path: &Path, mask: u32, flags: u32) {
+        let sids = TrustedSids::load().unwrap();
+        let world = well_known_sid(WinWorldSid).unwrap();
+        let entries = [
+            AclEntry {
+                flags: 0,
+                mask: FILE_ALL_ACCESS,
+                sid: sids.current(),
+            },
+            AclEntry {
+                flags: 0,
+                mask: FILE_ALL_ACCESS,
+                sid: sids.system(),
+            },
+            AclEntry {
+                flags: 0,
+                mask: FILE_ALL_ACCESS,
+                sid: sids.administrators(),
+            },
+            AclEntry {
+                flags,
+                mask,
+                sid: world.as_ptr() as PSID,
+            },
+        ];
+        set_path_dacl_entries(path, &entries).unwrap();
+    }
 
     #[test]
     fn private_acl_is_accepted_for_the_current_user() {
         let directory = tempfile::tempdir().unwrap();
         make_path_private(directory.path()).unwrap();
-        assert!(path_acl_is_trusted(directory.path(), false).unwrap());
+        assert!(path_acl_is_trusted(directory.path(), AclObjectKind::Directory, false).unwrap());
     }
 
     #[test]
     fn writable_acl_for_an_untrusted_principal_is_rejected() {
-        use windows_sys::Win32::Security::WinWorldSid;
-
         let directory = tempfile::tempdir().unwrap();
-        let sids = TrustedSids::load().unwrap();
-        let world = well_known_sid(WinWorldSid).unwrap();
-        set_path_dacl(
+        set_world_access(directory.path(), FILE_ALL_ACCESS, 0);
+        assert!(!path_acl_is_trusted(directory.path(), AclObjectKind::Directory, false).unwrap());
+    }
+
+    #[test]
+    fn directory_add_subdirectory_does_not_grant_file_append_access() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("endpoint.exe");
+        std::fs::write(&file, "endpoint").unwrap();
+        set_world_access(directory.path(), FILE_ADD_SUBDIRECTORY, 0);
+        set_world_access(&file, FILE_APPEND_DATA, 0);
+
+        assert!(path_acl_is_trusted(directory.path(), AclObjectKind::Directory, false).unwrap());
+        assert!(!path_acl_is_trusted(&file, AclObjectKind::File, false).unwrap());
+    }
+
+    #[test]
+    fn directory_add_file_does_not_grant_file_write_data_access() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("endpoint.exe");
+        std::fs::write(&file, "endpoint").unwrap();
+        set_world_access(directory.path(), FILE_ADD_FILE, 0);
+        set_world_access(&file, FILE_WRITE_DATA, 0);
+
+        assert!(path_acl_is_trusted(directory.path(), AclObjectKind::Directory, false).unwrap());
+        assert!(!path_acl_is_trusted(&file, AclObjectKind::File, false).unwrap());
+    }
+
+    #[test]
+    fn directory_rights_that_can_alter_existing_components_are_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let rights = [
+            ("delete child", FILE_DELETE_CHILD),
+            ("delete", DELETE),
+            ("write DACL", WRITE_DAC),
+            ("write owner", WRITE_OWNER),
+            ("write extended attributes", FILE_WRITE_EA),
+            ("write attributes", FILE_WRITE_ATTRIBUTES),
+            ("generic write", GENERIC_WRITE),
+            ("generic all", GENERIC_ALL),
+        ];
+
+        for (name, mask) in rights {
+            set_world_access(directory.path(), mask, 0);
+            assert!(
+                !path_acl_is_trusted(directory.path(), AclObjectKind::Directory, false).unwrap(),
+                "{name} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn inherit_only_access_is_ignored_until_it_becomes_effective() {
+        let directory = tempfile::tempdir().unwrap();
+        let modify = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE;
+        set_world_access(
             directory.path(),
-            &[
-                sids.current(),
-                sids.system(),
-                sids.administrators(),
-                world.as_ptr() as PSID,
-            ],
-        )
-        .unwrap();
-        assert!(!path_acl_is_trusted(directory.path(), false).unwrap());
+            modify,
+            CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE | INHERIT_ONLY_ACE,
+        );
+
+        assert!(path_acl_is_trusted(directory.path(), AclObjectKind::Directory, false).unwrap());
+
+        let child = directory.path().join("child");
+        std::fs::create_dir(&child).unwrap();
+        assert!(!path_acl_is_trusted(&child, AclObjectKind::Directory, false).unwrap());
     }
 }

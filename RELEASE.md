@@ -48,7 +48,7 @@ GitHub release URL in the commit body, and submit it to Nixpkgs.
 
 ## One-time registry setup
 
-External registry status was last verified on 2026-08-29. Recheck every item
+External registry status was last verified on 2026-08-31. Recheck every item
 still marked pending before tagging a release.
 
 Trusted Publishing works differently per registry. PyPI and RubyGems let you
@@ -82,38 +82,24 @@ The RubyGems Trusted Publisher is active for gem `secretspec` (repository owner
 environment `release`). OIDC-authenticated releases have published through
 0.19.1; no token or additional setup is needed.
 
-### npm — already done
+### npm — trusted publishing active, done
 
 npm has no pending-publisher mechanism, so this needed a manual first publish
 for the main `secretspec` package **and every platform sub-package**
 (`secretspec-linux-x64-gnu`, `secretspec-linux-arm64-gnu`,
-`secretspec-darwin-arm64`, `secretspec-win32-x64-msvc`) — 5 packages that each
+`secretspec-linux-x64-musl`, `secretspec-linux-arm64-musl`,
+`secretspec-darwin-arm64`, `secretspec-win32-x64-msvc`) — 7 packages that each
 had to exist before a Trusted Publisher could be attached. This has been done:
-all 5 packages are published (bootstrap-published once with a temporary
+all 7 packages are published (bootstrap-published once with a temporary
 granular access token, "All Packages" / "Read and write" scope — narrower
 "select packages" scopes 404 on brand-new package names, since that picker
 can't reference a package that doesn't exist yet), each has a Trusted
 Publisher configured (GitHub Actions, repo `cachix/secretspec`, workflow
-`node-addon.yml`, no environment), and the bootstrap token has been revoked.
-Nothing left to do — every release from here publishes via OIDC.
-
-### npm musl packages (0.20+) — bootstrap pending
-
-`secretspec-linux-x64-musl` and `secretspec-linux-arm64-musl` are new package
-names. Both were still absent from the public npm registry when this status was
-last verified, so each needs the same manual first publish the four older
-platform packages had:
-
-1. Publish both once with a temporary granular access token, scope "All
-   Packages" / "Read and write". A "select packages" scope cannot name a
-   package that does not exist yet.
-2. Attach a Trusted Publisher to each (GitHub Actions, repo
-   `cachix/secretspec`, workflow `node-addon.yml`, no environment).
-3. Revoke the token.
-
-`napi pre-publish` publishes every platform package in one step, so until this
-is done the publish job in `node-addon.yml` fails and takes the main
-`secretspec` package with it.
+`node-addon.yml`, no environment). Revoke every temporary bootstrap token
+immediately after setup; release automation does not use or store one. Every
+release from here publishes via OIDC. `napi pre-publish` skips a platform
+package version that is already present, so the manually bootstrapped 0.20
+musl packages do not make the tag workflow fail.
 
 ### Hackage — token set, done
 

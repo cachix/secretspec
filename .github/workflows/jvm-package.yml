@@ -295,7 +295,9 @@ jobs:
           done
       - name: Pack
         run: |
-          ( cd secretspec-jvm && ./gradlew build --no-daemon )
+          # Native jobs test the SDK against each built library, and the
+          # consumer matrix below tests the assembled JAR on every target.
+          ( cd secretspec-jvm && ./gradlew assemble --no-daemon )
           mkdir -p artifacts/
           cp secretspec-jvm/library/build/libs/*.jar artifacts/
       - name: Verify runtime assets are present

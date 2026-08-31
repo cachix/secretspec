@@ -7,6 +7,11 @@ name: "FFI cdylib"
 on:
   workflow_call:
     inputs:
+      pre_release:
+        description: Run as part of the canonical pre-release suite
+        required: false
+        type: boolean
+        default: false
       release_tag:
         description: Existing GitHub Release tag to upload artifacts to
         required: false
@@ -35,6 +40,10 @@ on:
 jobs:
   build:
     name: ${{ matrix.target }}
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container || null }}
     permissions:

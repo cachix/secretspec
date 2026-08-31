@@ -7,6 +7,11 @@ name: "Java Virtual Machine SDK"
 on:
   workflow_call:
     inputs:
+      pre_release:
+        description: Run as part of the canonical pre-release suite
+        required: false
+        type: boolean
+        default: false
       publish:
         description: Publish the built package
         required: false
@@ -36,6 +41,10 @@ permissions:
 jobs:
   native:
     name: "Build ${{ matrix.rid }} native library"
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container || null }}
     strategy:
@@ -168,6 +177,10 @@ jobs:
 
   musl:
     name: "Build ${{ matrix.rid }} native library"
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false

@@ -16,6 +16,11 @@ name: "Go static lib"
 on:
   workflow_call:
     inputs:
+      pre_release:
+        description: Run as part of the canonical pre-release suite
+        required: false
+        type: boolean
+        default: false
       release_tag:
         description: Existing GitHub Release tag to upload artifacts to
         required: false
@@ -43,6 +48,10 @@ permissions:
 jobs:
   static:
     name: x86_64-linux-musl (fully static)
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

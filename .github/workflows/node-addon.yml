@@ -20,6 +20,11 @@ name: "Node addon"
 on:
   workflow_call:
     inputs:
+      pre_release:
+        description: Run as part of the canonical pre-release suite
+        required: false
+        type: boolean
+        default: false
       publish:
         description: Publish the built packages to npm
         required: false
@@ -51,6 +56,10 @@ permissions:
 jobs:
   addon:
     name: ${{ matrix.target }}
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container || null }}
     strategy:
@@ -115,6 +124,10 @@ jobs:
 
   musl:
     name: ${{ matrix.target }}
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     # GitHub Actions runs JavaScript actions inside an Alpine container only on
     # x64 runners, so an Alpine job container breaks checkout on the ARM runner.
     # These legs stay on the host and drive the build through docker run, the

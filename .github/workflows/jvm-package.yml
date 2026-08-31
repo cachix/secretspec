@@ -282,7 +282,11 @@ jobs:
           done
       - name: Pack
         run: |
-          ( cd secretspec-jvm && ./gradlew build --no-daemon )
+          # Native tests already ran once per build target above. At this point
+          # the libraries are staged as resources for the JAR, not in Cargo's
+          # target directory, so run packaging only; the consumer matrix below
+          # tests the assembled JAR on every supported runtime.
+          ( cd secretspec-jvm && ./gradlew assemble --no-daemon )
           mkdir -p artifacts/
           cp secretspec-jvm/library/build/libs/*.jar artifacts/
       - name: Verify runtime assets are present
@@ -399,7 +403,10 @@ jobs:
 
   publish:
     name: Publish to central repository
-    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish
+    # Maven Central ownership, signing, and repository secrets are not set up
+    # yet. Keep tag builds producing and testing the release JAR, but require an
+    # explicit manual dispatch before attempting publication.
+    if: inputs.publish
     needs: [consumer]
     runs-on: ubuntu-latest
     permissions:

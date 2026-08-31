@@ -29,6 +29,13 @@ class SecretSpecTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    @Test
+    void testNativeLibraryBaseNameMatchesJnaPlatformMapping() {
+        assertThat(NativeResolver.libraryBaseName("Windows 11")).isEqualTo("libsecretspec");
+        assertThat(NativeResolver.libraryBaseName("Linux")).isEqualTo("secretspec");
+        assertThat(NativeResolver.libraryBaseName("Mac OS X")).isEqualTo("secretspec");
+    }
+
     private static final String MANIFEST =
         "[project]\n" +
         "name = \"java-test\"\n" +

@@ -48,7 +48,7 @@ GitHub release URL in the commit body, and submit it to Nixpkgs.
 
 ## One-time registry setup
 
-External registry status was last verified on 2026-08-29. Recheck every item
+External registry status was last verified on 2026-08-31. Recheck every item
 still marked pending before tagging a release.
 
 Trusted Publishing works differently per registry. PyPI and RubyGems let you
@@ -82,38 +82,24 @@ The RubyGems Trusted Publisher is active for gem `secretspec` (repository owner
 environment `release`). OIDC-authenticated releases have published through
 0.19.1; no token or additional setup is needed.
 
-### npm — already done
+### npm — trusted publishing active, done
 
 npm has no pending-publisher mechanism, so this needed a manual first publish
 for the main `secretspec` package **and every platform sub-package**
 (`secretspec-linux-x64-gnu`, `secretspec-linux-arm64-gnu`,
-`secretspec-darwin-arm64`, `secretspec-win32-x64-msvc`) — 5 packages that each
+`secretspec-linux-x64-musl`, `secretspec-linux-arm64-musl`,
+`secretspec-darwin-arm64`, `secretspec-win32-x64-msvc`) — 7 packages that each
 had to exist before a Trusted Publisher could be attached. This has been done:
-all 5 packages are published (bootstrap-published once with a temporary
+all 7 packages are published (bootstrap-published once with a temporary
 granular access token, "All Packages" / "Read and write" scope — narrower
 "select packages" scopes 404 on brand-new package names, since that picker
 can't reference a package that doesn't exist yet), each has a Trusted
 Publisher configured (GitHub Actions, repo `cachix/secretspec`, workflow
-`node-addon.yml`, no environment), and the bootstrap token has been revoked.
-Nothing left to do — every release from here publishes via OIDC.
-
-### npm musl packages (0.20+) — bootstrap pending
-
-`secretspec-linux-x64-musl` and `secretspec-linux-arm64-musl` are new package
-names. Both were still absent from the public npm registry when this status was
-last verified, so each needs the same manual first publish the four older
-platform packages had:
-
-1. Publish both once with a temporary granular access token, scope "All
-   Packages" / "Read and write". A "select packages" scope cannot name a
-   package that does not exist yet.
-2. Attach a Trusted Publisher to each (GitHub Actions, repo
-   `cachix/secretspec`, workflow `node-addon.yml`, no environment).
-3. Revoke the token.
-
-`napi pre-publish` publishes every platform package in one step, so until this
-is done the publish job in `node-addon.yml` fails and takes the main
-`secretspec` package with it.
+`node-addon.yml`, no environment). Revoke every temporary bootstrap token
+immediately after setup; release automation does not use or store one. Every
+release from here publishes via OIDC. `napi pre-publish` skips a platform
+package version that is already present, so the manually bootstrapped 0.20
+musl packages do not make the tag workflow fail.
 
 ### Hackage — token set, done
 
@@ -188,27 +174,48 @@ intentionally leaves the checksum alone, making a missing checksum refresh
 visible during release review. There is no Swift registry credential or
 separate repository.
 
-### WinGet — bootstrap merged; token access must be confirmed
+### Maven Central (JVM, 0.20+) — setup pending
 
-[`winget-releaser`](https://github.com/vedantmgoyal9/winget-releaser)
-requires one package version in the WinGet Community Repository before it can
-derive future manifests. The manual `Cachix.SecretSpec` 0.18.0 bootstrap was
-merged in
+The JVM workflow builds and tests the multi-platform JAR on version tags, but
+does not publish it automatically yet. Before the first Maven Central release:
+
+1. Register and verify the `org.cachix` namespace with Maven Central.
+2. Create a GPG signing key and add `MAVEN_CENTRAL_SIGNING_KEY` and
+   `MAVEN_CENTRAL_SIGNING_PASSPHRASE` as GitHub Actions secrets.
+3. Create a Maven Central publisher token and add
+   `MAVEN_CENTRAL_TOKEN_USERNAME` and `MAVEN_CENTRAL_TOKEN_PASSWORD` as GitHub
+   Actions secrets.
+4. Manually dispatch `jvm-package.yml` from the release tag with
+   `publish: true`. Do not enable tag-triggered publication until this path has
+   successfully published and a clean consumer resolves the package from Maven
+   Central.
+
+### WinGet — manual post-release submission
+
+`Cachix.SecretSpec` was bootstrapped manually in
 [microsoft/winget-pkgs#413776](https://github.com/microsoft/winget-pkgs/pull/413776)
-on 2026-08-18.
+and is updated with a manual pull request after each stable GitHub Release.
+WinGet is intentionally not published from GitHub Actions: cross-repository
+submission would require storing a classic GitHub personal access token with
+access to every public repository the release operator can write to.
 
-Before relying on automatic publication, confirm that this repository can
-access a `WINGET_TOKEN` secret. No repository-level secret was visible when
-this status was last verified; an organization-level secret could not be
-verified. If it is not already available, create a classic GitHub personal
-access token for `domenkozar` with only the `public_repo` scope and store it as
-`WINGET_TOKEN`. The action does not support fine-grained tokens and uses the
-`domenkozar/winget-pkgs` fork created for the bootstrap submission.
+After the stable release and its Windows ZIP are published:
 
-After this one-time setup, `winget.yml` runs after each successful stable
-`Release` workflow and submits the matching
-`secretspec-x86_64-pc-windows-msvc.zip`. Manual dispatch accepts an existing
-published release tag for recovery or retry. Prerelease tags are skipped.
+1. Generate an updated `Cachix.SecretSpec` manifest with
+   [`wingetcreate update`](https://github.com/microsoft/winget-create/blob/main/doc/update.md),
+   using version `<version>` and installer URL
+   `https://github.com/cachix/secretspec/releases/download/v<version>/secretspec-x86_64-pc-windows-msvc.zip`.
+   Write the manifest to a local output directory; do not use `--submit` or
+   provide a token.
+2. Add the generated version directory to the existing
+   `domenkozar/winget-pkgs` fork, based on the latest `microsoft/winget-pkgs`
+   default branch.
+3. Review the version, installer URL, and SHA-256, then open a pull request from
+   the fork to `microsoft/winget-pkgs`. Use the release operator's normal local
+   GitHub or browser login; no SecretSpec Actions secret is needed.
+4. Confirm the upstream validation checks pass and follow the pull request
+   through merge. The WinGet update is a post-release distribution step, not a
+   gate for creating the SecretSpec version tag.
 
 ## Python (PyPI) — `python-wheels.yml`
 

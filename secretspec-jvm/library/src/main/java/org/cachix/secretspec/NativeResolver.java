@@ -60,7 +60,10 @@ final class NativeResolver {
                 */
                 return Native.load("secretspec_musl", SecretSpecFFI.class, OPTIONS);
             } else {
-                return Native.load("libsecretspec", SecretSpecFFI.class, OPTIONS);
+                // JNA adds the platform prefix and suffix to a library base name.
+                // "secretspec" therefore resolves to libsecretspec.so/.dylib on
+                // Unix and secretspec.dll on Windows.
+                return Native.load("secretspec", SecretSpecFFI.class, OPTIONS);
             }
         } catch (UnsatisfiedLinkError error) {
             throw new SecretSpecException("load", error.getMessage(), error);

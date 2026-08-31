@@ -410,7 +410,11 @@ fn check_file_security(path: &Path, _scope: RegistrationScope, _executable: bool
         return Err(discovery_error("provider endpoint is not a regular file"));
     }
     let system_scope = _scope == RegistrationScope::System;
-    match crate::windows_security::path_acl_is_trusted(path, system_scope) {
+    match crate::windows_security::path_acl_is_trusted(
+        path,
+        crate::windows_security::AclObjectKind::File,
+        system_scope,
+    ) {
         Ok(true) => Ok(()),
         Ok(false) => Err(discovery_error(
             "provider endpoint ACL is outside the trust domain",
@@ -426,7 +430,13 @@ fn check_parent_security(path: &Path, _scope: RegistrationScope) -> Result<()> {
     check_windows_parent_security_with(
         path,
         _scope == RegistrationScope::System,
-        crate::windows_security::path_acl_is_trusted,
+        |ancestor, system_scope| {
+            crate::windows_security::path_acl_is_trusted(
+                ancestor,
+                crate::windows_security::AclObjectKind::Directory,
+                system_scope,
+            )
+        },
     )
 }
 
@@ -1786,5 +1796,66 @@ mod tests {
             "higher ancestor was never checked"
         );
         assert!(error.contains("outside the trust domain"), "{error}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_accepts_a_trusted_chain_through_the_volume_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("bin");
+        std::fs::create_dir(&parent).unwrap();
+        let executable = parent.join("endpoint.exe");
+        std::fs::write(&executable, "endpoint").unwrap();
+        let resolved = executable.canonicalize().unwrap();
+        let resolved_parent = resolved.parent().unwrap().to_path_buf();
+        let volume_root = resolved.ancestors().last().unwrap().to_path_buf();
+        let mut checked = Vec::new();
+
+        check_windows_parent_security_with(&executable, false, |ancestor, _| {
+            checked.push(ancestor.to_path_buf());
+            // The directory ACL tests model the root's only untrusted effective
+            // right as FILE_ADD_SUBDIRECTORY, which is safe for existing paths.
+            Ok(true)
+        })
+        .unwrap();
+
+        assert_eq!(checked.first(), Some(&resolved_parent));
+        assert_eq!(checked.last(), Some(&volume_root));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_checks_the_resolved_target_of_a_directory_link() {
+        let directory = tempfile::tempdir().unwrap();
+        let real = directory.path().join("real");
+        let parent = real.join("bin");
+        std::fs::create_dir_all(&parent).unwrap();
+        let executable = parent.join("endpoint.exe");
+        std::fs::write(&executable, "endpoint").unwrap();
+        let linked = directory.path().join("linked");
+        if let Err(error) = std::os::windows::fs::symlink_dir(&real, &linked) {
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                return;
+            }
+            panic!("failed to create directory link: {error}");
+        }
+        let linked_executable = linked.join("bin").join("endpoint.exe");
+        let resolved_real = real.canonicalize().unwrap();
+        let mut checked = Vec::new();
+
+        check_windows_parent_security_with(&linked_executable, false, |ancestor, _| {
+            checked.push(ancestor.to_path_buf());
+            Ok(ancestor != resolved_real)
+        })
+        .unwrap_err();
+
+        assert!(
+            checked.contains(&resolved_real),
+            "resolved target was never checked: {checked:?}"
+        );
+        assert!(
+            !checked.contains(&linked),
+            "unresolved link spelling was checked: {checked:?}"
+        );
     }
 }

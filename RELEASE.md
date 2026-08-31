@@ -190,27 +190,32 @@ does not publish it automatically yet. Before the first Maven Central release:
    successfully published and a clean consumer resolves the package from Maven
    Central.
 
-### WinGet — bootstrap merged; token access must be confirmed
+### WinGet — manual post-release submission
 
-[`winget-releaser`](https://github.com/vedantmgoyal9/winget-releaser)
-requires one package version in the WinGet Community Repository before it can
-derive future manifests. The manual `Cachix.SecretSpec` 0.18.0 bootstrap was
-merged in
+`Cachix.SecretSpec` was bootstrapped manually in
 [microsoft/winget-pkgs#413776](https://github.com/microsoft/winget-pkgs/pull/413776)
-on 2026-08-18.
+and is updated with a manual pull request after each stable GitHub Release.
+WinGet is intentionally not published from GitHub Actions: cross-repository
+submission would require storing a classic GitHub personal access token with
+access to every public repository the release operator can write to.
 
-Before relying on automatic publication, confirm that this repository can
-access a `WINGET_TOKEN` secret. No repository-level secret was visible when
-this status was last verified; an organization-level secret could not be
-verified. If it is not already available, create a classic GitHub personal
-access token for `domenkozar` with only the `public_repo` scope and store it as
-`WINGET_TOKEN`. The action does not support fine-grained tokens and uses the
-`domenkozar/winget-pkgs` fork created for the bootstrap submission.
+After the stable release and its Windows ZIP are published:
 
-After this one-time setup, `winget.yml` runs after each successful stable
-`Release` workflow and submits the matching
-`secretspec-x86_64-pc-windows-msvc.zip`. Manual dispatch accepts an existing
-published release tag for recovery or retry. Prerelease tags are skipped.
+1. Generate an updated `Cachix.SecretSpec` manifest with
+   [`wingetcreate update`](https://github.com/microsoft/winget-create/blob/main/doc/update.md),
+   using version `<version>` and installer URL
+   `https://github.com/cachix/secretspec/releases/download/v<version>/secretspec-x86_64-pc-windows-msvc.zip`.
+   Write the manifest to a local output directory; do not use `--submit` or
+   provide a token.
+2. Add the generated version directory to the existing
+   `domenkozar/winget-pkgs` fork, based on the latest `microsoft/winget-pkgs`
+   default branch.
+3. Review the version, installer URL, and SHA-256, then open a pull request from
+   the fork to `microsoft/winget-pkgs`. Use the release operator's normal local
+   GitHub or browser login; no SecretSpec Actions secret is needed.
+4. Confirm the upstream validation checks pass and follow the pull request
+   through merge. The WinGet update is a post-release distribution step, not a
+   gate for creating the SecretSpec version tag.
 
 ## Python (PyPI) — `python-wheels.yml`
 

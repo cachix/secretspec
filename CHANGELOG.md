@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rights from file mutation rights, allowing endpoints below standard protected
   volume roots while continuing to reject replaceable path components.
 
+- External providers now request URI-specific credentials from SecretSpec at
+  runtime instead of declaring names in their installation claim or receiving
+  every configured credential during initialization. Provider aliases no
+  longer need a `credentials` table: `config provider login` discovers requested
+  names and stores them in a provider-private system-keyring namespace, while
+  configured sources remain lazy, explicit overrides.
+
 - Provider failures now preserve opaque interaction references in SecretSpec's
   local audit log, allowing CLI and GUI approval surfaces to correlate an
   actionable request without treating its ID as authorization material.

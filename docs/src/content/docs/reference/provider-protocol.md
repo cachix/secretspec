@@ -117,8 +117,7 @@ Its `application` member is:
     "base_dir": "/absolute/project/directory",
     "reason": "deploy production api",
     "requested_authorization_duration_ms": 28800000
-  },
-  "credentials": {}
+  }
 }
 ```
 
@@ -140,10 +139,6 @@ Rules:
   where the native address carries no corresponding component.
 - `context.base_dir` is the absolute directory against which provider-relative
   paths are resolved, or null when the provider has no project base directory.
-- `credentials` maps registered semantic credential names to secret strings. The host
-  obtains them through SecretSpec's provider-credential mechanism. They are
-  sent in the private inherited pipe, never argv or protocol
-  environment variables.
 - `context.reason` is the session-wide access reason or null. An endpoint
   needing a different reason must use another session.
 - `context.requested_authorization_duration_ms`, when present, is a positive
@@ -229,6 +224,100 @@ Metadata rules:
 
 The endpoint is ready when this response has been validated. Authentication or
 unlock that requires I/O may stay lazy until the first operation.
+
+### Credential brokerage (0.20+)
+
+Credential requirements are negotiated by the endpoint; they are not part of
+the public provider claim or the initialization application. An endpoint knows
+which authentication path a particular URI selects, so it requests only the
+credentials that path actually needs with `client.credential`. The client
+advertises this callback in `client_methods` and may answer it while
+`rpc.initialize` is still active or during a later token refresh.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "client.credential",
+  "params": {
+    "name": "access_token",
+    "scope": "example://account/team-a",
+    "required": true
+  },
+  "_meta": {
+    "deadline_unix_ms": 1760000000000,
+    "parent_request_id": 1
+  }
+}
+```
+
+`name` is a lowercase semantic identifier matching
+`^[a-z][a-z0-9_]*$` and is at most 256 bytes. `scope` is a stable,
+credential-free account or store identity chosen from the configured URI; it
+is non-empty and at most 4,096 bytes. `required` tells an interactive client
+that declining will prevent this authentication path, but does not turn an
+ordinary broker miss into a transport error.
+
+The result is either:
+
+```json
+{ "status": "found", "value": "secret value" }
+```
+
+or:
+
+```json
+{ "status": "missing" }
+```
+
+The host binds every lookup to the already discovered provider scheme, so an
+endpoint cannot request another provider's credentials by changing `scope`.
+SecretSpec accepts at most 64 distinct `(scope, name)` requests in one session.
+It resolves a name in this order:
+
+1. a matching `credentials` source on the selected provider alias, fetched
+   lazily only after the endpoint requests it;
+2. SecretSpec's provider-private operating-system keyring namespace, keyed by
+   provider scheme, a hash of `scope`, and `name`;
+3. `missing`.
+
+The endpoint remains free to try its native environment, workload identity,
+desktop agent, or browser authentication before or after a broker miss. This
+makes provider configuration optional: `credentials = { ... }` is an explicit
+storage override, not a second declaration of the endpoint's credential
+vocabulary. `secretspec config provider login <alias>` starts the endpoint,
+answers the credentials it requests, and stores those answers in the private
+keyring namespace when the alias has no explicit mappings. An endpoint that
+wants this login flow to provision its broker-managed authentication MUST make
+those URI-selected requests during initialization, even if it defers validating
+the returned values or contacting its backend until the first operation.
+
+A client that does not advertise `client.credential` behaves like an empty
+broker. An endpoint MUST handle that as `missing`; it MUST NOT wait for a
+callback the client did not advertise. Credential values travel only in framed
+requests and responses on the inherited private pipe, never in argv or protocol
+environment variables.
+
+Rust endpoints use the typed helper rather than constructing a reverse
+JSON-RPC request directly:
+
+```rust
+use secretspec_ipc::protocol::callback::CredentialParams;
+use secretspec_ipc::provider::request_credential;
+
+let token = request_credential(
+    context,
+    CredentialParams {
+        name: "access_token".into(),
+        scope: account_identity,
+        required: false,
+    },
+).await?;
+```
+
+`request_credential` returns `None` both for a broker miss and when the client
+did not advertise the callback. The returned `SecretValue` zeroizes its owned
+buffer on drop.
 
 ## Address schema
 

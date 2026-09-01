@@ -840,6 +840,22 @@ pub enum Generation {
         /// Key size in bits; `None` uses SecretSpec's default.
         bits: Option<usize>,
     },
+    /// An ASCII-armored OpenPGP transferable secret key (0.21+).
+    OpenPgpPrivateKey {
+        /// User ID certified by the generated key.
+        user_id: String,
+        /// Cryptographic profile used for the primary key and subkeys.
+        algorithm: OpenPgpAlgorithm,
+        /// Capabilities placed on separate subkeys.
+        capabilities: Vec<OpenPgpCapability>,
+    },
+    /// An unencrypted OpenSSH private key (0.21+).
+    SshPrivateKey {
+        /// Cryptographic algorithm and optional RSA key size.
+        algorithm: SshKeyAlgorithm,
+        /// Optional comment embedded in the OpenSSH key.
+        comment: Option<String>,
+    },
 }
 
 impl Generation {
@@ -874,6 +890,23 @@ impl Generation {
     /// An RSA private key with SecretSpec's default key size.
     pub fn rsa_private_key() -> Self {
         Self::RsaPrivateKey { bits: None }
+    }
+
+    /// An OpenPGP private key with signing and encryption subkeys (0.21+).
+    pub fn openpgp_private_key(user_id: impl Into<String>) -> Self {
+        Self::OpenPgpPrivateKey {
+            user_id: user_id.into(),
+            algorithm: OpenPgpAlgorithm::Ed25519,
+            capabilities: vec![OpenPgpCapability::Sign, OpenPgpCapability::Encrypt],
+        }
+    }
+
+    /// An Ed25519 OpenSSH private key without an embedded comment (0.21+).
+    pub fn ssh_private_key() -> Self {
+        Self::SshPrivateKey {
+            algorithm: SshKeyAlgorithm::Ed25519,
+            comment: None,
+        }
     }
 
     fn into_config(self) -> (&'static str, GenerateConfig) {
@@ -915,6 +948,111 @@ impl Generation {
                     ..GenerateOptions::default()
                 }),
             ),
+            Self::OpenPgpPrivateKey {
+                user_id,
+                algorithm,
+                capabilities,
+            } => (
+                "openpgp_private_key",
+                GenerateConfig::Options(GenerateOptions {
+                    user_id: Some(user_id),
+                    algorithm: Some(algorithm.as_str().to_string()),
+                    bits: algorithm.bits(),
+                    capabilities: Some(
+                        capabilities
+                            .into_iter()
+                            .map(|capability| capability.as_str().to_string())
+                            .collect(),
+                    ),
+                    ..GenerateOptions::default()
+                }),
+            ),
+            Self::SshPrivateKey { algorithm, comment } => (
+                "ssh_private_key",
+                GenerateConfig::Options(GenerateOptions {
+                    algorithm: Some(algorithm.as_str().to_string()),
+                    bits: algorithm.bits(),
+                    comment,
+                    ..GenerateOptions::default()
+                }),
+            ),
+        }
+    }
+}
+
+/// The algorithm for a generated OpenSSH private key.
+///
+/// Available starting with SecretSpec 0.21.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SshKeyAlgorithm {
+    /// Ed25519, the default for new SSH keys.
+    Ed25519,
+    /// RSA for compatibility. `None` uses the 3072-bit default.
+    Rsa { bits: Option<usize> },
+}
+
+impl SshKeyAlgorithm {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ed25519 => "ed25519",
+            Self::Rsa { .. } => "rsa",
+        }
+    }
+
+    fn bits(self) -> Option<usize> {
+        match self {
+            Self::Ed25519 => None,
+            Self::Rsa { bits } => bits,
+        }
+    }
+}
+
+/// The cryptographic profile for a generated OpenPGP key.
+///
+/// Available starting with SecretSpec 0.21.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OpenPgpAlgorithm {
+    /// Ed25519 certification/signing keys and Curve25519 encryption subkeys.
+    Ed25519,
+    /// RSA primary key and subkeys. `None` uses the 3072-bit default.
+    Rsa { bits: Option<usize> },
+}
+
+impl OpenPgpAlgorithm {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ed25519 => "ed25519",
+            Self::Rsa { .. } => "rsa",
+        }
+    }
+
+    fn bits(self) -> Option<usize> {
+        match self {
+            Self::Ed25519 => None,
+            Self::Rsa { bits } => bits,
+        }
+    }
+}
+
+/// A capability assigned to a generated OpenPGP subkey.
+///
+/// Available starting with SecretSpec 0.21.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OpenPgpCapability {
+    /// Generate a signing subkey using the selected algorithm.
+    Sign,
+    /// Generate an encryption subkey using the selected algorithm.
+    Encrypt,
+}
+
+impl OpenPgpCapability {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Sign => "sign",
+            Self::Encrypt => "encrypt",
         }
     }
 }
@@ -998,6 +1136,65 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("duplicate secret 'TOKEN'"));
+    }
+
+    #[test]
+    fn openpgp_generation_builder_uses_the_interoperable_default_profile() {
+        let (secret_type, config) =
+            Generation::openpgp_private_key("Release Bot <releases@example.com>").into_config();
+        assert_eq!(secret_type, "openpgp_private_key");
+        let GenerateConfig::Options(options) = config else {
+            panic!("OpenPGP generation must use options");
+        };
+        assert_eq!(
+            options.user_id.as_deref(),
+            Some("Release Bot <releases@example.com>")
+        );
+        assert_eq!(options.algorithm.as_deref(), Some("ed25519"));
+        assert_eq!(options.bits, None);
+        assert_eq!(
+            options.capabilities,
+            Some(vec!["sign".to_string(), "encrypt".to_string()])
+        );
+    }
+
+    #[test]
+    fn openpgp_generation_builder_maps_an_explicit_rsa_profile() {
+        let generation = Generation::OpenPgpPrivateKey {
+            user_id: "Legacy Bot <legacy@example.com>".to_string(),
+            algorithm: OpenPgpAlgorithm::Rsa { bits: Some(4096) },
+            capabilities: vec![OpenPgpCapability::Encrypt],
+        };
+        let (_, GenerateConfig::Options(options)) = generation.into_config() else {
+            panic!("OpenPGP generation must use options");
+        };
+        assert_eq!(options.algorithm.as_deref(), Some("rsa"));
+        assert_eq!(options.bits, Some(4096));
+        assert_eq!(options.capabilities, Some(vec!["encrypt".to_string()]));
+    }
+
+    #[test]
+    fn ssh_generation_builder_maps_default_and_rsa_profiles() {
+        let (secret_type, GenerateConfig::Options(default)) =
+            Generation::ssh_private_key().into_config()
+        else {
+            panic!("SSH generation must use options");
+        };
+        assert_eq!(secret_type, "ssh_private_key");
+        assert_eq!(default.algorithm.as_deref(), Some("ed25519"));
+        assert_eq!(default.bits, None);
+        assert_eq!(default.comment, None);
+
+        let generation = Generation::SshPrivateKey {
+            algorithm: SshKeyAlgorithm::Rsa { bits: Some(4096) },
+            comment: Some("deploy@example.com".to_string()),
+        };
+        let (_, GenerateConfig::Options(rsa)) = generation.into_config() else {
+            panic!("SSH generation must use options");
+        };
+        assert_eq!(rsa.algorithm.as_deref(), Some("rsa"));
+        assert_eq!(rsa.bits, Some(4096));
+        assert_eq!(rsa.comment.as_deref(), Some("deploy@example.com"));
     }
 
     #[test]

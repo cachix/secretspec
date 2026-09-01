@@ -1558,10 +1558,29 @@ pub struct GenerateOptions {
     /// Shell command to run (for `command` type)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    /// Key size in bits (for `rsa` type, default 2048)
+    /// RSA key size in bits (`rsa_private_key` defaults to 2048; OpenPGP and SSH RSA default to 3072).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bits: Option<usize>,
+    /// OpenPGP or SSH key algorithm (`ed25519` or `rsa`, default `ed25519`; 0.21+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub algorithm: Option<String>,
+    /// OpenPGP User ID bound to a generated certificate (0.21+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    /// OpenPGP subkey capabilities (`sign` and/or `encrypt`, 0.21+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<String>>,
+    /// Comment embedded in a generated OpenSSH private key (0.21+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
 }
+
+pub(crate) const OPENPGP_RSA_DEFAULT_BITS: usize = 3072;
+pub(crate) const OPENPGP_RSA_MIN_BITS: usize = 2048;
+pub(crate) const OPENPGP_RSA_MAX_BITS: usize = 8192;
+pub(crate) const SSH_RSA_DEFAULT_BITS: usize = 3072;
+pub(crate) const SSH_RSA_MIN_BITS: usize = 2048;
+pub(crate) const SSH_RSA_MAX_BITS: usize = 8192;
 
 /// Native coordinates of one externally managed secret: the value of a
 /// secret's `ref` field.
@@ -2182,7 +2201,8 @@ pub struct Secret {
     ///
     /// Available since SecretSpec 0.19.
     pub extract: Option<SecretExtract>,
-    /// The type of secret, used for generation (e.g., "password", "hex", "base64", "uuid", "command", "rsa_private_key")
+    /// The type of secret, used for generation. OpenPGP and OpenSSH private-key
+    /// generation are available in SecretSpec 0.21+.
     pub secret_type: Option<String>,
     /// Auto-generation configuration. Either `true` for defaults or a table with options.
     pub generate: Option<GenerateConfig>,
@@ -2468,10 +2488,139 @@ impl Secret {
                 }
             }
 
+            if self.secret_type.as_deref() == Some("openpgp_private_key") {
+                let opts = match gen_config {
+                    GenerateConfig::Options(opts) => opts,
+                    GenerateConfig::Bool(true) => {
+                        return Err(
+                            "type = \"openpgp_private_key\" requires generate = { user_id = \"Name <email>\" }"
+                                .into(),
+                        );
+                    }
+                    GenerateConfig::Bool(false) => {
+                        unreachable!("disabled generation handled above")
+                    }
+                };
+                let user_id = opts.user_id.as_deref().ok_or_else(|| {
+                    "type = \"openpgp_private_key\" requires generate.user_id".to_string()
+                })?;
+                if user_id.trim().is_empty() {
+                    return Err("generate.user_id cannot be empty or whitespace".into());
+                }
+                if user_id.chars().any(char::is_control) {
+                    return Err("generate.user_id cannot contain control characters".into());
+                }
+                if opts.comment.is_some() {
+                    return Err(
+                        "generate.comment is only valid for type = \"ssh_private_key\"".into(),
+                    );
+                }
+
+                match opts.algorithm.as_deref().unwrap_or("ed25519") {
+                    "ed25519" => {
+                        if opts.bits.is_some() {
+                            return Err(
+                                "generate.bits is only valid when generate.algorithm = \"rsa\""
+                                    .into(),
+                            );
+                        }
+                    }
+                    "rsa" => {
+                        let bits = opts.bits.unwrap_or(OPENPGP_RSA_DEFAULT_BITS);
+                        if !(OPENPGP_RSA_MIN_BITS..=OPENPGP_RSA_MAX_BITS).contains(&bits) {
+                            return Err(
+                                "OpenPGP RSA generate.bits must be between 2048 and 8192".into()
+                            );
+                        }
+                    }
+                    algorithm => {
+                        return Err(format!(
+                            "unknown OpenPGP algorithm '{algorithm}'; expected `ed25519` or `rsa`"
+                        ));
+                    }
+                }
+
+                if let Some(capabilities) = &opts.capabilities {
+                    if capabilities.is_empty() {
+                        return Err(
+                            "generate.capabilities must contain `sign`, `encrypt`, or both".into(),
+                        );
+                    }
+                    let mut seen = HashSet::new();
+                    for capability in capabilities {
+                        if !matches!(capability.as_str(), "sign" | "encrypt") {
+                            return Err(format!(
+                                "unknown OpenPGP capability '{capability}'; expected `sign` or `encrypt`"
+                            ));
+                        }
+                        if !seen.insert(capability) {
+                            return Err(format!(
+                                "generate.capabilities contains duplicate capability '{capability}'"
+                            ));
+                        }
+                    }
+                }
+            }
+
+            if self.secret_type.as_deref() == Some("ssh_private_key") {
+                let opts = match gen_config {
+                    GenerateConfig::Bool(true) => None,
+                    GenerateConfig::Options(opts) => Some(opts),
+                    GenerateConfig::Bool(false) => {
+                        unreachable!("disabled generation handled above")
+                    }
+                };
+                if let Some(opts) = opts {
+                    if opts.user_id.is_some() || opts.capabilities.is_some() {
+                        return Err(
+                            "generate.user_id and generate.capabilities are only valid for type = \"openpgp_private_key\""
+                                .into(),
+                        );
+                    }
+                    if opts
+                        .comment
+                        .as_deref()
+                        .is_some_and(|comment| comment.chars().any(char::is_control))
+                    {
+                        return Err("generate.comment cannot contain control characters".into());
+                    }
+                    match opts.algorithm.as_deref().unwrap_or("ed25519") {
+                        "ed25519" => {
+                            if opts.bits.is_some() {
+                                return Err(
+                                    "generate.bits is only valid when generate.algorithm = \"rsa\""
+                                        .into(),
+                                );
+                            }
+                        }
+                        "rsa" => {
+                            let bits = opts.bits.unwrap_or(SSH_RSA_DEFAULT_BITS);
+                            if !(SSH_RSA_MIN_BITS..=SSH_RSA_MAX_BITS).contains(&bits) {
+                                return Err(
+                                    "SSH RSA generate.bits must be between 2048 and 8192".into()
+                                );
+                            }
+                        }
+                        algorithm => {
+                            return Err(format!(
+                                "unknown SSH algorithm '{algorithm}'; expected `ed25519` or `rsa`"
+                            ));
+                        }
+                    }
+                }
+            }
+
             // Validate known types
             if let Some(ref t) = self.secret_type {
                 match t.as_str() {
-                    "password" | "hex" | "base64" | "uuid" | "command" | "rsa_private_key" => {}
+                    "password"
+                    | "hex"
+                    | "base64"
+                    | "uuid"
+                    | "command"
+                    | "rsa_private_key"
+                    | "openpgp_private_key"
+                    | "ssh_private_key" => {}
                     unknown => {
                         return Err(format!("unknown secret type '{}'", unknown));
                     }
@@ -2485,7 +2634,14 @@ impl Secret {
         {
             // Type is informational when not generating, but still validate known values
             match t.as_str() {
-                "password" | "hex" | "base64" | "uuid" | "command" | "rsa_private_key" => {}
+                "password"
+                | "hex"
+                | "base64"
+                | "uuid"
+                | "command"
+                | "rsa_private_key"
+                | "openpgp_private_key"
+                | "ssh_private_key" => {}
                 unknown => {
                     return Err(format!("unknown secret type '{}'", unknown));
                 }

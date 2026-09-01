@@ -243,6 +243,14 @@ struct InlineGenerateOptions {
     command: Option<String>,
     #[serde(default)]
     bits: Option<usize>,
+    #[serde(default)]
+    algorithm: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+    #[serde(default)]
+    capabilities: Option<Vec<String>>,
+    #[serde(default)]
+    comment: Option<String>,
 }
 
 impl InlineSpec {
@@ -329,6 +337,10 @@ impl InlineSecret {
                     charset: options.charset,
                     command: options.command,
                     bits: options.bits,
+                    algorithm: options.algorithm,
+                    user_id: options.user_id,
+                    capabilities: options.capabilities,
+                    comment: options.comment,
                 }),
             }),
             prompt: self.prompt,
@@ -496,5 +508,56 @@ mod tests {
         }"#)).unwrap();
         assert_eq!(response["ok"], false);
         assert_eq!(response["error"]["kind"], "invalid_request");
+    }
+
+    #[test]
+    fn inline_declaration_preserves_openpgp_generation_options() {
+        let secret: InlineSecret = serde_json::from_str(
+            r#"{
+              "description": "Release key",
+              "type": "openpgp_private_key",
+                "generate": {
+                  "user_id": "Release Bot <releases@example.com>",
+                  "algorithm": "rsa",
+                  "bits": 2048,
+                  "capabilities": ["sign"]
+              }
+            }"#,
+        )
+        .unwrap();
+        let secret = secret.into_config().unwrap();
+        let Some(GenerateConfig::Options(options)) = secret.generate else {
+            panic!("expected OpenPGP generation options");
+        };
+        assert_eq!(
+            options.user_id.as_deref(),
+            Some("Release Bot <releases@example.com>")
+        );
+        assert_eq!(options.algorithm.as_deref(), Some("rsa"));
+        assert_eq!(options.bits, Some(2048));
+        assert_eq!(options.capabilities, Some(vec!["sign".to_string()]));
+    }
+
+    #[test]
+    fn inline_declaration_preserves_ssh_generation_options() {
+        let secret: InlineSecret = serde_json::from_str(
+            r#"{
+              "description": "Deployment key",
+              "type": "ssh_private_key",
+              "generate": {
+                "algorithm": "rsa",
+                "bits": 4096,
+                "comment": "deploy@example.com"
+              }
+            }"#,
+        )
+        .unwrap();
+        let secret = secret.into_config().unwrap();
+        let Some(GenerateConfig::Options(options)) = secret.generate else {
+            panic!("expected SSH generation options");
+        };
+        assert_eq!(options.algorithm.as_deref(), Some("rsa"));
+        assert_eq!(options.bits, Some(4096));
+        assert_eq!(options.comment.as_deref(), Some("deploy@example.com"));
     }
 }

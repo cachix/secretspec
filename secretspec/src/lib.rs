@@ -114,7 +114,10 @@ pub use resolve::{
 };
 pub use secrets::ExportFormat;
 pub use secrets::Secrets;
-pub use spec::{Generation, PasswordCharset, Profile, Secret, Spec, SpecBuilder};
+pub use spec::{
+    Generation, OpenPgpAlgorithm, OpenPgpCapability, PasswordCharset, Profile, Secret, Spec,
+    SpecBuilder, SshKeyAlgorithm,
+};
 pub use validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
 
 #[cfg(test)]

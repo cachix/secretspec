@@ -1,6 +1,7 @@
 use crate::config::{
-    Config, CredentialSource, GlobalConfig, GlobalDefaults, NativeAddress, NativeAddressTemplate,
-    ParseError, Profile, Project, ProviderAlias, ProviderCache, RequireReason, Resolved, Secret,
+    Config, CredentialSource, GenerateConfig, GlobalConfig, GlobalDefaults, NativeAddress,
+    NativeAddressTemplate, ParseError, Profile, Project, ProviderAlias, ProviderCache,
+    RequireReason, Resolved, Secret,
 };
 use crate::error::{Result, SecretSpecError};
 use crate::secrets::Secrets;
@@ -5708,6 +5709,104 @@ MONGO_KEY = { description = "MongoDB keyfile", type = "command", generate = { co
             assert_eq!(opts.command.as_deref(), Some("echo test"));
         }
         other => panic!("Expected Options, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_config_parse_generate_openpgp_private_key() {
+    let toml_content = r#"
+[project]
+name = "test-gen"
+revision = "1.0"
+
+[profiles.default]
+RELEASE_KEY = { description = "Release key", type = "openpgp_private_key", generate = { user_id = "Release Bot <releases@example.com>", algorithm = "rsa", bits = 4096, capabilities = ["sign"] } }
+"#;
+    let config = parse_spec_from_str(toml_content, None).unwrap();
+    let secret = &config.profiles["default"].secrets["RELEASE_KEY"];
+    assert_eq!(secret.secret_type.as_deref(), Some("openpgp_private_key"));
+    match &secret.generate {
+        Some(crate::config::GenerateConfig::Options(opts)) => {
+            assert_eq!(
+                opts.user_id.as_deref(),
+                Some("Release Bot <releases@example.com>")
+            );
+            assert_eq!(opts.algorithm.as_deref(), Some("rsa"));
+            assert_eq!(opts.bits, Some(4096));
+            assert_eq!(
+                opts.capabilities.as_deref(),
+                Some(["sign".to_string()].as_slice())
+            );
+        }
+        other => panic!("Expected Options, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_config_rejects_invalid_openpgp_generation_options() {
+    for declaration in [
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = true }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = {} }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = " " } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", capabilities = [] } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", capabilities = ["authenticate"] } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", capabilities = ["sign", "sign"] } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", algorithm = "dsa" } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", algorithm = "ed25519", bits = 3072 } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", algorithm = "rsa", bits = 1024 } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", algorithm = "rsa", bits = 16384 } }"#,
+    ] {
+        let toml_content = format!(
+            "[project]\nname = \"test-gen\"\nrevision = \"1.0\"\n\n[profiles.default]\n{declaration}\n"
+        );
+        assert!(
+            parse_spec_from_str(&toml_content, None).is_err(),
+            "accepted invalid declaration: {declaration}"
+        );
+    }
+}
+
+#[test]
+fn test_config_parses_ssh_generation_options() {
+    let toml_content = r#"
+[project]
+name = "test-gen"
+revision = "1.0"
+
+[profiles.default]
+DEFAULT_KEY = { description = "Default key", type = "ssh_private_key", generate = true }
+RSA_KEY = { description = "RSA key", type = "ssh_private_key", generate = { algorithm = "rsa", bits = 4096, comment = "deploy@example.com" } }
+"#;
+    let config = parse_spec_from_str(toml_content, None).unwrap();
+    assert!(matches!(
+        config.profiles["default"].secrets["DEFAULT_KEY"].generate,
+        Some(GenerateConfig::Bool(true))
+    ));
+    let Some(GenerateConfig::Options(options)) =
+        &config.profiles["default"].secrets["RSA_KEY"].generate
+    else {
+        panic!("expected SSH generation options");
+    };
+    assert_eq!(options.algorithm.as_deref(), Some("rsa"));
+    assert_eq!(options.bits, Some(4096));
+    assert_eq!(options.comment.as_deref(), Some("deploy@example.com"));
+}
+
+#[test]
+fn test_config_rejects_invalid_ssh_generation_options() {
+    for declaration in [
+        r#"KEY = { description = "Key", type = "ssh_private_key", generate = { algorithm = "ecdsa" } }"#,
+        r#"KEY = { description = "Key", type = "ssh_private_key", generate = { algorithm = "ed25519", bits = 3072 } }"#,
+        r#"KEY = { description = "Key", type = "ssh_private_key", generate = { algorithm = "rsa", bits = 1024 } }"#,
+        r#"KEY = { description = "Key", type = "ssh_private_key", generate = { algorithm = "rsa", bits = 16384 } }"#,
+        r#"KEY = { description = "Key", type = "ssh_private_key", generate = { comment = "bad\ncomment" } }"#,
+        r#"KEY = { description = "Key", type = "ssh_private_key", generate = { user_id = "Bot" } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", comment = "ssh-only" } }"#,
+    ] {
+        let toml_content = format!(
+            "[project]\nname = \"test-gen\"\nrevision = \"1.0\"\n\n[profiles.default]\n{declaration}\n"
+        );
+        assert!(parse_spec_from_str(&toml_content, None).is_err());
     }
 }
 

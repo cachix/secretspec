@@ -66,10 +66,14 @@ azure_security_keyvault_secrets = { workspace = true, optional = true }
 tokio.workspace = true
 reqwest = { workspace = true, optional = true }
 rand.workspace = true
+rand_08.workspace = true
 rsa.workspace = true
+pgp.workspace = true
+smallvec.workspace = true
 uuid.workspace = true
 data-encoding.workspace = true
 sha2.workspace = true
+ssh-key.workspace = true
 detect-coding-agent.workspace = true
 age = { workspace = true, optional = true }
 kube = { workspace = true, optional = true }

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- OpenPGP and OpenSSH private keys can be generated entirely in Rust (0.21+).
+  OpenPGP generation uses an explicit User ID and signing, encryption, or
+  combined capability profiles; Ed25519/Curve25519 is the default, with
+  configurable RSA available for compatibility. OpenSSH generation likewise
+  defaults to Ed25519 and supports configurable RSA keys and comments.
+
 ## [0.20.0] - 2026-08-31
 
 ### Changed

@@ -165,7 +165,7 @@ Each secret variable is defined as a table with the following fields:
 | `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
 | `encoding` (0.19+) | `"base64"`, `"base64url"`, or `"hex"` | No | Encode logical values before storage writes and decode stored values after reads |
 | `extract` (0.19+) | table | No | Select one logical value from stored JSON (0.19+) or INI (0.20+) data with a pointer |
-| `type` | string | No | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key` |
+| `type` | string | No | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key`, `openpgp_private_key` (0.21+), `ssh_private_key` (0.21+) |
 | `generate` | boolean or table | No | Enable auto-generation when secret is missing |
 | `prompt` (0.19+) | boolean | No | Securely prompt for a missing value during `secretspec run`; the selected provider controls persistence |
 
@@ -1001,6 +1001,12 @@ MONGO_KEY = { description = "MongoDB keyfile", type = "command", generate = { co
 # RSA private key (PKCS1 PEM)
 JWT_SIGNING_KEY = { description = "JWT signing key", type = "rsa_private_key", generate = true }
 
+# OpenPGP signing key (0.21+)
+RELEASE_KEY = { description = "Release signing key", type = "openpgp_private_key", generate = { user_id = "Release Bot <releases@example.com>", capabilities = ["sign"] } }
+
+# OpenSSH Ed25519 private key (0.21+)
+DEPLOY_KEY = { description = "Deployment SSH key", type = "ssh_private_key", generate = true }
+
 # Type without generate: informational only, no auto-generation
 MANUAL_SECRET = { description = "Manually managed", type = "password" }
 ```
@@ -1015,6 +1021,38 @@ MANUAL_SECRET = { description = "Manually managed", type = "password" }
 | `uuid` | UUID v4 (36 chars) | none |
 | `command` | stdout of command | `command` (string, required) |
 | `rsa_private_key` | 2048-bit RSA private key (PKCS1 PEM) | `bits` (int) |
+| `openpgp_private_key` (0.21+) | ASCII-armored OpenPGP v4 transferable secret key | `user_id` (required), `algorithm` (`"ed25519"` or `"rsa"`), `bits` (RSA only), `capabilities` (`["sign"]`, `["encrypt"]`, or both) |
+| `ssh_private_key` (0.21+) | Unencrypted OpenSSH Ed25519 private key | `algorithm` (`"ed25519"` or `"rsa"`), `bits` (RSA only), `comment` (string) |
+
+#### OpenPGP private-key generation {/* #openpgp-private-key-generation-021 */}
+
+<VersionCompatibility version="0.21" />
+
+`openpgp_private_key` is generated entirely in Rust and does not invoke GnuPG.
+The default `algorithm = "ed25519"` creates an Ed25519 certification-only
+primary key plus separate Ed25519 signing and/or Curve25519 encryption subkeys.
+For compatibility with RSA-only consumers, `algorithm = "rsa"` uses RSA for
+the primary key and all requested subkeys. RSA defaults to 3072 bits;
+`bits` accepts 2048 through 8192 and is invalid with `"ed25519"`.
+
+Omitting `capabilities` selects both; the list must otherwise contain `"sign"`,
+`"encrypt"`, or both without duplicates. `generate = true` is invalid because
+every generated certificate requires an explicit `user_id`.
+
+The ASCII-armored transferable secret key has no OpenPGP passphrase and no
+expiration. Store it with an encrypted provider when it needs protection at
+rest. Its public certificate and fingerprint can be derived after import by
+OpenPGP tooling; SecretSpec stores the secret key as one logical value.
+
+#### SSH private-key generation {/* #ssh-private-key-generation-021 */}
+
+<VersionCompatibility version="0.21" />
+
+`ssh_private_key` is generated entirely in Rust. `generate = true` creates an
+unencrypted Ed25519 OpenSSH private key. Select `algorithm = "rsa"` for
+compatibility; RSA defaults to 3072 bits and accepts 2048 through 8192. `bits`
+is invalid with Ed25519. An optional `comment` is embedded in the key and must
+not contain control characters.
 
 #### Behavior
 
@@ -1024,6 +1062,11 @@ MANUAL_SECRET = { description = "Manually managed", type = "password" }
 - Subsequent runs find the stored value and skip generation (idempotent)
 - `generate` and `default` cannot both be set on the same secret
 - `type = "command"` requires `generate = { command = "..." }` (not just `generate = true`)
+- `type = "openpgp_private_key"` (0.21+) requires `generate.user_id`; omitted
+  `algorithm` and `capabilities` default to Ed25519/Curve25519 and both
+  signing and encryption, respectively
+- `type = "ssh_private_key"` (0.21+) defaults to Ed25519; RSA generation is
+  available with `generate = { algorithm = "rsa", bits = 4096 }`
 - The value-free preflights — [`check --json` / `check --explain`](/reference/cli/#resolution-report---json----explain)
   and the SDKs' report/no-values resolutions — never mint a value. Since
   SecretSpec 0.20 a **required** generatable secret that no provider holds is

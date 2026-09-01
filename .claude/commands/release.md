@@ -12,3 +12,4 @@ description: release secretspec crates
 - open a PR with `gh pr create`
 - wait for the PR to be merged (do not tag before merge)
 - after merge: `git checkout main && git pull`, then `git tag vX.X.X && git push origin vX.X.X`
+- after crates.io has published the new version, bump `secretspec` in Nixpkgs following the instructions in `RELEASE.md`

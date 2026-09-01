@@ -12,6 +12,7 @@ import reportExample from '../../../../../secretspec-jvm/examples/src/main/java/
 import typedAccessExample from '../../../../../secretspec-jvm/examples/src/main/java/org/cachix/examples/TypedAccessExample.java?raw';
 import asPathExample from '../../../../../secretspec-jvm/examples/src/main/java/org/cachix/examples/AsPathExample.java?raw';
 import callerExample from '../../../../../secretspec-jvm/examples/src/main/java/org/cachix/examples/CallerExample.java?raw';
+import inlineSpecExample from '../../../../../secretspec-jvm/examples/src/main/java/org/cachix/examples/InlineSpecExample.java?raw';
 
 <VersionCompatibility version="0.20" />
 
@@ -61,6 +62,13 @@ Visual C++ Redistributable, or system `libdbus` installation is needed.
 secret. A missing required secret throws `MissingRequiredException`; its
 `missing()` method returns the secret names. Other failures throw
 `SecretSpecException`, whose `kind()` method returns a stable error category.
+
+## Inline Spec (0.20+)
+
+Use `withInlineSpec(spec, baseDir)` to use an inline specification.
+Can be useful if you want to embed the specification inside your application.
+
+<Code code={inlineSpecExample} lang="java" meta='title="InlineSpecExample.java"' />
 
 ## Scopes {/* #scopes-017 */}
 

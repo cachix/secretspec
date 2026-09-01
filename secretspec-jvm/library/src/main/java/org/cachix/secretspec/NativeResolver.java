@@ -25,6 +25,7 @@ final class NativeResolver {
 
     interface SecretSpecFFI extends Library {
         Pointer secretspec_resolve(String requestJson);
+        Pointer secretspec_call(String requestJson);
         void secretspec_free(Pointer pointer);
         Pointer secretspec_abi_version();
     }
@@ -95,6 +96,29 @@ final class NativeResolver {
                 throw new SecretSpecException("ffi", "secretspec_resolve returned invalid UTF-8");
             }
             return result;
+        } finally {
+            if (responsePtr != Pointer.NULL) {
+                resolver.secretspec_free(responsePtr);
+            }
+        }
+    }
+
+    static String call(String requestJson) {
+        Pointer responsePtr = Pointer.NULL;
+        var resolver = getResolverInstance();
+        try {
+            responsePtr = resolver.secretspec_call(requestJson);
+            if (responsePtr == Pointer.NULL) {
+                throw new SecretSpecException("ffi", "secretspec_call returned null");
+            }
+
+            String result = responsePtr.getString(0, "UTF-8");
+            if (result == null) {
+                throw new SecretSpecException("ffi", "secretspec_call returned invalid UTF-8");
+            }
+            return result;
+        } catch (UnsatisfiedLinkError error) {
+            throw new SecretSpecException("capability", error.getMessage(), error);
         } finally {
             if (responsePtr != Pointer.NULL) {
                 resolver.secretspec_free(responsePtr);

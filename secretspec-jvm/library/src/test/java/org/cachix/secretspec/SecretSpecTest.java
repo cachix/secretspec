@@ -76,6 +76,58 @@ class SecretSpecTest {
     }
 
     @Test
+    void testInlineSpec() throws IOException {
+        Path inlineEnv = null;
+        try (var project = Project.create(MANIFEST, "")) {
+            Path dir = project.manifestPath.getParent();
+            inlineEnv = dir.resolve("inline.env");
+            Files.write(inlineEnv, "TOKEN=inline-java\n".getBytes(StandardCharsets.UTF_8));
+            try (var resolved = SecretSpec.builder()
+                    .withInlineSpec(
+                        "{\n" +
+                        "  \"project\": { \"name\": \"java-inline\" },\n" +
+                        "  \"providers\": { \"env\": \"dotenv://inline.env\" },\n" +
+                        "  \"profiles\": { \"default\": { \"secrets\": {\n" +
+                        "    \"TOKEN\": { \"description\": \"token\", \"providers\": [\"env\"] }\n" +
+                        "  } } }\n" +
+                        "}",
+                        dir.toString()
+                    )
+                    .withReason("Java inline test")
+                    .load()) {
+                assertThat(resolved.secret("TOKEN").get())
+                    .isEqualTo("inline-java");
+            }
+        }
+        finally {
+            if (inlineEnv != null) {
+                Files.deleteIfExists(inlineEnv);
+            }
+        }
+    }
+
+    @Test
+    void testNullInlineSpec() {
+        try (Project project = Project.create(MANIFEST, "DATABASE_URL=postgres://db\n")) {
+            Path directory = project.manifestPath.getParent();
+            Path originalDir = Path.of(System.getProperty("user.dir"));
+            try {
+                System.setProperty("user.dir", directory.toAbsolutePath().toString());
+                SecretSpecException error = catchThrowableOfType(SecretSpecException.class,
+                    () -> SecretSpec.builder()
+                        .withInlineSpec("null", directory.toString())
+                        .withReason("Java null inline test")
+                        .load()
+                );
+                assertThat(error).isNotNull();
+                assertThat(error.kind()).isEqualTo("invalid_request");
+            } finally {
+                System.setProperty("user.dir", originalDir.toAbsolutePath().toString());
+            }
+        }
+    }
+
+    @Test
     void testScope() {
         try (Project project = Project.create(
                 MANIFEST,
@@ -366,18 +418,18 @@ class SecretSpecTest {
 
     private static final class Project implements AutoCloseable {
         private final Path root;
-        final String manifestPath;
+        final Path manifestPath;
         final String provider;
 
         private Project(Path root) {
             this.root = root;
-            this.manifestPath = root.resolve("secretspec.toml").toString();
+            this.manifestPath = root.resolve("secretspec.toml");
             this.provider = "dotenv://" + root.resolve(".env");
         }
 
         SecretSpec.Builder builder() {
             return SecretSpec.builder()
-                    .withPath(manifestPath)
+                    .withPath(manifestPath.toString())
                     .withProvider(provider)
                     .withReason("Java test");
         }
@@ -386,7 +438,7 @@ class SecretSpecTest {
             try {
                 Path tempDir = Files.createTempDirectory("secretspec-jvm-");
                 Project project = new Project(tempDir);
-                writeString(Path.of(project.manifestPath), manifest);
+                writeString(project.manifestPath, manifest);
                 writeString(tempDir.resolve(".env"), dotenv);
                 return project;
             }

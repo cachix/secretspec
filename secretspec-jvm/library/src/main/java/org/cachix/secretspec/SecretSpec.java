@@ -2,6 +2,7 @@ package org.cachix.secretspec;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 
 
 /**
@@ -33,6 +34,9 @@ public class SecretSpec {
     public static final class Builder {
 
         private String path;
+        private boolean hasInlineSpec;
+        private JsonNode inlineSpec;
+        private String inlineBaseDir;
         private String provider;
         private String profile;
         private String scope;
@@ -43,7 +47,27 @@ public class SecretSpec {
 
         public Builder withPath(String path) {
             this.path = path;
+            this.hasInlineSpec = false;
+            this.inlineSpec = null;
+            this.inlineBaseDir = null;
             return this;
+        }
+
+        private Builder withInlineSpec(JsonNode inlineSpec, String baseDir) {
+            this.path = null;
+            this.hasInlineSpec = true;
+            this.inlineSpec = inlineSpec;
+            this.inlineBaseDir = baseDir;
+            return this;
+        }
+
+        public Builder withInlineSpec(String inlineSpec, String baseDir) {
+            try {
+                var document = SecretSpecJsonContext.MAPPER.readTree(inlineSpec);
+                return withInlineSpec(document, baseDir);
+            } catch (JsonProcessingException e) {
+                throw new IllegalArgumentException("invalid inline spec: " + inlineSpec);
+            }
         }
 
         public Builder withProvider(String provider) {
@@ -158,52 +182,83 @@ public class SecretSpec {
                     response.constraintViolations()
             );
         }
-    }
 
-    private static <T> T call(
-            ResolveRequest request,
-            String kind,
-            TypeReference<Envelope<T>> typeReference) {
+        private <T> T call(
+                ResolveRequest request,
+                String kind,
+                TypeReference<Envelope<T>> typeReference) {
 
-        String payload;
-        try {
-            payload = SecretSpecJsonContext.MAPPER.writeValueAsString(request);
-        } catch (JsonProcessingException e) {
-            throw new SecretSpecException("serialize", "Failed to serialize request: " + e.getMessage(), e);
+            boolean versioned = hasInlineSpec;
+
+            String payload;
+            try {
+                payload = versioned
+                    ? serializeInlineRequest(request)
+                    : SecretSpecJsonContext.MAPPER.writeValueAsString(request);
+            } catch (JsonProcessingException e) {
+                throw new SecretSpecException("serialize", "Failed to serialize request: " + e.getMessage(), e);
+            }
+
+            String raw = versioned ? NativeResolver.call(payload) : NativeResolver.resolve(payload);
+
+            Envelope<T> envelope;
+            try {
+                envelope = SecretSpecJsonContext.MAPPER.readValue(raw, typeReference);
+            } catch (JsonProcessingException error) {
+                throw new SecretSpecException("parse", error.getMessage(), error);
+            }
+
+            if (envelope == null) {
+                throw new SecretSpecException("parse", "native resolver returned an empty response");
+            }
+
+            if (!envelope.ok()) {
+                String errorKind = (envelope.error() != null && envelope.error().kind() != null)
+                        ? envelope.error().kind()
+                        : "unknown";
+                String errorMessage = (envelope.error() != null && envelope.error().message() != null)
+                        ? envelope.error().message()
+                        : "native resolver returned an unspecified error";
+
+                throw new SecretSpecException(errorKind, errorMessage);
+            }
+
+            if (envelope.response() == null) {
+                throw new SecretSpecException(
+                        "ffi",
+                        String.format("secretspec_resolve reported ok with no %s response", kind)
+                );
+            }
+
+            return envelope.response();
         }
 
-        String raw = NativeResolver.resolve(payload);
+        private String serializeInlineRequest(ResolveRequest request) {
+            JsonNode options;
+            try {
+                options = SecretSpecJsonContext.MAPPER.valueToTree(request);
+            } catch(IllegalArgumentException e) {
+                throw new SecretSpecException("serialize", "Failed to serialize options: " + e.getMessage(), e);
+            }
 
-        Envelope<T> envelope;
-        try {
-            envelope = SecretSpecJsonContext.MAPPER.readValue(raw, typeReference);
-        } catch (JsonProcessingException error) {
-            throw new SecretSpecException("parse", error.getMessage(), error);
+            var root = SecretSpecJsonContext.MAPPER.createObjectNode();
+            root.put("request_version", 1);
+            root.put("operation", "resolve");
+
+            var source = root.putObject("source");
+            source.put("kind", "inline");
+            source.put("spec_version", 1);
+            source.put("base_dir", inlineBaseDir);
+            source.set("spec", inlineSpec);
+
+            root.set("options", options);
+
+            try {
+                return SecretSpecJsonContext.MAPPER.writeValueAsString(root);
+            } catch (JsonProcessingException e) {
+                throw new SecretSpecException("serialize", "Failed to serialize inline request: " + e.getMessage(), e);
+            }
         }
-
-        if (envelope == null) {
-            throw new SecretSpecException("parse", "native resolver returned an empty response");
-        }
-
-        if (!envelope.ok()) {
-            String errorKind = (envelope.error() != null && envelope.error().kind() != null)
-                    ? envelope.error().kind()
-                    : "unknown";
-            String errorMessage = (envelope.error() != null && envelope.error().message() != null)
-                    ? envelope.error().message()
-                    : "native resolver returned an unspecified error";
-
-            throw new SecretSpecException(errorKind, errorMessage);
-        }
-
-        if (envelope.response() == null) {
-            throw new SecretSpecException(
-                    "ffi",
-                    String.format("secretspec_resolve reported ok with no %s response", kind)
-            );
-        }
-
-        return envelope.response();
     }
 
     private static void ensureSchemaVersion(int actual, int expected, String kind) {

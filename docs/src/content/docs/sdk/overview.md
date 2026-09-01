@@ -4,7 +4,7 @@ description: How the SecretSpec language SDKs work
 ---
 
 SecretSpec ships SDKs for Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell,
-PHP, C# (0.16+), Swift (0.18+) and JVM languages (0.20+). They all resolve
+PHP, C# (0.16+), Swift (0.18+), JVM languages (0.20+), and Elixir (0.21+). They all resolve
 secrets from the same declarative `secretspec.toml`, and they all behave
 identically, because they share one resolver.
 
@@ -41,6 +41,8 @@ that core rather than a reimplementation:
   and falls back to loading the same C ABI at runtime through `ext-ffi`.
 - **JVM (0.20+)** loads the same C ABI with JNA from a runtime-specific
   native asset in the Jar package.
+- **Elixir (0.21+)** uses a Rustler NIF and RustlerPrecompiled archives to call
+  the shared resolver directly from the BEAM.
 
 Because resolution happens in one place, every provider, chain, profile, and
 generator works the same in every language, and a new provider added to the core
@@ -66,8 +68,8 @@ print(resolved.secrets["DATABASE_URL"].get)
 See each language's page for the idiomatic spelling: [Rust](/sdk/rust),
 [Python](/sdk/python), [Go](/sdk/go), [Ruby](/sdk/ruby),
 [Node.js](/sdk/nodejs), [Haskell](/sdk/haskell), [PHP](/sdk/php),
-[C# (0.16+)](/sdk/csharp), [Swift (0.18+)](/sdk/swift)
-and [JVM languages (0.20+)](/sdk/jvm).
+[C# (0.16+)](/sdk/csharp), [Swift (0.18+)](/sdk/swift),
+[JVM languages (0.20+)](/sdk/jvm), and [Elixir (0.21+)](/sdk/elixir).
 
 Every builder also takes a [scope (0.17+)](/concepts/scopes/),
 resolving only a named subset of the profile and returning the selected name on
@@ -118,6 +120,8 @@ no runtime library path to set:
 - **JVM** ships the `cdylib` as runtime-specific native assets in one
   Jar package and loads the matching asset through JNA; glibc/musl Linux,
   Intel/Arm macOS, and x64/Arm64 Windows assets are included.
+- **Elixir (0.21+)** ships RustlerPrecompiled NIF archives for Linux x64/Arm64,
+  macOS Apple silicon, and Windows x64.
 
 Because the resolver is linked or embedded directly, the SDKs do not depend on a
 separately installed `cdylib` or an `LD_LIBRARY_PATH`/`SECRETSPEC_FFI_LIB`
@@ -142,6 +146,7 @@ SecretSpec 0.17.
 | PHP | ✓ | ✓ | — | ✓ | ✓ (0.17+) | — |
 | Haskell (source) | ✓ | — | — | — | ✓ (0.17+) | — |
 | JVM (0.20+) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Elixir (0.21+) | ✓ | ✓ | — | ✓ | ✓ | — |
 
 Most Linux packages build against a manylinux_2_28 baseline (glibc 2.28 or
 newer); the C# and JVM packages additionally ship musl Linux assets. Hackage

@@ -305,6 +305,12 @@ Provider credentials follow these rules:
   profiles should share one provider credential.
 - **Names are provider-specific.** The catalog above is exhaustive. Unsupported
   names are rejected before any source is read.
+- **External providers negotiate names (0.20+).** An out-of-tree endpoint asks
+  for the URI-specific credentials it needs at runtime. Its alias does not need
+  a `credentials` table: SecretSpec can load requested values from a
+  provider-private operating-system keyring namespace, and `config provider
+  login` discovers and stores them. A configured mapping remains useful as an
+  explicit source override and is read only if the endpoint requests its name.
 - **A URI may not carry a credential (0.19+).** A provider URI with a password
   (`scheme://user:PASSWORD@host`) is rejected, as is a service account token in
   the `onepassword+token://` userinfo. A URI is committed to `secretspec.toml`,

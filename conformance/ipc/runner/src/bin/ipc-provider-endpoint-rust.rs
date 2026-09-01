@@ -1,11 +1,14 @@
 use async_trait::async_trait;
 use secretspec_ipc::error::{ErrorKind, RpcError};
+use secretspec_ipc::protocol::callback::CredentialParams;
 use secretspec_ipc::protocol::provider::{
     self as wire, Address, ClearParams, ClearScope, GetManyParams, GetManyResult,
     InitializeApplication, Metadata, NamedGetResult, Persistence, ReflectParams, ReflectResult,
     ResolveAddressResult,
 };
-use secretspec_ipc::provider::{ProvidedSecret, ProviderHandler, SecretValue, serve_provider};
+use secretspec_ipc::provider::{
+    ProvidedSecret, ProviderHandler, SecretValue, request_credential, serve_provider,
+};
 use secretspec_ipc::server::{RequestContext, RpcResult, ServerConfig};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -127,9 +130,21 @@ impl ProviderHandler for MemoryProvider {
 
     async fn initialize(
         &self,
-        _context: &RequestContext,
+        context: &RequestContext,
         application: InitializeApplication,
     ) -> RpcResult<Metadata> {
+        // Optional by design: clients predating brokerage and native provider
+        // authentication remain valid. The adapter conformance path advertises
+        // the callback and verifies this request reaches its broker.
+        let _credential = request_credential(
+            context,
+            CredentialParams {
+                name: "conformance_token".into(),
+                scope: application.uri.clone(),
+                required: false,
+            },
+        )
+        .await?;
         Ok(Metadata {
             name: application.scheme.clone(),
             display_uri: format!("{}://conformance", application.scheme),

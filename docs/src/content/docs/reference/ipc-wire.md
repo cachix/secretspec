@@ -268,6 +268,19 @@ An implementation that answers no callbacks needs none of this: it advertises
 nothing, never receives a request, and continues to treat an inbound request as
 the protocol violation it is.
 
+Version 1 defines two callbacks (both available in SecretSpec 0.20+):
+
+- `client.prompt` lets a resolver ask its launching client for one declared
+  secret value;
+- `client.credential` lets an external provider request one semantic,
+  URI-scoped provider credential. Its closed request and result shapes are
+  specified by the [provider protocol](/reference/provider-protocol/#credential-brokerage-020).
+
+The server read loop must remain live during `rpc.initialize` as well as during
+ordinary methods. A credential callback commonly occurs inside provider
+initialization; waiting for initialization to return before consuming the
+callback response deadlocks both peers.
+
 ## Cancellation and terminal responses
 
 The client cancels an in-flight request with a notification:

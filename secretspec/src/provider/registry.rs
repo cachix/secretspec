@@ -127,8 +127,17 @@ pub(crate) fn credential_names_for_spec(spec: &str) -> Result<Vec<String>> {
             .map(|name| (*name).to_string())
             .collect());
     }
-    super::external::discover(scheme)
-        .map(|endpoint| endpoint.map_or_else(Vec::new, |endpoint| endpoint.credential_names))
+    super::external::discover(scheme).map(|_| Vec::new())
+}
+
+/// Whether `spec` names an external endpoint whose credential requirements
+/// are negotiated at runtime rather than registered statically (0.20+).
+pub(crate) fn spec_uses_dynamic_credentials(spec: &str) -> Result<bool> {
+    let (scheme, _) = split_spec(spec);
+    if registration_for_scheme(scheme).is_some() {
+        return Ok(false);
+    }
+    Ok(super::external::discover(scheme)?.is_some())
 }
 
 /// Whether the provider named by `spec` can return plaintext secret values.

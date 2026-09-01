@@ -368,6 +368,163 @@ type ProviderCredentialsKey = (String, String);
 type ProviderCredentialsSlot = Arc<Mutex<Option<ProviderCredentials>>>;
 type ProviderKey = (String, String);
 type ProviderSlot = Arc<Mutex<Option<Arc<dyn ProviderTrait>>>>;
+
+struct BrokerCredentialSource {
+    source: CredentialSource,
+    provider: Arc<dyn ProviderTrait>,
+}
+
+/// Host-side resolver for credentials requested by one external provider.
+///
+/// A manifest mapping is an explicit override, not a declaration of the
+/// endpoint's complete credential vocabulary. Requests without a mapping use
+/// SecretSpec's provider-private keyring namespace. Values are memoized only
+/// for the lifetime of the provider operation that owns this broker.
+struct SecretsProviderCredentialBroker {
+    alias: String,
+    scheme: String,
+    project: String,
+    profile: String,
+    configured: HashMap<String, BrokerCredentialSource>,
+    fallback: crate::provider::external::KeyringCredentialBroker,
+    cache: Mutex<HashMap<(String, String), Option<SecretString>>>,
+    audit: Option<Arc<AuditLogger>>,
+    reason: Option<String>,
+    caller: Option<CallerContext>,
+    #[cfg(feature = "cli")]
+    purpose: Option<IpcAuditPurpose>,
+}
+
+impl SecretsProviderCredentialBroker {
+    fn record(
+        &self,
+        name: &str,
+        provider_uri: String,
+        reference: Option<&NativeAddress>,
+        outcome: AuditOutcome,
+        error_kind: Option<&str>,
+    ) {
+        let Some(logger) = &self.audit else { return };
+        #[cfg(feature = "cli")]
+        let purpose = self.purpose.as_ref().map(|purpose| AuditPurpose {
+            consumer: &purpose.consumer,
+            operation: &purpose.operation,
+            host: purpose.host.as_deref(),
+            path: purpose.path.as_deref(),
+        });
+        #[cfg(not(feature = "cli"))]
+        let purpose: Option<AuditPurpose<'_>> = None;
+        logger.record(
+            AuditAction::Get,
+            AuditContext {
+                project: &self.project,
+                profile: &self.profile,
+                scope: None,
+                key: Some(name),
+                keys: &[],
+                command: Some("credential"),
+                provider_uri: Some(provider_uri),
+                reference: reference.map(NativeAddress::render),
+                outcome,
+                error_kind,
+                interaction: None,
+                reason: self.reason.as_deref(),
+                caller: self.caller.as_ref(),
+                purpose,
+            },
+        );
+    }
+}
+
+impl crate::provider::external::ProviderCredentialBroker for SecretsProviderCredentialBroker {
+    fn get(
+        &self,
+        scheme: &str,
+        request: &secretspec_ipc::protocol::callback::CredentialParams,
+    ) -> Result<Option<SecretString>> {
+        // The responder supplies the discovered endpoint's scheme, but retain
+        // this check at the authority boundary so a future caller cannot reuse
+        // a broker across provider principals.
+        if scheme != self.scheme {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "external provider credential principal changed".to_string(),
+            ));
+        }
+        let identity = (
+            if self.configured.contains_key(&request.name) {
+                String::new()
+            } else {
+                request.scope.clone()
+            },
+            request.name.clone(),
+        );
+        // Hold the per-operation cache lock through population. Credential
+        // callbacks may be concurrent; single-flight prevents duplicate source
+        // reads or duplicate interactive prompts for one identity.
+        let mut cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = cache.get(&identity).cloned() {
+            return Ok(cached);
+        }
+
+        let value = if let Some(configured) = self.configured.get(&request.name) {
+            let fetched = configured
+                .provider
+                .get(configured.source.address(&self.project, &request.name));
+            let (outcome, error_kind) = match &fetched {
+                Ok(Some(_)) => (AuditOutcome::Found, None),
+                Ok(None) => (AuditOutcome::Missing, None),
+                Err(error) => (AuditOutcome::Error, Some(error.kind())),
+            };
+            self.record(
+                &request.name,
+                configured.provider.uri(),
+                configured.source.reference.as_ref(),
+                outcome,
+                error_kind,
+            );
+            match fetched? {
+                Some(value) => Some(value),
+                None => {
+                    return Err(credential_missing_error(
+                        &request.name,
+                        &self.alias,
+                        &configured.source.location(&self.project, &request.name),
+                    ));
+                }
+            }
+        } else {
+            let address = crate::provider::external::brokered_credential_address(
+                scheme,
+                &request.scope,
+                &request.name,
+            );
+            let fetched = crate::provider::external::ProviderCredentialBroker::get(
+                &self.fallback,
+                scheme,
+                request,
+            );
+            let (outcome, error_kind) = match &fetched {
+                Ok(Some(_)) => (AuditOutcome::Found, None),
+                Ok(None) => (AuditOutcome::Missing, None),
+                Err(error) => (AuditOutcome::Error, Some(error.kind())),
+            };
+            self.record(
+                &request.name,
+                "keyring://".to_string(),
+                Some(&address),
+                outcome,
+                error_kind,
+            );
+            fetched?
+        };
+
+        cache.insert(identity, value.clone());
+        Ok(value)
+    }
+}
 type GroupFetch<'a> = (
     Option<&'a str>,
     Vec<&'a PlannedSecret>,
@@ -768,10 +925,11 @@ pub struct Secrets {
     require_reason: RequireReason,
     /// Audit logger, if auditing is enabled (user-global `[audit]` config). `None`
     /// disables auditing. Built once per `Secrets` so all events share a session id.
-    audit: Option<AuditLogger>,
-    /// Provider credentials memoized per (profile, raw provider spec), so N
-    /// secrets routed at one alias fetch its credentials from the source provider
-    /// once per session, not once per provider build. The stored *values* are
+    audit: Option<Arc<AuditLogger>>,
+    /// Built-in provider credentials memoized per (profile, raw provider spec),
+    /// so N secrets routed at one alias fetch its credentials from the source
+    /// provider once per session, not once per provider build. External
+    /// providers use their operation-local lazy broker instead. The stored *values* are
     /// profile-independent (see `PROVIDER_CREDENTIAL_SCOPE`); the profile is kept
     /// in the key only so each profile's operations audit their own credential
     /// read. Cleared by [`Secrets::store_provider_credential`] so a freshly
@@ -1144,7 +1302,8 @@ impl Secrets {
                 .as_ref()
                 .and_then(|g| g.audit.clone())
                 .unwrap_or_default(),
-        );
+        )
+        .map(Arc::new);
         Ok(Self {
             require_reason: config.project.require_reason.unwrap_or_default(),
             config,
@@ -1528,13 +1687,22 @@ impl Secrets {
         // credential stores merely to discover that it cannot build the alias.
         self.ensure_provider_use_allowed(&spec, allow_inline_cached)?;
 
-        // When `spec` names an alias with a `credentials` map, resolve those
-        // values from their source providers and hand them to the built provider.
+        let profile = self.resolve_profile_name(profile);
+        let resolved = self.resolve_provider_spec(spec.clone());
+        if crate::provider::spec_uses_dynamic_credentials(&resolved)? {
+            let broker = self.external_provider_credential_broker(&spec, &resolved, &profile)?;
+            let mut provider = crate::provider::external_provider_from_spec(&resolved, broker)
+                .map_err(|err| self.explain_unknown_provider(err, &resolved))?;
+            self.apply_provider_context(provider.as_mut(), Some(&profile));
+            return Ok(provider);
+        }
+
+        // Built-in providers declare a closed credential vocabulary. Resolve
+        // every configured value before construction and inject that snapshot.
         // Memoized per (profile, spec) so rebuilding a provider (per-secret chain walks,
         // interactive prompting) does not refetch the same credentials from
         // the source store, while a profile switch on this instance does not
         // reuse the other profile's credentials.
-        let profile = self.resolve_profile_name(profile);
         let key = (profile.clone(), spec.clone());
         let credentials = self
             .provider_credentials_cache
@@ -1545,6 +1713,59 @@ impl Secrets {
             allow_inline_cached,
             Some(&profile),
         )
+    }
+
+    fn external_provider_credential_broker(
+        &self,
+        alias: &str,
+        resolved: &str,
+        profile: &str,
+    ) -> Result<Arc<dyn crate::provider::external::ProviderCredentialBroker>> {
+        self.validate_credential_sources(alias)?;
+        let declared = self
+            .lookup_provider_alias_entry(alias)
+            .and_then(ProviderAlias::credentials)
+            .map(sorted_credential_entries)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, source)| (name.clone(), source.clone()))
+            .collect::<Vec<_>>();
+
+        // Credentials sharing a source share one provider session, just as
+        // they did under eager resolution. Constructing these providers is
+        // side-effect free; their stores are contacted only from `get` below.
+        let mut providers: HashMap<String, Arc<dyn ProviderTrait>> = HashMap::new();
+        let mut configured = HashMap::new();
+        for (name, source) in declared {
+            let provider = match providers.entry(source.provider.clone()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let provider: Arc<dyn ProviderTrait> =
+                        Arc::from(self.build_source_provider(&source.provider)?);
+                    entry.insert(provider.clone());
+                    provider
+                }
+            };
+            configured.insert(name, BrokerCredentialSource { source, provider });
+        }
+
+        let scheme = crate::provider::provider_url_from_spec(resolved)?
+            .scheme()
+            .to_string();
+        Ok(Arc::new(SecretsProviderCredentialBroker {
+            alias: alias.to_string(),
+            scheme,
+            project: self.config.project.name.clone(),
+            profile: profile.to_string(),
+            configured,
+            fallback: Default::default(),
+            cache: Mutex::new(HashMap::new()),
+            audit: self.audit.clone(),
+            reason: self.reason.clone(),
+            caller: self.caller.clone(),
+            #[cfg(feature = "cli")]
+            purpose: IPC_AUDIT_PURPOSE.with(|slot| slot.borrow().clone()),
+        }))
     }
 
     /// [`Self::build_provider`], memoized within one resolution so repeated
@@ -1622,6 +1843,11 @@ impl Secrets {
         let resolved = self.resolve_provider_spec(spec.to_string());
         let mut provider = crate::provider::provider_from_spec(resolved.as_str(), credentials)
             .map_err(|err| self.explain_unknown_provider(err, &resolved))?;
+        self.apply_provider_context(provider.as_mut(), profile);
+        Ok(provider)
+    }
+
+    fn apply_provider_context(&self, provider: &mut dyn ProviderTrait, profile: Option<&str>) {
         provider.with_base_dir(&self.config_dir);
         provider.set_reason(self.reason.clone());
         provider.set_requested_authorization_duration(self.requested_authorization_duration);
@@ -1638,11 +1864,10 @@ impl Secrets {
         if let Some(profile) = profile {
             provider.set_profile(profile);
         }
-        Ok(provider)
     }
 
-    /// Resolves the credentials declared by a provider alias, fetching each
-    /// semantic `(name, source)` entry from its source provider.
+    /// Resolves the credentials declared by a built-in provider alias, fetching
+    /// each semantic `(name, source)` entry from its source provider.
     ///
     /// `profile` scopes the convention path a bare-string source reads from.
     /// Returns an empty map for a spec that is not an alias, or an alias with
@@ -1746,6 +1971,31 @@ impl Secrets {
             .collect())
     }
 
+    /// Initializes an external provider with a caller-supplied credential
+    /// broker. Used by `config provider login` to discover URI-specific
+    /// requirements and store answers without a per-alias credentials table.
+    #[cfg(any(feature = "cli", test))]
+    pub(crate) fn initialize_external_provider_with_broker(
+        &self,
+        spec: &str,
+        broker: Arc<dyn crate::provider::external::ProviderCredentialBroker>,
+    ) -> Result<()> {
+        self.ensure_provider_use_allowed(spec, false)?;
+        let resolved = self.resolve_provider_spec(spec.to_string());
+        let url = crate::provider::provider_url_from_spec(&resolved)?;
+        let endpoint = crate::provider::external::discover(url.scheme())?
+            .ok_or_else(|| SecretSpecError::ProviderNotFound(url.scheme().to_string()))?;
+        let mut provider = crate::provider::external::ExternalProvider::from_url(endpoint, &url);
+        provider.with_credential_broker(broker);
+        provider.with_base_dir(&self.config_dir);
+        provider.set_reason(self.reason.clone());
+        provider.set_requested_authorization_duration(self.requested_authorization_duration);
+        provider.set_caller(self.caller.clone());
+        provider.set_project(&self.config.project.name);
+        provider.set_profile(&self.resolve_profile_name(None));
+        provider.initialize()
+    }
+
     /// Stores one provider credential at its source provider — the exact
     /// location [`Self::resolve_provider_credentials`] later reads it from (a `ref`
     /// or the profile-independent convention path for the active project). Errors
@@ -1789,6 +2039,42 @@ impl Secrets {
         Ok(source.location(&project, name))
     }
 
+    /// Stores one dynamically requested external-provider credential in the
+    /// provider-private keyring namespace and records the write like an
+    /// explicitly mapped credential source (0.20+).
+    #[cfg(any(feature = "cli", test))]
+    pub(crate) fn store_external_provider_credential(
+        &self,
+        scheme: &str,
+        scope: &str,
+        name: &str,
+        value: &SecretString,
+    ) -> Result<String> {
+        self.ensure_reason_for(AuditAction::Set, Some(name))?;
+        let result =
+            crate::provider::external::store_brokered_credential(scheme, scope, name, value);
+        let address = crate::provider::external::brokered_credential_address(scheme, scope, name);
+        let (outcome, error_kind) = match &result {
+            Ok(_) => (AuditOutcome::Written, None),
+            Err(error) => (AuditOutcome::Error, Some(error.kind())),
+        };
+        let profile = self.resolve_profile_name(None);
+        self.record(
+            AuditAction::Set,
+            &profile,
+            outcome,
+            AuditFields {
+                key: Some(name),
+                command: Some("credential"),
+                provider_uri: Some("keyring://".into()),
+                reference: Some(&address),
+                error_kind,
+                ..Default::default()
+            },
+        );
+        result
+    }
+
     /// Validates a spec's `credentials` (pure map lookups, no I/O): every name
     /// must be accepted by the target provider, every source must resolve to a
     /// known provider, and no source may itself declare credentials. Credential
@@ -1806,9 +2092,12 @@ impl Secrets {
         };
         let resolved_target = self.resolve_provider_spec(spec.to_string());
         let supported = crate::provider::credential_names_for_spec(&resolved_target)?;
+        let dynamic = crate::provider::spec_uses_dynamic_credentials(&resolved_target)?;
         let provider_name = crate::provider::provider_display_name_for_spec(&resolved_target);
         for (name, source) in sorted_credential_entries(credentials) {
-            if !supported.iter().any(|supported| supported == name) {
+            if dynamic {
+                validate_provider_credential_name(name)?;
+            } else if !supported.iter().any(|supported| supported == name) {
                 let supported_display = if supported.is_empty() {
                     "none".to_string()
                 } else {
@@ -2301,7 +2590,7 @@ impl Secrets {
     /// Attach an audit logger (for testing which events an operation emits).
     #[cfg(test)]
     pub(crate) fn set_audit_for_test(&mut self, logger: crate::audit::AuditLogger) {
-        self.audit = Some(logger);
+        self.audit = Some(Arc::new(logger));
     }
 
     /// Override the `require_reason` policy (for testing the gate without going
@@ -6839,6 +7128,19 @@ impl Secrets {
     }
 }
 
+fn validate_provider_credential_name(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+    if name.len() > 256
+        || !matches!(chars.next(), Some('a'..='z'))
+        || chars.any(|character| !matches!(character, 'a'..='z' | '0'..='9' | '_'))
+    {
+        return Err(SecretSpecError::ProviderOperationFailed(format!(
+            "invalid provider credential name '{name}'"
+        )));
+    }
+    Ok(())
+}
+
 /// Output format for [`Secrets::export`]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
@@ -7427,6 +7729,103 @@ mod provider_credentials_cache_tests {
             );
         }
         assert_eq!(fetches.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[cfg(test)]
+mod external_provider_credential_broker_tests {
+    use super::*;
+    use crate::provider::external::ProviderCredentialBroker;
+
+    struct RecordingSource {
+        reads: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl ProviderTrait for RecordingSource {
+        fn convention_address(
+            &self,
+            _project: &str,
+            _profile: &str,
+            key: &str,
+        ) -> Result<NativeAddress> {
+            Ok(NativeAddress {
+                item: key.to_string(),
+                ..NativeAddress::default()
+            })
+        }
+
+        fn get(&self, address: Address<'_>) -> Result<Option<SecretString>> {
+            let item = match address {
+                Address::Native(address) => address.item.clone(),
+                Address::Convention { key, .. } => key.to_string(),
+            };
+            self.reads.lock().unwrap().push(item.clone());
+            Ok(Some(SecretString::new(format!("value-for-{item}").into())))
+        }
+
+        fn set(&self, _address: Address<'_>, _value: &SecretString) -> Result<()> {
+            Ok(())
+        }
+
+        fn name(&self) -> &str {
+            "recording"
+        }
+
+        fn uri(&self) -> String {
+            "recording://".into()
+        }
+    }
+
+    #[test]
+    fn configured_external_credentials_are_read_only_when_requested_and_memoized() {
+        let reads = Arc::new(Mutex::new(Vec::new()));
+        let source: Arc<dyn ProviderTrait> = Arc::new(RecordingSource {
+            reads: reads.clone(),
+        });
+        let configured = [("access_token", "token-a"), ("client_secret", "token-b")]
+            .into_iter()
+            .map(|(name, item)| {
+                (
+                    name.to_string(),
+                    BrokerCredentialSource {
+                        source: CredentialSource {
+                            provider: "recording://".into(),
+                            reference: Some(NativeAddress {
+                                item: item.into(),
+                                ..NativeAddress::default()
+                            }),
+                        },
+                        provider: source.clone(),
+                    },
+                )
+            })
+            .collect();
+        let broker = SecretsProviderCredentialBroker {
+            alias: "remote".into(),
+            scheme: "example".into(),
+            project: "payments".into(),
+            profile: "production".into(),
+            configured,
+            fallback: Default::default(),
+            cache: Mutex::new(HashMap::new()),
+            audit: None,
+            reason: None,
+            caller: None,
+            #[cfg(feature = "cli")]
+            purpose: None,
+        };
+        let request = secretspec_ipc::protocol::callback::CredentialParams {
+            name: "access_token".into(),
+            scope: "example://team-a".into(),
+            required: true,
+        };
+
+        let first = broker.get("example", &request).unwrap().unwrap();
+        let second = broker.get("example", &request).unwrap().unwrap();
+
+        assert_eq!(first.expose_secret(), "value-for-token-a");
+        assert_eq!(second.expose_secret(), "value-for-token-a");
+        assert_eq!(reads.lock().unwrap().as_slice(), ["token-a"]);
     }
 }
 

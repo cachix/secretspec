@@ -389,16 +389,22 @@ where
                         let _ = commit(&writer_tx, response, active_limit).await;
                         break;
                     }
-                    let selected =
-                        match initialize(&request, handler.as_ref(), &config, &writer_tx, &peer)
-                            .await
-                        {
-                            Ok(selected) => selected,
-                            Err(error) => {
-                                fatal = Some(error);
-                                break;
-                            }
-                        };
+                    let selected = match initialize(
+                        &request,
+                        handler.as_ref(),
+                        &config,
+                        &writer_tx,
+                        &peer,
+                        &mut reader,
+                    )
+                    .await
+                    {
+                        Ok(selected) => selected,
+                        Err(error) => {
+                            fatal = Some(error);
+                            break;
+                        }
+                    };
                     let Some((limits, capabilities)) = selected else {
                         break;
                     };
@@ -538,13 +544,17 @@ where
     }
 }
 
-async fn initialize<H: ApplicationHandler>(
+async fn initialize<R, H: ApplicationHandler>(
     request: &Request,
     handler: &H,
     config: &ServerConfig,
     writer: &mpsc::Sender<WriterCommand>,
     peer: &Peer,
-) -> Result<Option<(Limits, Vec<String>)>> {
+    reader: &mut AsyncFrameReader<R>,
+) -> Result<Option<(Limits, Vec<String>)>>
+where
+    R: AsyncRead + Unpin,
+{
     let params: InitializeParams<Value> = match serde_json::from_value(request.params.clone()) {
         Ok(params) => params,
         Err(_) => {
@@ -618,32 +628,101 @@ async fn initialize<H: ApplicationHandler>(
         .await?;
         return Ok(None);
     }
-    let application = match tokio::time::timeout_at(
-        context.deadline,
-        handler.initialize(&context, params.application),
-    )
-    .await
-    {
-        Ok(Ok(application)) => application,
-        Ok(Err(error)) => {
-            commit(
-                writer,
-                Response::error(Some(request.id), error),
-                ABSOLUTE_MAX_FRAME_BYTES,
-            )
-            .await?;
-            return Ok(None);
-        }
-        Err(_) => {
-            context.cancellation.cancel();
-            commit(
-                writer,
-                Response::error(Some(request.id), RpcError::new(ErrorKind::DeadlineExceeded)),
-                ABSOLUTE_MAX_FRAME_BYTES,
-            )
-            .await?;
-            return Ok(None);
-        }
+    // Initialization may itself call the client (for example to request a
+    // provider credential). Keep consuming that one transport while the
+    // application future is pending; otherwise the callback response sits in
+    // the pipe behind a read loop that cannot resume until initialization has
+    // completed, producing a deadline deadlock.
+    let mut operation = Box::pin(handler.initialize(&context, params.application));
+    let application = loop {
+        let outcome = tokio::select! {
+            biased;
+            _ = tokio::time::sleep_until(context.deadline) => {
+                context.cancellation.cancel();
+                commit(
+                    writer,
+                    Response::error(
+                        Some(request.id),
+                        RpcError::new(ErrorKind::DeadlineExceeded),
+                    ),
+                    ABSOLUTE_MAX_FRAME_BYTES,
+                )
+                .await?;
+                return Ok(None);
+            }
+            _ = context.cancellation.cancelled() => {
+                commit(
+                    writer,
+                    Response::error(Some(request.id), RpcError::new(ErrorKind::Cancelled)),
+                    ABSOLUTE_MAX_FRAME_BYTES,
+                )
+                .await?;
+                return Ok(None);
+            }
+            outcome = &mut operation => Some(outcome),
+            frame = reader.read_frame(ABSOLUTE_MAX_FRAME_BYTES) => {
+                let Some(frame) = frame? else {
+                    context.cancellation.cancel();
+                    return Err(Error::Closed);
+                };
+                match Envelope::parse_classified(&frame) {
+                    Ok(Envelope::Response(response)) => {
+                        if !peer.deliver(response).await {
+                            context.cancellation.cancel();
+                            return Err(Error::Protocol(
+                                "unmatched callback response during initialization",
+                            ));
+                        }
+                        None
+                    }
+                    Ok(Envelope::Notification(notification)) => {
+                        if notification.method == rpc::CANCEL
+                            && serde_json::from_value::<CancelParams>(notification.params)
+                                .is_ok_and(|params| params.id == request.id)
+                        {
+                            context.cancellation.cancel();
+                        }
+                        None
+                    }
+                    Ok(Envelope::Request(invalid)) => {
+                        context.cancellation.cancel();
+                        commit(
+                            writer,
+                            Response::error(
+                                Some(invalid.id),
+                                RpcError::new(ErrorKind::InvalidRequest),
+                            ),
+                            ABSOLUTE_MAX_FRAME_BYTES,
+                        )
+                        .await?;
+                        return Ok(None);
+                    }
+                    Err((_, kind)) => {
+                        context.cancellation.cancel();
+                        commit(
+                            writer,
+                            Response::error(None, RpcError::new(kind)),
+                            ABSOLUTE_MAX_FRAME_BYTES,
+                        )
+                        .await?;
+                        return Ok(None);
+                    }
+                }
+            }
+        };
+        let Some(outcome) = outcome else { continue };
+        break match outcome {
+            Ok(application) => application,
+            Err(error) => {
+                commit(
+                    writer,
+                    Response::error(Some(request.id), error),
+                    ABSOLUTE_MAX_FRAME_BYTES,
+                )
+                .await?;
+                return Ok(None);
+            }
+        };
     };
     let result = InitializeResult {
         protocol: handler.protocol().to_string(),

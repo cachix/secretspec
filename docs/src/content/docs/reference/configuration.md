@@ -505,6 +505,12 @@ credentials = { role_id   = { provider = "onepassword", ref = { vault = "Infra",
 
 Configured credentials take precedence over provider environment fallbacks, credential chains are limited to one hop, and a fetched credential is never written to the environment. Store the credentials with [`secretspec config provider login`](/reference/cli/#config-provider-login). See [Provider credentials](/concepts/providers/#provider-credentials) for the full behavior.
 
+For an external provider (0.20+), `credentials` is optional and does not need
+to enumerate every possible authentication method. The endpoint requests the
+semantic names selected by its URI at runtime. A matching table entry overrides
+SecretSpec's provider-private system-keyring lookup and is fetched lazily; an
+entry the endpoint never requests is never read.
+
 Starting with SecretSpec 0.19, a leaf alias may also compile logical secret
 names into that provider's native coordinates. Templates expand each
 placeholder once; text inserted from a project, profile, or key is never

@@ -1,5 +1,6 @@
 use crate::error::{ErrorKind, RpcError};
 use crate::protocol::PROVIDER_PROTOCOL;
+use crate::protocol::callback::{self, CredentialParams, CredentialResult};
 use crate::protocol::provider::{
     Address, AddressParams, CAPABILITIES, ClearParams, ClearResult, DescribeWriteTargetResult,
     ExistsResult, GetManyParams, GetManyResult, GetResult, InitializeApplication,
@@ -160,6 +161,35 @@ pub trait ProviderHandler: Send + Sync + 'static {
     }
 
     async fn shutdown(&self) {}
+}
+
+/// Requests one provider credential from the client while serving the current
+/// request, normally from [`ProviderHandler::initialize`] (0.20+).
+///
+/// A client that did not advertise credential brokerage behaves like an empty
+/// broker, allowing an endpoint to retain native environment, agent, or
+/// workload-identity fallbacks without treating callback support as mandatory.
+pub async fn request_credential(
+    context: &RequestContext,
+    params: CredentialParams,
+) -> RpcResult<Option<SecretValue>> {
+    params
+        .validate()
+        .map_err(|_| RpcError::new(ErrorKind::InvalidParams))?;
+    if !context.peer.supports(callback::method::CREDENTIAL) {
+        return Ok(None);
+    }
+    let result: CredentialResult = context
+        .peer
+        .call(callback::method::CREDENTIAL, &params, context)
+        .await?;
+    result
+        .validate()
+        .map_err(|_| RpcError::new(ErrorKind::OperationFailed))?;
+    Ok(match result {
+        CredentialResult::Found { value } => Some(SecretValue::new(value)),
+        CredentialResult::Missing => None,
+    })
 }
 
 struct ProviderApplication<H> {

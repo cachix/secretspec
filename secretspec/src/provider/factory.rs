@@ -8,6 +8,7 @@ use super::{
 use crate::{Result, SecretSpecError};
 use percent_encoding::percent_encode;
 use std::convert::TryFrom;
+use std::sync::Arc;
 use url::Url;
 
 impl TryFrom<String> for Box<dyn Provider> {
@@ -62,6 +63,37 @@ pub(crate) fn provider_from_spec(
     s: &str,
     credentials: ProviderCredentials,
 ) -> Result<Box<dyn Provider>> {
+    let url = provider_url_from_spec(s)?;
+    provider_from_url(&url, credentials)
+}
+
+/// Builds an external provider with a host-owned credential broker installed
+/// before its endpoint can start. Runtime credential negotiation is exclusive
+/// to external providers; a built-in scheme is rejected here rather than
+/// silently ignoring the broker.
+pub(crate) fn external_provider_from_spec(
+    s: &str,
+    broker: Arc<dyn super::external::ProviderCredentialBroker>,
+) -> Result<Box<dyn Provider>> {
+    let url = provider_url_from_spec(s)?;
+    reject_uri_credential(&url)?;
+    let scheme = url.scheme();
+    if registration_for_scheme(scheme).is_some() {
+        return Err(SecretSpecError::ProviderOperationFailed(format!(
+            "provider '{scheme}' does not use runtime credential negotiation"
+        )));
+    }
+    let endpoint = super::external::discover(scheme)?
+        .ok_or_else(|| SecretSpecError::ProviderNotFound(scheme.to_string()))?;
+    let mut provider = super::external::ExternalProvider::from_url(endpoint, &url);
+    provider.with_credential_broker(broker);
+    Ok(Box::new(provider))
+}
+
+/// Parses and normalizes a provider spec without constructing or contacting
+/// the provider. Shared with external-provider login, which must install its
+/// credential broker before the endpoint is launched.
+pub(crate) fn provider_url_from_spec(s: &str) -> Result<ProviderUrl> {
     // Parse the scheme from the input string
     let (scheme, rest) = split_spec(s);
 
@@ -140,7 +172,7 @@ pub(crate) fn provider_from_spec(
         ))
     })?;
 
-    provider_from_url(&ProviderUrl::new(proper_url), credentials)
+    Ok(ProviderUrl::new(proper_url))
 }
 
 impl TryFrom<&Url> for Box<dyn Provider> {

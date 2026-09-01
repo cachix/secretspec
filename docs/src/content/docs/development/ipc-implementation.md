@@ -389,8 +389,12 @@ session safely across `Arc` wrappers, keep the response reader independent of
 calling threads, and make interruption/cancellation callable from another
 thread.
 
-Delay endpoint initialization until `with_base_dir`, `with_credentials`, and
-the initial `set_reason` have been applied. If a live provider instance receives
+Delay endpoint initialization until `with_base_dir`, the credential broker
+(0.20+),
+and the initial `set_reason` have been applied. The initialization request does
+not carry an eager credential map: the endpoint calls `client.credential` for
+the URI-specific semantic names it needs, and the adapter answers from explicit
+alias mappings or its provider-private keyring namespace. If a live provider instance receives
 a different reason later, close its endpoint and lazily open a new session;
 session initialization is immutable.
 
@@ -413,14 +417,20 @@ For each registration:
 1. open the file without following an attacker-controlled final symlink where
    platform APIs permit;
 2. bound its size before parsing;
-3. parse a closed schema and verify the scheme/file-name match;
-4. validate distinct semantic `credential_names` and expose them through the
-   same provider-info lookup used by credential-source preflight;
-5. require an absolute executable and no shell metacharacter interpretation;
-6. inspect owner and permissions/ACL according to whether the directory is
+3. parse the executable claim and verify the scheme/file-name match;
+4. require an absolute executable and no shell metacharacter interpretation;
+5. inspect owner and permissions/ACL according to whether the directory is
    user or system scoped;
-7. canonicalize and retain the resolved executable identity;
-8. launch that exact target with fixed arguments and private pipe handles.
+6. canonicalize and retain the resolved executable identity;
+7. launch that exact target with fixed arguments and private pipe handles.
+
+Starting with 0.20, the claim intentionally declares only executable identity. Credential names
+depend on the configured URI and evolve with the provider independently of its
+installation record. Validate semantic names when the endpoint requests them,
+bind every request to the discovered scheme, and bound the number of distinct
+requests per session. A configured credential mapping for an external alias is
+valid when its name has the semantic-name shape; it becomes authorized only if
+that endpoint actually requests the same name.
 
 Provider construction checks the compiled in-tree registry first and only then
 uses external discovery. Update `provider_from_url`, known-provider checks,

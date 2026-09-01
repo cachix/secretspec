@@ -11,6 +11,12 @@
       "result": { "name": "result", "schema": { "$ref": "provider.schema.json#/$defs/InitializeResult" } }
     },
     {
+      "name": "client.credential",
+      "summary": "Provider callback requesting one namespaced authentication credential",
+      "params": [{ "name": "params", "required": true, "schema": { "$ref": "provider.schema.json#/$defs/CredentialParams" } }],
+      "result": { "name": "result", "schema": { "$ref": "provider.schema.json#/$defs/CredentialResult" } }
+    },
+    {
       "name": "provider.resolve_address",
       "params": [{ "name": "params", "required": true, "schema": { "$ref": "provider.schema.json#/$defs/AddressParams" } }],
       "result": { "name": "result", "schema": { "$ref": "provider.schema.json#/$defs/ResolveAddressResult" } }

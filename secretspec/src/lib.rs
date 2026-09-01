@@ -110,8 +110,9 @@ pub use config::{
 };
 pub use error::{Result, SecretSpecError};
 pub use provider::external::{
-    EndpointSecurity, ExternalProvider, PlatformEndpointSecurity, ProviderDiscovery,
-    ProviderEndpoint, RegistrationScope, set_provider_discovery,
+    EndpointSecurity, ExternalProvider, PlatformEndpointSecurity, ProviderCredentialBroker,
+    ProviderCredentialRequest, ProviderDiscovery, ProviderEndpoint, RegistrationScope,
+    set_provider_discovery,
 };
 pub use provider::{Address, DiscoveryContext, ProducedValuePersistence, Provider, ProviderValue};
 pub use report::{

@@ -200,7 +200,13 @@ $ secretspec config global provider remove prod_vault  # 0.17+
 ```
 
 ### config provider login
-Store the [credentials](/reference/provider-credentials/) a provider alias declares. Prompts (hidden input) for each credential and writes it to its source provider at the exact location resolution reads it back from. Runs in a project, like `set` and `check`.
+Store the [credentials](/reference/provider-credentials/) a provider alias
+declares. Prompts (hidden input) for each credential and writes it to its source
+provider at the exact location resolution reads it back from. For an external
+provider with no mappings (0.20+), starts the endpoint, prompts for the
+URI-specific credentials it requests, and stores them in SecretSpec's
+provider-private operating-system keyring namespace. Runs in a project, like
+`set` and `check`.
 
 :::note[Version compatibility]
 `config provider login` is available starting with SecretSpec 0.15. In
@@ -224,7 +230,9 @@ Enter access_token for provider 'bws' (source: keyring): ****
 Run 'secretspec check --provider bws' to verify authentication.
 ```
 
-A read-only source provider is rejected. An alias that declares no credentials reports that there is nothing to store.
+A read-only source provider is rejected. A built-in alias that declares no
+credentials reports that there is nothing to store. An external alias with no
+mappings may still request credentials dynamically (0.20+).
 
 ### git configure (0.20+)
 

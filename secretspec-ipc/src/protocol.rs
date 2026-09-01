@@ -169,8 +169,12 @@ pub mod callback {
     pub mod method {
         /// Ask the client to obtain one secret value from a person (0.20+).
         pub const PROMPT: &str = "client.prompt";
+        /// Ask the client for one provider authentication credential (0.20+).
+        pub const CREDENTIAL: &str = "client.credential";
 
-        pub const ALL: &[&str] = &[PROMPT];
+        pub const RESOLVER: &[&str] = &[PROMPT];
+        pub const PROVIDER: &[&str] = &[CREDENTIAL];
+        pub const ALL: &[&str] = &[PROMPT, CREDENTIAL];
     }
 
     use super::*;
@@ -228,6 +232,66 @@ pub mod callback {
             )
         }
     }
+
+    /// One semantic provider credential requested while an endpoint is
+    /// initializing or refreshing its authentication (0.20+).
+    ///
+    /// `scope` is a stable, credential-free account or store identity chosen
+    /// by the provider from its configured URI. The client binds it to the
+    /// already selected provider principal before consulting its credential
+    /// broker, so it cannot address another provider's credentials.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct CredentialParams {
+        pub name: String,
+        pub scope: String,
+        pub required: bool,
+    }
+
+    impl CredentialParams {
+        pub fn validate(&self) -> Result<()> {
+            validate_semantic_name(&self.name)?;
+            validate_nonempty_bytes(
+                "provider credential scope has an invalid byte length",
+                &self.scope,
+                4096,
+            )
+        }
+    }
+
+    /// A broker lookup is either a secret value or an ordinary miss. Missing
+    /// is not a transport failure: the endpoint may try another authentication
+    /// mechanism or return its own actionable authentication error.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+    pub enum CredentialResult {
+        Found { value: String },
+        Missing,
+    }
+
+    impl CredentialResult {
+        pub fn validate(&self) -> Result<()> {
+            match self {
+                Self::Found { value } => validate_nonempty_bytes(
+                    "provider credential has an invalid byte length",
+                    value,
+                    ABSOLUTE_MAX_FRAME_BYTES,
+                ),
+                Self::Missing => Ok(()),
+            }
+        }
+    }
+}
+
+fn validate_semantic_name(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+    if !matches!(chars.next(), Some('a'..='z'))
+        || chars.any(|character| !matches!(character, 'a'..='z' | '0'..='9' | '_'))
+        || name.len() > 256
+    {
+        return Err(Error::Protocol("invalid credential semantic name"));
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_capabilities(capabilities: &[String]) -> Result<()> {
@@ -907,7 +971,6 @@ pub mod provider {
         pub scheme: String,
         pub uri: String,
         pub context: ApplicationContext,
-        pub credentials: BTreeMap<String, String>,
     }
 
     impl InitializeApplication {
@@ -915,9 +978,6 @@ pub mod provider {
             validate_scheme(&self.scheme)?;
             validate_nonempty_bytes("provider URI has an invalid byte length", &self.uri, 32768)?;
             self.context.validate()?;
-            for name in self.credentials.keys() {
-                validate_semantic_name(name)?;
-            }
             let uri_scheme = self.uri.split_once(':').map(|(scheme, _)| scheme);
             if uri_scheme != Some(self.scheme.as_str()) {
                 return Err(Error::Protocol(
@@ -1347,17 +1407,6 @@ pub mod provider {
         }
         Ok(())
     }
-
-    fn validate_semantic_name(name: &str) -> Result<()> {
-        let mut chars = name.chars();
-        if !matches!(chars.next(), Some('a'..='z'))
-            || chars.any(|character| !matches!(character, 'a'..='z' | '0'..='9' | '_'))
-            || name.len() > 256
-        {
-            return Err(Error::Protocol("invalid credential semantic name"));
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -1391,9 +1440,63 @@ mod tests {
                 reason: None,
                 requested_authorization_duration_ms: None,
             },
-            credentials: BTreeMap::new(),
         };
         assert!(application.validate().is_err());
+    }
+
+    #[test]
+    fn provider_credential_requests_use_bounded_semantic_names_and_scopes() {
+        let valid = callback::CredentialParams {
+            name: "client_secret_2".into(),
+            scope: "https://service.example/account/team-a".into(),
+            required: true,
+        };
+        assert!(valid.validate().is_ok());
+        for name in ["", "ClientSecret", "2fa", "client-secret"] {
+            assert!(
+                callback::CredentialParams {
+                    name: name.into(),
+                    ..valid.clone()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        assert!(
+            callback::CredentialParams {
+                scope: String::new(),
+                ..valid.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            callback::CredentialParams {
+                scope: "x".repeat(4097),
+                ..valid
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn provider_credential_results_distinguish_a_miss_from_an_empty_secret() {
+        assert!(callback::CredentialResult::Missing.validate().is_ok());
+        assert!(
+            callback::CredentialResult::Found {
+                value: "token".into()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            callback::CredentialResult::Found {
+                value: String::new()
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]
@@ -1453,8 +1556,7 @@ mod tests {
                     "project": "demo",
                     "profile": "default",
                     "base_dir": null
-                },
-                "credentials": {}
+                }
             }))
             .is_err()
         );

@@ -36,7 +36,7 @@ SECRET_NAME = {
 - `required`: Whether the secret must be provided (default: `true`)
 - `default`: Fallback value for optional secrets
 - `composed` (0.16+): Derive a read-only value from other declared secrets (see [Composed Secrets](/concepts/composed-secrets/) for the strict template and dependency semantics)
-- `type`: Secret type for auto-generation (`password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key`, and `openpgp_private_key` in 0.21+)
+- `type`: Secret type for auto-generation (`password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key`, `openpgp_private_key` (0.21+), and `ssh_private_key` (0.21+))
 - `generate`: Enable auto-generation when the secret is missing (`true` or a table with options)
 - `prompt` (0.19+): Securely ask for a missing value during `secretspec run` and
   let the selected provider decide whether to save the answer

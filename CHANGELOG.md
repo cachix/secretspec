@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Windows external-provider discovery now distinguishes directory creation
+  rights from file mutation rights, allowing endpoints below standard protected
+  volume roots while continuing to reject replaceable path components.
+
 - Provider failures now preserve opaque interaction references in SecretSpec's
   local audit log, allowing CLI and GUI approval surfaces to correlate an
   actionable request without treating its ID as authorization material.

@@ -2,6 +2,12 @@ name: "Test"
 
 on:
   workflow_call:
+    inputs:
+      pre_release:
+        description: Run as part of the canonical pre-release suite
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
   pull_request:
   push:
@@ -18,6 +24,10 @@ concurrency:
 jobs:
   changes:
     name: Classify changes
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.classify.outputs.code }}
@@ -61,6 +71,10 @@ jobs:
 
   docs:
     name: Documentation
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

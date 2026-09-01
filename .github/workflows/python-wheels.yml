@@ -20,6 +20,12 @@ name: "Python wheels"
 
 on:
   workflow_call:
+    inputs:
+      pre_release:
+        description: Run as part of the canonical pre-release suite
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
   push:
     tags:
@@ -40,6 +46,10 @@ permissions:
 jobs:
   linux:
     name: wheel ${{ matrix.arch }} (manylinux)
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -71,6 +81,10 @@ jobs:
 
   native:
     name: wheel ${{ matrix.target }}
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false

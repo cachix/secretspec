@@ -8,6 +8,11 @@ name: "Swift SDK"
 on:
   workflow_call:
     inputs:
+      pre_release:
+        description: Run as part of the canonical pre-release suite
+        required: false
+        type: boolean
+        default: false
       publish:
         description: Attach the XCFramework to the GitHub Release
         required: false
@@ -48,6 +53,10 @@ permissions:
 jobs:
   native:
     name: macOS native libraries
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: macos-latest
 
     steps:
@@ -137,8 +146,9 @@ jobs:
           name: swift-xcframework
           path: CSecretSpec.xcframework.zip
       - name: Validate the committed SwiftPM checksum
-        # PRs build current source, while Package.swift pins a published release.
-        if: ${{ github.event_name != 'pull_request' }}
+        # PRs and the pre-release suite build current source, while Package.swift
+        # pins a published release.
+        if: ${{ github.event_name != 'pull_request' && !inputs.pre_release }}
         shell: bash
         env:
           ACTUAL_CHECKSUM: ${{ steps.checksum.outputs.checksum }}

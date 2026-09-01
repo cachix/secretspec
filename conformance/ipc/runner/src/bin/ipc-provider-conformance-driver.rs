@@ -1,7 +1,7 @@
 use secrecy::{ExposeSecret, SecretString};
 use secretspec::{
-    Address as CoreAddress, DiscoveryContext, ExternalProvider, Provider, ProviderEndpoint,
-    SecretSpecError,
+    Address as CoreAddress, DiscoveryContext, ExternalProvider, Provider, ProviderCredentialBroker,
+    ProviderCredentialRequest, ProviderEndpoint, SecretSpecError,
 };
 use secretspec_ipc::lifecycle::{Environment, LaunchOptions, ProviderSession};
 use secretspec_ipc::protocol::provider::{
@@ -19,6 +19,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const CANARY: &str = "SECRETSPEC_IPC_CANARY_DO_NOT_LOG";
@@ -250,7 +252,6 @@ fn initialize_params() -> InitializeParams<InitializeApplication> {
                 reason: Some("conformance".into()),
                 requested_authorization_duration_ms: Some(8 * 60 * 60 * 1_000),
             },
-            credentials: BTreeMap::new(),
         },
     }
 }
@@ -629,7 +630,6 @@ fn external_provider_with_uri(
             scheme: "memory".into(),
             executable: endpoint.to_path_buf(),
             arguments,
-            credential_names: Vec::new(),
         },
         uri,
     )
@@ -637,10 +637,37 @@ fn external_provider_with_uri(
 }
 
 fn run_adapter_operations(endpoint: &Path) -> Result<Vec<Value>, String> {
-    let provider = external_provider(endpoint, Vec::new())?;
+    struct ConformanceBroker(AtomicBool);
+    impl ProviderCredentialBroker for ConformanceBroker {
+        fn get(
+            &self,
+            scheme: &str,
+            request: &ProviderCredentialRequest,
+        ) -> secretspec::Result<Option<SecretString>> {
+            if scheme != "memory"
+                || request.name != "conformance_token"
+                || request.scope != "memory://conformance"
+            {
+                return Err(SecretSpecError::ProviderOperationFailed(
+                    "provider sent an unexpected credential request".into(),
+                ));
+            }
+            self.0.store(true, Ordering::Release);
+            Ok(Some(SecretString::from(
+                "conformance-credential".to_string(),
+            )))
+        }
+    }
+
+    let broker = Arc::new(ConformanceBroker(AtomicBool::new(false)));
+    let mut provider = external_provider(endpoint, Vec::new())?;
+    provider.with_credential_broker(broker.clone());
     let resolved = provider
         .convention_address("payments", "production", "TOKEN")
         .map_err(|error| error.to_string())?;
+    if !broker.0.load(Ordering::Acquire) {
+        return Err("external adapter did not broker the endpoint credential request".into());
+    }
     if resolved.render() != "item=payments/production/TOKEN" {
         return Err("external adapter resolved the wrong convention address".into());
     }

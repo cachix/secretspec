@@ -102,6 +102,48 @@ pub struct ProviderSession {
     metadata: Metadata,
 }
 
+/// Resolves provider authentication material requested over the private IPC
+/// session (0.20+).
+///
+/// Implementations must namespace the request by the already selected provider
+/// principal, must not log returned values, and should avoid consulting a
+/// general project provider that could recurse back into the endpoint being
+/// initialized.
+#[async_trait::async_trait]
+pub trait CredentialResponder: Send + Sync + 'static {
+    async fn credential(
+        &self,
+        params: callback::CredentialParams,
+    ) -> std::result::Result<callback::CredentialResult, RpcError>;
+}
+
+struct CredentialCallbacks {
+    responder: Arc<dyn CredentialResponder>,
+}
+
+#[async_trait::async_trait]
+impl CallbackHandler for CredentialCallbacks {
+    async fn call(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> std::result::Result<serde_json::Value, RpcError> {
+        if method != callback::method::CREDENTIAL {
+            return Err(RpcError::new(ErrorKind::MethodNotFound));
+        }
+        let params: callback::CredentialParams =
+            serde_json::from_value(params).map_err(|_| RpcError::new(ErrorKind::InvalidParams))?;
+        params
+            .validate()
+            .map_err(|_| RpcError::new(ErrorKind::InvalidParams))?;
+        let result = self.responder.credential(params).await?;
+        result
+            .validate()
+            .map_err(|_| RpcError::new(ErrorKind::InvalidParams))?;
+        serde_json::to_value(result).map_err(|_| RpcError::new(ErrorKind::Internal))
+    }
+}
+
 macro_rules! provider_calls {
     ($(($name:ident, $method:ty)),+ $(,)?) => {
         $(
@@ -126,20 +168,50 @@ impl ProviderSession {
         application: ProviderInitializeApplication,
         startup_deadline_unix_ms: u64,
     ) -> Result<Self> {
+        Self::launch_with_credential_broker(
+            options,
+            client,
+            limits,
+            application,
+            startup_deadline_unix_ms,
+            None,
+        )
+        .await
+    }
+
+    /// As [`Self::launch`], allowing the endpoint to request only the provider
+    /// credentials it actually needs while initialization is pending (0.20+).
+    pub async fn launch_with_credential_broker(
+        options: LaunchOptions,
+        client: Product,
+        limits: Limits,
+        application: ProviderInitializeApplication,
+        startup_deadline_unix_ms: u64,
+        responder: Option<Arc<dyn CredentialResponder>>,
+    ) -> Result<Self> {
         application.validate()?;
         let expected_scheme = application.scheme.clone();
+        let (client_methods, callbacks): (Vec<String>, Option<Arc<dyn CallbackHandler>>) =
+            match responder {
+                Some(responder) => (
+                    vec![callback::method::CREDENTIAL.to_string()],
+                    Some(Arc::new(CredentialCallbacks { responder })),
+                ),
+                None => (Vec::new(), None),
+            };
         let initialize = InitializeParams {
             protocol: PROVIDER_PROTOCOL.to_string(),
             versions: vec![PROTOCOL_VERSION],
             client,
             limits,
-            client_methods: Vec::new(),
+            client_methods,
             application,
         };
-        let (child, initialized) = spawn::<_, ProviderInitializedApplication>(
+        let (child, initialized) = spawn_with_callbacks::<_, ProviderInitializedApplication>(
             options,
             initialize,
             startup_deadline_unix_ms,
+            callbacks,
         )
         .await?;
         let validation = initialized
@@ -348,7 +420,7 @@ impl ResolverSession {
             versions: vec![PROTOCOL_VERSION],
             client,
             limits,
-            client_methods: client_methods,
+            client_methods,
             application,
         };
         let (child, initialized) = spawn_with_callbacks::<_, ResolverInitializedApplication>(

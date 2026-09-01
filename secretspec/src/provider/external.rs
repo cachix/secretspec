@@ -10,14 +10,17 @@ use crate::config::NativeAddress;
 use crate::{Result, Secret, SecretSpecError};
 use secrecy::{ExposeSecret, SecretString};
 use secretspec_ipc::deadline_unix_ms_after;
-use secretspec_ipc::lifecycle::{Environment, LaunchOptions, ProviderSession};
+use secretspec_ipc::error::{ErrorKind as RpcErrorKind, RpcError};
+use secretspec_ipc::lifecycle::{CredentialResponder, Environment, LaunchOptions, ProviderSession};
+use secretspec_ipc::protocol::callback::CredentialResult;
 use secretspec_ipc::protocol::provider::{
     self as wire, AddressParams, ApplicationContext, GetManyParams, GetResult,
     InitializeApplication, NamedRequest, Persistence, ReflectParams, SetExpiringParams, SetParams,
 };
 use secretspec_ipc::protocol::{Limits, Product};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::Read;
@@ -29,6 +32,9 @@ const REGISTRATION_MAX_BYTES: u64 = 64 * 1024;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Semantic credential request made by an external endpoint (0.20+).
+pub use secretspec_ipc::protocol::callback::CredentialParams as ProviderCredentialRequest;
+
 /// A resolved provider endpoint and its fixed executable identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderEndpoint {
@@ -38,8 +44,6 @@ pub struct ProviderEndpoint {
     /// providers always receive the fixed `provider` argument.
     #[serde(default)]
     pub arguments: Vec<String>,
-    #[serde(default)]
-    pub credential_names: Vec<String>,
 }
 
 /// Public discovery claim written by an installed provider.
@@ -170,7 +174,6 @@ impl ProviderDiscovery {
                 scheme: scheme.to_string(),
                 executable: path,
                 arguments: vec!["provider".to_string()],
-                credential_names: Vec::new(),
             },
             scheme,
             RegistrationScope::Path,
@@ -257,7 +260,6 @@ fn load_registration(
             scheme: scheme.to_string(),
             executable: claim.executable,
             arguments: vec!["provider".to_string()],
-            credential_names: Vec::new(),
         },
         scheme,
         scope,
@@ -277,15 +279,6 @@ fn validate_endpoint(
         ));
     }
     validate_scheme(&endpoint.scheme)?;
-    let mut credentials = BTreeSet::new();
-    for name in &endpoint.credential_names {
-        validate_credential_name(name)?;
-        if !credentials.insert(name) {
-            return Err(discovery_error(
-                "provider credential names must be distinct",
-            ));
-        }
-    }
     if !endpoint.executable.is_absolute() {
         return Err(discovery_error("provider executable must be absolute"));
     }
@@ -310,17 +303,6 @@ fn is_valid_scheme(value: &str) -> bool {
     let mut chars = value.chars();
     matches!(chars.next(), Some('a'..='z'))
         && chars.all(|character| matches!(character, 'a'..='z' | '0'..='9' | '-'))
-}
-
-fn validate_credential_name(value: &str) -> Result<()> {
-    let mut chars = value.chars();
-    if value.len() > 256
-        || !matches!(chars.next(), Some('a'..='z'))
-        || chars.any(|character| !matches!(character, 'a'..='z' | '0'..='9' | '_'))
-    {
-        return Err(discovery_error("invalid provider credential name"));
-    }
-    Ok(())
 }
 
 /// Sticky directories are safe ancestors even when world-writable: the bit
@@ -590,34 +572,175 @@ fn discovery_error(message: &str) -> SecretSpecError {
     SecretSpecError::ProviderOperationFailed(message.to_string())
 }
 
+/// Resolves credentials requested by one already-discovered external provider.
+///
+/// The selected scheme is supplied separately from the endpoint-controlled
+/// request and MUST be part of the backing-store namespace. Implementations
+/// return `None` for an ordinary miss and must never place a value in an error.
+pub trait ProviderCredentialBroker: Send + Sync + 'static {
+    fn get(
+        &self,
+        scheme: &str,
+        request: &ProviderCredentialRequest,
+    ) -> Result<Option<SecretString>>;
+}
+
+#[derive(Default)]
+pub(crate) struct KeyringCredentialBroker;
+
+impl ProviderCredentialBroker for KeyringCredentialBroker {
+    fn get(
+        &self,
+        scheme: &str,
+        request: &ProviderCredentialRequest,
+    ) -> Result<Option<SecretString>> {
+        #[cfg(feature = "keyring")]
+        {
+            use crate::provider::keyring::{KeyringConfig, KeyringProvider};
+
+            let provider = KeyringProvider::new(KeyringConfig::default());
+            let address = brokered_credential_address(scheme, &request.scope, &request.name);
+            match provider.get(Address::Native(&address)) {
+                // An optional broker lookup must not prevent the endpoint from
+                // using its native environment, agent, or workload identity merely
+                // because this machine has no usable keyring service.
+                Err(_) if !request.required => Ok(None),
+                result => result,
+            }
+        }
+        #[cfg(not(feature = "keyring"))]
+        {
+            let _ = (scheme, request);
+            Ok(None)
+        }
+    }
+}
+
+/// Stable, provider-private keyring address for a dynamically requested
+/// credential. Hashing the endpoint-controlled scope prevents separators or
+/// platform keyring limits from collapsing two namespaces; the scheme and
+/// semantic name remain visible for diagnostics and keyring UIs.
+pub(crate) fn brokered_credential_address(scheme: &str, scope: &str, name: &str) -> NativeAddress {
+    let digest = Sha256::digest(scope.as_bytes());
+    let mut scope_hash = String::with_capacity(digest.len() * 2);
+    use std::fmt::Write as _;
+    for byte in digest {
+        let _ = write!(scope_hash, "{byte:02x}");
+    }
+    NativeAddress {
+        item: format!("secretspec/provider-credentials/{scheme}/{scope_hash}/{name}"),
+        ..NativeAddress::default()
+    }
+}
+
+#[cfg(any(feature = "cli", test))]
+pub(crate) fn store_brokered_credential(
+    scheme: &str,
+    scope: &str,
+    name: &str,
+    value: &SecretString,
+) -> Result<String> {
+    #[cfg(feature = "keyring")]
+    {
+        use crate::provider::keyring::{KeyringConfig, KeyringProvider};
+
+        let provider = KeyringProvider::new(KeyringConfig::default());
+        let address = brokered_credential_address(scheme, scope, name);
+        provider.set(Address::Native(&address), value)?;
+        Ok(format!("keyring at {}", address.render()))
+    }
+    #[cfg(not(feature = "keyring"))]
+    {
+        let _ = (scheme, scope, name, value);
+        Err(SecretSpecError::ProviderOperationFailed(
+            "this SecretSpec build has no system-keyring support".into(),
+        ))
+    }
+}
+
+struct ExternalCredentialResponder {
+    scheme: String,
+    explicit: ProviderCredentials,
+    broker: Arc<dyn ProviderCredentialBroker>,
+    names: Mutex<HashSet<(String, String)>>,
+    broker_error: Arc<Mutex<Option<String>>>,
+}
+
+#[async_trait::async_trait]
+impl CredentialResponder for ExternalCredentialResponder {
+    async fn credential(
+        &self,
+        request: ProviderCredentialRequest,
+    ) -> std::result::Result<CredentialResult, RpcError> {
+        // Bound the authority surface independently from frame size. Repeated
+        // requests for the same credential remain valid for token refresh.
+        let identity = (request.scope.clone(), request.name.clone());
+        {
+            let mut names = self
+                .names
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !names.contains(&identity) && names.len() >= 64 {
+                return Err(RpcError::new(RpcErrorKind::InvalidParams));
+            }
+            names.insert(identity);
+        }
+        let value = match self.explicit.get(&request.name).cloned() {
+            Some(value) => Some(value),
+            None => {
+                let broker = self.broker.clone();
+                let scheme = self.scheme.clone();
+                let result = tokio::task::spawn_blocking(move || broker.get(&scheme, &request))
+                    .await
+                    .map_err(|_| RpcError::new(RpcErrorKind::OperationFailed))?;
+                match result {
+                    Ok(value) => value,
+                    Err(error) => {
+                        *self
+                            .broker_error
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                            Some(error.to_string());
+                        return Err(RpcError::new(RpcErrorKind::OperationFailed));
+                    }
+                }
+            }
+        };
+        Ok(match value {
+            Some(value) if !value.expose_secret().is_empty() => CredentialResult::Found {
+                value: value.expose_secret().to_string(),
+            },
+            _ => CredentialResult::Missing,
+        })
+    }
+}
+
 struct ExternalState {
     project: Option<String>,
     profile: Option<String>,
     base_dir: Option<PathBuf>,
     credentials: ProviderCredentials,
+    credential_broker: Arc<dyn ProviderCredentialBroker>,
+    credential_error: Arc<Mutex<Option<String>>>,
     reason: Option<String>,
     requested_authorization_duration: Option<std::time::Duration>,
     /// Latched rejection from the last `with_base_dir`, cleared when a later
     /// call supplies an acceptable value.
     base_dir_error: Option<String>,
-    /// Latched rejection from the last `with_credentials`, cleared likewise.
-    credentials_error: Option<String>,
     session: Option<Arc<ProviderSession>>,
 }
 
 impl ExternalState {
     /// The configuration rejection that must block session startup, if any.
     fn configuration_error(&self) -> Option<&str> {
-        self.base_dir_error
-            .as_deref()
-            .or(self.credentials_error.as_deref())
+        self.base_dir_error.as_deref()
     }
 }
 
 /// A core provider backed by one `secretspec.provider/1` endpoint.
 ///
-/// Endpoint startup is lazy so project/profile context, `with_base_dir`,
-/// `with_credentials`, and the initial `set_reason` are applied to immutable
+/// Endpoint startup is lazy so project/profile context, `with_base_dir`, the
+/// credential broker, and the initial `set_reason` are applied to immutable
 /// initialization state first.
 pub struct ExternalProvider {
     endpoint: ProviderEndpoint,
@@ -659,10 +782,11 @@ impl ExternalProvider {
                 profile: None,
                 base_dir: None,
                 credentials: ProviderCredentials::new(),
+                credential_broker: Arc::new(KeyringCredentialBroker),
+                credential_error: Arc::new(Mutex::new(None)),
                 reason: None,
                 requested_authorization_duration: None,
                 base_dir_error: None,
-                credentials_error: None,
                 session: None,
             }),
             metadata: OnceLock::new(),
@@ -673,6 +797,29 @@ impl ExternalProvider {
         self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Replaces the default system-keyring broker before the endpoint starts.
+    /// Embedders can use this to enforce their own credential policy (0.20+).
+    pub fn with_credential_broker(&mut self, broker: Arc<dyn ProviderCredentialBroker>) {
+        let session = {
+            let mut state = self.state();
+            state.credential_broker = broker;
+            state
+                .credential_error
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take();
+            state.session.take()
+        };
+        if let Some(session) = session {
+            close_live_session(session);
+        }
+    }
+
+    #[cfg(any(feature = "cli", test))]
+    pub(crate) fn initialize(&self) -> Result<()> {
+        self.ensure_session().map(|_| ())
     }
 
     fn ensure_session(&self) -> Result<Arc<ProviderSession>> {
@@ -688,11 +835,6 @@ impl ExternalProvider {
                 close_live_session(stale);
             }
         }
-        let credentials = state
-            .credentials
-            .iter()
-            .map(|(name, value)| (name.clone(), value.expose_secret().to_string()))
-            .collect();
         let application = InitializeApplication {
             scheme: self.scheme.clone(),
             uri: self.configured_uri.clone(),
@@ -708,8 +850,14 @@ impl ExternalProvider {
                     .requested_authorization_duration
                     .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)),
             },
-            credentials,
         };
+        let responder = Arc::new(ExternalCredentialResponder {
+            scheme: self.scheme.clone(),
+            explicit: state.credentials.clone(),
+            broker: state.credential_broker.clone(),
+            names: Mutex::new(HashSet::new()),
+            broker_error: state.credential_error.clone(),
+        });
         let launch = LaunchOptions {
             executable: self.endpoint.executable.clone(),
             arguments: self.endpoint.arguments.iter().map(OsString::from).collect(),
@@ -717,7 +865,7 @@ impl ExternalProvider {
             allow_path_discovery: false,
             max_stderr_bytes: 64 * 1024,
         };
-        let session = super::block_on(ProviderSession::launch(
+        let launched = super::block_on(ProviderSession::launch_with_credential_broker(
             launch,
             Product {
                 name: "secretspec".to_string(),
@@ -729,8 +877,30 @@ impl ExternalProvider {
             },
             application,
             deadline_unix_ms_after(STARTUP_TIMEOUT),
-        ))
-        .map_err(ipc_error)?;
+            Some(responder.clone()),
+        ));
+        let session = match launched {
+            Ok(session) => session,
+            Err(error) => {
+                if let Some(message) = state
+                    .credential_error
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take()
+                {
+                    return Err(SecretSpecError::ProviderOperationFailed(message));
+                }
+                return Err(ipc_error(error));
+            }
+        };
+        // An endpoint may deliberately catch a failed optional lookup and use
+        // native authentication instead. Do not let that handled failure leak
+        // into a later operation on the healthy session.
+        state
+            .credential_error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
         if let Some(existing) = self.metadata.get() {
             if existing != session.metadata() {
                 let _ =
@@ -795,7 +965,29 @@ impl ExternalProvider {
                 close_live_session(stale);
             }
         }
-        result.map_err(ipc_error)
+        match result {
+            Ok(value) => {
+                self.state()
+                    .credential_error
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
+                Ok(value)
+            }
+            Err(error) => {
+                if let Some(message) = self
+                    .state()
+                    .credential_error
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take()
+                {
+                    Err(SecretSpecError::ProviderOperationFailed(message))
+                } else {
+                    Err(ipc_error(error))
+                }
+            }
+        }
     }
 
     fn resolve_remote(&self, address: Address<'_>) -> Result<NativeAddress> {
@@ -1186,24 +1378,18 @@ impl Provider for ExternalProvider {
     }
 
     fn with_credentials(&mut self, credentials: ProviderCredentials) {
-        let supported = self
-            .endpoint
-            .credential_names
-            .iter()
-            .map(String::as_str)
-            .collect::<HashSet<_>>();
-        let unknown = credentials
-            .keys()
-            .any(|name| !supported.contains(name.as_str()));
-        let mut state = self.state();
-        if unknown {
-            // Keep the previously accepted credentials rather than installing a
-            // set the endpoint never registered for.
-            state.credentials_error =
-                Some("external provider received an unregistered credential".to_string());
-        } else {
+        let session = {
+            let mut state = self.state();
             state.credentials = credentials;
-            state.credentials_error = None;
+            state
+                .credential_error
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take();
+            state.session.take()
+        };
+        if let Some(session) = session {
+            close_live_session(session);
         }
     }
 
@@ -1320,7 +1506,6 @@ mod tests {
             scheme: "example".into(),
             executable,
             arguments: vec![argument.into()],
-            credential_names: Vec::new(),
         }
     }
 
@@ -1616,7 +1801,6 @@ mod tests {
                     scheme: "example".into(),
                     executable,
                     arguments: Vec::new(),
-                    credential_names: Vec::new(),
                 },
             )]),
             ..ProviderDiscovery::default()

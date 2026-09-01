@@ -6,17 +6,41 @@
     "InitializeApplication": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["scheme", "uri", "context", "credentials"],
+      "required": ["scheme", "uri", "context"],
       "properties": {
         "scheme": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
         "uri": { "type": "string", "minLength": 1, "maxLength": 32768 },
-        "context": { "$ref": "#/$defs/ApplicationContext" },
-        "credentials": {
-          "type": "object",
-          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 256 },
-          "additionalProperties": { "type": "string" }
-        }
+        "context": { "$ref": "#/$defs/ApplicationContext" }
       }
+    },
+    "CredentialParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "scope", "required"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$", "maxLength": 256 },
+        "scope": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "required": { "type": "boolean" }
+      }
+    },
+    "CredentialResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "value"],
+          "properties": {
+            "status": { "const": "found" },
+            "value": { "type": "string", "minLength": 1, "maxLength": 1048576 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": { "status": { "const": "missing" } }
+        }
+      ]
     },
     "ApplicationContext": {
       "type": "object",

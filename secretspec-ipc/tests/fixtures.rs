@@ -94,7 +94,12 @@ fn method_catalogs_match_openrpc() {
         (
             "resolver.openrpc.json",
             "client.",
-            secretspec_ipc::protocol::callback::method::ALL,
+            secretspec_ipc::protocol::callback::method::RESOLVER,
+        ),
+        (
+            "provider.openrpc.json",
+            "client.",
+            secretspec_ipc::protocol::callback::method::PROVIDER,
         ),
     ];
     for (document, prefix, catalog) in cases {
@@ -196,6 +201,14 @@ fn fixture_schema<'a>(role: &str, path: &Path, envelope: &'a Value) -> (&'static
         ),
         ("provider", "get-result.json") => (
             "https://secretspec.dev/schema/ipc/v1/provider.schema.json#/$defs/GetResult",
+            &envelope["result"],
+        ),
+        ("provider", "credential-request.json") => (
+            "https://secretspec.dev/schema/ipc/v1/provider.schema.json#/$defs/CredentialParams",
+            &envelope["params"],
+        ),
+        ("provider", "credential-result.json") => (
+            "https://secretspec.dev/schema/ipc/v1/provider.schema.json#/$defs/CredentialResult",
             &envelope["result"],
         ),
         _ => panic!("fixture {role}/{name} has no schema assertion"),

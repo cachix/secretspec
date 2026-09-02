@@ -92,6 +92,7 @@ jobs:
       contents: read
     uses: ./.github/workflows/elixir-package.yml
     with:
+      pre_release: true
       release_tag: ""
 
   python:

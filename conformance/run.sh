@@ -103,7 +103,10 @@ run_jvm() { (
 ); }
 run_elixir() { (
   cd secretspec-ex
-  SECRETSPEC_EX_BUILD=1 mix test test/conformance_test.exs
+  mix local.hex --force
+  mix local.rebar --force
+  mix deps.get
+  mix test test/conformance_test.exs
 ); }
 
 run "Python"  python run_python

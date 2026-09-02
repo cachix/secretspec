@@ -65,6 +65,6 @@ Use `with_inline_spec/3` when the declaration lives in application code. The bas
 
 Secrets with `as_path = true` are materialized as mode-0400 temporary files. Call `SecretSpec.Resolved.close/1` when the resolved value is no longer needed so those files are removed.
 
-## Native build
+## Native extension
 
-The release package carries precompiled NIF archives. A local development build can compile the NIF from the workspace source with `SECRETSPEC_EX_BUILD=1 mix test`.
+The release package carries precompiled NIF archives for its supported targets.

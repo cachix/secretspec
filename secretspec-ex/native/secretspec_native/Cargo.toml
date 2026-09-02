@@ -8,4 +8,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rustler = "0.38"
-secretspec = { path = "../../../secretspec" }
+secretspec = { workspace = true }

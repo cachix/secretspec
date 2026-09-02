@@ -20,13 +20,22 @@ defmodule SecretSpec.Resolved do
 
   @doc "Removes materialized files belonging to this resolution."
   def close(%__MODULE__{secrets: secrets}) do
-    secrets
-    |> Map.values()
-    |> Enum.filter(&(&1.as_path && is_binary(&1.path)))
-    |> Enum.each(fn secret -> File.rm(secret.path) |> ignore_missing_file() end)
-  end
+    first_error =
+      secrets
+      |> Map.values()
+      |> Enum.filter(&(&1.as_path && is_binary(&1.path)))
+      |> Enum.reduce(nil, fn secret, first_error ->
+        case File.rm(secret.path) do
+          :ok -> first_error
+          {:error, :enoent} -> first_error
+          {:error, reason} when is_nil(first_error) -> reason
+          {:error, _reason} -> first_error
+        end
+      end)
 
-  defp ignore_missing_file(:ok), do: :ok
-  defp ignore_missing_file({:error, :enoent}), do: :ok
-  defp ignore_missing_file({:error, reason}), do: raise(File.Error, reason: reason)
+    case first_error do
+      nil -> :ok
+      reason -> raise File.Error, reason: reason
+    end
+  end
 end

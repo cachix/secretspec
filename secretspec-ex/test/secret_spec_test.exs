@@ -174,6 +174,24 @@ defmodule SecretSpecTest do
     refute File.exists?(secret.path)
   end
 
+  @tag :tmp_dir
+  test "close removes later materialized files after a removal error", %{tmp_dir: tmp_dir} do
+    blocked_path = Path.join(tmp_dir, "blocked")
+    later_path = Path.join(tmp_dir, "later")
+    File.mkdir!(blocked_path)
+    File.write!(later_path, "later")
+
+    resolved = %SecretSpec.Resolved{
+      secrets: %{
+        "BLOCKED" => %SecretSpec.ResolvedSecret{as_path: true, path: blocked_path},
+        "LATER" => %SecretSpec.ResolvedSecret{as_path: true, path: later_path}
+      }
+    }
+
+    assert_raise File.Error, fn -> SecretSpec.Resolved.close(resolved) end
+    refute File.exists?(later_path)
+  end
+
   test "invalid manifest raises SecretSpec.Error" do
     assert_raise SecretSpec.Error, fn ->
       SecretSpec.builder()

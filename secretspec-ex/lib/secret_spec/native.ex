@@ -3,6 +3,9 @@ defmodule SecretSpec.Native do
 
   version = Mix.Project.config()[:version]
 
+  # local_checkout? =
+  #   File.exists?(Path.expand("../../native/secretspec_native/Cargo.toml", __DIR__))
+
   use RustlerPrecompiled,
     otp_app: :secretspec,
     crate: "secretspec_native",
@@ -13,7 +16,7 @@ defmodule SecretSpec.Native do
       "x86_64-pc-windows-msvc"
     ],
     base_url: "https://github.com/cachix/secretspec/releases/download/v#{version}",
-    force_build: System.get_env("SECRETSPEC_EX_BUILD") in ["1", "true"],
+    # force_build: local_checkout?,
     version: version
 
   def resolve(_request), do: :erlang.nif_error(:nif_not_loaded)

@@ -193,7 +193,13 @@ run_jvm() {
 
 run_elixir() {
   echo "==> Elixir"
-  ( cd secretspec-ex && SECRETSPEC_EX_BUILD=1 mix test )
+  (
+    cd secretspec-ex
+    mix local.hex --force
+    mix local.rebar --force
+    mix deps.get
+    mix test
+  )
 }
 
 run_php() {

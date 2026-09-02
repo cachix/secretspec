@@ -17,5 +17,5 @@ SecretSpec.Resolved.set_as_env(resolved)
 SecretSpec.Resolved.close(resolved)
 ```
 
-Build and test with `mix test`. A Rust toolchain and a C compiler are required
-for the native extension.
+Build and test a checkout with `mix test`. A Rust toolchain and a C compiler
+are required.

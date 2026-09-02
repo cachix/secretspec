@@ -40,7 +40,13 @@ defmodule SecretSpec do
   @doc false
   def checked_response({request, versioned}, kind, expected_version) do
     request_json = Jason.encode!(request)
-    raw = if versioned, do: Native.call(request_json), else: Native.resolve(request_json)
+
+    # Rust's LastPass provider uses waitpid, which fails while OTP ignores SIGCHLD.
+    raw =
+      with_default_sigchld(fn ->
+        if versioned, do: Native.call(request_json), else: Native.resolve(request_json)
+      end)
+
     envelope = Jason.decode!(raw)
 
     case envelope do
@@ -60,6 +66,20 @@ defmodule SecretSpec do
   end
 
   @doc false
+  defp with_default_sigchld(fun) do
+    :global.trans({__MODULE__, :sigchld}, fn ->
+      :ok = :os.set_signal(:sigchld, :default)
+
+      try do
+        fun.()
+      after
+        # OTP normally starts with SIGCHLD ignored, but the public Erlang API has no
+        # getter, so restore that assumed original disposition.
+        :ok = :os.set_signal(:sigchld, :ignore)
+      end
+    end)
+  end
+
   def to_resolved(%{"missing_required" => [_ | _] = missing}),
     do: raise(%MissingRequiredError{missing: missing})
 

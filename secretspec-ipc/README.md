@@ -6,6 +6,11 @@ Independent Rust implementation of SecretSpec IPC version 1 (SecretSpec
 multiplexed clients, a server dispatcher, child lifecycle management, and typed
 resolution/provider handler APIs.
 
+Endpoints also answer `rpc.discover` before or after initialization (SecretSpec
+0.20+). Discovery returns a self-contained OpenRPC document with its JSON
+Schemas and endpoint metadata without loading application or provider state.
+The crate packages the canonical discovery assets under `schema/ipc/v1/`.
+
 The runtime-independent codec builds without Tokio:
 
 ```console

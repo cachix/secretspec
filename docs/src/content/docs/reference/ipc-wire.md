@@ -27,6 +27,7 @@ SecretSpec IPC wire protocol version 1 is available starting with SecretSpec
 | Request IDs | Positive JSON integers from 1 through 9,007,199,254,740,991; strictly increasing within one direction of a session |
 | Concurrency | Negotiated, at least 1 and at most 32 in-flight requests in version 1 |
 | Deadline | Mandatory absolute Unix time in milliseconds on every request |
+| Discovery | Side-effect-free `rpc.discover` before or after initialization (0.20+) |
 | Cancellation | `rpc.cancel` notification naming the original request ID |
 | Callbacks | `client.`-prefixed requests an endpoint sends to its client, only when advertised (0.20+) |
 | Shutdown | `rpc.shutdown`, then EOF and bounded process termination |
@@ -54,17 +55,19 @@ close the transport if LF has not arrived before `max_frame_bytes` JSON bytes.
   frame-level lock or a single writer task so bytes from two messages cannot
   interleave.
 
-The initialization exchange uses the same absolute limit. It negotiates a
-possibly smaller `max_frame_bytes` for the rest of the session.
+Discovery (0.20+) and initialization use the same absolute limit.
+Initialization negotiates a possibly smaller `max_frame_bytes` for the rest of
+the session.
 
 ## JSON-RPC profile
 
 Version 1 uses the JSON-RPC string `"2.0"`. Requests and responses use the
 standard `method`, `params`, `result`, and `error` members.
-`rpc.initialize`, `rpc.cancel`, and `rpc.shutdown` are the RPC-internal
-extensions defined by this profile. Application methods a client calls on an
-endpoint use the `resolver.` or `provider.` prefix; the [callbacks](#callbacks)
-an endpoint calls on its client use the `client.` prefix.
+`rpc.discover` (0.20+), `rpc.initialize`, `rpc.cancel`, and `rpc.shutdown` are
+the RPC-internal extensions defined by this profile. Application methods a
+client calls on an endpoint use the `resolver.` or `provider.` prefix; the
+[callbacks](#callbacks) an endpoint calls on its client use the `client.`
+prefix.
 
 Request IDs are positive integers no larger than JavaScript's exactly
 representable integer limit. A sender MUST choose IDs in strictly increasing
@@ -89,8 +92,8 @@ The receiver MUST reject requests with:
 - an ID less than or equal to the last request ID received in that direction;
 - unknown top-level members;
 - unknown members in a method's `params` object;
-- a request sent before successful initialization, other than
-  `rpc.initialize`;
+- a request sent before successful initialization, other than `rpc.discover`
+  (0.20+) or `rpc.initialize`;
 - a second `rpc.initialize` request.
 
 A notification has no response channel. Unknown notifications, cancellation
@@ -111,12 +114,92 @@ optional field is only optional to a peer that advertised the capability naming
 it, and a sender must not write the field to a peer that did not. Reviewers
 should read a new `params` member as a new capability until shown otherwise.
 
+## Runtime discovery (0.20+)
+
+`rpc.discover` returns the endpoint's self-contained
+[OpenRPC](https://spec.open-rpc.org/) document without initializing application
+state. It is the only request other than `rpc.initialize` that a server accepts
+before initialization.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "rpc.discover",
+  "_meta": { "deadline_unix_ms": 1786766405000 },
+  "params": {}
+}
+```
+
+The result is the OpenRPC document itself. Its `x-secretspec` extension carries
+the endpoint-specific facts that do not belong to the application interface:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "openrpc": "1.3.2",
+    "info": {
+      "title": "SecretSpec Secret Resolution Protocol",
+      "version": "1"
+    },
+    "methods": [
+      {
+        "name": "rpc.discover",
+        "params": [
+          { "name": "params", "required": true, "schema": { "type": "object" } }
+        ],
+        "result": {
+          "name": "OpenRPC document",
+          "schema": { "type": "object" }
+        }
+      }
+    ],
+    "components": {
+      "schemas": { "...": "..." }
+    },
+    "x-secretspec": {
+      "protocol": "secretspec.resolver",
+      "versions": [1],
+      "server": {
+        "name": "secretspec-resolver",
+        "version": "0.20.0"
+      },
+      "methods": ["resolver.get", "resolver.release"],
+      "absolute_max_frame_bytes": 1048576
+    }
+  }
+}
+```
+
+Rules:
+
+- Discovery MUST NOT load a manifest, initialize a provider, obtain a
+  credential, send a callback, or create application session state.
+- The returned OpenRPC document MUST include all referenced schemas. A caller
+  does not need network access, an installed schema directory, or a source
+  checkout to interpret it.
+- `x-secretspec.methods` lists the application methods this endpoint can
+  advertise. It is descriptive only; a client still uses the `methods` selected
+  by `rpc.initialize` as the authority for application calls.
+- Discovery does not select a protocol version, negotiate limits, or make the
+  endpoint ready. After replying, an uninitialized endpoint continues waiting
+  for `rpc.initialize` or EOF.
+- Discovery may be repeated with fresh, increasing request IDs. After
+  initialization its response is subject to the negotiated frame limit; before
+  initialization it is subject to the absolute frame limit.
+- Invalid parameters receive `invalid_params`; an expired deadline receives
+  `deadline_exceeded`. Either response leaves the session usable.
+
 ## Initialization and capabilities
 
-`rpc.initialize` MUST be the first request. Its envelope carries the startup
-deadline; clients commonly choose 5 seconds, and servers may enforce a shorter
-local startup bound. Its
-`application` member is defined by the selected application protocol.
+`rpc.initialize` MUST be the first request that creates or addresses application
+state. It MAY be preceded only by `rpc.discover` (0.20+) requests. Clients that
+do not need discovery send initialization as request ID 1. Its envelope carries
+the startup deadline; clients commonly choose 5 seconds, and servers may enforce
+a shorter local startup bound. Its `application` member is defined by the
+selected application protocol.
 
 ```json
 {
@@ -179,8 +262,8 @@ Rules:
 - Unsupported protocols or versions return `unsupported_version`; the server
   then closes the connection.
 
-An initialization request is constrained by the pre-negotiation limits of one
-frame and one in-flight request.
+Discovery and initialization requests are constrained by the pre-negotiation
+limits of one frame and one in-flight request.
 
 ## Application requests
 
@@ -303,10 +386,11 @@ Cancellation has these race rules:
    cancellation has no effect.
 5. The notification itself never receives a response.
 
-An **accepted request** is a complete, valid JSON-RPC request with a fresh ID
-that has passed initialization, capability, parameter, and in-flight-limit
-checks. Every accepted request MUST produce exactly one terminal `result` or
-`error` response unless the transport disconnects before it can be written.
+An **accepted application request** is a complete, valid JSON-RPC request with a
+fresh ID that has passed initialization, capability, parameter, and
+in-flight-limit checks. Every accepted application or `rpc.discover` (0.20+)
+request MUST produce exactly one terminal `result` or `error` response unless
+the transport disconnects before it can be written.
 The writer owns the atomic terminal-state transition so a handler, deadline,
 and cancellation race cannot emit two responses.
 

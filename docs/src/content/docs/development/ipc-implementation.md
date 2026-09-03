@@ -95,7 +95,9 @@ libsecretspec-resolver/
   meson.build
 
 secretspec-ipc/                  # Full Rust client/server implementation
+  schema/ipc/v1/                 # Packaged discovery descriptions (0.20+)
   src/
+    description.rs
     frame.rs
     client.rs
     jsonrpc.rs
@@ -705,9 +707,13 @@ Rust type definition becomes a second source of truth.
 The Rust implementation must satisfy the same observable rules as C: bounded
 pre-initialization allocation, negotiated concurrency, continued reads while
 handlers run, exactly one terminal result, no uncertain replay, direct launch
-without a shell, bounded child reaping, and value-free errors and logs. Its
-async API may differ ergonomically from C call handles, but normalized wire and
-lifecycle outcomes must agree.
+without a shell, bounded child reaping, and value-free errors and logs. The Rust
+server additionally answers side-effect-free `rpc.discover` (0.20+). Runtime
+discovery embeds the canonical OpenRPC and JSON Schema assets, rewrites their
+references into one self-contained document, and must not invoke the
+application handler's initialization hook. Its async API may differ
+ergonomically from C call handles, but normalized wire and lifecycle outcomes
+must agree.
 
 ## Conformance suite
 
@@ -735,7 +741,9 @@ to the Rust implementation and every conforming endpoint.
 - zero, oversized, truncated, invalid UTF-8, malformed JSON, duplicate-key,
   excessive-nesting, and batch-array frames;
 - invalid, duplicate, and reused request IDs;
-- request before initialize and repeated initialize;
+- side-effect-free `rpc.discover` (0.20+) before and after initialization,
+  including discovery followed by initialization with the next request ID;
+- application request before initialize and repeated initialize;
 - no common protocol version and invalid required-method advertisement;
 - negotiated smaller frame and in-flight limits;
 - unknown capability, method, top-level field, and parameter;

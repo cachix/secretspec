@@ -387,7 +387,7 @@ jobs:
         if: matrix.musl == false && runner.os != 'Windows'
         shell: bash
         run: |
-          package="$(find ${GITHUB_WORKSPACE}/artifacts -name "*.jar" -not -name "*-sources.jar" -not -name "*-javadoc.jar" -print -quit)"
+          package="$(find "${GITHUB_WORKSPACE}/artifacts" -name "*.jar" -not -name "*-sources.jar" -not -name "*-javadoc.jar" -print -quit)"
           unset SECRETSPEC_FFI_LIB
           cd secretspec-jvm && ./gradlew :consumer:test -Psecretspec.jar="$package" --no-daemon
 
@@ -416,10 +416,9 @@ jobs:
 
   publish:
     name: Publish to central repository
-    # Maven Central ownership, signing, and repository secrets are not set up
-    # yet. Keep tag builds producing and testing the release JAR, but require an
-    # explicit manual dispatch before attempting publication.
-    if: inputs.publish
+    # Version tags publish automatically. A standalone manual run can opt in to
+    # re-publishing one SDK, while reusable pre-release runs leave this off.
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish
     needs: [consumer]
     runs-on: ubuntu-latest
     permissions:
@@ -440,11 +439,15 @@ jobs:
         env:
           MAVEN_CENTRAL_SIGNING_KEY: ${{ secrets.MAVEN_CENTRAL_SIGNING_KEY }}
         run: |
-          mkdir -p -m 700 ~/.gnupg
-          echo "$MAVEN_CENTRAL_SIGNING_KEY" | gpg --batch --import
+          install -d -m 700 ~/.gnupg
+          printf '%s' "$MAVEN_CENTRAL_SIGNING_KEY" | gpg --batch --import
           # Ultimately trust the imported key
-          KEY_ID=$(gpg --with-colons --list-secret-keys | grep '^sec' | cut -d':' -f5)
-          echo "${KEY_ID}:6:" | gpg --import-ownertrust
+          KEY_FINGERPRINT=$(gpg --batch --with-colons --fingerprint --list-secret-keys | awk -F: '$1 == "fpr" { print $10; exit }')
+          if [[ -z "$KEY_FINGERPRINT" ]]; then
+            echo "the Maven Central signing key has no primary fingerprint" >&2
+            exit 1
+          fi
+          printf '%s:6:\n' "$KEY_FINGERPRINT" | gpg --batch --import-ownertrust
       - name: Prepare Maven Bundle Structure
         shell: bash
         env:
@@ -455,9 +458,16 @@ jobs:
           BUNDLE_DIR="bundle-dir/org/cachix/secretspec-jvm/${VERSION}"
           mkdir -p "${BUNDLE_DIR}"
           ( cd secretspec-jvm && ./gradlew generatePomFileForMavenPublication )
-          cp artifacts/secretspec-jvm-${SNAPSHOT_VERSION}.jar "${BUNDLE_DIR}/secretspec-jvm-${VERSION}.jar"
-          cp artifacts/secretspec-jvm-${SNAPSHOT_VERSION}-javadoc.jar "${BUNDLE_DIR}/secretspec-jvm-${VERSION}-javadoc.jar"
-          cp artifacts/secretspec-jvm-${SNAPSHOT_VERSION}-sources.jar "${BUNDLE_DIR}/secretspec-jvm-${VERSION}-sources.jar"
+          MAIN_JAR=$(find artifacts -type f -name "secretspec-jvm-${SNAPSHOT_VERSION}.jar" -print -quit)
+          JAVADOC_JAR=$(find artifacts -type f -name "secretspec-jvm-${SNAPSHOT_VERSION}-javadoc.jar" -print -quit)
+          SOURCES_JAR=$(find artifacts -type f -name "secretspec-jvm-${SNAPSHOT_VERSION}-sources.jar" -print -quit)
+          if [[ -z "$MAIN_JAR" || -z "$JAVADOC_JAR" || -z "$SOURCES_JAR" ]]; then
+            echo "one or more Maven Central JAR artifacts are missing" >&2
+            exit 1
+          fi
+          cp "$MAIN_JAR" "${BUNDLE_DIR}/secretspec-jvm-${VERSION}.jar"
+          cp "$JAVADOC_JAR" "${BUNDLE_DIR}/secretspec-jvm-${VERSION}-javadoc.jar"
+          cp "$SOURCES_JAR" "${BUNDLE_DIR}/secretspec-jvm-${VERSION}-sources.jar"
           cp secretspec-jvm/library/build/publications/maven/pom-default.xml "${BUNDLE_DIR}/secretspec-jvm-${VERSION}.pom"
           cd bundle-dir
           find . -type f \( -name "*.jar" -o -name "*.pom" \) -print0 | while IFS= read -r -d '' file; do
@@ -475,8 +485,43 @@ jobs:
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_TOKEN_USERNAME }}
           MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_TOKEN_PASSWORD }}
         run: |
+          VERSION=$(grep 'secretspec.version' secretspec-jvm/gradle.properties | cut -d'=' -f2 | tr -d '[:space:]')
+          VERSION="${VERSION%-SNAPSHOT}"
           ENCODED_AUTH=$(echo -n "${MAVEN_CENTRAL_USERNAME}:${MAVEN_CENTRAL_PASSWORD}" | base64 -w 0)
-          curl --fail-with-body --request POST \
+          DEPLOYMENT_ID=$(curl --fail-with-body --silent --show-error --request POST \
             --header "Authorization: Bearer ${ENCODED_AUTH}" \
             --form "bundle=@maven-central-bundle.zip" \
-            "https://central.sonatype.com/api/v1/publisher/upload?publishingType=AUTOMATIC"
+            "https://central.sonatype.com/api/v1/publisher/upload?name=secretspec-jvm-${VERSION}&publishingType=AUTOMATIC")
+          if [[ -z "$DEPLOYMENT_ID" ]]; then
+            echo "Maven Central did not return a deployment ID" >&2
+            exit 1
+          fi
+          echo "Maven Central deployment: $DEPLOYMENT_ID"
+
+          previous_state=""
+          for _ in {1..90}; do
+            if ! response=$(curl --fail-with-body --silent --show-error --request POST \
+              --header "Authorization: Bearer ${ENCODED_AUTH}" \
+              "https://central.sonatype.com/api/v1/publisher/status?id=${DEPLOYMENT_ID}"); then
+              sleep 10
+              continue
+            fi
+            state=$(jq -r .deploymentState <<< "$response")
+            if [[ "$state" != "$previous_state" ]]; then
+              echo "Maven Central deployment state: $state"
+              previous_state="$state"
+            fi
+            case "$state" in
+              PUBLISHED)
+                exit 0
+                ;;
+              FAILED)
+                jq . <<< "$response"
+                exit 1
+                ;;
+            esac
+            sleep 10
+          done
+
+          echo "timed out waiting for Maven Central deployment $DEPLOYMENT_ID" >&2
+          exit 1

@@ -95,6 +95,13 @@ jobs:
         working-directory: docs
         site: https://secretspec.dev
 
+  # Temporary dispatch bridge: GitHub only registers a brand-new standalone
+  # workflow after it reaches the default branch. The existing Test workflow
+  # can call the branch-local diagnostic so PR #362 can be measured first.
+  windows-startup-diagnostics:
+    if: github.event_name == 'workflow_dispatch' && github.ref_name == 'feat/ipc-v1'
+    uses: ./.github/workflows/windows-startup.yml
+
   tests:
     needs: changes
     if: needs.changes.outputs.code == 'true'

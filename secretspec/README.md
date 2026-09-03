@@ -68,7 +68,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
 - **[Git credential helper](https://secretspec.dev/integrations/git/)** (0.20+): Authenticate Git HTTPS and
   `git send-email` SMTP operations through any SecretSpec provider
 - **[Discovery](https://secretspec.dev/reference/cli#init)**: `secretspec init` to discover secrets from existing `.env` files
-- **[Claude Code credential integration](https://secretspec.dev/integrations/claude-code/)** (0.20+): Configure, store, and remove API or gateway credentials through Claude Code's native `apiKeyHelper`
+- **[Claude Code credential integration](https://secretspec.dev/integrations/claude-code/)** (0.21+): Configure, store, and remove API or gateway credentials through Claude Code's native `apiKeyHelper`
 
 ## Quick Start
 

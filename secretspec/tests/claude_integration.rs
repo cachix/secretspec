@@ -555,6 +555,23 @@ fn logout_remains_available_after_unconfigure() {
 }
 
 #[test]
+fn login_refuses_after_unconfigure() {
+    let fixture = Fixture::new();
+    assert_success("Claude configure", &fixture.embedded_configure("null"));
+    let output = fixture
+        .command()
+        .args(["claude", "unconfigure"])
+        .output()
+        .unwrap();
+    assert_success("Claude unconfigure", &output);
+
+    let output = command_with_stdin(fixture.command(), &["claude", "login"], b"unused-token\n");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not active") && stderr.contains("claude configure"));
+}
+
+#[test]
 fn managed_state_rejects_relative_settings_paths() {
     let fixture = Fixture::new();
     assert_success("Claude configure", &fixture.embedded_configure("null"));

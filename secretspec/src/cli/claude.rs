@@ -23,7 +23,7 @@ const DEFAULT_RESOURCE: &str = "api.anthropic.com";
 #[derive(Subcommand)]
 pub(super) enum ClaudeAction {
     #[command(
-        about = "Configure Claude Code to retrieve an API credential through SecretSpec (0.20+)"
+        about = "Configure Claude Code to retrieve an API credential through SecretSpec (0.21+)"
     )]
     Configure {
         #[arg(
@@ -61,7 +61,7 @@ pub(super) enum ClaudeAction {
         )]
         yes: bool,
     },
-    #[command(about = "Store a Claude Code credential in the embedded SecretSpec store (0.20+)")]
+    #[command(about = "Store a Claude Code credential in the embedded SecretSpec store (0.21+)")]
     Login {
         #[arg(
             short,
@@ -73,7 +73,7 @@ pub(super) enum ClaudeAction {
         #[arg(long, help = "Use the current user's Claude Code configuration")]
         global: bool,
     },
-    #[command(about = "Remove a Claude Code credential from the embedded SecretSpec store (0.20+)")]
+    #[command(about = "Remove a Claude Code credential from the embedded SecretSpec store (0.21+)")]
     Logout {
         #[arg(
             short,
@@ -85,7 +85,7 @@ pub(super) enum ClaudeAction {
         #[arg(long, help = "Use the current user's Claude Code configuration")]
         global: bool,
     },
-    #[command(about = "Remove Claude Code credential configuration managed by SecretSpec (0.20+)")]
+    #[command(about = "Remove Claude Code credential configuration managed by SecretSpec (0.21+)")]
     Unconfigure {
         #[arg(long, help = "Remove the current user's Claude Code configuration")]
         global: bool,
@@ -404,6 +404,12 @@ fn login(
     caller: &Option<CallerContext>,
 ) -> Result<()> {
     let setting = lifecycle_setting(global, file)?;
+    if !setting.configured {
+        let scope = if global { " --global" } else { "" };
+        return Err(miette!(
+            "Claude Code credential integration is not active for this scope; rerun secretspec claude configure{scope} before login"
+        ));
+    }
     let (secrets, secret) =
         embedded_cli_secrets(&setting, provider.as_deref(), reason, caller, "login")?;
     let value = read_credential()?;

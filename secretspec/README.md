@@ -69,6 +69,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   `git send-email` SMTP operations through any SecretSpec provider
 - **[Discovery](https://secretspec.dev/reference/cli#init)**: `secretspec init` to discover secrets from existing `.env` files
 - **[Claude Code credential integration](https://secretspec.dev/integrations/claude-code/)** (0.21+): Configure, store, and remove API or gateway credentials through Claude Code's native `apiKeyHelper`
+- **[Codex API-key integration](https://secretspec.dev/integrations/codex/)** (0.21+): Configure, store, and remove OpenAI or gateway API keys through Codex's native command-backed provider authentication
 
 ## Quick Start
 

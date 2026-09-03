@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Claude Code can retrieve Anthropic API and LLM gateway credentials from any
+  SecretSpec provider through its native `apiKeyHelper`. `secretspec claude
+  configure` and `unconfigure` safely manage repository or user settings,
+  including worktrees and `CLAUDE_CONFIG_DIR`, without replacing unrelated
+  helpers. `login` and `logout` manage credentials isolated by settings scope
+  and API resource; custom manifests remain available through `--file` (0.21+).
+
 - OpenPGP and OpenSSH private keys can be generated entirely in Rust (0.21+).
   OpenPGP generation uses an explicit User ID and signing, encryption, or
   combined capability profiles; Ed25519/Curve25519 is the default, with
@@ -165,7 +172,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the URI, environment, process arguments, or a local key file. Batch
   resolution decrypts each file once, and the initial provider is intentionally
   read-only.
-
 - **Azure App Configuration provider** (`aac://`, 0.20+): select direct
   values and Azure Key Vault references by label, prefix, and tags, with Entra
   ID or connection-string authentication and guarded writes, deletion, and

@@ -16,6 +16,7 @@ use std::io::{IsTerminal, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+mod claude;
 mod completion;
 mod docker;
 mod git;
@@ -276,6 +277,11 @@ enum Commands {
     Git {
         #[command(subcommand)]
         action: GitAction,
+    },
+    #[command(about = "Manage Claude Code API credential integration (0.21+)")]
+    Claude {
+        #[command(subcommand)]
+        action: claude::ClaudeAction,
     },
     /// Import secrets from a provider to another provider
     Import {
@@ -959,6 +965,7 @@ pub fn main() -> Result<()> {
     let caller = caller_context(&cli)?;
 
     match cli.command {
+        Commands::Claude { action } => claude::run(action, &cli.file, &cli.reason, &caller, typed),
         Commands::Docker { action } => docker::run(action, &cli.file, &cli.reason, &caller, typed),
         // Initialize a new secretspec.toml configuration file
         Commands::Init {

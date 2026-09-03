@@ -411,6 +411,11 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
               slug: "integrations/docker",
               badge: { text: "0.20+", variant: "note" },
             },
+            {
+              label: "Claude Code",
+              slug: "integrations/claude-code",
+              badge: { text: "0.21+", variant: "note" },
+            },
           ],
         },
         {

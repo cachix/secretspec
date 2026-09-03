@@ -2707,6 +2707,12 @@ impl Secret {
                         contract.name
                     ));
                 }
+                if self.extract.is_some() {
+                    return Err(format!(
+                        "`extract` is not valid for stored type = \"{}\"; its value is a binary archive",
+                        contract.name
+                    ));
+                }
                 if self.default.is_some() || self.prompt == Some(true) {
                     return Err(format!(
                         "`type = \"{}\"` cannot be combined with `default` or `prompt = true`; its value is a binary archive",
@@ -2922,14 +2928,18 @@ impl Secret {
                 if user_id.chars().any(char::is_control) {
                     return Err("generate.user_id cannot contain control characters".into());
                 }
-                if opts.comment.is_some()
+                if opts.length.is_some()
+                    || opts.bytes.is_some()
+                    || opts.charset.is_some()
+                    || opts.command.is_some()
+                    || opts.comment.is_some()
                     || opts.words.is_some()
                     || opts.separator.is_some()
                     || opts.language.is_some()
                     || opts.kid.is_some()
                 {
                     return Err(
-                        "generate.comment, generate.words, generate.separator, generate.language, and generate.kid are not valid for type = \"openpgp_private_key\""
+                        "openpgp_private_key generation accepts only `algorithm`, `bits`, `user_id`, and `capabilities` options"
                             .into(),
                     );
                 }
@@ -2989,7 +2999,11 @@ impl Secret {
                     }
                 };
                 if let Some(opts) = opts {
-                    if opts.user_id.is_some()
+                    if opts.length.is_some()
+                        || opts.bytes.is_some()
+                        || opts.charset.is_some()
+                        || opts.command.is_some()
+                        || opts.user_id.is_some()
                         || opts.capabilities.is_some()
                         || opts.words.is_some()
                         || opts.separator.is_some()
@@ -2997,7 +3011,7 @@ impl Secret {
                         || opts.kid.is_some()
                     {
                         return Err(
-                            "generate.user_id, generate.capabilities, generate.words, generate.separator, generate.language, and generate.kid are not valid for type = \"ssh_private_key\""
+                            "ssh_private_key generation accepts only `algorithm`, `bits`, and `comment` options"
                                 .into(),
                         );
                     }

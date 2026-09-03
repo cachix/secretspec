@@ -186,6 +186,20 @@ B = { description = "b", from = "not a name", extract = { format = "json", point
 }
 
 #[test]
+fn stored_x509_identity_rejects_extract() {
+    let error = validation_error(
+        r#"
+[profiles.default]
+TLS_IDENTITY = { description = "identity", type = "x509_identity", extract = { format = "json", pointer = "/certificate" } }
+"#,
+    );
+    assert!(
+        error.contains("`extract` is not valid for stored type = \"x509_identity\""),
+        "{error}"
+    );
+}
+
+#[test]
 fn from_secrets_reject_storage_and_generation_fields() {
     for field in [
         r#"default = "x""#,

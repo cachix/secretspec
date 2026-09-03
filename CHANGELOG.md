@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provisioning preserves stored identities while requesting missing passwords
   and canonicalizes encoded PFX input; empty credential maps clear inherited
   bindings, and valid long DNS SANs use a fallback certificate subject.
+  Configuration loading rejects extraction on stored binary identities and
+  generation options that the selected credential type does not support.
 
 ## [0.20.0] - 2026-08-31
 

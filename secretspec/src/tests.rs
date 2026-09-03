@@ -5755,6 +5755,10 @@ fn test_config_rejects_invalid_openpgp_generation_options() {
         r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", algorithm = "ed25519", bits = 3072 } }"#,
         r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", algorithm = "rsa", bits = 1024 } }"#,
         r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", algorithm = "rsa", bits = 16384 } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", length = 1 } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", bytes = 1 } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", charset = "ascii" } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", command = "echo ignored" } }"#,
     ] {
         let toml_content = format!(
             "[project]\nname = \"test-gen\"\nrevision = \"1.0\"\n\n[profiles.default]\n{declaration}\n"
@@ -5801,6 +5805,10 @@ fn test_config_rejects_invalid_ssh_generation_options() {
         r#"KEY = { description = "Key", type = "ssh_private_key", generate = { algorithm = "rsa", bits = 16384 } }"#,
         r#"KEY = { description = "Key", type = "ssh_private_key", generate = { comment = "bad\ncomment" } }"#,
         r#"KEY = { description = "Key", type = "ssh_private_key", generate = { user_id = "Bot" } }"#,
+        r#"KEY = { description = "Key", type = "ssh_private_key", generate = { length = 1 } }"#,
+        r#"KEY = { description = "Key", type = "ssh_private_key", generate = { bytes = 1 } }"#,
+        r#"KEY = { description = "Key", type = "ssh_private_key", generate = { charset = "ascii" } }"#,
+        r#"KEY = { description = "Key", type = "ssh_private_key", generate = { command = "echo ignored" } }"#,
         r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", comment = "ssh-only" } }"#,
     ] {
         let toml_content = format!(

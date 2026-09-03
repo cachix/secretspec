@@ -157,8 +157,10 @@ We cannot make the equivalent fix in Claude Code. Its [public
 repository](https://github.com/anthropics/claude-code) does not include the
 core CLI implementation, and its [license is all rights
 reserved](https://github.com/anthropics/claude-code/blob/main/LICENSE.md).
-We can document the problem and propose a SecretSpec TypeScript integration,
-but only Anthropic can change Claude Code's MCP OAuth storage today.
+We can support the [open request for secure, pluggable credential
+storage](https://github.com/anthropics/claude-code/issues/73582) and propose a
+SecretSpec TypeScript integration, but only Anthropic can change Claude Code's
+MCP OAuth storage today.
 
 That is one of the practical security benefits of open source: when a secret
 crosses the wrong boundary, users do not have to wait for the vendor to decide

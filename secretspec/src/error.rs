@@ -85,6 +85,14 @@ pub enum SecretSpecError {
         "Secret '{0}' uses `extract` and is read-only; update its containing document in the source provider instead"
     )]
     ExtractedSecretReadOnly(String),
+    #[error("Secret '{name}' is derived from '{from}' and is read-only; change '{from}' instead")]
+    DerivedSecretReadOnly { name: String, from: String },
+    #[error("Secret '{name}': credential `{role}` {reason}")]
+    CredentialInvalid {
+        name: String,
+        role: String,
+        reason: String,
+    },
     #[error("Failed to compose secret: {0}")]
     CompositionFailed(String),
     #[error("No secretspec.toml found in current or any parent directory")]
@@ -149,6 +157,8 @@ impl SecretSpecError {
             SecretSpecError::PromptValueEmpty(_) => "prompt_value_empty",
             SecretSpecError::ComposedSecretReadOnly(_) => "composed_secret_read_only",
             SecretSpecError::ExtractedSecretReadOnly(_) => "extracted_secret_read_only",
+            SecretSpecError::DerivedSecretReadOnly { .. } => "derived_secret_read_only",
+            SecretSpecError::CredentialInvalid { .. } => "credential_invalid",
             SecretSpecError::CompositionFailed(_) => "composition_failed",
             SecretSpecError::NoManifest => "no_manifest",
             SecretSpecError::ExtendedConfigNotFound(_) => "extended_config_not_found",
@@ -269,6 +279,13 @@ mod tests {
             (
                 SecretSpecError::ExtractedSecretReadOnly("X".into()),
                 "extracted_secret_read_only",
+            ),
+            (
+                SecretSpecError::DerivedSecretReadOnly {
+                    name: "X".into(),
+                    from: "Y".into(),
+                },
+                "derived_secret_read_only",
             ),
             (
                 SecretSpecError::CompositionFailed("too large".into()),

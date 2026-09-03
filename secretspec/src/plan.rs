@@ -198,18 +198,59 @@ impl PlannedSecret {
         self.secret.config.as_path.unwrap_or(false)
     }
 
-    /// Optional encoding applied at the storage boundary.
+    /// The codec used wherever this value must be text: the declared
+    /// `encoding`, or the type registry's default for a binary value. For a
+    /// provider-backed secret that is the storage and cache boundary; for a
+    /// binary value it is also the inline exposure when `as_path` is off.
     pub(crate) fn encoding(&self) -> Option<SecretEncoding> {
-        self.secret.config.encoding
+        self.secret.config.effective_encoding()
     }
 
-    /// Optional structured extraction applied at the storage boundary.
+    /// Optional structured extraction applied at the storage boundary or to
+    /// the `from` source's text.
     pub(crate) fn extract(&self) -> Option<&SecretExtract> {
         self.secret.config.extract.as_ref()
     }
 
     pub(crate) fn is_composed(&self) -> bool {
         self.secret.composition.is_some()
+    }
+
+    /// The declared secret this value is converted or selected from.
+    pub(crate) fn from(&self) -> Option<&str> {
+        self.secret.config.from.as_deref()
+    }
+
+    /// Whether the value is produced by the executor from other declared
+    /// secrets rather than read from a store.
+    pub(crate) fn is_derived(&self) -> bool {
+        self.is_composed() || self.from().is_some()
+    }
+
+    /// Whether this is a provider-backed registry type whose stored value is
+    /// decoded and validated by the type contract, possibly with credentials,
+    /// once every dependency has resolved.
+    pub(crate) fn is_typed_stored(&self) -> bool {
+        self.from().is_none()
+            && self
+                .secret
+                .config
+                .typed_contract()
+                .is_some_and(|contract| contract.is_stored())
+    }
+
+    /// Every declared secret that must resolve before this one.
+    pub(crate) fn dependencies(&self) -> Vec<&str> {
+        self.secret.dependencies()
+    }
+
+    /// The declared secret bound to a credential role, if any.
+    pub(crate) fn credential(&self, role: &str) -> Option<&str> {
+        self.secret
+            .config
+            .credential_secrets()
+            .find(|(bound_role, _)| *bound_role == role)
+            .map(|(_, credential)| credential)
     }
 
     /// The parsed derived-value template, for composed secrets.
@@ -456,9 +497,9 @@ impl Secrets {
         override_spec: &Option<String>,
     ) -> Result<PlannedSecret> {
         self.validate_scoped_refs(&name, &secret.config)?;
-        // A composed secret's value is derived by the executor, so it routes
+        // A derived secret's value is produced by the executor, so it routes
         // to no store, including an explicit `--provider` override.
-        let route = if secret.composition.is_some() {
+        let route = if secret.composition.is_some() || secret.config.from.is_some() {
             None
         } else {
             Some(self.route_for(&secret.config, override_spec)?)

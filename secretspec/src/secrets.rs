@@ -14,7 +14,7 @@ use crate::provider::{
     Address, OwnedAddress, ProducedValuePersistence, Provider as ProviderTrait,
     ProviderCredentials, same_storage_container,
 };
-use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
+use crate::report::{Derivation, ResolutionReport, ResolutionStatus, SecretResolution};
 use crate::resolve::{
     NamedResolution, RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource,
 };
@@ -24,6 +24,7 @@ use colored::Colorize;
 use data_encoding::{
     BASE64, BASE64_NOPAD, BASE64URL, BASE64URL_NOPAD, Encoding, HEXLOWER, HEXLOWER_PERMISSIVE,
 };
+use secrecy::zeroize::Zeroizing;
 use secrecy::{ExposeSecret, SecretSlice, SecretString};
 #[cfg(unix)]
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
@@ -173,9 +174,9 @@ fn resolved_source(entry: &SecretResolution) -> ResolvedSource {
 /// Stands in for a secret's name in diagnostics when the active scope hides it.
 ///
 /// Every accessed-but-not-visible secret is by construction a dependency of a
-/// visible composed secret, so this describes what it is without disclosing
+/// visible derived secret, so this describes what it is without disclosing
 /// which secret it is.
-pub(crate) const HIDDEN_SECRET_LABEL: &str = "a hidden composition input";
+pub(crate) const HIDDEN_SECRET_LABEL: &str = "a hidden derived-secret input";
 
 /// Emits a warning when a provider in a fallback chain fails so the user
 /// can see why a particular link was skipped, without aborting the chain.
@@ -1037,6 +1038,13 @@ struct ResolutionExecution<'secrets, 'plan, 'filter, 'addresses> {
     failed_primary_uris: HashMap<Option<&'plan str>, SecretSpecError>,
     cached_uris: HashMap<String, String>,
     fallback_results: HashMap<String, FallbackReadResult>,
+    /// Registry-typed provider values parked by the provider pass until the
+    /// derived pass, where their credentials have resolved and the type
+    /// contract decodes them exactly once.
+    pending_typed: HashMap<String, PendingTyped>,
+    /// Decoded identities, keyed by secret name, for the projections that
+    /// derive from them in the same pass.
+    identities: HashMap<String, crate::x509_identity::Identity>,
 }
 
 impl<'secrets, 'plan, 'filter, 'addresses>
@@ -1066,6 +1074,58 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             failed_primary_uris: HashMap::new(),
             cached_uris: HashMap::new(),
             fallback_results: HashMap::new(),
+            pending_typed: HashMap::new(),
+            identities: HashMap::new(),
+        }
+    }
+
+    /// Insert a value that crossed a storage boundary. A registry-typed stored
+    /// value is parked instead: its contract decodes it in the derived pass,
+    /// once the credentials it may need have resolved.
+    fn insert_stored(
+        &mut self,
+        planned: &PlannedSecret,
+        diagnostic_name: &str,
+        value: SecretString,
+    ) -> Result<()> {
+        if planned.is_typed_stored() {
+            self.pending_typed
+                .insert(planned.name.clone(), PendingTyped::Stored(value));
+            return Ok(());
+        }
+        self.manager.insert_resolved(
+            &mut self.values,
+            &mut self.temp_files,
+            planned,
+            diagnostic_name,
+            value,
+            ResolvedRepresentation::Stored,
+        )
+    }
+
+    /// Insert a freshly generated value. Text is already logical; generated
+    /// binary identities are parked like stored ones so one code path decodes,
+    /// validates, and delivers every typed value.
+    fn insert_generated(
+        &mut self,
+        planned: &PlannedSecret,
+        diagnostic_name: &str,
+        value: GeneratedValue,
+    ) -> Result<()> {
+        match value {
+            GeneratedValue::Text(value) => self.manager.insert_resolved(
+                &mut self.values,
+                &mut self.temp_files,
+                planned,
+                diagnostic_name,
+                value,
+                ResolvedRepresentation::Logical,
+            ),
+            GeneratedValue::Binary(bytes) => {
+                self.pending_typed
+                    .insert(planned.name.clone(), PendingTyped::Logical(bytes));
+                Ok(())
+            }
         }
     }
 
@@ -1084,7 +1144,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
         self.fetch_primary_values()?;
         self.fetch_fallback_values();
         self.resolve_provider_backed_values()?;
-        self.resolve_composed_values()?;
+        self.resolve_derived_values()?;
         self.finish()
     }
 
@@ -1271,14 +1331,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                         manager.write_cached_secret(planned, route, profile, &value);
                     }
                     if materialize.values() {
-                        manager.insert_resolved(
-                            &mut self.values,
-                            &mut self.temp_files,
-                            planned,
-                            diagnostic_name,
-                            value,
-                            ResolvedRepresentation::Stored,
-                        )?;
+                        self.insert_stored(planned, diagnostic_name, value)?;
                     }
                     status = ResolutionStatus::Resolved;
                 }
@@ -1332,14 +1385,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                         source_provider = fallback_uri;
                         if materialize.values() {
                             manager.write_cached_secret(planned, route, profile, &value);
-                            manager.insert_resolved(
-                                &mut self.values,
-                                &mut self.temp_files,
-                                planned,
-                                diagnostic_name,
-                                value,
-                                ResolvedRepresentation::Stored,
-                            )?;
+                            self.insert_stored(planned, diagnostic_name, value)?;
                         }
                         status = ResolutionStatus::Resolved;
                     } else {
@@ -1372,13 +1418,10 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                                     let generated_value = manager
                                         .try_generate_secret(planned, profile)?
                                         .expect("compiled Generate policy has a generator");
-                                    manager.insert_resolved(
-                                        &mut self.values,
-                                        &mut self.temp_files,
+                                    self.insert_generated(
                                         planned,
                                         diagnostic_name,
                                         generated_value,
-                                        ResolvedRepresentation::Logical,
                                     )?;
                                     status = ResolutionStatus::Resolved;
                                 } else if required
@@ -1433,49 +1476,48 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 default_applied,
                 generated,
                 composed: false,
+                derivation: None,
                 as_path: planned.as_path(),
             });
         }
         Ok(())
     }
 
-    fn resolve_composed_values(&mut self) -> Result<()> {
-        fn composition_order<'a>(
+    /// Resolve every value the executor produces itself, in one topological
+    /// pass: composed templates, `from` conversions and selections, and the
+    /// typed decoding of provider-backed registry values whose credentials had
+    /// to resolve first. A node runs after its dependencies, so declaration
+    /// order never matters and a typed value is decoded exactly once.
+    fn resolve_derived_values(&mut self) -> Result<()> {
+        fn order<'a>(
             planned: &'a PlannedSecret,
-            composed: &HashMap<&str, &'a PlannedSecret>,
+            nodes: &HashMap<&str, &'a PlannedSecret>,
             visited: &mut HashSet<&'a str>,
             ordered: &mut Vec<&'a PlannedSecret>,
         ) {
             if !visited.insert(planned.name.as_str()) {
                 return;
             }
-            let template = planned
-                .composition()
-                .expect("only composed nodes are ordered");
-            for dependency in template.dependencies() {
-                if let Some(dependency) = composed.get(dependency.as_str()) {
-                    composition_order(dependency, composed, visited, ordered);
+            for dependency in planned.dependencies() {
+                if let Some(dependency) = nodes.get(dependency) {
+                    order(dependency, nodes, visited, ordered);
                 }
             }
             ordered.push(planned);
         }
 
-        let composed: HashMap<&str, &PlannedSecret> = self
+        let is_node = |secret: &PlannedSecret| secret.is_derived() || secret.is_typed_stored();
+        let nodes: HashMap<&str, &PlannedSecret> = self
             .plan
             .secrets
             .iter()
-            .filter(|secret| secret.is_composed())
+            .filter(|secret| is_node(secret))
             .map(|secret| (secret.name.as_str(), secret))
             .collect();
-        let mut ordered = Vec::with_capacity(composed.len());
+        let mut ordered = Vec::with_capacity(nodes.len());
         let mut visited = HashSet::new();
-        for planned in self
-            .plan
-            .secrets
-            .iter()
-            .filter(|secret| secret.is_composed())
-        {
-            composition_order(planned, &composed, &mut visited, &mut ordered);
+        for planned in self.plan.secrets.iter().filter(|secret| is_node(secret)) {
+            order(planned, &nodes, &mut visited, &mut ordered);
         }
 
         if ordered.is_empty() {
@@ -1488,30 +1530,67 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             .map(|entry| (entry.name.clone(), entry.status.clone()))
             .collect();
         for planned in ordered {
-            let template = planned
-                .composition()
-                .expect("only composed nodes are ordered");
-            let dependencies_resolved = template
+            let dependencies_resolved = planned
                 .dependencies()
                 .iter()
-                .all(|dependency| statuses.get(dependency) == Some(&ResolutionStatus::Resolved));
+                .all(|dependency| statuses.get(*dependency) == Some(&ResolutionStatus::Resolved));
+
+            if planned.is_typed_stored() {
+                // The provider pass already recorded this secret. It stays
+                // resolved only while its credentials did: an archive whose
+                // password is missing cannot be opened, so the secret is
+                // missing under its own policy rather than exposed unusable.
+                let fetched =
+                    statuses.get(planned.name.as_str()) == Some(&ResolutionStatus::Resolved);
+                if fetched && dependencies_resolved {
+                    if self.materialize.values() {
+                        self.finalize_typed_stored(planned)?;
+                    }
+                } else if fetched {
+                    self.pending_typed.remove(planned.name.as_str());
+                    let status = match planned.secret.missing {
+                        MissingPolicy::Omit => {
+                            self.missing_optional.push(planned.name.clone());
+                            ResolutionStatus::MissingOptional
+                        }
+                        _ => {
+                            self.missing_required.push(planned.name.clone());
+                            ResolutionStatus::MissingRequired
+                        }
+                    };
+                    if let Some(entry) = self
+                        .resolution
+                        .iter_mut()
+                        .find(|entry| entry.name == planned.name)
+                    {
+                        entry.status = status.clone();
+                    }
+                    statuses.insert(planned.name.clone(), status);
+                }
+                continue;
+            }
+
             let status = if dependencies_resolved {
                 if self.materialize.values() {
-                    let rendered = template
-                        .render(|dependency| {
-                            self.values
-                                .get(dependency)
-                                .map(|value| value.expose_secret())
-                        })
-                        .map_err(SecretSpecError::CompositionFailed)?;
-                    self.manager.insert_resolved(
-                        &mut self.values,
-                        &mut self.temp_files,
-                        planned,
-                        Secrets::diagnostic_secret_name(&planned.name, self.output_filter),
-                        SecretString::new(rendered.into()),
-                        ResolvedRepresentation::Logical,
-                    )?;
+                    if let Some(template) = planned.composition() {
+                        let rendered = template
+                            .render(|dependency| {
+                                self.values
+                                    .get(dependency)
+                                    .map(|value| value.expose_secret())
+                            })
+                            .map_err(SecretSpecError::CompositionFailed)?;
+                        self.manager.insert_resolved(
+                            &mut self.values,
+                            &mut self.temp_files,
+                            planned,
+                            Secrets::diagnostic_secret_name(&planned.name, self.output_filter),
+                            SecretString::new(rendered.into()),
+                            ResolvedRepresentation::Logical,
+                        )?;
+                    } else {
+                        self.resolve_from(planned)?;
+                    }
                 }
                 ResolutionStatus::Resolved
             } else {
@@ -1525,11 +1604,22 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                         ResolutionStatus::MissingOptional
                     }
                     MissingPolicy::Generate | MissingPolicy::UseDefault | MissingPolicy::Prompt => {
-                        unreachable!("composed source conflicts are rejected at load time")
+                        unreachable!("derived source conflicts are rejected at load time")
                     }
                 }
             };
 
+            let derivation = if planned.is_composed() {
+                Derivation::Composed
+            } else if let Some(source) = planned.from() {
+                if planned.extract().is_some() {
+                    Derivation::SelectedFrom(source.to_string())
+                } else {
+                    Derivation::ConvertedFrom(source.to_string())
+                }
+            } else {
+                unreachable!("derived nodes are composed or converted")
+            };
             statuses.insert(planned.name.clone(), status.clone());
             self.resolution.push(SecretResolution {
                 name: planned.name.clone(),
@@ -1539,10 +1629,172 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 default_applied: false,
                 generated: false,
                 composed: true,
+                derivation: Some(derivation),
                 as_path: planned.as_path(),
             });
         }
         Ok(())
+    }
+
+    /// The value bound to one credential role of a typed secret, validated
+    /// against the bounds every credential shares. `None` when the role is
+    /// unbound, which the type contract treats as an empty credential.
+    fn credential_value(
+        &self,
+        planned: &PlannedSecret,
+        role: &str,
+    ) -> Result<Option<SecretString>> {
+        let Some(credential) = planned.credential(role) else {
+            return Ok(None);
+        };
+        let diagnostic_name = Secrets::diagnostic_secret_name(&planned.name, self.output_filter);
+        let value =
+            self.values
+                .get(credential)
+                .ok_or_else(|| SecretSpecError::CredentialInvalid {
+                    name: diagnostic_name.to_string(),
+                    role: role.to_string(),
+                    reason: format!(
+                        "depends on '{}', which did not resolve",
+                        Secrets::diagnostic_secret_name(credential, self.output_filter)
+                    ),
+                })?;
+        crate::typed::validate_credential_value(role, value.expose_secret()).map_err(|reason| {
+            SecretSpecError::CredentialInvalid {
+                name: diagnostic_name.to_string(),
+                role: role.to_string(),
+                reason,
+            }
+        })?;
+        Ok(Some(value.clone()))
+    }
+
+    /// Deliver a binary logical value: a file holding the raw bytes with the
+    /// type's suffix when `as_path`, otherwise inline text in the value's
+    /// encoding. This is the one rule for every binary value, stored or
+    /// derived.
+    fn deliver_bytes(&mut self, planned: &PlannedSecret, bytes: &[u8]) -> Result<()> {
+        if planned.as_path() {
+            let (owner, path) = self
+                .manager
+                .write_secret_to_temp_file(bytes, planned.config().file_suffix())?;
+            self.temp_files.push(owner);
+            self.values
+                .insert(planned.name.clone(), SecretString::new(path.into()));
+        } else {
+            let encoding = planned
+                .encoding()
+                .expect("binary values always carry an encoding");
+            self.values.insert(
+                planned.name.clone(),
+                Secrets::encode_logical_bytes(encoding, bytes),
+            );
+        }
+        Ok(())
+    }
+
+    /// Decode and validate a parked registry-typed value with the credentials
+    /// bound to it, deliver its canonical bytes, and keep the decoded identity
+    /// for the projections that derive from it.
+    fn finalize_typed_stored(&mut self, planned: &PlannedSecret) -> Result<()> {
+        let diagnostic_name = Secrets::diagnostic_secret_name(&planned.name, self.output_filter);
+        let pending = self
+            .pending_typed
+            .remove(planned.name.as_str())
+            .expect("a resolved typed stored secret parked its value");
+        let bytes: SecretSlice<u8> = match pending {
+            PendingTyped::Stored(value) => {
+                let encoding = planned
+                    .encoding()
+                    .expect("binary stored types always carry an encoding");
+                Secrets::decode_stored_value(encoding, diagnostic_name, &value)?
+            }
+            PendingTyped::Logical(bytes) => bytes,
+        };
+        let password = self.credential_value(planned, "password")?;
+        let identity = crate::x509_identity::Identity::decode(
+            bytes.expose_secret(),
+            password.as_ref().map(|password| password.expose_secret()),
+            diagnostic_name,
+        )?;
+        self.deliver_bytes(planned, bytes.expose_secret())?;
+        self.identities.insert(planned.name.clone(), identity);
+        Ok(())
+    }
+
+    /// Produce a `from` secret: select a field from the source's text with
+    /// `extract`, or convert the source identity into the target type.
+    fn resolve_from(&mut self, planned: &PlannedSecret) -> Result<()> {
+        let source_name = planned.from().expect("a `from` secret names its source");
+        let diagnostic_name = Secrets::diagnostic_secret_name(&planned.name, self.output_filter);
+
+        if let Some(extract) = planned.extract() {
+            let source_planned = self
+                .plan
+                .secrets
+                .iter()
+                .find(|candidate| candidate.name == source_name)
+                .expect("validated `from` source is in the resolution plan");
+            let source = self
+                .values
+                .get(source_name)
+                .expect("a resolved `from` source has a value");
+            let not_utf8 = |error: std::str::Utf8Error| SecretSpecError::DecodeFailed {
+                name: diagnostic_name.to_string(),
+                encoding: extract.format.as_str(),
+                reason: format!("source value is not valid UTF-8: {error}"),
+            };
+            let text = if source_planned.as_path() {
+                let bytes = Zeroizing::new(std::fs::read(source.expose_secret())?);
+                SecretString::new(std::str::from_utf8(&bytes).map_err(not_utf8)?.into())
+            } else {
+                source.clone()
+            };
+            let value =
+                Secrets::extract_stored_value(extract, diagnostic_name, text.expose_secret())?;
+            return self.manager.insert_resolved(
+                &mut self.values,
+                &mut self.temp_files,
+                planned,
+                diagnostic_name,
+                value,
+                ResolvedRepresentation::Logical,
+            );
+        }
+
+        let contract = planned
+            .config()
+            .typed_contract()
+            .expect("a converting `from` secret has a registry type");
+        let projection = contract
+            .projection
+            .expect("derivable registry types define a projection");
+        let password = self.credential_value(planned, "password")?;
+        let projected = {
+            let identity = self
+                .identities
+                .get(source_name)
+                .expect("an x509_identity source is decoded before its projections");
+            identity.project(
+                projection,
+                planned.config().typed_format(),
+                password.as_ref().map(|password| password.expose_secret()),
+                diagnostic_name,
+            )?
+        };
+        match projected {
+            crate::x509_identity::ProjectedValue::Text(value) => self.manager.insert_resolved(
+                &mut self.values,
+                &mut self.temp_files,
+                planned,
+                diagnostic_name,
+                value,
+                ResolvedRepresentation::Logical,
+            ),
+            crate::x509_identity::ProjectedValue::Binary(bytes) => {
+                self.deliver_bytes(planned, bytes.expose_secret())
+            }
+        }
     }
 
     fn apply_output_filter(&mut self) {
@@ -1676,6 +1928,20 @@ enum PreparedSecret {
         owner: tempfile::NamedTempFile,
         path: String,
     },
+}
+
+/// A freshly generated value before the provider's textual storage boundary.
+enum GeneratedValue {
+    Text(SecretString),
+    Binary(SecretSlice<u8>),
+}
+
+/// A registry-typed value waiting for the derived pass to decode it: either
+/// the text read from a store, still in its storage encoding, or the logical
+/// bytes a generator just produced.
+enum PendingTyped {
+    Stored(SecretString),
+    Logical(SecretSlice<u8>),
 }
 
 /// Whether a resolved string came from a storage boundary and is eligible for
@@ -2914,7 +3180,10 @@ impl Secrets {
     /// Encode a logical UTF-8 value into the canonical stored representation
     /// for its declared encoding.
     fn encode_logical_value(encoding: SecretEncoding, value: &SecretString) -> SecretString {
-        let bytes = value.expose_secret().as_bytes();
+        Self::encode_logical_bytes(encoding, value.expose_secret().as_bytes())
+    }
+
+    fn encode_logical_bytes(encoding: SecretEncoding, bytes: &[u8]) -> SecretString {
         let encoded = match encoding {
             SecretEncoding::Base64 => BASE64.encode(bytes),
             SecretEncoding::Base64Url => BASE64URL_NOPAD.encode(bytes),
@@ -2931,6 +3200,32 @@ impl Secrets {
             .map(|encoding| Self::encode_logical_value(encoding, value))
     }
 
+    /// Convert operator input into the provider representation. Binary typed
+    /// values are entered in their encoded form, so decode them before
+    /// validating and re-encoding canonically. Text values are logical input
+    /// and only need their configured storage encoding applied.
+    fn prompted_value_for_storage(
+        planned: &PlannedSecret,
+        diagnostic_name: &str,
+        value: &SecretString,
+    ) -> Result<Option<SecretString>> {
+        if !planned.is_typed_stored() {
+            return Ok(Self::encoded_for_storage(planned, value));
+        }
+
+        let encoding = planned
+            .encoding()
+            .expect("binary stored types always carry an encoding");
+        let bytes = Self::decode_stored_value(encoding, diagnostic_name, value)?;
+        if planned.credential("password").is_none() {
+            crate::x509_identity::validate(bytes.expose_secret(), diagnostic_name)?;
+        }
+        Ok(Some(Self::encode_logical_bytes(
+            encoding,
+            bytes.expose_secret(),
+        )))
+    }
+
     /// Validate a stored value before import copies it into another provider.
     /// Import moves the stored representation verbatim, so an invalid encoded
     /// source must fail before any target write (and especially before source
@@ -2944,6 +3239,15 @@ impl Secrets {
             return Ok(());
         };
         let decoded = Self::decode_stored_value(encoding, diagnostic_name, value)?;
+        if planned.is_typed_stored() {
+            // Import copies stored bytes without resolving the profile, so an
+            // archive that a bound credential unlocks can only be checked for
+            // its encoding here; an unprotected one is validated in full.
+            if planned.credential("password").is_none() {
+                crate::x509_identity::validate(decoded.expose_secret(), diagnostic_name)?;
+            }
+            return Ok(());
+        }
         if !planned.as_path() {
             std::str::from_utf8(decoded.expose_secret()).map_err(|error| {
                 SecretSpecError::DecodeFailed {
@@ -3044,7 +3348,8 @@ impl Secrets {
                 .map(|value| value.expose_secret().as_bytes())
                 .or_else(|| decoded.as_ref().map(|(_, decoded)| decoded.expose_secret()))
                 .unwrap_or_else(|| value.expose_secret().as_bytes());
-            let (owner, path) = self.write_secret_to_temp_file(bytes)?;
+            let (owner, path) =
+                self.write_secret_to_temp_file(bytes, planned.config().file_suffix())?;
             Ok(PreparedSecret::File { owner, path })
         } else if let Some(extracted) = extracted {
             Ok(PreparedSecret::Inline(extracted))
@@ -3341,10 +3646,8 @@ impl Secrets {
             if !acc.insert(name.to_string()) {
                 return;
             }
-            if let Some(secret) = profile.secrets.get(name)
-                && let Some(template) = &secret.composition
-            {
-                for dependency in template.dependencies() {
+            if let Some(secret) = profile.secrets.get(name) {
+                for dependency in secret.dependencies() {
                     visit(dependency, profile, acc);
                 }
             }
@@ -4258,7 +4561,7 @@ impl Secrets {
             let Some(route) = &planned.route else {
                 if named {
                     return Err(SecretSpecError::ProviderOperationFailed(format!(
-                        "secret '{name}' is composed and has no provider cache"
+                        "secret '{name}' is derived and has no provider cache"
                     )));
                 }
                 continue;
@@ -4359,26 +4662,29 @@ impl Secrets {
             }
         };
 
-        // A composed secret plans no route: its value is derived, so a write
-        // has nowhere to go.
-        let Some(route) = &planned.route else {
-            let err = SecretSpecError::ComposedSecretReadOnly(name.to_string());
-            self.record_key_error(AuditAction::Set, &profile_name, name, None, None, &err);
-            return Err(err);
-        };
-
-        if planned.extract().is_some() {
+        if planned.extract().is_some() && planned.from().is_none() {
             let err = SecretSpecError::ExtractedSecretReadOnly(name.to_string());
             self.record_key_error(
                 AuditAction::Set,
                 &profile_name,
                 name,
-                route.primary().map(str::to_string),
+                planned
+                    .route
+                    .as_ref()
+                    .and_then(|route| route.primary().map(str::to_string)),
                 planned.reference(),
                 &err,
             );
             return Err(err);
         }
+
+        // A derived secret plans no route: its value is produced from other
+        // secrets, so a write has nowhere to go.
+        let Some(route) = &planned.route else {
+            let err = Self::derived_read_only(&planned);
+            self.record_key_error(AuditAction::Set, &profile_name, name, None, None, &err);
+            return Err(err);
+        };
 
         let backend = match self.write_provider_for_route(route, Some(&profile_name)) {
             Ok(backend) => backend,
@@ -4442,7 +4748,24 @@ impl Secrets {
             return Err(err);
         }
 
-        let encoded_value = Self::encoded_for_storage(&planned, &value);
+        // A binary registry type is entered in its encoded form, since a
+        // terminal cannot carry the bytes. Decode it to check the encoding,
+        // validate an archive no credential unlocks, and store the canonical
+        // encoding; everything else is logical text encoded for storage.
+        let encoded_value = match Self::prompted_value_for_storage(&planned, name, &value) {
+            Ok(value) => value,
+            Err(err) => {
+                self.record_key_error(
+                    AuditAction::Set,
+                    &profile_name,
+                    name,
+                    Some(backend.uri()),
+                    None,
+                    &err,
+                );
+                return Err(err);
+            }
+        };
         let stored_value = encoded_value.as_ref().unwrap_or(&value);
         let result = backend.set(addr, stored_value);
         self.audit_write_result(
@@ -4497,23 +4820,26 @@ impl Secrets {
             }
         };
 
-        let Some(route) = &planned.route else {
-            let error = SecretSpecError::ComposedSecretReadOnly(name.to_string());
-            self.record_key_error(AuditAction::Delete, &profile_name, name, None, None, &error);
-            return Err(error);
-        };
-        if planned.extract().is_some() {
+        if planned.extract().is_some() && planned.from().is_none() {
             let error = SecretSpecError::ExtractedSecretReadOnly(name.to_string());
             self.record_key_error(
                 AuditAction::Delete,
                 &profile_name,
                 name,
-                route.primary().map(str::to_string),
+                planned
+                    .route
+                    .as_ref()
+                    .and_then(|route| route.primary().map(str::to_string)),
                 planned.reference(),
                 &error,
             );
             return Err(error);
         }
+        let Some(route) = &planned.route else {
+            let error = Self::derived_read_only(&planned);
+            self.record_key_error(AuditAction::Delete, &profile_name, name, None, None, &error);
+            return Err(error);
+        };
         let backend = match self.write_provider_for_route(route, Some(&profile_name)) {
             Ok(backend) => backend,
             Err(error) => {
@@ -4723,7 +5049,24 @@ impl Secrets {
 
                             let value = SecretString::new(prompt.prompt()?.into());
 
-                            let encoded_value = Self::encoded_for_storage(&planned, &value);
+                            let encoded_value = match Self::prompted_value_for_storage(
+                                &planned,
+                                secret_name,
+                                &value,
+                            ) {
+                                Ok(value) => value,
+                                Err(error) => {
+                                    self.record_key_error(
+                                        AuditAction::Set,
+                                        &profile_display,
+                                        secret_name,
+                                        Some(backend.uri()),
+                                        planned.reference(),
+                                        &error,
+                                    );
+                                    return Err(error);
+                                }
+                            };
                             let stored_value = encoded_value.as_ref().unwrap_or(&value);
                             let address = self.address_for_spec(
                                 &planned,
@@ -5206,7 +5549,7 @@ impl Secrets {
         &self,
         planned: &PlannedSecret,
         profile_name: &str,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Option<GeneratedValue>> {
         let name = planned.name.as_str();
         let gen_config = match &planned.config().generate {
             Some(config) if config.is_enabled() => config,
@@ -5228,7 +5571,11 @@ impl Secrets {
             }
         };
 
-        let value = crate::generator::generate(secret_type, gen_config)?;
+        let value = if secret_type == "x509_identity" {
+            GeneratedValue::Binary(crate::x509_identity::generate(gen_config)?)
+        } else {
+            GeneratedValue::Text(crate::generator::generate(secret_type, gen_config)?)
+        };
 
         // Store the generated value at the plan's address, through the plan's
         // write route: the same decisions every other write path executes.
@@ -5258,8 +5605,22 @@ impl Secrets {
         // The provider states why a write is refused; wrapping it here would
         // only nest a second "Provider operation failed" prefix.
         backend.check_writable(addr)?;
-        let encoded_value = Self::encoded_for_storage(planned, &value);
-        let stored_value = encoded_value.as_ref().unwrap_or(&value);
+        let encoded_value = match &value {
+            GeneratedValue::Text(value) => Self::encoded_for_storage(planned, value),
+            GeneratedValue::Binary(value) => Some(Self::encode_logical_bytes(
+                planned
+                    .encoding()
+                    .expect("binary generators require a validated encoding"),
+                value.expose_secret(),
+            )),
+        };
+        let stored_value = match (&value, encoded_value.as_ref()) {
+            (_, Some(value)) => value,
+            (GeneratedValue::Text(value), None) => value,
+            (GeneratedValue::Binary(_), None) => {
+                unreachable!("binary generators require a stored encoding")
+            }
+        };
         let set_result = backend.set(addr, stored_value);
         // Generating a secret writes a brand-new value to the provider; record it
         // like any other write so the audit log captures every stored secret.
@@ -5387,6 +5748,18 @@ impl Secrets {
         Ok(value)
     }
 
+    /// The read-only error for a secret that plans no route: a `from` secret
+    /// names the source to change, a composed one has no single source.
+    fn derived_read_only(planned: &PlannedSecret) -> SecretSpecError {
+        match planned.from() {
+            Some(source) => SecretSpecError::DerivedSecretReadOnly {
+                name: planned.name.clone(),
+                from: source.to_string(),
+            },
+            None => SecretSpecError::ComposedSecretReadOnly(planned.name.clone()),
+        }
+    }
+
     /// Writes secret bytes to a temporary file and returns the file handle and path
     ///
     /// # Arguments
@@ -5403,10 +5776,14 @@ impl Secrets {
     fn write_secret_to_temp_file(
         &self,
         secret: &[u8],
+        suffix: Option<&str>,
     ) -> Result<(tempfile::NamedTempFile, String)> {
         use std::io::Write;
 
-        let mut temp_file = tempfile::NamedTempFile::new().map_err(SecretSpecError::Io)?;
+        let mut temp_file = tempfile::Builder::new()
+            .suffix(suffix.unwrap_or(""))
+            .tempfile()
+            .map_err(SecretSpecError::Io)?;
 
         temp_file.write_all(secret).map_err(SecretSpecError::Io)?;
 
@@ -5960,10 +6337,8 @@ impl Secrets {
             if !names.insert(name.to_string()) {
                 return;
             }
-            if let Some(template) = &profile.secrets[name].composition {
-                for dependency in template.dependencies() {
-                    visit(dependency, profile, names);
-                }
+            for dependency in profile.secrets[name].dependencies() {
+                visit(dependency, profile, names);
             }
         }
 
@@ -5991,6 +6366,12 @@ impl Secrets {
             .iter()
             .map(|entry| (entry.name.as_str(), &entry.status))
             .collect();
+        let fetched_from_provider: HashSet<&str> = errors
+            .resolution
+            .iter()
+            .filter(|entry| entry.source_provider.is_some())
+            .map(|entry| entry.name.as_str())
+            .collect();
         let profile = self
             .manifest
             .profile(profile_name)
@@ -6000,22 +6381,59 @@ impl Secrets {
             name: &str,
             profile: &crate::compiled_spec::CompiledProfile,
             statuses: &HashMap<&str, &ResolutionStatus>,
+            fetched_from_provider: &HashSet<&str>,
             promptable: &mut HashSet<String>,
         ) {
-            let Some(template) = &profile.secrets[name].composition else {
+            let secret = &profile.secrets[name];
+            // A stored typed value can be fetched successfully but remain
+            // unresolved because a credential is missing. It is a dependency
+            // node in that state, not a missing leaf: prompting for it would
+            // overwrite the archive that is already present.
+            if secret
+                .config
+                .typed_contract()
+                .is_some_and(|contract| contract.is_stored())
+                && fetched_from_provider.contains(name)
+            {
+                for (_, credential) in secret.config.credential_secrets() {
+                    if statuses.get(credential).copied() != Some(&ResolutionStatus::Resolved) {
+                        visit(
+                            credential,
+                            profile,
+                            statuses,
+                            fetched_from_provider,
+                            promptable,
+                        );
+                    }
+                }
+                return;
+            }
+            if !secret.config.is_derived() {
                 promptable.insert(name.to_string());
                 return;
-            };
-            for dependency in template.dependencies() {
-                if statuses.get(dependency.as_str()).copied() != Some(&ResolutionStatus::Resolved) {
-                    visit(dependency, profile, statuses, promptable);
+            }
+            for dependency in secret.dependencies() {
+                if statuses.get(dependency).copied() != Some(&ResolutionStatus::Resolved) {
+                    visit(
+                        dependency,
+                        profile,
+                        statuses,
+                        fetched_from_provider,
+                        promptable,
+                    );
                 }
             }
         }
 
         let mut promptable = HashSet::new();
         for name in &errors.missing_required {
-            visit(name, profile, &statuses, &mut promptable);
+            visit(
+                name,
+                profile,
+                &statuses,
+                &fetched_from_provider,
+                &mut promptable,
+            );
         }
         let mut promptable: Vec<String> = promptable.into_iter().collect();
         promptable.sort();
@@ -7297,6 +7715,38 @@ mod encoding_tests {
             let stored = Secrets::encode_logical_value(encoding, &logical);
             assert_eq!(stored.expose_secret(), expected);
         }
+    }
+
+    #[test]
+    fn prompted_binary_value_is_decoded_before_canonical_storage() {
+        let generated = crate::x509_identity::generate(&crate::config::GenerateConfig::Options(
+            crate::config::GenerateOptions {
+                san: Some(vec!["dns:localhost".to_string()]),
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+        let canonical = BASE64.encode(generated.expose_secret());
+        let entered = SecretString::new(format!("{canonical}\n").into());
+
+        let config = crate::tests::resolve_test_config(HashMap::from([(
+            "TLS_IDENTITY".to_string(),
+            crate::config::Secret {
+                description: Some("identity".to_string()),
+                secret_type: Some("x509_identity".to_string()),
+                ..Default::default()
+            },
+        )]));
+        let spec = Secrets::new(config, None, None, None);
+        let planned = spec
+            .plan_secret("TLS_IDENTITY", "default", None)
+            .unwrap()
+            .unwrap();
+
+        let stored = Secrets::prompted_value_for_storage(&planned, "TLS_IDENTITY", &entered)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.expose_secret(), canonical);
     }
 }
 

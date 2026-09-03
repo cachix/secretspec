@@ -61,13 +61,32 @@ pub struct SecretResolution {
     /// retains a generated value. A required secret backed by a store that keeps
     /// what it mints is reported `missing_required` until a pass provisions it.
     pub generated: bool,
-    /// Whether the value was derived from other declared secrets.
+    /// Whether the value was derived from other declared secrets. The field's
+    /// historical internal name covers templates, conversions, and selections.
     /// Internal provenance used by human-readable output and the value-carrying
     /// resolve response; omitted from the report v1 wire format.
     #[serde(skip)]
     pub composed: bool,
+    /// How a derived value was produced, for human-readable output. `None`
+    /// when the value is not derived. Omitted from the report wire format.
+    #[serde(skip)]
+    pub derivation: Option<Derivation>,
     /// Whether the value is materialized to a temp file and exposed as a path.
     pub as_path: bool,
+}
+
+/// How a derived secret's value is produced from other declared secrets.
+///
+/// Available since SecretSpec 0.21.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Derivation {
+    /// Rendered from a `composed` template.
+    Composed,
+    /// Converted from the named `from` source by its `type`.
+    ConvertedFrom(String),
+    /// Selected from the named `from` source's text with `extract`.
+    SelectedFrom(String),
 }
 
 /// A complete, value-free snapshot of one resolution pass over a profile.
@@ -155,7 +174,15 @@ impl ResolutionReport {
                     } else if s.default_applied {
                         "ok        default value".to_string()
                     } else if s.composed {
-                        "ok        composed".to_string()
+                        match &s.derivation {
+                            Some(Derivation::ConvertedFrom(source)) => {
+                                format!("ok        converted from {source}")
+                            }
+                            Some(Derivation::SelectedFrom(source)) => {
+                                format!("ok        selected from {source}")
+                            }
+                            Some(Derivation::Composed) | None => "ok        composed".to_string(),
+                        }
                     } else if let Some(uri) = &s.source_provider {
                         format!("ok        source {}", uri)
                     } else {
@@ -199,6 +226,7 @@ mod tests {
                     default_applied: false,
                     generated: false,
                     composed: false,
+                    derivation: None,
                     as_path: false,
                 },
                 SecretResolution {
@@ -209,6 +237,7 @@ mod tests {
                     default_applied: false,
                     generated: false,
                     composed: false,
+                    derivation: None,
                     as_path: false,
                 },
                 SecretResolution {
@@ -219,6 +248,7 @@ mod tests {
                     default_applied: false,
                     generated: true,
                     composed: false,
+                    derivation: None,
                     as_path: false,
                 },
                 SecretResolution {
@@ -229,6 +259,7 @@ mod tests {
                     default_applied: true,
                     generated: false,
                     composed: false,
+                    derivation: None,
                     as_path: false,
                 },
                 SecretResolution {
@@ -239,6 +270,7 @@ mod tests {
                     default_applied: false,
                     generated: false,
                     composed: false,
+                    derivation: None,
                     as_path: false,
                 },
             ],
@@ -300,6 +332,7 @@ mod tests {
                 default_applied: false,
                 generated: false,
                 composed: false,
+                derivation: None,
                 as_path: true,
             }],
         );

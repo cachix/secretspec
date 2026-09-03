@@ -942,27 +942,79 @@ fn validate_composition_graph(
     profile_name: &str,
     profile: &crate::compiled_spec::CompiledProfile,
 ) -> Result<(), ParseError> {
-    // Templates were parsed during manifest compilation; a malformed one was
-    // already rejected by `validate_semantics` before this runs.
-    let mut graph: BTreeMap<&str, &[String]> = BTreeMap::new();
+    // Templates, `from`, and credential shapes were validated per secret
+    // before this runs. They share one dependency graph so a cycle mixing
+    // composed, converted, and credential edges cannot evade any resolver pass.
+    let mut graph: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for (name, secret) in &profile.secrets {
-        let Some(template) = &secret.composition else {
-            continue;
+        let fail = |message: String| {
+            ParseError::Validation(format!(
+                "Profile '{profile_name}': Secret '{name}': {message}"
+            ))
         };
-        for dependency in template.dependencies() {
-            if !profile.secrets.contains_key(dependency) {
-                return Err(ParseError::Validation(format!(
-                    "Profile '{}': Secret '{}': composed reference `${{{}}}` does not name a declared secret",
-                    profile_name, name, dependency
+        let dependencies = secret.dependencies();
+        for dependency in &dependencies {
+            if *dependency == name.as_str() {
+                return Err(fail("cannot depend on itself".to_string()));
+            }
+            if !profile.secrets.contains_key(*dependency) {
+                return Err(fail(format!(
+                    "dependency '{dependency}' does not name a declared secret"
                 )));
             }
         }
-        graph.insert(name.as_str(), template.dependencies());
+
+        let config = &secret.config;
+        if let Some(source) = config.from.as_deref() {
+            let source_config = &profile.secrets[source].config;
+            if let Some(contract) = config.typed_contract() {
+                if !contract.accepts_source(source_config.secret_type.as_deref()) {
+                    let declared = source_config.secret_type.as_deref().map_or_else(
+                        || "no `type`".to_string(),
+                        |source_type| format!("type = \"{source_type}\""),
+                    );
+                    return Err(fail(format!(
+                        "`from` source '{source}' has {declared}, but type = \"{}\" derives from {}",
+                        contract.name,
+                        contract
+                            .sources
+                            .iter()
+                            .map(|source| format!("type = \"{source}\""))
+                            .collect::<Vec<_>>()
+                            .join(" or ")
+                    )));
+                }
+            } else if source_config.is_binary_value() {
+                return Err(fail(format!(
+                    "`extract` cannot select from '{source}' because its type = \"{}\" is binary",
+                    source_config.secret_type.as_deref().unwrap_or_default()
+                )));
+            }
+        }
+
+        for (role, credential) in config.credential_secrets() {
+            let credential_config = &profile.secrets[credential].config;
+            if credential_config.as_path == Some(true) {
+                return Err(fail(format!(
+                    "credential `{role}` names '{credential}', which is delivered as a path; credentials must be text values"
+                )));
+            }
+            if credential_config.is_binary_value() {
+                return Err(fail(format!(
+                    "credential `{role}` names '{credential}', whose type = \"{}\" is binary; credentials must be text values",
+                    credential_config.secret_type.as_deref().unwrap_or_default()
+                )));
+            }
+        }
+
+        if !dependencies.is_empty() {
+            graph.insert(name.as_str(), dependencies);
+        }
     }
 
     fn visit<'a>(
         name: &'a str,
-        graph: &BTreeMap<&'a str, &'a [String]>,
+        graph: &BTreeMap<&'a str, Vec<&'a str>>,
         state: &mut HashMap<&'a str, u8>,
         stack: &mut Vec<&'a str>,
     ) -> Result<(), Vec<String>> {
@@ -979,8 +1031,8 @@ fn validate_composition_graph(
         state.insert(name, 1);
         stack.push(name);
         if let Some(dependencies) = graph.get(name) {
-            for dependency in *dependencies {
-                if graph.contains_key(dependency.as_str()) {
+            for dependency in dependencies {
+                if graph.contains_key(dependency) {
                     visit(dependency, graph, state, stack)?;
                 }
             }
@@ -994,7 +1046,7 @@ fn validate_composition_graph(
     for name in graph.keys() {
         if let Err(cycle) = visit(name, &graph, &mut state, &mut Vec::new()) {
             return Err(ParseError::Validation(format!(
-                "Profile '{}': composed secret cycle: {}",
+                "Profile '{}': derived secret cycle: {}",
                 profile_name,
                 cycle.join(" -> ")
             )));
@@ -1526,6 +1578,8 @@ impl IntoIterator for Profile {
 /// type-specific options (`generate = { length = 64 }`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
+// Keep the options variant unboxed to preserve the public Rust API.
+#[allow(clippy::large_enum_variant)]
 pub enum GenerateConfig {
     /// Simple boolean flag to enable/disable generation with defaults
     Bool(bool),
@@ -1558,10 +1612,10 @@ pub struct GenerateOptions {
     /// Shell command to run (for `command` type)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    /// RSA key size in bits (`rsa_private_key` defaults to 2048; OpenPGP and SSH RSA default to 3072).
+    /// RSA key size in bits (`rsa_private_key` defaults to 2048; OpenPGP, SSH, and JWK RSA default to 3072).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bits: Option<usize>,
-    /// OpenPGP or SSH key algorithm (`ed25519` or `rsa`, default `ed25519`; 0.21+).
+    /// OpenPGP, SSH, JWK, or mnemonic algorithm (type-specific values; 0.21+).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub algorithm: Option<String>,
     /// OpenPGP User ID bound to a generated certificate (0.21+).
@@ -1573,6 +1627,30 @@ pub struct GenerateOptions {
     /// Comment embedded in a generated OpenSSH private key (0.21+).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+    /// Number of words in a generated passphrase or mnemonic (defaults 7 or 24; 0.21+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub words: Option<usize>,
+    /// Separator placed between generated passphrase words (default `-`; 0.21+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub separator: Option<String>,
+    /// Word-list language for a generated mnemonic (currently `english`; 0.21+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Optional JSON Web Key identifier (`kid`; 0.21+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
+    /// X.509 issuer mode (currently `self_signed`; 0.21+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issuer: Option<String>,
+    /// X.509 subject alternative names, written as `dns:name` or `ip:address` (0.21+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub san: Option<Vec<String>>,
+    /// X.509 extended key usages (`server_auth` and/or `client_auth`; 0.21+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usages: Option<Vec<String>>,
+    /// X.509 certificate lifetime as whole days, for example `30d` (0.21+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_for: Option<String>,
 }
 
 pub(crate) const OPENPGP_RSA_DEFAULT_BITS: usize = 3072;
@@ -1581,6 +1659,14 @@ pub(crate) const OPENPGP_RSA_MAX_BITS: usize = 8192;
 pub(crate) const SSH_RSA_DEFAULT_BITS: usize = 3072;
 pub(crate) const SSH_RSA_MIN_BITS: usize = 2048;
 pub(crate) const SSH_RSA_MAX_BITS: usize = 8192;
+pub(crate) const JWK_RSA_DEFAULT_BITS: usize = 3072;
+pub(crate) const JWK_RSA_MIN_BITS: usize = 2048;
+pub(crate) const JWK_RSA_MAX_BITS: usize = 8192;
+pub(crate) const PASSPHRASE_DEFAULT_WORDS: usize = 7;
+pub(crate) const PASSPHRASE_MIN_WORDS: usize = 6;
+pub(crate) const PASSPHRASE_MAX_WORDS: usize = 32;
+pub(crate) const MNEMONIC_DEFAULT_WORDS: usize = 24;
+pub(crate) const MNEMONIC_WORD_COUNTS: &[usize] = &[12, 15, 18, 21, 24];
 
 /// Native coordinates of one externally managed secret: the value of a
 /// secret's `ref` field.
@@ -2017,6 +2103,12 @@ struct SecretSerde {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     secret_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credentials: Option<BTreeMap<String, CredentialBinding>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     generate: Option<GenerateConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt: Option<bool>,
@@ -2052,7 +2144,7 @@ impl SecretEncoding {
 ///
 /// Available since SecretSpec 0.19.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum ExtractFormat {
     /// A JSON document selected with an RFC 6901 JSON Pointer.
     Json,
@@ -2073,21 +2165,23 @@ impl ExtractFormat {
     }
 }
 
-/// Selects one logical secret from a structured stored value.
+/// Selects one logical secret from a structured text document.
 ///
-/// Extraction is applied after [`SecretEncoding`] is decoded and only to
-/// values read from providers or caches. Defaults and composed values are
-/// already logical and are not extracted.
+/// On a provider-backed secret, extraction is applied after [`SecretEncoding`]
+/// is decoded and only to values read from providers or caches. On a secret
+/// with [`from`](Secret::from) (0.21+), the named declared secret is resolved
+/// first and its logical text becomes the extraction input.
 ///
 /// Available since SecretSpec 0.19.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SecretExtract {
-    /// The structured-data format of the stored value.
+    /// The structured-data format of the document.
     pub format: ExtractFormat,
     /// Slash-delimited pointer selecting the logical value. JSON accepts a
     /// complete RFC 6901 JSON Pointer; INI accepts `/key` or `/section/key`
     /// with RFC 6901 escaping for each segment.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pointer: String,
 }
 
@@ -2097,6 +2191,73 @@ impl SecretExtract {
             ExtractFormat::Json => validate_json_pointer(&self.pointer),
             ExtractFormat::Ini => crate::ini_field::validate_pointer(&self.pointer),
         }
+    }
+}
+
+/// How a typed secret obtains one credential it needs (SecretSpec 0.21+).
+///
+/// Written in a secret's `credentials` table keyed by the role its type
+/// defines, with the bare name of another declared secret as the value:
+///
+/// ```toml
+/// TLS_PFX = { type = "pkcs12", from = "TLS_IDENTITY", credentials = { password = "TLS_PFX_PASSWORD" } }
+/// ```
+///
+/// The named secret is an ordinary declaration: it resolves through its own
+/// providers, default, prompt, or generator, joins the dependency graph, and is
+/// stored with `secretspec set` like any other value. Table values are rejected
+/// and reserved for a future provider-pinned source, so adding one later is
+/// additive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CredentialBinding {
+    /// A declared secret in the same profile.
+    Secret(String),
+}
+
+impl CredentialBinding {
+    /// The declared secret this binding resolves through.
+    pub fn secret_name(&self) -> &str {
+        match self {
+            Self::Secret(name) => name,
+        }
+    }
+}
+
+impl Serialize for CredentialBinding {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Secret(name) => serializer.serialize_str(name),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CredentialBinding {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = CredentialBinding;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("the name of a declared secret")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, name: &str) -> Result<CredentialBinding, E> {
+                Ok(CredentialBinding::Secret(name.to_string()))
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                _map: M,
+            ) -> Result<CredentialBinding, M::Error> {
+                Err(serde::de::Error::custom(
+                    "credential bindings name a declared secret, for example `password = \"PFX_PASSWORD\"`; the `{ provider, ref }` table form is reserved",
+                ))
+            }
+        }
+
+        deserializer.deserialize_any(Visitor)
     }
 }
 
@@ -2192,18 +2353,47 @@ pub struct Secret {
     ///
     /// Available since SecretSpec 0.19.
     pub encoding: Option<SecretEncoding>,
-    /// Structured stored-value extraction applied after optional decoding.
-    /// JSON extraction uses an RFC 6901 pointer. INI extraction (0.20+) uses
-    /// `/key` for an unsectioned key or `/section/key` for a named section,
-    /// with RFC 6901 segment escaping. Extracted secrets are read-only because
-    /// a selected value cannot reconstruct its containing document for a
-    /// storage write.
+    /// Structured extraction applied after optional decoding, or to the
+    /// logical text of the declared secret named by [`from`](Self::from)
+    /// (0.21+). JSON extraction uses an RFC 6901 pointer. INI extraction
+    /// (0.20+) uses `/key` for an unsectioned key or `/section/key` for a named
+    /// section, with RFC 6901 segment escaping. Extracted secrets are read-only
+    /// because a selected value cannot reconstruct its containing document for
+    /// a storage write.
     ///
     /// Available since SecretSpec 0.19.
     pub extract: Option<SecretExtract>,
-    /// The type of secret, used for generation. OpenPGP and OpenSSH private-key
-    /// generation are available in SecretSpec 0.21+.
+    /// The semantic secret type. Generatable key types include
+    /// `mnemonic`, `openpgp_private_key`, `ssh_private_key`, `wireguard_private_key`,
+    /// `jwk_private_key`, `age_identity`, and `x509_identity` in SecretSpec 0.21+;
+    /// For the typed contracts in [`crate::typed`] (`x509_identity` and the
+    /// `pkcs12`, `pkcs8_private_key`, `x509_certificate`,
+    /// `x509_certificate_chain`, and `x509_issuer_chain` targets, 0.21+) the
+    /// type is authoritative: it decides decoding, validation, conversion,
+    /// accepted `credentials` roles, accepted `format` values, and the default
+    /// `encoding` of a binary value.
     pub secret_type: Option<String>,
+    /// Serialization of a typed value whose type offers more than one, for
+    /// example `pem` or `der` for a `pkcs8_private_key`. Every such type has a
+    /// default, so this is normally written only to select DER.
+    ///
+    /// Available since SecretSpec 0.21.
+    pub format: Option<String>,
+    /// Another declared secret whose logical value this secret derives from.
+    /// Combined with a derivable `type` it converts the source (an
+    /// `x509_identity` to a `pkcs12`, key, or certificate); combined with
+    /// `extract` it selects one field from the source's text. Derived secrets
+    /// are read-only and route to no provider.
+    ///
+    /// Available since SecretSpec 0.21.
+    pub from: Option<String>,
+    /// Declared secrets that unlock or protect this typed value, keyed by the
+    /// role the type defines: the `password` that opens a stored
+    /// `x509_identity` archive, or the `password` that protects a derived
+    /// `pkcs12`.
+    ///
+    /// Available since SecretSpec 0.21.
+    pub credentials: Option<BTreeMap<String, CredentialBinding>>,
     /// Auto-generation configuration. Either `true` for defaults or a table with options.
     pub generate: Option<GenerateConfig>,
     /// Prompt securely when the value is missing during `secretspec run`.
@@ -2244,6 +2434,9 @@ impl TryFrom<SecretSerde> for Secret {
             encoding: value.encoding,
             extract: value.extract,
             secret_type: value.secret_type,
+            format: value.format,
+            from: value.from,
+            credentials: value.credentials,
             generate: value.generate,
             prompt: value.prompt,
         })
@@ -2273,6 +2466,9 @@ impl From<Secret> for SecretSerde {
             encoding: value.encoding,
             extract: value.extract,
             secret_type: value.secret_type,
+            format: value.format,
+            from: value.from,
+            credentials: value.credentials,
             generate: value.generate,
             prompt: value.prompt,
         }
@@ -2323,6 +2519,205 @@ impl Secret {
     /// validation.
     pub(crate) fn would_generate(&self) -> bool {
         self.generate.as_ref().is_some_and(|g| g.is_enabled())
+    }
+
+    /// The registry contract behind `type`, when the type is one the registry
+    /// governs. `None` for informational types and untyped secrets.
+    pub(crate) fn typed_contract(&self) -> Option<&'static crate::typed::TypeContract> {
+        self.secret_type.as_deref().and_then(crate::typed::contract)
+    }
+
+    /// The effective serialization of a registry-typed value: the declared
+    /// `format` or the type's default. `None` when the type is not a registry
+    /// type, has a fixed representation, or the declared format is invalid
+    /// (which [`Self::validate`] rejects separately).
+    pub(crate) fn typed_format(&self) -> Option<crate::typed::Format> {
+        self.typed_contract()
+            .and_then(|contract| contract.format(self.format.as_deref()).ok())
+            .flatten()
+    }
+
+    /// Whether the logical value is bytes rather than text. Only registry
+    /// types are binary; an informational type with `encoding` still stores
+    /// text that happens to be encoded at rest.
+    pub(crate) fn is_binary_value(&self) -> bool {
+        self.typed_contract()
+            .is_some_and(|contract| contract.is_binary(self.typed_format()))
+    }
+
+    /// The codec used wherever this value must be text: the declared
+    /// `encoding`, or Base64 for a binary registry type that declares none.
+    pub(crate) fn effective_encoding(&self) -> Option<SecretEncoding> {
+        self.encoding.or_else(|| {
+            self.typed_contract()
+                .and_then(|contract| contract.default_encoding(self.typed_format()))
+        })
+    }
+
+    /// Preferred file suffix for `as_path` delivery, from the type registry.
+    pub(crate) fn file_suffix(&self) -> Option<&'static str> {
+        self.typed_contract()
+            .map(|contract| contract.suffix(self.typed_format()))
+    }
+
+    /// The `(role, declared secret)` pairs bound through `credentials`.
+    pub(crate) fn credential_secrets(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.credentials
+            .iter()
+            .flat_map(|bindings| bindings.iter())
+            .map(|(role, binding)| (role.as_str(), binding.secret_name()))
+    }
+
+    /// Whether the value is derived from other declared secrets rather than
+    /// stored: a `composed` template or a `from` source.
+    pub(crate) fn is_derived(&self) -> bool {
+        self.composed.is_some() || self.from.is_some()
+    }
+
+    /// Rules for `from`, `format`, `credentials`, and the registry types
+    /// (0.21+). Every rule reads the type registry rather than matching type
+    /// names, so adding a contract cannot leave a rule behind.
+    fn validate_typed(&self) -> Result<(), String> {
+        let contract = self.typed_contract();
+
+        let format = match contract {
+            Some(contract) => contract.format(self.format.as_deref())?,
+            None => {
+                if self.format.is_some() {
+                    return Err(match self.secret_type.as_deref() {
+                        Some(name) => format!(
+                            "`format` is not valid for type = \"{name}\"; only `pkcs8_private_key` and `x509_certificate` accept `pem` or `der`"
+                        ),
+                        None => "`format` requires a `type` that accepts formats: `pkcs8_private_key` or `x509_certificate`".into(),
+                    });
+                }
+                None
+            }
+        };
+
+        if let Some(bindings) = &self.credentials
+            && !bindings.is_empty()
+        {
+            let Some(contract) = contract else {
+                return Err(match self.secret_type.as_deref() {
+                    Some(name) => format!(
+                        "`credentials` is not valid for type = \"{name}\"; only `x509_identity` and `pkcs12` accept a `password` credential"
+                    ),
+                    None => "`credentials` requires a `type` that accepts credentials: `x509_identity` or `pkcs12`".into(),
+                });
+            };
+            for (role, binding) in bindings {
+                if !contract.accepts_role(role) {
+                    return Err(if contract.roles.is_empty() {
+                        format!(
+                            "type = \"{}\" accepts no credentials; unknown role `{role}`",
+                            contract.name
+                        )
+                    } else {
+                        format!(
+                            "unknown credential role `{role}` for type = \"{}\"; expected {}",
+                            contract.name,
+                            contract
+                                .roles
+                                .iter()
+                                .map(|role| format!("`{role}`"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    });
+                }
+                if !is_valid_identifier(binding.secret_name()) {
+                    return Err(format!(
+                        "credential `{role}` must name a declared secret using a valid identifier"
+                    ));
+                }
+            }
+            if contract.is_stored() && self.would_generate() {
+                return Err(format!(
+                    "`credentials` cannot be combined with enabled `generate` for type = \"{}\"; a generated identity is stored with an empty password and the provider is its boundary",
+                    contract.name
+                ));
+            }
+        }
+
+        match (&self.from, contract) {
+            (Some(source), _) => {
+                if !is_valid_identifier(source) {
+                    return Err(
+                        "`from` must name a declared secret using a valid identifier".into(),
+                    );
+                }
+                match (contract, &self.extract) {
+                    (Some(contract), None) if !contract.is_stored() => {}
+                    (Some(contract), None) => {
+                        return Err(format!(
+                            "type = \"{}\" is stored by a provider and cannot be derived with `from`",
+                            contract.name
+                        ));
+                    }
+                    (Some(_), Some(_)) => {
+                        return Err(
+                            "`from` either selects with `extract` or converts with a derivable `type`, not both"
+                                .into(),
+                        );
+                    }
+                    (None, Some(_)) => {
+                        if self.secret_type.is_some() {
+                            return Err("`from` with `extract` cannot also set `type`".into());
+                        }
+                    }
+                    (None, None) => {
+                        return Err(match self.secret_type.as_deref() {
+                            Some(name) => format!(
+                                "type = \"{name}\" cannot be derived with `from`; derivable types are {}",
+                                crate::typed::derivable_type_names()
+                                    .map(|name| format!("`{name}`"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
+                            None => "`from` requires `extract` to select from the source or a derivable `type` to convert it".into(),
+                        });
+                    }
+                }
+                if self.default.is_some()
+                    || self.providers.is_some()
+                    || self.reference.is_some()
+                    || self.refs.is_some()
+                    || self.would_generate()
+                    || self.prompt == Some(true)
+                {
+                    return Err(
+                        "`from` secrets cannot also set `default`, `providers`, `ref`, `refs`, enabled `generate`, or `prompt = true`; the source declaration owns storage"
+                            .into(),
+                    );
+                }
+                if self.encoding.is_some()
+                    && !contract.is_some_and(|contract| contract.is_binary(format))
+                {
+                    return Err(
+                        "`encoding` on a `from` secret is valid only when the result is binary: a `pkcs12` or a `der` format"
+                            .into(),
+                    );
+                }
+            }
+            (None, Some(contract)) => {
+                if !contract.is_stored() {
+                    return Err(format!(
+                        "type = \"{}\" requires `from`; it is derived from a declared `x509_identity`",
+                        contract.name
+                    ));
+                }
+                if self.default.is_some() || self.prompt == Some(true) {
+                    return Err(format!(
+                        "`type = \"{}\"` cannot be combined with `default` or `prompt = true`; its value is a binary archive",
+                        contract.name
+                    ));
+                }
+            }
+            (None, None) => {}
+        }
+
+        Ok(())
     }
 
     /// Whether this declaration supplies an individual or grouped requiredness
@@ -2379,16 +2774,20 @@ impl Secret {
                 || self.encoding.is_some()
                 || self.extract.is_some()
                 || self.secret_type.is_some()
+                || self.format.is_some()
+                || self.from.is_some()
+                || self.credentials.is_some()
                 || self.would_generate()
                 || self.prompt == Some(true)
             {
                 return Err(
-                    "`composed` secrets cannot also set `default`, `providers`, `ref`, `refs`, `encoding`, `extract`, `type`, enabled `generate`, or `prompt = true`"
+                    "`composed` secrets cannot also set `default`, `providers`, `ref`, `refs`, `encoding`, `extract`, `type`, `format`, `from`, `credentials`, enabled `generate`, or `prompt = true`"
                         .into(),
                 );
             }
         }
 
+        self.validate_typed()?;
         if self.prompt == Some(true) {
             if self.required == Some(false)
                 || self.at_least_one.is_some()
@@ -2471,6 +2870,19 @@ impl Secret {
                 return Err("'generate' and 'default' cannot both be set".into());
             }
 
+            if let GenerateConfig::Options(opts) = gen_config
+                && self.secret_type.as_deref() != Some("x509_identity")
+                && (opts.issuer.is_some()
+                    || opts.san.is_some()
+                    || opts.usages.is_some()
+                    || opts.valid_for.is_some())
+            {
+                return Err(
+                    "generate.issuer, generate.san, generate.usages, and generate.valid_for are only valid for type = \"x509_identity\""
+                        .into(),
+                );
+            }
+
             // type = "command" requires generate = { command = "..." }
             if self.secret_type.as_deref() == Some("command") {
                 match gen_config {
@@ -2510,9 +2922,15 @@ impl Secret {
                 if user_id.chars().any(char::is_control) {
                     return Err("generate.user_id cannot contain control characters".into());
                 }
-                if opts.comment.is_some() {
+                if opts.comment.is_some()
+                    || opts.words.is_some()
+                    || opts.separator.is_some()
+                    || opts.language.is_some()
+                    || opts.kid.is_some()
+                {
                     return Err(
-                        "generate.comment is only valid for type = \"ssh_private_key\"".into(),
+                        "generate.comment, generate.words, generate.separator, generate.language, and generate.kid are not valid for type = \"openpgp_private_key\""
+                            .into(),
                     );
                 }
 
@@ -2571,9 +2989,15 @@ impl Secret {
                     }
                 };
                 if let Some(opts) = opts {
-                    if opts.user_id.is_some() || opts.capabilities.is_some() {
+                    if opts.user_id.is_some()
+                        || opts.capabilities.is_some()
+                        || opts.words.is_some()
+                        || opts.separator.is_some()
+                        || opts.language.is_some()
+                        || opts.kid.is_some()
+                    {
                         return Err(
-                            "generate.user_id and generate.capabilities are only valid for type = \"openpgp_private_key\""
+                            "generate.user_id, generate.capabilities, generate.words, generate.separator, generate.language, and generate.kid are not valid for type = \"ssh_private_key\""
                                 .into(),
                         );
                     }
@@ -2610,6 +3034,247 @@ impl Secret {
                 }
             }
 
+            if self.secret_type.as_deref() == Some("passphrase") {
+                let opts = match gen_config {
+                    GenerateConfig::Bool(true) => None,
+                    GenerateConfig::Options(opts) => Some(opts),
+                    GenerateConfig::Bool(false) => {
+                        unreachable!("disabled generation handled above")
+                    }
+                };
+                if let Some(opts) = opts {
+                    let words = opts.words.unwrap_or(PASSPHRASE_DEFAULT_WORDS);
+                    if !(PASSPHRASE_MIN_WORDS..=PASSPHRASE_MAX_WORDS).contains(&words) {
+                        return Err(format!(
+                            "passphrase generate.words must be between {PASSPHRASE_MIN_WORDS} and {PASSPHRASE_MAX_WORDS}"
+                        ));
+                    }
+                    if opts.separator.as_deref().is_some_and(|separator| {
+                        separator.is_empty() || separator.chars().any(char::is_control)
+                    }) {
+                        return Err(
+                            "passphrase generate.separator must be non-empty and contain no control characters"
+                                .into(),
+                        );
+                    }
+                    if opts.length.is_some()
+                        || opts.bytes.is_some()
+                        || opts.charset.is_some()
+                        || opts.command.is_some()
+                        || opts.algorithm.is_some()
+                        || opts.bits.is_some()
+                        || opts.user_id.is_some()
+                        || opts.capabilities.is_some()
+                        || opts.comment.is_some()
+                        || opts.kid.is_some()
+                        || opts.language.is_some()
+                    {
+                        return Err(
+                            "passphrase generation accepts only `words` and `separator` options"
+                                .into(),
+                        );
+                    }
+                }
+            }
+
+            if self.secret_type.as_deref() == Some("mnemonic") {
+                let opts = match gen_config {
+                    GenerateConfig::Bool(true) => None,
+                    GenerateConfig::Options(opts) => Some(opts),
+                    GenerateConfig::Bool(false) => {
+                        unreachable!("disabled generation handled above")
+                    }
+                };
+                if let Some(opts) = opts {
+                    let words = opts.words.unwrap_or(MNEMONIC_DEFAULT_WORDS);
+                    if !MNEMONIC_WORD_COUNTS.contains(&words) {
+                        return Err(
+                            "mnemonic generate.words must be one of 12, 15, 18, 21, or 24".into(),
+                        );
+                    }
+                    if opts.algorithm.as_deref().unwrap_or("bip39") != "bip39" {
+                        return Err("unknown mnemonic algorithm; expected `bip39`".into());
+                    }
+                    if opts.language.as_deref().unwrap_or("english") != "english" {
+                        return Err("unknown mnemonic language; expected `english`".into());
+                    }
+                    if opts.length.is_some()
+                        || opts.bytes.is_some()
+                        || opts.charset.is_some()
+                        || opts.command.is_some()
+                        || opts.bits.is_some()
+                        || opts.user_id.is_some()
+                        || opts.capabilities.is_some()
+                        || opts.comment.is_some()
+                        || opts.separator.is_some()
+                        || opts.kid.is_some()
+                    {
+                        return Err(
+                            "mnemonic generation accepts only `algorithm`, `words`, and `language` options"
+                                .into(),
+                        );
+                    }
+                }
+            }
+
+            if self.secret_type.as_deref() == Some("jwk_private_key") {
+                let opts = match gen_config {
+                    GenerateConfig::Bool(true) => None,
+                    GenerateConfig::Options(opts) => Some(opts),
+                    GenerateConfig::Bool(false) => {
+                        unreachable!("disabled generation handled above")
+                    }
+                };
+                if let Some(opts) = opts {
+                    if opts.kid.as_deref().is_some_and(|kid| {
+                        kid.trim().is_empty() || kid.chars().any(char::is_control)
+                    }) {
+                        return Err(
+                            "JWK generate.kid must be non-empty and contain no control characters"
+                                .into(),
+                        );
+                    }
+                    match opts.algorithm.as_deref().unwrap_or("ed25519") {
+                        "ed25519" | "p256" => {
+                            if opts.bits.is_some() {
+                                return Err(
+                                    "generate.bits is only valid when generate.algorithm = \"rsa\""
+                                        .into(),
+                                );
+                            }
+                        }
+                        "rsa" => {
+                            let bits = opts.bits.unwrap_or(JWK_RSA_DEFAULT_BITS);
+                            if !(JWK_RSA_MIN_BITS..=JWK_RSA_MAX_BITS).contains(&bits) {
+                                return Err(
+                                    "JWK RSA generate.bits must be between 2048 and 8192".into()
+                                );
+                            }
+                        }
+                        algorithm => {
+                            return Err(format!(
+                                "unknown JWK algorithm '{algorithm}'; expected `ed25519`, `p256`, or `rsa`"
+                            ));
+                        }
+                    }
+                    if opts.length.is_some()
+                        || opts.bytes.is_some()
+                        || opts.charset.is_some()
+                        || opts.command.is_some()
+                        || opts.user_id.is_some()
+                        || opts.capabilities.is_some()
+                        || opts.comment.is_some()
+                        || opts.words.is_some()
+                        || opts.separator.is_some()
+                        || opts.language.is_some()
+                    {
+                        return Err(
+                            "JWK generation accepts only `algorithm`, `bits`, and `kid` options"
+                                .into(),
+                        );
+                    }
+                }
+            }
+
+            if self.secret_type.as_deref() == Some("x509_identity") {
+                let opts = match gen_config {
+                    GenerateConfig::Options(opts) => opts,
+                    GenerateConfig::Bool(true) => {
+                        return Err(
+                            "type = \"x509_identity\" requires generate = { san = [\"dns:localhost\"] }"
+                                .into(),
+                        );
+                    }
+                    GenerateConfig::Bool(false) => {
+                        unreachable!("disabled generation handled above")
+                    }
+                };
+                if opts.issuer.as_deref().unwrap_or("self_signed") != "self_signed" {
+                    return Err("unknown X.509 issuer; expected `self_signed`".into());
+                }
+                if opts.algorithm.as_deref().unwrap_or("p256") != "p256" {
+                    return Err("unknown X.509 algorithm; expected `p256`".into());
+                }
+                let sans = opts
+                    .san
+                    .as_deref()
+                    .ok_or_else(|| "type = \"x509_identity\" requires generate.san".to_string())?;
+                if sans.is_empty() || sans.len() > 100 {
+                    return Err("X.509 generate.san must contain between 1 and 100 names".into());
+                }
+                let mut seen = HashSet::new();
+                for san in sans {
+                    crate::x509_identity::validate_san(san)?;
+                    if !seen.insert(san) {
+                        return Err(format!("generate.san contains duplicate name '{san}'"));
+                    }
+                }
+                if let Some(usages) = &opts.usages {
+                    if usages.is_empty() {
+                        return Err(
+                            "X.509 generate.usages must contain `server_auth`, `client_auth`, or both"
+                                .into(),
+                        );
+                    }
+                    let mut seen = HashSet::new();
+                    for usage in usages {
+                        if !matches!(usage.as_str(), "server_auth" | "client_auth") {
+                            return Err(format!(
+                                "unknown X.509 usage '{usage}'; expected `server_auth` or `client_auth`"
+                            ));
+                        }
+                        if !seen.insert(usage) {
+                            return Err(format!(
+                                "generate.usages contains duplicate usage '{usage}'"
+                            ));
+                        }
+                    }
+                }
+                crate::x509_identity::parse_valid_days(opts.valid_for.as_deref())?;
+                if opts.length.is_some()
+                    || opts.bytes.is_some()
+                    || opts.charset.is_some()
+                    || opts.command.is_some()
+                    || opts.bits.is_some()
+                    || opts.user_id.is_some()
+                    || opts.capabilities.is_some()
+                    || opts.comment.is_some()
+                    || opts.words.is_some()
+                    || opts.separator.is_some()
+                    || opts.language.is_some()
+                    || opts.kid.is_some()
+                {
+                    return Err(
+                        "X.509 generation accepts only `issuer`, `algorithm`, `san`, `usages`, and `valid_for` options"
+                            .into(),
+                    );
+                }
+            }
+
+            if matches!(
+                self.secret_type.as_deref(),
+                Some("wireguard_private_key" | "age_identity")
+            ) && let GenerateConfig::Options(opts) = gen_config
+                && (opts.length.is_some()
+                    || opts.bytes.is_some()
+                    || opts.charset.is_some()
+                    || opts.command.is_some()
+                    || opts.bits.is_some()
+                    || opts.algorithm.is_some()
+                    || opts.user_id.is_some()
+                    || opts.capabilities.is_some()
+                    || opts.comment.is_some()
+                    || opts.words.is_some()
+                    || opts.separator.is_some()
+                    || opts.language.is_some()
+                    || opts.kid.is_some())
+            {
+                return Err(format!(
+                    "{} generation does not accept options",
+                    self.secret_type.as_deref().expect("matched type")
+                ));
+            }
+
             // Validate known types
             if let Some(ref t) = self.secret_type {
                 match t.as_str() {
@@ -2620,7 +3285,14 @@ impl Secret {
                     | "command"
                     | "rsa_private_key"
                     | "openpgp_private_key"
-                    | "ssh_private_key" => {}
+                    | "ssh_private_key"
+                    | "passphrase"
+                    | "mnemonic"
+                    | "wireguard_private_key"
+                    | "jwk_private_key"
+                    | "age_identity"
+                    | "x509_identity" => {}
+                    typed if crate::typed::contract(typed).is_some() => {}
                     unknown => {
                         return Err(format!("unknown secret type '{}'", unknown));
                     }
@@ -2641,7 +3313,14 @@ impl Secret {
                 | "command"
                 | "rsa_private_key"
                 | "openpgp_private_key"
-                | "ssh_private_key" => {}
+                | "ssh_private_key"
+                | "passphrase"
+                | "mnemonic"
+                | "wireguard_private_key"
+                | "jwk_private_key"
+                | "age_identity"
+                | "x509_identity" => {}
+                typed if crate::typed::contract(typed).is_some() => {}
                 unknown => {
                     return Err(format!("unknown secret type '{}'", unknown));
                 }
@@ -2695,9 +3374,15 @@ impl Secret {
         } else {
             (defaults.and_then(|d| d.required), None, None)
         };
-        // A composed secret's source is its dependency graph, so the
+        let extract = inherit(current, default, |s| s.extract.clone());
+        let from = inherit(current, default, |s| s.from.clone());
+        // A derived secret's source is its dependency graph, so the
         // `[defaults]` storage fields (`default`, `providers`) do not apply.
-        let storage_defaults = if composed.is_some() { None } else { defaults };
+        let storage_defaults = if composed.is_some() || from.is_some() {
+            None
+        } else {
+            defaults
+        };
         // `ref` and `refs` are two serialized forms of one address-model
         // setting. Select the pair from one profile entry so an explicit switch
         // in either direction replaces, rather than combines with, the inherited
@@ -2710,6 +3395,14 @@ impl Secret {
         let (reference, refs) = reference_source.map_or((None, None), |secret| {
             (secret.reference.clone(), secret.refs.clone())
         });
+        // An explicitly empty table clears a binding inherited from the
+        // default profile. Keep this selection separate from `inherit`: using
+        // `or_else` would mistake the empty table for an absent override.
+        let credentials = match current.and_then(|secret| secret.credentials.as_ref()) {
+            Some(bindings) if bindings.is_empty() => None,
+            Some(bindings) => Some(bindings.clone()),
+            None => default.and_then(|secret| secret.credentials.clone()),
+        };
         Some(Secret {
             description: inherit(current, default, |s| s.description.clone()),
             required,
@@ -2724,8 +3417,11 @@ impl Secret {
             refs,
             as_path: inherit(current, default, |s| s.as_path),
             encoding: inherit(current, default, |s| s.encoding),
-            extract: inherit(current, default, |s| s.extract.clone()),
+            extract,
             secret_type: inherit(current, default, |s| s.secret_type.clone()),
+            format: inherit(current, default, |s| s.format.clone()),
+            from,
+            credentials,
             generate: inherit(current, default, |s| s.generate.clone()),
             prompt: inherit(current, default, |s| s.prompt),
         })
@@ -3674,6 +4370,107 @@ C = { description = "c", composed = "${A}" }
     }
 
     #[test]
+    fn from_sources_share_the_derived_dependency_graph() {
+        let parse = |body: &str| {
+            toml::from_str::<Config>(&format!(
+                r#"
+[project]
+name = "derived"
+revision = "1.0"
+
+[profiles.default]
+{body}
+"#
+            ))
+            .unwrap()
+        };
+
+        parse(
+            r#"
+TLS_IDENTITY = { description = "identity", type = "x509_identity" }
+TLS_KEY = { description = "key", type = "pkcs8_private_key", from = "TLS_IDENTITY" }
+TLS_CERTIFICATE = { description = "certificate", type = "x509_certificate", format = "der", from = "TLS_IDENTITY", as_path = true }
+DOCUMENT = { description = "document" }
+FIELD = { description = "field", from = "DOCUMENT", extract = { format = "json", pointer = "/a" } }
+"#,
+        )
+        .validate()
+        .unwrap();
+
+        let wrong_type = parse(
+            r#"
+DOCUMENT = { description = "document" }
+TLS_KEY = { description = "key", type = "pkcs8_private_key", from = "DOCUMENT" }
+"#,
+        )
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(
+            wrong_type.contains("has no `type`, but type = \"pkcs8_private_key\" derives from type = \"x509_identity\""),
+            "{wrong_type}"
+        );
+
+        let cycle = parse(
+            r#"
+A = { description = "a", from = "B", extract = { format = "json", pointer = "" } }
+B = { description = "b", from = "A", extract = { format = "json", pointer = "" } }
+"#,
+        )
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(cycle.contains("A -> B -> A"), "{cycle}");
+
+        let credential_cycle = parse(
+            r#"
+TLS_IDENTITY = { description = "identity", type = "x509_identity" }
+TLS_PFX = { description = "pfx", type = "pkcs12", from = "TLS_IDENTITY", credentials = { password = "PFX_PASSWORD" } }
+PFX_PASSWORD = { description = "password", composed = "${TLS_PFX}" }
+"#,
+        )
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(
+            credential_cycle.contains("derived secret cycle"),
+            "{credential_cycle}"
+        );
+        assert!(
+            credential_cycle.contains("TLS_PFX -> PFX_PASSWORD")
+                || credential_cycle.contains("PFX_PASSWORD -> TLS_PFX"),
+            "{credential_cycle}"
+        );
+
+        let self_reference = parse(
+            r#"
+A = { description = "a", from = "A", extract = { format = "json", pointer = "" } }
+"#,
+        )
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(
+            self_reference.contains("cannot depend on itself"),
+            "{self_reference}"
+        );
+
+        let unknown = parse(
+            r#"
+TLS_IDENTITY = { description = "identity", type = "x509_identity" }
+TLS_PFX = { description = "pfx", type = "pkcs12", from = "TLS_IDENTITY", credentials = { password = "MISSING" } }
+"#,
+        )
+        .validate()
+        .unwrap_err()
+        .to_string();
+        assert!(
+            unknown.contains("dependency 'MISSING' does not name a declared secret"),
+            "{unknown}"
+        );
+    }
+
+    #[test]
     fn composed_rejects_operators_and_storage_sources() {
         let invalid: Config = toml::from_str(
             r#"
@@ -3870,6 +4667,30 @@ TOKEN = { generate = true }
         .unwrap();
 
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn empty_credentials_override_clears_inherited_binding() {
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "tmp"
+revision = "1.0"
+
+[profiles.default]
+PFX_PASSWORD = { description = "password" }
+TLS_IDENTITY = { description = "identity", type = "x509_identity", credentials = { password = "PFX_PASSWORD" } }
+
+[profiles.production]
+TLS_IDENTITY = { credentials = {}, generate = { san = ["dns:localhost"] } }
+"#,
+        )
+        .unwrap();
+
+        let compiled = config.validate_and_compile().unwrap();
+        let identity = &compiled.profile("production").unwrap().secrets["TLS_IDENTITY"].config;
+        assert!(identity.credentials.is_none());
+        assert!(identity.would_generate());
     }
 
     #[test]

@@ -36,10 +36,19 @@ SECRET_NAME = {
 - `required`: Whether the secret must be provided (default: `true`)
 - `default`: Fallback value for optional secrets
 - `composed` (0.16+): Derive a read-only value from other declared secrets (see [Composed Secrets](/concepts/composed-secrets/) for the strict template and dependency semantics)
-- `type`: Secret type for auto-generation (`password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key`, and `openpgp_private_key` in 0.21+)
+- `type`: Secret type for auto-generation (`password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key`; `passphrase`, `mnemonic`, `openpgp_private_key`, `ssh_private_key`, `wireguard_private_key`, `jwk_private_key`, `age_identity`, and `x509_identity` require 0.21+)
 - `generate`: Enable auto-generation when the secret is missing (`true` or a table with options)
 - `prompt` (0.19+): Securely ask for a missing value during `secretspec run` and
   let the selected provider decide whether to save the answer
+- `from` (0.21+): Derive a read-only value from another declared secret, either
+  by selecting a field with `extract` or by converting an `x509_identity` into
+  a `pkcs12`, `pkcs8_private_key`, `x509_certificate`,
+  `x509_certificate_chain`, or `x509_issuer_chain` (see the
+  [configuration reference](/reference/configuration/#derived-typed-secrets-021))
+- `format` (0.21+): Choose `pem` (default) or `der` for a converted key or
+  certificate
+- `credentials` (0.21+): Bind the `password` that opens a stored
+  `x509_identity` or protects a derived `pkcs12` to another declared secret
 
 ## Related Concepts
 

@@ -3,7 +3,11 @@ title: Codex
 description: Let Codex retrieve OpenAI and gateway API keys through SecretSpec providers
 ---
 
-The Codex API-key integration is available in SecretSpec 0.20+. It configures
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.21" />
+
+The Codex API-key integration is available in SecretSpec 0.21+. It configures
 Codex's native command-backed custom-provider authentication to retrieve an
 OpenAI or compatible gateway API key from any SecretSpec provider.
 
@@ -17,11 +21,13 @@ credential command.
 ## Prerequisites
 
 - Codex CLI 0.118.0 or newer
-- SecretSpec 0.20 or newer, with `secretspec` on `PATH`
+- SecretSpec 0.21 or newer, with `secretspec` on `PATH`
 
 ## Quick start
 
-These commands are available in SecretSpec 0.20+.
+<VersionCompatibility version="0.21" />
+
+These commands are available in SecretSpec 0.21+.
 
 Configure the current user's `$CODEX_HOME/config.toml`, or
 `~/.codex/config.toml` when `CODEX_HOME` is unset:
@@ -89,7 +95,9 @@ corresponding option explicitly when it should be pinned.
 
 ## Configuration and precedence
 
-User-level Codex API-key configuration is available in SecretSpec 0.20+.
+<VersionCompatibility version="0.21" />
+
+User-level Codex API-key configuration is available in SecretSpec 0.21+.
 
 SecretSpec creates a uniquely named custom provider in the user's
 `config.toml`, points `model_provider` at it, and records only owner-only
@@ -109,7 +117,9 @@ should not be committed or shared.
 
 ## Use an OpenAI-compatible gateway
 
-Gateway configuration is available in SecretSpec 0.20+.
+<VersionCompatibility version="0.21" />
+
+Gateway configuration is available in SecretSpec 0.21+.
 
 Set the non-secret Responses API base URL during configuration:
 
@@ -131,7 +141,9 @@ before reconfiguring when the old credential should be removed.
 
 ## Use a custom manifest
 
-Custom Codex credential configuration is available in SecretSpec 0.20+.
+<VersionCompatibility version="0.21" />
+
+Custom Codex credential configuration is available in SecretSpec 0.21+.
 
 Pass `--file` when the API key already has a project or company declaration.
 In this mode, `--token-secret` is required and `--profile` is available:
@@ -159,7 +171,9 @@ and `logout` intentionally manage only the embedded store.
 
 ## Remove credentials and configuration
 
-These removal commands are available in SecretSpec 0.20+.
+<VersionCompatibility version="0.21" />
+
+These removal commands are available in SecretSpec 0.21+.
 
 Remove the embedded API key without changing Codex configuration:
 
@@ -200,7 +214,9 @@ token lifecycle are separate concerns and are not provided by this integration.
 
 ## Manual configuration
 
-SecretSpec 0.20+ management commands are optional when a declarative Codex
+<VersionCompatibility version="0.21" />
+
+SecretSpec 0.21+ management commands are optional when a declarative Codex
 configuration is preferred. Declare the credential in a manifest and configure
 a custom provider directly:
 
@@ -222,6 +238,6 @@ timeout_ms = 5000
 
 This provider is not recorded as SecretSpec-managed, so `secretspec codex
 unconfigure` does not remove it. Keep an explicit `--file` in `args` when Codex
-can start outside the manifest's directory. In SecretSpec 0.20+, add `--caller
+can start outside the manifest's directory. In SecretSpec 0.21+, add `--caller
 codex --caller-operation credential_get --caller-resource api.openai.com` when
 the manual command should carry the same structured audit context.

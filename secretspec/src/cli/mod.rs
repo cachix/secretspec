@@ -285,7 +285,7 @@ enum Commands {
         #[command(subcommand)]
         action: claude::ClaudeAction,
     },
-    #[command(about = "Manage Codex API-key integration (0.20+)")]
+    #[command(about = "Manage Codex API-key integration (0.21+)")]
     Codex {
         #[command(subcommand)]
         action: codex::CodexAction,

@@ -479,7 +479,9 @@ Use `--yes` to confirm a user-level change non-interactively. The command
 preserves the stored credential and unrelated Claude settings. It refuses to
 remove an `apiKeyHelper` that changed outside SecretSpec.
 
-### codex configure (0.20+)
+### codex configure {/* #codex-configure-021 */}
+
+<VersionCompatibility version="0.21" />
 
 Configure the current user's Codex custom model provider to retrieve an OpenAI
 or compatible gateway API key through SecretSpec:
@@ -514,7 +516,9 @@ endpoint. With `--file`, `--token-secret` is required. See
 [Codex](/integrations/codex/) for gateway, custom-manifest, precedence, and
 native-login details.
 
-### codex login (0.20+)
+### codex login {/* #codex-login-021 */}
+
+<VersionCompatibility version="0.21" />
 
 Store an API key in the embedded Codex credential store, prompting securely on
 a terminal or reading it from piped standard input:
@@ -528,7 +532,9 @@ audit resource recorded by `configure`. An operation-level provider overrides
 the recorded provider. `codex login` rejects `--file`; use `secretspec set` for
 a custom manifest.
 
-### codex logout (0.20+)
+### codex logout {/* #codex-logout-021 */}
+
+<VersionCompatibility version="0.21" />
 
 Remove the embedded Codex API key without changing Codex configuration:
 
@@ -540,7 +546,9 @@ The command uses the same selection as `login` and remains available after
 `unconfigure`. `codex logout` rejects `--file`; use `secretspec delete` for a
 custom manifest.
 
-### codex unconfigure (0.20+)
+### codex unconfigure {/* #codex-unconfigure-021 */}
+
+<VersionCompatibility version="0.21" />
 
 Remove the SecretSpec-managed custom provider and restore the previous Codex
 `model_provider`:

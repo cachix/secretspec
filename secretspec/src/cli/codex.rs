@@ -21,7 +21,7 @@ const EMBEDDED_SECRET: &str = "CODEX_API_KEY";
 
 #[derive(Subcommand)]
 pub(super) enum CodexAction {
-    #[command(about = "Configure Codex to retrieve an API key through SecretSpec (0.20+)")]
+    #[command(about = "Configure Codex to retrieve an API key through SecretSpec (0.21+)")]
     Configure {
         #[arg(long, help = "Custom manifest key containing the API or gateway key")]
         token_secret: Option<String>,
@@ -57,7 +57,7 @@ pub(super) enum CodexAction {
         )]
         yes: bool,
     },
-    #[command(about = "Store a Codex API key in the embedded SecretSpec store (0.20+)")]
+    #[command(about = "Store a Codex API key in the embedded SecretSpec store (0.21+)")]
     Login {
         #[arg(
             short,
@@ -67,7 +67,7 @@ pub(super) enum CodexAction {
         )]
         provider: Option<String>,
     },
-    #[command(about = "Remove a Codex API key from the embedded SecretSpec store (0.20+)")]
+    #[command(about = "Remove a Codex API key from the embedded SecretSpec store (0.21+)")]
     Logout {
         #[arg(
             short,
@@ -77,7 +77,7 @@ pub(super) enum CodexAction {
         )]
         provider: Option<String>,
     },
-    #[command(about = "Remove Codex API-key configuration managed by SecretSpec (0.20+)")]
+    #[command(about = "Remove Codex API-key configuration managed by SecretSpec (0.21+)")]
     Unconfigure {
         #[arg(
             short,

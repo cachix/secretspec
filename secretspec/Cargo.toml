@@ -72,6 +72,11 @@ pgp.workspace = true
 smallvec.workspace = true
 uuid.workspace = true
 data-encoding.workspace = true
+bip39.workspace = true
+bech32.workspace = true
+ed25519-dalek.workspace = true
+p256.workspace = true
+x25519-dalek.workspace = true
 sha2.workspace = true
 ssh-key.workspace = true
 detect-coding-agent.workspace = true
@@ -79,6 +84,7 @@ age = { workspace = true, optional = true }
 kube = { workspace = true, optional = true }
 k8s-openapi = { workspace = true, optional = true }
 json-patch = { workspace = true, optional = true }
+openssl.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

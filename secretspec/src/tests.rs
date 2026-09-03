@@ -5755,6 +5755,10 @@ fn test_config_rejects_invalid_openpgp_generation_options() {
         r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", algorithm = "ed25519", bits = 3072 } }"#,
         r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", algorithm = "rsa", bits = 1024 } }"#,
         r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", algorithm = "rsa", bits = 16384 } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", length = 1 } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", bytes = 1 } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", charset = "ascii" } }"#,
+        r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", command = "echo ignored" } }"#,
     ] {
         let toml_content = format!(
             "[project]\nname = \"test-gen\"\nrevision = \"1.0\"\n\n[profiles.default]\n{declaration}\n"
@@ -5801,12 +5805,89 @@ fn test_config_rejects_invalid_ssh_generation_options() {
         r#"KEY = { description = "Key", type = "ssh_private_key", generate = { algorithm = "rsa", bits = 16384 } }"#,
         r#"KEY = { description = "Key", type = "ssh_private_key", generate = { comment = "bad\ncomment" } }"#,
         r#"KEY = { description = "Key", type = "ssh_private_key", generate = { user_id = "Bot" } }"#,
+        r#"KEY = { description = "Key", type = "ssh_private_key", generate = { length = 1 } }"#,
+        r#"KEY = { description = "Key", type = "ssh_private_key", generate = { bytes = 1 } }"#,
+        r#"KEY = { description = "Key", type = "ssh_private_key", generate = { charset = "ascii" } }"#,
+        r#"KEY = { description = "Key", type = "ssh_private_key", generate = { command = "echo ignored" } }"#,
         r#"KEY = { description = "Key", type = "openpgp_private_key", generate = { user_id = "Bot", comment = "ssh-only" } }"#,
     ] {
         let toml_content = format!(
             "[project]\nname = \"test-gen\"\nrevision = \"1.0\"\n\n[profiles.default]\n{declaration}\n"
         );
         assert!(parse_spec_from_str(&toml_content, None).is_err());
+    }
+}
+
+#[test]
+fn test_config_parses_additional_credential_generators() {
+    let toml_content = r#"
+[project]
+name = "test-gen"
+revision = "1.0"
+
+[profiles.default]
+RECOVERY = { description = "Recovery phrase", type = "passphrase", generate = { words = 8, separator = "." } }
+WALLET_SEED = { description = "Wallet recovery mnemonic", type = "mnemonic", generate = { algorithm = "bip39", words = 24, language = "english" } }
+WG_KEY = { description = "WireGuard key", type = "wireguard_private_key", generate = true }
+JWT_KEY = { description = "JWT key", type = "jwk_private_key", generate = { algorithm = "p256", kid = "release-2026" } }
+AGE_KEY = { description = "age identity", type = "age_identity", generate = true }
+"#;
+    let config = parse_spec_from_str(toml_content, None).unwrap();
+    let profile = &config.profiles["default"];
+
+    let Some(GenerateConfig::Options(passphrase)) = &profile.secrets["RECOVERY"].generate else {
+        panic!("expected passphrase options");
+    };
+    assert_eq!(passphrase.words, Some(8));
+    assert_eq!(passphrase.separator.as_deref(), Some("."));
+
+    let Some(GenerateConfig::Options(mnemonic)) = &profile.secrets["WALLET_SEED"].generate else {
+        panic!("expected mnemonic options");
+    };
+    assert_eq!(mnemonic.algorithm.as_deref(), Some("bip39"));
+    assert_eq!(mnemonic.words, Some(24));
+    assert_eq!(mnemonic.language.as_deref(), Some("english"));
+
+    let Some(GenerateConfig::Options(jwk)) = &profile.secrets["JWT_KEY"].generate else {
+        panic!("expected JWK options");
+    };
+    assert_eq!(jwk.algorithm.as_deref(), Some("p256"));
+    assert_eq!(jwk.kid.as_deref(), Some("release-2026"));
+
+    for name in ["WG_KEY", "AGE_KEY"] {
+        assert!(matches!(
+            profile.secrets[name].generate,
+            Some(GenerateConfig::Bool(true))
+        ));
+    }
+}
+
+#[test]
+fn test_config_rejects_invalid_additional_credential_generation_options() {
+    for declaration in [
+        r#"KEY = { description = "Key", type = "passphrase", generate = { words = 5 } }"#,
+        r#"KEY = { description = "Key", type = "passphrase", generate = { separator = "" } }"#,
+        r#"KEY = { description = "Key", type = "passphrase", generate = { algorithm = "rsa" } }"#,
+        r#"KEY = { description = "Key", type = "mnemonic", generate = { words = 11 } }"#,
+        r#"KEY = { description = "Key", type = "mnemonic", generate = { words = 13 } }"#,
+        r#"KEY = { description = "Key", type = "mnemonic", generate = { words = 25 } }"#,
+        r#"KEY = { description = "Key", type = "mnemonic", generate = { algorithm = "electrum" } }"#,
+        r#"KEY = { description = "Key", type = "mnemonic", generate = { language = "spanish" } }"#,
+        r#"KEY = { description = "Key", type = "mnemonic", generate = { separator = "-" } }"#,
+        r#"KEY = { description = "Key", type = "jwk_private_key", generate = { algorithm = "ed25519", bits = 3072 } }"#,
+        r#"KEY = { description = "Key", type = "jwk_private_key", generate = { algorithm = "rsa", bits = 1024 } }"#,
+        r#"KEY = { description = "Key", type = "jwk_private_key", generate = { algorithm = "secp256k1" } }"#,
+        r#"KEY = { description = "Key", type = "jwk_private_key", generate = { kid = " " } }"#,
+        r#"KEY = { description = "Key", type = "wireguard_private_key", generate = { bytes = 32 } }"#,
+        r#"KEY = { description = "Key", type = "age_identity", generate = { algorithm = "x25519" } }"#,
+    ] {
+        let toml_content = format!(
+            "[project]\nname = \"test-gen\"\nrevision = \"1.0\"\n\n[profiles.default]\n{declaration}\n"
+        );
+        assert!(
+            parse_spec_from_str(&toml_content, None).is_err(),
+            "accepted invalid declaration: {declaration}"
+        );
     }
 }
 
@@ -6195,6 +6276,7 @@ DB_PASSWORD = { description = "Password", type = "password", generate = true }
 API_TOKEN = { description = "Token", type = "hex", generate = { bytes = 16 } }
 SESSION_KEY = { description = "Session", type = "base64", generate = { bytes = 24 } }
 REQUEST_ID = { description = "ID", type = "uuid", generate = true }
+WALLET_RECOVERY = { description = "Wallet recovery mnemonic", type = "mnemonic", generate = true }
 "#;
     fs::write(&config_file, toml_content).unwrap();
 
@@ -6216,6 +6298,7 @@ REQUEST_ID = { description = "ID", type = "uuid", generate = true }
     assert!(validated.resolved.secrets.contains_key("API_TOKEN"));
     assert!(validated.resolved.secrets.contains_key("SESSION_KEY"));
     assert!(validated.resolved.secrets.contains_key("REQUEST_ID"));
+    assert!(validated.resolved.secrets.contains_key("WALLET_RECOVERY"));
 
     // Verify types
     let pw = validated
@@ -6242,6 +6325,16 @@ REQUEST_ID = { description = "ID", type = "uuid", generate = true }
         .expose_secret();
     assert_eq!(uuid.len(), 36);
     assert!(uuid.contains('-'));
+
+    let mnemonic = validated
+        .resolved
+        .secrets
+        .get("WALLET_RECOVERY")
+        .unwrap()
+        .expose_secret();
+    let parsed = bip39::Mnemonic::parse_in_normalized(bip39::Language::English, mnemonic)
+        .expect("resolved mnemonic must have a valid BIP-39 checksum");
+    assert_eq!(parsed.word_count(), 24);
 }
 
 #[test]
@@ -6316,6 +6409,9 @@ fn test_resolve_secret_config_merges_type_and_generate() {
             encoding: None,
             extract: None,
             secret_type: Some("password".to_string()),
+            format: None,
+            from: None,
+            credentials: None,
             generate: Some(crate::config::GenerateConfig::Bool(true)),
             prompt: None,
         },
@@ -9570,6 +9666,42 @@ secrets = ["DATABASE_URL"]
         assert!(
             sprompt.is_empty(),
             "a scope must not offer hidden dependencies for prompting: {sprompt:?}"
+        );
+    }
+
+    #[test]
+    fn prompting_fetched_identity_descends_to_missing_password() {
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        // The bytes need not form a PFX yet: resolution parks a fetched typed
+        // value until its credential resolves, so it must not inspect or offer
+        // to replace the existing archive in this pass.
+        fs::write(&env_path, "TLS_IDENTITY=Zm9v\n").unwrap();
+        let manifest = r#"
+[project]
+name = "typed-prompt"
+revision = "1.0"
+
+[profiles.default]
+PFX_PASSWORD = { description = "PFX password" }
+TLS_IDENTITY = { description = "identity", type = "x509_identity", credentials = { password = "PFX_PASSWORD" } }
+"#;
+        let config = config(manifest);
+        config.validate().unwrap();
+        let spec = Secrets::new(
+            config,
+            None,
+            Some(format!("dotenv://{}", env_path.display())),
+            None,
+        );
+        let errors = match spec.validate().unwrap() {
+            Ok(_) => panic!("the missing password must keep the identity unresolved"),
+            Err(errors) => errors,
+        };
+
+        assert_eq!(
+            spec.scoped_promptable_missing(&errors, "default").unwrap(),
+            vec!["PFX_PASSWORD".to_string()]
         );
     }
 

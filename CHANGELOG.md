@@ -9,11 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- OpenPGP and OpenSSH private keys can be generated entirely in Rust (0.21+).
-  OpenPGP generation uses an explicit User ID and signing, encryption, or
-  combined capability profiles; Ed25519/Curve25519 is the default, with
-  configurable RSA available for compatibility. OpenSSH generation likewise
-  defaults to Ed25519 and supports configurable RSA keys and comments.
+- SecretSpec can generate `passphrase`, `mnemonic`, `openpgp_private_key`,
+  `ssh_private_key`, `wireguard_private_key`, `jwk_private_key`, and
+  `age_identity` values entirely in Rust, plus self-signed P-256
+  `x509_identity` values stored as PKCS#12 archives, Base64 by default
+  (0.21+). A secret with `from` derives from another declared secret: with
+  `extract` it selects a JSON or INI field from that secret's text, and with a
+  typed conversion target (`pkcs12`, `pkcs8_private_key`,
+  `x509_certificate`, `x509_certificate_chain`, or `x509_issuer_chain`) it
+  converts an `x509_identity` into a PFX archive, key, certificate, or chain.
+  `format` selects `pem` or `der` where a type offers both. A stored
+  `x509_identity` may be a password protected archive: `credentials =
+  { password = "PFX_PASSWORD" }` names the declared secret that opens it, and
+  the same binding on a `pkcs12` target protects the produced archive with
+  PBES2/AES-256-CBC and HMAC-SHA-256. Derived secrets join composed secrets'
+  dependency graph, so declaration order does not matter, scopes fetch hidden
+  sources and passwords without exposing them, and cycles are rejected when
+  the manifest loads. Binary values are delivered as owner-only `.pfx`, `.pem`,
+  or `.der` files with `as_path`, or inline in their encoding otherwise, and
+  `check --explain` labels them `converted from` or `selected from`. OpenPGP
+  generation uses an explicit User ID and signing, encryption, or combined
+  capability profiles; Ed25519/Curve25519 is the default, with configurable
+  RSA available for compatibility. OpenSSH generation likewise defaults to
+  Ed25519 and supports configurable RSA keys and comments. JWK generation
+  supports Ed25519, P-256, and RSA signing keys and uses RFC 9864's fully
+  specified `Ed25519` identifier. Credential entropy is read directly from
+  the operating system, passphrases require at least six words, and mnemonics
+  default to checksum-protected 24-word English BIP-39 values. Temporary
+  private-key and mnemonic encodings are cleared from memory. Interactive
+  provisioning preserves stored identities while requesting missing passwords
+  and canonicalizes encoded PFX input; empty credential maps clear inherited
+  bindings, and valid long DNS SANs use a fallback certificate subject.
+  Configuration loading rejects extraction on stored binary identities and
+  generation options that the selected credential type does not support.
 
 ## [0.20.0] - 2026-08-31
 

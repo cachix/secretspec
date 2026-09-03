@@ -1,25 +1,34 @@
 //! Secret value generation
 //!
 //! This module provides generation of secret values based on type and configuration.
-//! Supported types: password, hex, base64, uuid, command, rsa_private_key,
-//! openpgp_private_key, ssh_private_key.
+//! Supported types: password, passphrase, mnemonic, hex, base64, uuid, command,
+//! rsa_private_key, openpgp_private_key, ssh_private_key,
+//! wireguard_private_key, jwk_private_key, age_identity, and (through the
+//! binary identity generator) x509_identity.
 
 use crate::SecretSpecError;
 use crate::config::{
-    GenerateConfig, OPENPGP_RSA_DEFAULT_BITS, OPENPGP_RSA_MAX_BITS, OPENPGP_RSA_MIN_BITS,
+    GenerateConfig, JWK_RSA_DEFAULT_BITS, JWK_RSA_MAX_BITS, JWK_RSA_MIN_BITS,
+    MNEMONIC_DEFAULT_WORDS, MNEMONIC_WORD_COUNTS, OPENPGP_RSA_DEFAULT_BITS, OPENPGP_RSA_MAX_BITS,
+    OPENPGP_RSA_MIN_BITS, PASSPHRASE_DEFAULT_WORDS, PASSPHRASE_MAX_WORDS, PASSPHRASE_MIN_WORDS,
     SSH_RSA_DEFAULT_BITS, SSH_RSA_MAX_BITS, SSH_RSA_MIN_BITS,
 };
-use data_encoding::{BASE64, HEXLOWER};
+use bip39::{Language, Mnemonic};
+use data_encoding::{BASE64, BASE64URL_NOPAD, HEXLOWER};
+use p256::elliptic_curve::sec1::ToEncodedPoint;
 use pgp::composed::{
     ArmorOptions, EncryptionCaps, KeyType, SecretKeyParamsBuilder, SubkeyParamsBuilder,
 };
 use pgp::crypto::{ecc_curve::ECCCurve, hash::HashAlgorithm, sym::SymmetricKeyAlgorithm};
 use pgp::types::{CompressionAlgorithm, KeyVersion};
 use rand::RngExt;
-use rand_08::rngs::OsRng as OpenPgpOsRng;
+use rand_08::RngCore as _;
+use rand_08::rngs::OsRng as OsRng08;
 use rsa::RsaPrivateKey;
 use rsa::pkcs1::EncodeRsaPrivateKey;
+use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 use secrecy::SecretString;
+use secrecy::zeroize::Zeroizing;
 use smallvec::smallvec;
 use ssh_key::private::{KeypairData as SshKeypairData, RsaKeypair as SshRsaKeypair};
 use ssh_key::{
@@ -30,6 +39,8 @@ use ssh_key::{
 pub fn generate(secret_type: &str, config: &GenerateConfig) -> crate::Result<SecretString> {
     match secret_type {
         "password" => generate_password(config),
+        "passphrase" => generate_passphrase(config),
+        "mnemonic" => generate_mnemonic(config),
         "hex" => generate_hex(config),
         "base64" => generate_base64(config),
         "uuid" => generate_uuid(),
@@ -37,11 +48,104 @@ pub fn generate(secret_type: &str, config: &GenerateConfig) -> crate::Result<Sec
         "rsa_private_key" => generate_rsa(config),
         "openpgp_private_key" => generate_openpgp(config),
         "ssh_private_key" => generate_ssh(config),
+        "wireguard_private_key" => generate_wireguard(),
+        "jwk_private_key" => generate_jwk(config),
+        "age_identity" => generate_age_identity(),
         unknown => Err(SecretSpecError::GenerationFailed(format!(
             "unknown secret type '{}'",
             unknown
         ))),
     }
+}
+
+fn fill_os_random(bytes: &mut [u8], purpose: &str) -> crate::Result<()> {
+    OsRng08.try_fill_bytes(bytes).map_err(|error| {
+        SecretSpecError::GenerationFailed(format!(
+            "operating-system randomness failed while generating {purpose}: {error}"
+        ))
+    })
+}
+
+fn protect_generated_string(value: String) -> SecretString {
+    // Copy into an exactly sized protected allocation, then wipe the temporary
+    // String. This avoids leaving a serialized private credential in a normal
+    // String allocation after returning it to the caller.
+    let value = Zeroizing::new(value);
+    SecretString::new(value.as_str().into())
+}
+
+fn generate_passphrase(config: &GenerateConfig) -> crate::Result<SecretString> {
+    let (words, separator) = match config {
+        GenerateConfig::Bool(_) => (PASSPHRASE_DEFAULT_WORDS, "-"),
+        GenerateConfig::Options(opts) => (
+            opts.words.unwrap_or(PASSPHRASE_DEFAULT_WORDS),
+            opts.separator.as_deref().unwrap_or("-"),
+        ),
+    };
+    if !(PASSPHRASE_MIN_WORDS..=PASSPHRASE_MAX_WORDS).contains(&words) {
+        return Err(SecretSpecError::GenerationFailed(format!(
+            "passphrase generate.words must be between {PASSPHRASE_MIN_WORDS} and {PASSPHRASE_MAX_WORDS}"
+        )));
+    }
+    if separator.is_empty() || separator.chars().any(char::is_control) {
+        return Err(SecretSpecError::GenerationFailed(
+            "passphrase generate.separator must be non-empty and contain no control characters"
+                .to_string(),
+        ));
+    }
+
+    // Seven independently selected BIP-39 English words provide 77 bits of
+    // entropy by default. This is a passphrase, not a BIP-39 mnemonic: there
+    // is deliberately no checksum or wallet-seed interpretation.
+    let wordlist = Language::English.word_list();
+    let mut entropy = Zeroizing::new(vec![0_u8; words * 2]);
+    fill_os_random(&mut entropy, "passphrase")?;
+    let value = entropy
+        .chunks_exact(2)
+        // The word list has 2048 entries, which divides the 16-bit input
+        // domain exactly, so this reduction introduces no modulo bias.
+        .map(|bytes| {
+            let index = usize::from(u16::from_le_bytes([bytes[0], bytes[1]])) % wordlist.len();
+            wordlist[index]
+        })
+        .collect::<Vec<_>>()
+        .join(separator);
+    Ok(protect_generated_string(value))
+}
+
+fn generate_mnemonic(config: &GenerateConfig) -> crate::Result<SecretString> {
+    let (algorithm, words, language) = match config {
+        GenerateConfig::Bool(_) => ("bip39", MNEMONIC_DEFAULT_WORDS, "english"),
+        GenerateConfig::Options(opts) => (
+            opts.algorithm.as_deref().unwrap_or("bip39"),
+            opts.words.unwrap_or(MNEMONIC_DEFAULT_WORDS),
+            opts.language.as_deref().unwrap_or("english"),
+        ),
+    };
+    if algorithm != "bip39" {
+        return Err(SecretSpecError::GenerationFailed(format!(
+            "unknown mnemonic algorithm '{algorithm}'; expected 'bip39'"
+        )));
+    }
+    if language != "english" {
+        return Err(SecretSpecError::GenerationFailed(format!(
+            "unknown mnemonic language '{language}'; expected 'english'"
+        )));
+    }
+    if !MNEMONIC_WORD_COUNTS.contains(&words) {
+        return Err(SecretSpecError::GenerationFailed(
+            "mnemonic generate.words must be one of 12, 15, 18, 21, or 24".to_string(),
+        ));
+    }
+
+    // BIP-39 maps these word counts to 128, 160, 192, 224, or 256 bits of
+    // entropy respectively, then appends the checksum encoded by Mnemonic.
+    let mut entropy = Zeroizing::new(vec![0_u8; (words / 3) * 4]);
+    fill_os_random(&mut entropy, "BIP-39 mnemonic")?;
+    let mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy).map_err(|error| {
+        SecretSpecError::GenerationFailed(format!("failed to encode BIP-39 mnemonic: {error}"))
+    })?;
+    Ok(protect_generated_string(mnemonic.to_string()))
 }
 
 fn generate_password(config: &GenerateConfig) -> crate::Result<SecretString> {
@@ -135,6 +239,243 @@ fn generate_rsa(config: &GenerateConfig) -> crate::Result<SecretString> {
         })?;
 
     Ok(SecretString::new(pem.to_string().into()))
+}
+
+/// Generates the Base64-encoded, clamped Curve25519 scalar accepted by
+/// `wg(8)` as a WireGuard private key.
+fn generate_wireguard() -> crate::Result<SecretString> {
+    let mut key = Zeroizing::new([0_u8; 32]);
+    fill_os_random(&mut key[..], "WireGuard private key")?;
+    key[0] &= 248;
+    key[31] &= 127;
+    key[31] |= 64;
+    Ok(protect_generated_string(BASE64.encode(&*key)))
+}
+
+fn jwk_base64(bytes: &[u8]) -> String {
+    BASE64URL_NOPAD.encode(bytes)
+}
+
+fn jwk_integer(bytes: &[u8]) -> String {
+    let first_nonzero = bytes
+        .iter()
+        .position(|byte| *byte != 0)
+        .unwrap_or(bytes.len());
+    if first_nonzero == bytes.len() {
+        jwk_base64(&[0])
+    } else {
+        jwk_base64(&bytes[first_nonzero..])
+    }
+}
+
+#[derive(serde::Serialize)]
+struct OkpPrivateJwk<'a> {
+    kty: &'static str,
+    crv: &'static str,
+    alg: &'static str,
+    #[serde(rename = "use")]
+    usage: &'static str,
+    key_ops: [&'static str; 1],
+    x: String,
+    d: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kid: Option<&'a str>,
+}
+
+#[derive(serde::Serialize)]
+struct EcPrivateJwk<'a> {
+    kty: &'static str,
+    crv: &'static str,
+    alg: &'static str,
+    #[serde(rename = "use")]
+    usage: &'static str,
+    key_ops: [&'static str; 1],
+    x: String,
+    y: String,
+    d: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kid: Option<&'a str>,
+}
+
+#[derive(serde::Serialize)]
+struct RsaPrivateJwk<'a> {
+    kty: &'static str,
+    alg: &'static str,
+    #[serde(rename = "use")]
+    usage: &'static str,
+    key_ops: [&'static str; 1],
+    n: String,
+    e: String,
+    d: &'a str,
+    p: &'a str,
+    q: &'a str,
+    dp: &'a str,
+    dq: &'a str,
+    qi: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kid: Option<&'a str>,
+}
+
+/// Generates a private signing JWK. The output includes its public parameters
+/// so it can be consumed directly by ordinary JOSE libraries.
+fn generate_jwk(config: &GenerateConfig) -> crate::Result<SecretString> {
+    let opts = match config {
+        GenerateConfig::Bool(_) => None,
+        GenerateConfig::Options(opts) => Some(opts),
+    };
+    let algorithm = opts
+        .and_then(|options| options.algorithm.as_deref())
+        .unwrap_or("ed25519");
+    let kid = opts.and_then(|options| options.kid.as_deref());
+    if kid.is_some_and(|kid| kid.trim().is_empty() || kid.chars().any(char::is_control)) {
+        return Err(SecretSpecError::GenerationFailed(
+            "JWK generate.kid must be non-empty and contain no control characters".to_string(),
+        ));
+    }
+
+    let encoded = match algorithm {
+        "ed25519" => {
+            if opts.is_some_and(|options| options.bits.is_some()) {
+                return Err(SecretSpecError::GenerationFailed(
+                    "generate.bits is only valid when generate.algorithm = \"rsa\"".to_string(),
+                ));
+            }
+            let signing = ed25519_dalek::SigningKey::generate(&mut OsRng08);
+            let private = Zeroizing::new(jwk_base64(&signing.to_bytes()));
+            serde_json::to_string(&OkpPrivateJwk {
+                kty: "OKP",
+                crv: "Ed25519",
+                // RFC 9864 deprecates the polymorphic `EdDSA` identifier.
+                alg: "Ed25519",
+                usage: "sig",
+                key_ops: ["sign"],
+                x: jwk_base64(signing.verifying_key().as_bytes()),
+                d: private.as_str(),
+                kid,
+            })
+        }
+        "p256" => {
+            if opts.is_some_and(|options| options.bits.is_some()) {
+                return Err(SecretSpecError::GenerationFailed(
+                    "generate.bits is only valid when generate.algorithm = \"rsa\"".to_string(),
+                ));
+            }
+            let secret = p256::SecretKey::random(&mut OsRng08);
+            let point = secret.public_key().to_encoded_point(false);
+            let (x, y) = point.x().zip(point.y()).ok_or_else(|| {
+                SecretSpecError::GenerationFailed(
+                    "generated P-256 JSON Web Key has no affine coordinates".to_string(),
+                )
+            })?;
+            let private = Zeroizing::new(jwk_base64(&secret.to_bytes()));
+            serde_json::to_string(&EcPrivateJwk {
+                kty: "EC",
+                crv: "P-256",
+                alg: "ES256",
+                usage: "sig",
+                key_ops: ["sign"],
+                x: jwk_base64(x),
+                y: jwk_base64(y),
+                d: private.as_str(),
+                kid,
+            })
+        }
+        "rsa" => {
+            let bits = opts
+                .and_then(|options| options.bits)
+                .unwrap_or(JWK_RSA_DEFAULT_BITS);
+            if !(JWK_RSA_MIN_BITS..=JWK_RSA_MAX_BITS).contains(&bits) {
+                return Err(SecretSpecError::GenerationFailed(
+                    "JWK RSA generate.bits must be between 2048 and 8192".to_string(),
+                ));
+            }
+            let mut key =
+                RsaPrivateKey::new(&mut rsa::rand_core::OsRng, bits).map_err(|error| {
+                    SecretSpecError::GenerationFailed(format!(
+                        "failed to generate RSA JSON Web Key: {error}"
+                    ))
+                })?;
+            key.precompute().map_err(|error| {
+                SecretSpecError::GenerationFailed(format!(
+                    "failed to compute RSA JSON Web Key parameters: {error}"
+                ))
+            })?;
+            let primes = key.primes();
+            let (p, q) = primes.first().zip(primes.get(1)).ok_or_else(|| {
+                SecretSpecError::GenerationFailed(
+                    "generated RSA JSON Web Key has fewer than two primes".to_string(),
+                )
+            })?;
+            let dp = key.dp().ok_or_else(|| {
+                SecretSpecError::GenerationFailed(
+                    "generated RSA JSON Web Key has no first CRT exponent".to_string(),
+                )
+            })?;
+            let dq = key.dq().ok_or_else(|| {
+                SecretSpecError::GenerationFailed(
+                    "generated RSA JSON Web Key has no second CRT exponent".to_string(),
+                )
+            })?;
+            let qi = key
+                .qinv()
+                .ok_or_else(|| {
+                    SecretSpecError::GenerationFailed(
+                        "generated RSA JSON Web Key has no CRT coefficient".to_string(),
+                    )
+                })?
+                .to_biguint()
+                .ok_or_else(|| {
+                    SecretSpecError::GenerationFailed(
+                        "failed to encode RSA JSON Web Key q inverse".to_string(),
+                    )
+                })?;
+            let d = Zeroizing::new(jwk_integer(&key.d().to_bytes_be()));
+            let p = Zeroizing::new(jwk_integer(&p.to_bytes_be()));
+            let q = Zeroizing::new(jwk_integer(&q.to_bytes_be()));
+            let dp = Zeroizing::new(jwk_integer(&dp.to_bytes_be()));
+            let dq = Zeroizing::new(jwk_integer(&dq.to_bytes_be()));
+            let qi = Zeroizing::new(jwk_integer(&qi.to_bytes_be()));
+            serde_json::to_string(&RsaPrivateJwk {
+                kty: "RSA",
+                alg: "RS256",
+                usage: "sig",
+                key_ops: ["sign"],
+                n: jwk_integer(&key.n().to_bytes_be()),
+                e: jwk_integer(&key.e().to_bytes_be()),
+                d: d.as_str(),
+                p: p.as_str(),
+                q: q.as_str(),
+                dp: dp.as_str(),
+                dq: dq.as_str(),
+                qi: qi.as_str(),
+                kid,
+            })
+        }
+        algorithm => {
+            return Err(SecretSpecError::GenerationFailed(format!(
+                "unknown JWK algorithm '{algorithm}'; expected `ed25519`, `p256`, or `rsa`"
+            )));
+        }
+    }
+    .map_err(|error| {
+        SecretSpecError::GenerationFailed(format!("failed to encode JSON Web Key: {error}"))
+    })?;
+    Ok(protect_generated_string(encoded))
+}
+
+fn generate_age_identity() -> crate::Result<SecretString> {
+    let mut scalar = Zeroizing::new([0_u8; 32]);
+    fill_os_random(&mut scalar[..], "age identity")?;
+    let secret = x25519_dalek::StaticSecret::from(*scalar);
+    let hrp = bech32::Hrp::parse("AGE-SECRET-KEY-").map_err(|error| {
+        SecretSpecError::GenerationFailed(format!("failed to configure age identity: {error}"))
+    })?;
+    let encoded = bech32::encode::<bech32::Bech32>(hrp, secret.as_bytes())
+        .map_err(|error| {
+            SecretSpecError::GenerationFailed(format!("failed to encode age identity: {error}"))
+        })?
+        .to_uppercase();
+    Ok(protect_generated_string(encoded))
 }
 
 /// Generates a broadly interoperable OpenPGP v4 transferable secret key.
@@ -290,7 +631,7 @@ fn generate_openpgp(config: &GenerateConfig) -> crate::Result<SecretString> {
                 "failed to configure OpenPGP private key: {error}"
             ))
         })?
-        .generate(OpenPgpOsRng)
+        .generate(OsRng08)
         .map_err(|error| {
             SecretSpecError::GenerationFailed(format!(
                 "failed to generate OpenPGP private key: {error}"
@@ -331,7 +672,7 @@ fn generate_ssh(config: &GenerateConfig) -> crate::Result<SecretString> {
         ));
     }
 
-    let mut rng = OpenPgpOsRng;
+    let mut rng = OsRng08;
     let mut key = match algorithm {
         "ed25519" => {
             if opts.is_some_and(|options| options.bits.is_some()) {
@@ -503,6 +844,99 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_passphrase_default_and_custom_separator() {
+        let value = generate("passphrase", &GenerateConfig::Bool(true)).unwrap();
+        let words = value.expose_secret().split('-').collect::<Vec<_>>();
+        assert_eq!(words.len(), PASSPHRASE_DEFAULT_WORDS);
+        assert!(
+            words
+                .iter()
+                .all(|word| Language::English.word_list().contains(word))
+        );
+
+        let custom = generate(
+            "passphrase",
+            &GenerateConfig::Options(GenerateOptions {
+                words: Some(8),
+                separator: Some(".".to_string()),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        assert_eq!(custom.expose_secret().split('.').count(), 8);
+    }
+
+    #[test]
+    fn test_generate_passphrase_rejects_unsafe_options() {
+        for config in [
+            GenerateOptions {
+                words: Some(5),
+                ..Default::default()
+            },
+            GenerateOptions {
+                separator: Some(String::new()),
+                ..Default::default()
+            },
+            GenerateOptions {
+                separator: Some("\n".to_string()),
+                ..Default::default()
+            },
+        ] {
+            assert!(generate("passphrase", &GenerateConfig::Options(config)).is_err());
+        }
+    }
+
+    #[test]
+    fn test_generate_mnemonic_default_is_valid_bip39() {
+        let first = generate("mnemonic", &GenerateConfig::Bool(true)).unwrap();
+        let second = generate("mnemonic", &GenerateConfig::Bool(true)).unwrap();
+        assert_ne!(first.expose_secret(), second.expose_secret());
+
+        let parsed = Mnemonic::parse_in_normalized(Language::English, first.expose_secret())
+            .expect("generated mnemonic must have a valid BIP-39 checksum");
+        assert_eq!(parsed.word_count(), MNEMONIC_DEFAULT_WORDS);
+    }
+
+    #[test]
+    fn test_generate_mnemonic_supports_every_bip39_word_count() {
+        for &words in MNEMONIC_WORD_COUNTS {
+            let value = generate(
+                "mnemonic",
+                &GenerateConfig::Options(GenerateOptions {
+                    algorithm: Some("bip39".to_string()),
+                    words: Some(words),
+                    language: Some("english".to_string()),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+            let parsed = Mnemonic::parse_in_normalized(Language::English, value.expose_secret())
+                .expect("generated mnemonic must have a valid BIP-39 checksum");
+            assert_eq!(parsed.word_count(), words);
+        }
+    }
+
+    #[test]
+    fn test_generate_mnemonic_rejects_invalid_options() {
+        for config in [
+            GenerateOptions {
+                words: Some(13),
+                ..Default::default()
+            },
+            GenerateOptions {
+                algorithm: Some("electrum".to_string()),
+                ..Default::default()
+            },
+            GenerateOptions {
+                language: Some("spanish".to_string()),
+                ..Default::default()
+            },
+        ] {
+            assert!(generate("mnemonic", &GenerateConfig::Options(config)).is_err());
+        }
+    }
+
+    #[test]
     fn test_generate_hex_default() {
         let value = generate("hex", &GenerateConfig::Bool(true)).unwrap();
         let s = value.expose_secret();
@@ -653,6 +1087,143 @@ mod tests {
         let v1 = generate("rsa_private_key", &GenerateConfig::Bool(true)).unwrap();
         let v2 = generate("rsa_private_key", &GenerateConfig::Bool(true)).unwrap();
         assert_ne!(v1.expose_secret(), v2.expose_secret());
+    }
+
+    #[test]
+    fn test_generate_wireguard_private_key() {
+        let first = generate("wireguard_private_key", &GenerateConfig::Bool(true)).unwrap();
+        let second = generate("wireguard_private_key", &GenerateConfig::Bool(true)).unwrap();
+        let decoded = BASE64.decode(first.expose_secret().as_bytes()).unwrap();
+        assert_eq!(decoded.len(), 32);
+        assert_eq!(decoded[0] & 7, 0);
+        assert_eq!(decoded[31] & 0x80, 0);
+        assert_eq!(decoded[31] & 0x40, 0x40);
+        assert_ne!(first.expose_secret(), second.expose_secret());
+    }
+
+    fn parse_jwk(config: &GenerateConfig) -> serde_json::Value {
+        let value = generate("jwk_private_key", config).unwrap();
+        serde_json::from_str(value.expose_secret()).unwrap()
+    }
+
+    fn decode_jwk_field(jwk: &serde_json::Value, field: &str) -> Vec<u8> {
+        BASE64URL_NOPAD
+            .decode(jwk[field].as_str().unwrap().as_bytes())
+            .unwrap()
+    }
+
+    #[test]
+    fn test_generate_ed25519_private_jwk() {
+        let jwk = parse_jwk(&GenerateConfig::Options(GenerateOptions {
+            kid: Some("release-2026".to_string()),
+            ..Default::default()
+        }));
+        assert_eq!(jwk["kty"], "OKP");
+        assert_eq!(jwk["crv"], "Ed25519");
+        assert_eq!(jwk["alg"], "Ed25519");
+        assert_eq!(jwk["use"], "sig");
+        assert_eq!(jwk["key_ops"], serde_json::json!(["sign"]));
+        assert_eq!(jwk["kid"], "release-2026");
+
+        let secret: [u8; 32] = decode_jwk_field(&jwk, "d").try_into().unwrap();
+        let signing = ed25519_dalek::SigningKey::from_bytes(&secret);
+        assert_eq!(
+            signing.verifying_key().as_bytes(),
+            decode_jwk_field(&jwk, "x").as_slice()
+        );
+    }
+
+    #[test]
+    fn test_generate_p256_private_jwk() {
+        let jwk = parse_jwk(&GenerateConfig::Options(GenerateOptions {
+            algorithm: Some("p256".to_string()),
+            ..Default::default()
+        }));
+        assert_eq!(jwk["kty"], "EC");
+        assert_eq!(jwk["crv"], "P-256");
+        assert_eq!(jwk["alg"], "ES256");
+
+        let secret = p256::SecretKey::from_slice(&decode_jwk_field(&jwk, "d")).unwrap();
+        let public = secret.public_key().to_encoded_point(false);
+        assert_eq!(public.x().unwrap().as_slice(), decode_jwk_field(&jwk, "x"));
+        assert_eq!(public.y().unwrap().as_slice(), decode_jwk_field(&jwk, "y"));
+    }
+
+    #[test]
+    fn test_generate_rsa_private_jwk() {
+        let jwk = parse_jwk(&GenerateConfig::Options(GenerateOptions {
+            algorithm: Some("rsa".to_string()),
+            bits: Some(2048),
+            ..Default::default()
+        }));
+        assert_eq!(jwk["kty"], "RSA");
+        assert_eq!(jwk["alg"], "RS256");
+        for field in ["n", "e", "d", "p", "q", "dp", "dq", "qi"] {
+            assert!(!decode_jwk_field(&jwk, field).is_empty(), "{field}");
+        }
+        let mut key = RsaPrivateKey::from_components(
+            rsa::BigUint::from_bytes_be(&decode_jwk_field(&jwk, "n")),
+            rsa::BigUint::from_bytes_be(&decode_jwk_field(&jwk, "e")),
+            rsa::BigUint::from_bytes_be(&decode_jwk_field(&jwk, "d")),
+            vec![
+                rsa::BigUint::from_bytes_be(&decode_jwk_field(&jwk, "p")),
+                rsa::BigUint::from_bytes_be(&decode_jwk_field(&jwk, "q")),
+            ],
+        )
+        .unwrap();
+        key.validate().unwrap();
+        key.precompute().unwrap();
+        assert_eq!(jwk["dp"], jwk_integer(&key.dp().unwrap().to_bytes_be()));
+        assert_eq!(jwk["dq"], jwk_integer(&key.dq().unwrap().to_bytes_be()));
+        assert_eq!(
+            jwk["qi"],
+            jwk_integer(&key.qinv().unwrap().to_biguint().unwrap().to_bytes_be())
+        );
+    }
+
+    #[test]
+    fn test_generate_jwk_rejects_invalid_profiles() {
+        for config in [
+            GenerateOptions {
+                algorithm: Some("ed25519".to_string()),
+                bits: Some(3072),
+                ..Default::default()
+            },
+            GenerateOptions {
+                algorithm: Some("rsa".to_string()),
+                bits: Some(1024),
+                ..Default::default()
+            },
+            GenerateOptions {
+                algorithm: Some("secp256k1".to_string()),
+                ..Default::default()
+            },
+            GenerateOptions {
+                kid: Some(" ".to_string()),
+                ..Default::default()
+            },
+        ] {
+            assert!(generate("jwk_private_key", &GenerateConfig::Options(config)).is_err());
+        }
+    }
+
+    #[test]
+    fn test_generate_age_identity() {
+        let first = generate("age_identity", &GenerateConfig::Bool(true)).unwrap();
+        let second = generate("age_identity", &GenerateConfig::Bool(true)).unwrap();
+        assert!(first.expose_secret().starts_with("AGE-SECRET-KEY-1"));
+        let (hrp, bytes) = bech32::decode(first.expose_secret()).unwrap();
+        assert_eq!(hrp, bech32::Hrp::parse("AGE-SECRET-KEY-").unwrap());
+        let secret = x25519_dalek::StaticSecret::from(<[u8; 32]>::try_from(bytes).unwrap());
+        assert_ne!(x25519_dalek::PublicKey::from(&secret).as_bytes(), &[0; 32]);
+        #[cfg(feature = "age")]
+        assert!(
+            first
+                .expose_secret()
+                .parse::<age::x25519::Identity>()
+                .is_ok()
+        );
+        assert_ne!(first.expose_secret(), second.expose_secret());
     }
 
     fn openpgp_config(

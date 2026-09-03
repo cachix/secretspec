@@ -181,6 +181,12 @@ struct InlineSecret {
     #[serde(default, rename = "type")]
     secret_type: Option<String>,
     #[serde(default)]
+    format: Option<String>,
+    #[serde(default)]
+    from: Option<String>,
+    #[serde(default)]
+    credentials: Option<BTreeMap<String, crate::config::CredentialBinding>>,
+    #[serde(default)]
     generate: Option<InlineGenerate>,
     #[serde(default)]
     prompt: Option<bool>,
@@ -227,7 +233,7 @@ where
 #[serde(untagged)]
 enum InlineGenerate {
     Bool(bool),
-    Options(InlineGenerateOptions),
+    Options(Box<InlineGenerateOptions>),
 }
 
 #[derive(Debug, Deserialize)]
@@ -251,6 +257,22 @@ struct InlineGenerateOptions {
     capabilities: Option<Vec<String>>,
     #[serde(default)]
     comment: Option<String>,
+    #[serde(default)]
+    words: Option<usize>,
+    #[serde(default)]
+    separator: Option<String>,
+    #[serde(default)]
+    language: Option<String>,
+    #[serde(default)]
+    kid: Option<String>,
+    #[serde(default)]
+    issuer: Option<String>,
+    #[serde(default)]
+    san: Option<Vec<String>>,
+    #[serde(default)]
+    usages: Option<Vec<String>>,
+    #[serde(default)]
+    valid_for: Option<String>,
 }
 
 impl InlineSpec {
@@ -329,6 +351,9 @@ impl InlineSecret {
             encoding: self.encoding,
             extract: self.extract,
             secret_type: self.secret_type,
+            format: self.format,
+            from: self.from,
+            credentials: self.credentials,
             generate: self.generate.map(|generate| match generate {
                 InlineGenerate::Bool(enabled) => GenerateConfig::Bool(enabled),
                 InlineGenerate::Options(options) => GenerateConfig::Options(GenerateOptions {
@@ -341,6 +366,14 @@ impl InlineSecret {
                     user_id: options.user_id,
                     capabilities: options.capabilities,
                     comment: options.comment,
+                    words: options.words,
+                    separator: options.separator,
+                    language: options.language,
+                    kid: options.kid,
+                    issuer: options.issuer,
+                    san: options.san,
+                    usages: options.usages,
+                    valid_for: options.valid_for,
                 }),
             }),
             prompt: self.prompt,
@@ -559,5 +592,54 @@ mod tests {
         assert_eq!(options.algorithm.as_deref(), Some("rsa"));
         assert_eq!(options.bits, Some(4096));
         assert_eq!(options.comment.as_deref(), Some("deploy@example.com"));
+    }
+
+    #[test]
+    fn inline_declaration_preserves_new_generation_options() {
+        let passphrase: InlineSecret = serde_json::from_str(
+            r#"{
+              "description": "Recovery phrase",
+              "type": "passphrase",
+              "generate": { "words": 8, "separator": "." }
+            }"#,
+        )
+        .unwrap();
+        let Some(GenerateConfig::Options(options)) = passphrase.into_config().unwrap().generate
+        else {
+            panic!("expected passphrase generation options");
+        };
+        assert_eq!(options.words, Some(8));
+        assert_eq!(options.separator.as_deref(), Some("."));
+
+        let mnemonic: InlineSecret = serde_json::from_str(
+            r#"{
+              "description": "Wallet recovery mnemonic",
+              "type": "mnemonic",
+              "generate": { "algorithm": "bip39", "words": 24, "language": "english" }
+            }"#,
+        )
+        .unwrap();
+        let Some(GenerateConfig::Options(options)) = mnemonic.into_config().unwrap().generate
+        else {
+            panic!("expected mnemonic generation options");
+        };
+        assert_eq!(options.algorithm.as_deref(), Some("bip39"));
+        assert_eq!(options.words, Some(24));
+        assert_eq!(options.language.as_deref(), Some("english"));
+
+        let jwk: InlineSecret = serde_json::from_str(
+            r#"{
+              "description": "Signing key",
+              "type": "jwk_private_key",
+              "generate": { "algorithm": "rsa", "bits": 4096, "kid": "release-2026" }
+            }"#,
+        )
+        .unwrap();
+        let Some(GenerateConfig::Options(options)) = jwk.into_config().unwrap().generate else {
+            panic!("expected JWK generation options");
+        };
+        assert_eq!(options.algorithm.as_deref(), Some("rsa"));
+        assert_eq!(options.bits, Some(4096));
+        assert_eq!(options.kid.as_deref(), Some("release-2026"));
     }
 }

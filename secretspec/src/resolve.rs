@@ -37,9 +37,12 @@ pub enum ResolvedSource {
     Generated,
     /// The manifest's committed `default` value.
     Default,
-    /// Derived from other declared secrets using a strict template.
+    /// Derived from other declared secrets: a strict `composed` template, or a
+    /// `from` conversion or selection. The serialized name remains `composed`
+    /// for wire compatibility.
     ///
-    /// Available since SecretSpec 0.16.
+    /// Template composition is available since SecretSpec 0.16; `from`
+    /// derivation is available since SecretSpec 0.21.
     Composed,
 }
 

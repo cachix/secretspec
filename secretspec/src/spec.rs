@@ -7,11 +7,12 @@
 
 use crate::compiled_spec::CompiledSpec;
 use crate::config::{
-    Config, GenerateConfig, GenerateOptions, NativeAddress, Profile as ConfigProfile,
-    ProfileDefaults, Project, ProviderAlias, RequireReason, Scope, Secret as ConfigSecret,
-    SecretEncoding, SecretExtract,
+    Config, CredentialBinding, GenerateConfig, GenerateOptions, NativeAddress,
+    Profile as ConfigProfile, ProfileDefaults, Project, ProviderAlias, RequireReason, Scope,
+    Secret as ConfigSecret, SecretEncoding, SecretExtract,
 };
 use crate::error::{Result, SecretSpecError};
+use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -775,9 +776,43 @@ impl Secret {
         self
     }
 
-    /// Extract a value from a structured provider result.
+    /// Extract a value from a structured provider result, or from the text of
+    /// the secret named by [`from`](Self::from).
     pub fn extract(mut self, extract: SecretExtract) -> Self {
         self.config.extract = Some(extract);
+        self
+    }
+
+    /// Set the semantic type. For the typed contracts (`x509_identity` and the
+    /// `pkcs12`, `pkcs8_private_key`, `x509_certificate`,
+    /// `x509_certificate_chain`, and `x509_issuer_chain` targets, 0.21+) the
+    /// type governs decoding, conversion, credentials, and delivery.
+    pub fn secret_type(mut self, secret_type: impl Into<String>) -> Self {
+        self.config.secret_type = Some(secret_type.into());
+        self
+    }
+
+    /// Choose the serialization of a typed value that offers more than one,
+    /// such as DER instead of the default PEM (0.21+).
+    pub fn format(mut self, format: crate::typed::Format) -> Self {
+        self.config.format = Some(format.as_str().to_string());
+        self
+    }
+
+    /// Derive this value from another declared secret: convert it with a
+    /// derivable type or select from it with `extract` (0.21+).
+    pub fn from(mut self, source: impl Into<String>) -> Self {
+        self.config.from = Some(source.into());
+        self
+    }
+
+    /// Bind a credential role of this typed value, such as the `password`
+    /// that opens or protects a PKCS#12 archive, to a declared secret (0.21+).
+    pub fn credential(mut self, role: impl Into<String>, secret: impl Into<String>) -> Self {
+        self.config
+            .credentials
+            .get_or_insert_with(BTreeMap::new)
+            .insert(role.into(), CredentialBinding::Secret(secret.into()));
         self
     }
 
@@ -821,6 +856,22 @@ pub enum Generation {
         /// Characters from which the password is drawn.
         charset: PasswordCharset,
     },
+    /// A human-readable passphrase composed from independently selected words (0.21+).
+    Passphrase {
+        /// Word count; `None` uses SecretSpec's seven-word default.
+        words: Option<usize>,
+        /// Text placed between words.
+        separator: String,
+    },
+    /// A checksum-protected recovery mnemonic (0.21+).
+    Mnemonic {
+        /// Mnemonic encoding algorithm.
+        algorithm: MnemonicAlgorithm,
+        /// Word count; `None` uses SecretSpec's 24-word default.
+        words: Option<usize>,
+        /// Word-list language.
+        language: MnemonicLanguage,
+    },
     /// Random bytes rendered as hexadecimal.
     Hex {
         /// Byte count; `None` uses SecretSpec's default.
@@ -856,6 +907,26 @@ pub enum Generation {
         /// Optional comment embedded in the OpenSSH key.
         comment: Option<String>,
     },
+    /// A Base64-encoded WireGuard private key (0.21+).
+    WireguardPrivateKey,
+    /// A private signing key serialized as a JSON Web Key (0.21+).
+    JwkPrivateKey {
+        /// JOSE signing algorithm and optional RSA key size.
+        algorithm: JwkKeyAlgorithm,
+        /// Optional JWK `kid` metadata.
+        kid: Option<String>,
+    },
+    /// A native X25519 age identity (0.21+).
+    AgeIdentity,
+    /// A self-signed P-256 X.509 identity stored as PKCS#12 (0.21+).
+    X509Identity {
+        /// DNS and IP subject alternative names (`dns:name` or `ip:address`).
+        subject_alt_names: Vec<String>,
+        /// Extended key usages placed on the certificate.
+        usages: Vec<X509Usage>,
+        /// Validity in days; `None` uses SecretSpec's 30-day default.
+        valid_for_days: Option<u32>,
+    },
 }
 
 impl Generation {
@@ -864,6 +935,23 @@ impl Generation {
         Self::Password {
             length: None,
             charset: PasswordCharset::Alphanumeric,
+        }
+    }
+
+    /// A seven-word passphrase separated with hyphens (0.21+).
+    pub fn passphrase() -> Self {
+        Self::Passphrase {
+            words: None,
+            separator: "-".to_string(),
+        }
+    }
+
+    /// A 24-word English BIP-39 mnemonic (0.21+).
+    pub fn mnemonic() -> Self {
+        Self::Mnemonic {
+            algorithm: MnemonicAlgorithm::Bip39,
+            words: None,
+            language: MnemonicLanguage::English,
         }
     }
 
@@ -909,6 +997,33 @@ impl Generation {
         }
     }
 
+    /// A Base64-encoded WireGuard private key (0.21+).
+    pub fn wireguard_private_key() -> Self {
+        Self::WireguardPrivateKey
+    }
+
+    /// An Ed25519 private signing JWK (0.21+).
+    pub fn jwk_private_key() -> Self {
+        Self::JwkPrivateKey {
+            algorithm: JwkKeyAlgorithm::Ed25519,
+            kid: None,
+        }
+    }
+
+    /// A native X25519 age identity (0.21+).
+    pub fn age_identity() -> Self {
+        Self::AgeIdentity
+    }
+
+    /// A self-signed P-256 X.509 server identity with a 30-day validity (0.21+).
+    pub fn x509_identity(subject_alt_names: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self::X509Identity {
+            subject_alt_names: subject_alt_names.into_iter().map(Into::into).collect(),
+            usages: vec![X509Usage::ServerAuth],
+            valid_for_days: None,
+        }
+    }
+
     fn into_config(self) -> (&'static str, GenerateConfig) {
         match self {
             Self::Password { length, charset } => (
@@ -916,6 +1031,27 @@ impl Generation {
                 GenerateConfig::Options(GenerateOptions {
                     length,
                     charset: Some(charset.as_str().to_string()),
+                    ..GenerateOptions::default()
+                }),
+            ),
+            Self::Passphrase { words, separator } => (
+                "passphrase",
+                GenerateConfig::Options(GenerateOptions {
+                    words,
+                    separator: Some(separator),
+                    ..GenerateOptions::default()
+                }),
+            ),
+            Self::Mnemonic {
+                algorithm,
+                words,
+                language,
+            } => (
+                "mnemonic",
+                GenerateConfig::Options(GenerateOptions {
+                    algorithm: Some(algorithm.as_str().to_string()),
+                    words,
+                    language: Some(language.as_str().to_string()),
                     ..GenerateOptions::default()
                 }),
             ),
@@ -976,6 +1112,125 @@ impl Generation {
                     ..GenerateOptions::default()
                 }),
             ),
+            Self::WireguardPrivateKey => ("wireguard_private_key", GenerateConfig::Bool(true)),
+            Self::JwkPrivateKey { algorithm, kid } => (
+                "jwk_private_key",
+                GenerateConfig::Options(GenerateOptions {
+                    algorithm: Some(algorithm.as_str().to_string()),
+                    bits: algorithm.bits(),
+                    kid,
+                    ..GenerateOptions::default()
+                }),
+            ),
+            Self::AgeIdentity => ("age_identity", GenerateConfig::Bool(true)),
+            Self::X509Identity {
+                subject_alt_names,
+                usages,
+                valid_for_days,
+            } => (
+                "x509_identity",
+                GenerateConfig::Options(GenerateOptions {
+                    issuer: Some("self_signed".to_string()),
+                    algorithm: Some("p256".to_string()),
+                    san: Some(subject_alt_names),
+                    usages: Some(
+                        usages
+                            .into_iter()
+                            .map(|usage| usage.as_str().to_string())
+                            .collect(),
+                    ),
+                    valid_for: valid_for_days.map(|days| format!("{days}d")),
+                    ..GenerateOptions::default()
+                }),
+            ),
+        }
+    }
+}
+
+/// Extended key usage for a generated X.509 identity.
+///
+/// Available starting with SecretSpec 0.21.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum X509Usage {
+    /// TLS server authentication.
+    ServerAuth,
+    /// TLS client authentication.
+    ClientAuth,
+}
+
+impl X509Usage {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ServerAuth => "server_auth",
+            Self::ClientAuth => "client_auth",
+        }
+    }
+}
+
+/// The encoding algorithm for a generated recovery mnemonic.
+///
+/// Available starting with SecretSpec 0.21.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MnemonicAlgorithm {
+    /// BIP-39 entropy and checksum encoding.
+    Bip39,
+}
+
+impl MnemonicAlgorithm {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Bip39 => "bip39",
+        }
+    }
+}
+
+/// The word-list language for a generated recovery mnemonic.
+///
+/// Available starting with SecretSpec 0.21.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MnemonicLanguage {
+    /// The BIP-39 English word list.
+    English,
+}
+
+impl MnemonicLanguage {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::English => "english",
+        }
+    }
+}
+
+/// The algorithm for a generated private JSON Web Key.
+///
+/// Available starting with SecretSpec 0.21.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum JwkKeyAlgorithm {
+    /// Ed25519 with the fully specified JOSE algorithm `Ed25519` (RFC 9864).
+    Ed25519,
+    /// NIST P-256 with JOSE algorithm `ES256`.
+    P256,
+    /// RSA with JOSE algorithm `RS256`. `None` uses the 3072-bit default.
+    Rsa { bits: Option<usize> },
+}
+
+impl JwkKeyAlgorithm {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ed25519 => "ed25519",
+            Self::P256 => "p256",
+            Self::Rsa { .. } => "rsa",
+        }
+    }
+
+    fn bits(self) -> Option<usize> {
+        match self {
+            Self::Rsa { bits } => bits,
+            Self::Ed25519 | Self::P256 => None,
         }
     }
 }
@@ -1195,6 +1450,78 @@ mod tests {
         assert_eq!(rsa.algorithm.as_deref(), Some("rsa"));
         assert_eq!(rsa.bits, Some(4096));
         assert_eq!(rsa.comment.as_deref(), Some("deploy@example.com"));
+    }
+
+    #[test]
+    fn additional_credential_generation_builders_map_to_document_options() {
+        let (secret_type, GenerateConfig::Options(passphrase)) = Generation::Passphrase {
+            words: Some(8),
+            separator: " ".to_string(),
+        }
+        .into_config() else {
+            panic!("passphrase generation must use options");
+        };
+        assert_eq!(secret_type, "passphrase");
+        assert_eq!(passphrase.words, Some(8));
+        assert_eq!(passphrase.separator.as_deref(), Some(" "));
+
+        let (secret_type, GenerateConfig::Options(mnemonic)) = Generation::Mnemonic {
+            algorithm: MnemonicAlgorithm::Bip39,
+            words: Some(12),
+            language: MnemonicLanguage::English,
+        }
+        .into_config() else {
+            panic!("mnemonic generation must use options");
+        };
+        assert_eq!(secret_type, "mnemonic");
+        assert_eq!(mnemonic.algorithm.as_deref(), Some("bip39"));
+        assert_eq!(mnemonic.words, Some(12));
+        assert_eq!(mnemonic.language.as_deref(), Some("english"));
+
+        let (secret_type, GenerateConfig::Options(default_mnemonic)) =
+            Generation::mnemonic().into_config()
+        else {
+            panic!("mnemonic generation must use options");
+        };
+        assert_eq!(secret_type, "mnemonic");
+        assert_eq!(default_mnemonic.words, None);
+
+        let (secret_type, GenerateConfig::Options(jwk)) = Generation::JwkPrivateKey {
+            algorithm: JwkKeyAlgorithm::Rsa { bits: Some(4096) },
+            kid: Some("release-2026".to_string()),
+        }
+        .into_config() else {
+            panic!("JWK generation must use options");
+        };
+        assert_eq!(secret_type, "jwk_private_key");
+        assert_eq!(jwk.algorithm.as_deref(), Some("rsa"));
+        assert_eq!(jwk.bits, Some(4096));
+        assert_eq!(jwk.kid.as_deref(), Some("release-2026"));
+
+        assert!(matches!(
+            Generation::wireguard_private_key().into_config(),
+            ("wireguard_private_key", GenerateConfig::Bool(true))
+        ));
+        assert!(matches!(
+            Generation::age_identity().into_config(),
+            ("age_identity", GenerateConfig::Bool(true))
+        ));
+
+        let (secret_type, GenerateConfig::Options(x509)) =
+            Generation::x509_identity(["dns:localhost", "ip:127.0.0.1"]).into_config()
+        else {
+            panic!("X.509 generation must use options");
+        };
+        assert_eq!(secret_type, "x509_identity");
+        assert_eq!(x509.algorithm.as_deref(), Some("p256"));
+        assert_eq!(
+            x509.san,
+            Some(vec![
+                "dns:localhost".to_string(),
+                "ip:127.0.0.1".to_string()
+            ])
+        );
+        assert_eq!(x509.usages, Some(vec!["server_auth".to_string()]));
     }
 
     #[test]

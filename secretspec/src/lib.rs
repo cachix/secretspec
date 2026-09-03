@@ -60,7 +60,9 @@ mod resolve;
 mod secrets;
 mod spec;
 mod spec_edit;
+pub(crate) mod typed;
 mod validation;
+mod x509_identity;
 
 pub(crate) mod provider;
 
@@ -99,14 +101,15 @@ pub mod __private {
 
 // Public API exports
 pub use config::{
-    CredentialSource, ExtractFormat, NativeAddress, NativeAddressTemplate, ProviderAlias,
-    ProviderCache, RequireReason, SecretEncoding, SecretExtract,
+    CredentialBinding, CredentialSource, ExtractFormat, NativeAddress, NativeAddressTemplate,
+    ProviderAlias, ProviderCache, RequireReason, SecretEncoding, SecretExtract,
 };
 pub use error::{Result, SecretSpecError};
 pub use native::{INLINE_SPEC_SCHEMA_VERSION, NATIVE_CALL_REQUEST_VERSION, call_json};
 pub use provider::{DiscoveryContext, ProducedValuePersistence, Provider};
 pub use report::{
-    RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus, SecretResolution,
+    Derivation, RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus,
+    SecretResolution,
 };
 pub use resolve::{
     NamedResolution, RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource,
@@ -115,10 +118,14 @@ pub use resolve::{
 pub use secrets::ExportFormat;
 pub use secrets::Secrets;
 pub use spec::{
-    Generation, OpenPgpAlgorithm, OpenPgpCapability, PasswordCharset, Profile, Secret, Spec,
-    SpecBuilder, SshKeyAlgorithm,
+    Generation, JwkKeyAlgorithm, MnemonicAlgorithm, MnemonicLanguage, OpenPgpAlgorithm,
+    OpenPgpCapability, PasswordCharset, Profile, Secret, Spec, SpecBuilder, SshKeyAlgorithm,
+    X509Usage,
 };
+pub use typed::Format;
 pub use validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod typed_tests;

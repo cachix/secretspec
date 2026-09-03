@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/windows-startup.yml"
+  workflow_call:
   workflow_dispatch:
     inputs:
       baseline_tag:

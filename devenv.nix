@@ -69,6 +69,10 @@
     enable = true;
     jdk.package = pkgs.jdk21;
   };
+  languages.elixir = {
+    enable = true;
+    package = pkgs.beam28Packages.elixir_1_19;
+  };
 
   packages = [
     # documentation link validation

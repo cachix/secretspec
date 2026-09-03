@@ -1,0 +1,70 @@
+---
+title: Elixir SDK
+description: Resolve SecretSpec secrets from Elixir
+---
+
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.21" />
+
+The Elixir SDK (`secretspec`) is a thin [Rustler](https://hex.pm/packages/rustler) binding over the shared SecretSpec Rust resolver. Providers, profiles, fallback chains, generated values, and materialized paths remain in the Rust core.
+
+## Install {/* #install-021 */}
+
+<VersionCompatibility version="0.21" />
+
+Add the package to `mix.exs`:
+
+```elixir
+defp deps do
+  [{:secretspec, "~> 0.21"}]
+end
+```
+
+The package includes precompiled NIFs for Linux x64 and arm64, macOS Apple silicon, and Windows x64. It uses RustlerPrecompiled to select the matching native archive.
+
+## Quick start
+
+```elixir
+resolved =
+  SecretSpec.builder()
+  |> SecretSpec.Builder.with_provider("dotenv://.env")
+  |> SecretSpec.Builder.with_reason("start application")
+  |> SecretSpec.Builder.load()
+
+url = resolved.secrets["DATABASE_URL"] |> SecretSpec.ResolvedSecret.get()
+SecretSpec.Resolved.set_as_env(resolved)
+SecretSpec.Resolved.close(resolved)
+```
+
+`SecretSpec.resolve/1` provides the same operation for one-shot calls:
+
+```elixir
+resolved = SecretSpec.resolve(provider: "keyring://", reason: "boot")
+```
+
+A missing required secret raises `SecretSpec.MissingRequiredError`. Other resolver failures raise `SecretSpec.Error` with a stable `kind`.
+
+## Reports
+
+`report/1` performs a value-free preflight and returns status and provenance metadata:
+
+```elixir
+report = SecretSpec.report(path: "secretspec.toml", provider: "dotenv://.env")
+```
+
+## Scopes
+
+Use `with_scope/2` to resolve a named `[scopes.<name>]` subset. The selected name is available as `resolved.scope` and `report.scope`.
+
+## Inline specifications
+
+Use `with_inline_spec/3` when the declaration lives in application code. The base directory controls relative provider paths, while the Rust core validates the strict inline-spec v1 envelope.
+
+## Lifetime and file secrets
+
+Secrets with `as_path = true` are materialized as mode-0400 temporary files. Call `SecretSpec.Resolved.close/1` when the resolved value is no longer needed so those files are removed.
+
+## Native extension
+
+The release package carries precompiled NIF archives for its supported targets.

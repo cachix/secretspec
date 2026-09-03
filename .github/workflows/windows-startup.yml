@@ -1,12 +1,6 @@
 name: "Windows CLI startup diagnostics"
 
 on:
-  # Let the workflow run once while it is first introduced. Subsequent runs
-  # are manual unless the diagnostic workflow itself changes.
-  pull_request:
-    paths:
-      - ".github/workflows/windows-startup.yml"
-  workflow_call:
   workflow_dispatch:
     inputs:
       baseline_tag:

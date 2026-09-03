@@ -7,7 +7,8 @@
 
 use crate::config::{
     Config, GenerateConfig, GenerateOptions, Profile as ConfigProfile, ProfileDefaults, Project,
-    ProviderAlias, RequireReason, Scope, Secret as ConfigSecret, SecretEncoding, SecretExtract,
+    ProjectDefaults, ProviderAlias, RequireReason, Scope, Secret as ConfigSecret, SecretEncoding,
+    SecretExtract,
 };
 use crate::{CallerContext, Secrets, Spec};
 use serde::Deserialize;
@@ -17,7 +18,7 @@ use std::path::PathBuf;
 /// The version of the native call envelope understood by this library.
 pub const NATIVE_CALL_REQUEST_VERSION: u32 = 1;
 /// The version of the JSON inline-declaration document understood by this library.
-pub const INLINE_SPEC_SCHEMA_VERSION: u32 = 1;
+pub const INLINE_SPEC_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -111,9 +112,17 @@ struct InlineSpec {
     project: InlineProject,
     profiles: BTreeMap<String, InlineProfile>,
     #[serde(default)]
+    defaults: Option<InlineProjectDefaults>,
+    #[serde(default)]
     providers: Option<HashMap<String, ProviderAlias>>,
     #[serde(default)]
     scopes: Option<HashMap<String, InlineScope>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InlineProjectDefaults {
+    providers: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -285,6 +294,9 @@ impl InlineSpec {
                     ))
                 })
                 .collect::<std::result::Result<_, _>>()?,
+            defaults: self.defaults.map(|defaults| ProjectDefaults {
+                providers: defaults.providers,
+            }),
             providers: self.providers,
             scopes: self.scopes.map(|scopes| {
                 scopes
@@ -501,7 +513,7 @@ mod tests {
     fn inline_declaration_rejects_unknown_secret_fields() {
         let response: serde_json::Value = serde_json::from_str(&call_json(r#"{
           "request_version": 1, "operation": "resolve",
-          "source": { "kind": "inline", "spec_version": 1, "base_dir": ".", "spec": {
+          "source": { "kind": "inline", "spec_version": 2, "base_dir": ".", "spec": {
             "project": { "name": "inline" },
             "profiles": { "default": { "secrets": { "TOKEN": { "description": "token", "typo": true } } } }
           }}

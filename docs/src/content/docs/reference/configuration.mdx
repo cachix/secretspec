@@ -81,6 +81,29 @@ The reason is recorded in secretspec's own [audit log](/concepts/audit/) and is
 also forwarded to providers that support auditing (e.g. the
 [Proton Pass](/providers/protonpass/) provider records it in the agent audit log).
 
+### [defaults] Section (0.21+)
+
+<VersionCompatibility version="0.21" />
+
+Set one project-wide provider chain for provider-backed secrets that do not
+choose providers themselves or through their active profile:
+
+```toml title="secretspec.toml"
+[defaults]
+providers = ["developer"]
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `providers` | array[string] | Yes | Non-empty default provider chain for every profile. Entries may be aliases, provider names, or provider URIs. |
+
+Project defaults deliberately accept only `providers`: a literal fallback value
+or requiredness policy rarely makes sense for every secret in every profile.
+The chain may name an alias defined in the project `[providers]` table or only
+in the current user's `[defaults.providers]` table. A secret-level chain wins,
+followed by `[profiles.<name>.defaults].providers`, this project default, and
+finally the user-global default provider.
+
 ### [profiles.*] Section
 
 Defines secret variables for different environments. At least one profile is
@@ -107,7 +130,7 @@ profile:
 | `inherit` (0.19+) | boolean | No | For a non-default profile, whether to inherit declarations and omitted fields from `[profiles.default]` (default: true) |
 | `required` | boolean | No | Default requiredness for secrets declared in this profile |
 | `default` | string | No | Default value for secrets declared in this profile |
-| `providers` | array[string] | No | Default provider chain for secrets declared in this profile |
+| `providers` | array[string] | No | Default provider chain for secrets declared in this profile. Overrides project `[defaults].providers` in 0.21+. |
 
 In SecretSpec 0.19+, set `inherit = false` for a standalone profile:
 

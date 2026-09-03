@@ -1031,6 +1031,7 @@ pub fn main() -> Result<()> {
                     ..Default::default()
                 },
                 profiles,
+                defaults: None,
                 providers: None,
                 scopes: None,
             };
@@ -1835,6 +1836,7 @@ mod tests {
         let mut secrets = HashMap::new();
         secrets.insert("S".to_string(), secret);
         Config {
+            defaults: None,
             project: Project {
                 name: "myproj".to_string(),
                 ..Default::default()
@@ -2073,6 +2075,7 @@ mod tests {
         // project name contains a quote. Before escaping was added these produced
         // malformed TOML that failed to parse back.
         let config = Config {
+            defaults: None,
             project: Project {
                 name: "weird \"name\"".to_string(),
                 ..Default::default()

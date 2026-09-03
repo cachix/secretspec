@@ -179,7 +179,7 @@ public sealed class SecretSpecBuilder
             writer.WritePropertyName("source");
             writer.WriteStartObject();
             writer.WriteString("kind", "inline");
-            writer.WriteNumber("spec_version", 1);
+            writer.WriteNumber("spec_version", 2);
             writer.WriteString("base_dir", _inlineBaseDir);
             writer.WritePropertyName("spec");
             _inlineSpec.WriteTo(writer);

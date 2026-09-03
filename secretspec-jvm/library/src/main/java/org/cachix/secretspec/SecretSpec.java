@@ -247,7 +247,7 @@ public class SecretSpec {
 
             var source = root.putObject("source");
             source.put("kind", "inline");
-            source.put("spec_version", 1);
+            source.put("spec_version", 2);
             source.put("base_dir", inlineBaseDir);
             source.set("spec", inlineSpec);
 

@@ -292,6 +292,7 @@ mod tests {
             );
         }
         Config {
+            defaults: None,
             project: Project {
                 name: "ir-test".to_string(),
                 ..Default::default()

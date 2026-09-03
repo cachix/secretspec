@@ -45,6 +45,7 @@ fn parse_spec_from_str(content: &str, _base_path: Option<&Path>) -> Result<Confi
 #[test]
 fn test_new_with_project_config() {
     let config = Config {
+        defaults: None,
         project: Project {
             name: "test-project".to_string(),
             ..Default::default()
@@ -208,6 +209,7 @@ require_reason = false
 #[test]
 fn test_new_with_default_overrides() {
     let config = Config {
+        defaults: None,
         project: Project {
             name: "test-project".to_string(),
             ..Default::default()
@@ -395,6 +397,7 @@ fn test_resolution_report_provenance() {
     );
 
     let config = Config {
+        defaults: None,
         project: Project {
             name: "report-test".to_string(),
             ..Default::default()
@@ -480,6 +483,7 @@ fn profile_presence_constraints_validate_resolved_values() {
             ..Default::default()
         };
         let config = Config {
+            defaults: None,
             project: Project {
                 name: "constraint-test".to_string(),
                 ..Default::default()
@@ -581,6 +585,7 @@ pub(crate) fn resolve_test_config(secrets: HashMap<String, Secret>) -> Config {
         },
     );
     Config {
+        defaults: None,
         project: Project {
             name: "resolve-test".to_string(),
             ..Default::default()
@@ -1475,6 +1480,7 @@ fn test_chain_primary_error_surfaces_instead_of_missing() {
 #[test]
 fn test_secretspec_new() {
     let config = Config {
+        defaults: None,
         project: Project {
             name: "test".to_string(),
             ..Default::default()
@@ -1518,6 +1524,7 @@ fn test_resolve_profile() {
 
     let spec = Secrets::new(
         Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -1540,6 +1547,7 @@ fn test_resolve_profile() {
     // Test without global config
     let spec_no_global = Secrets::new(
         Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -1612,6 +1620,7 @@ fn test_resolve_secret_config() {
 
     let spec = Secrets::new(
         Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -1653,6 +1662,7 @@ fn test_resolve_secret_config() {
 fn test_get_provider_error_cases() {
     let spec = Secrets::new(
         Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -1684,6 +1694,7 @@ fn test_get_provider_with_global_config() {
 
     let spec = Secrets::new(
         Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -2817,6 +2828,7 @@ NEW_SECRET = { description = "New secret", required = true }
 #[test]
 fn test_set_with_undefined_secret() {
     let project_config = Config {
+        defaults: None,
         project: Project {
             name: "test_project".to_string(),
             ..Default::default()
@@ -2889,6 +2901,7 @@ fn test_set_with_defined_secret() {
     env::set_current_dir(&temp_dir).unwrap();
 
     let project_config = Config {
+        defaults: None,
         project: Project {
             name: "test_project".to_string(),
             ..Default::default()
@@ -2944,6 +2957,7 @@ fn test_set_with_defined_secret() {
 #[test]
 fn test_set_with_readonly_provider() {
     let project_config = Config {
+        defaults: None,
         project: Project {
             name: "test_project".to_string(),
             ..Default::default()
@@ -3006,6 +3020,7 @@ fn test_import_between_dotenv_files() {
 
     // Create project config
     let project_config = Config {
+        defaults: None,
         project: Project {
             name: "test_import_project".to_string(),
             ..Default::default()
@@ -3138,6 +3153,7 @@ fn test_import_edge_cases() {
 
     // Create project config
     let project_config = Config {
+        defaults: None,
         project: Project {
             name: "test_edge_cases".to_string(),
             ..Default::default()
@@ -3375,6 +3391,7 @@ fn test_import_with_profiles() {
 
     // Create project config with multiple profiles
     let project_config = Config {
+        defaults: None,
         project: Project {
             name: "test_profiles".to_string(),
             ..Default::default()
@@ -3509,6 +3526,7 @@ fn test_run_with_empty_command() {
 
     let spec = Secrets::new(
         Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -3572,6 +3590,7 @@ fn test_run_with_missing_required_secrets() {
 
     let spec = Secrets::new(
         Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -3633,6 +3652,7 @@ fn test_get_existing_secret() {
 
     let spec = Secrets::new(
         Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -3688,6 +3708,7 @@ fn test_get_secret_with_default() {
 
     let spec = Secrets::new(
         Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -3742,6 +3763,7 @@ fn test_get_nonexistent_secret() {
 
     let spec = Secrets::new(
         Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -3913,6 +3935,7 @@ fn test_per_secret_provider_configuration() {
     );
 
     let config = Config {
+        defaults: None,
         project: Project {
             name: "test_per_secret_provider".to_string(),
             ..Default::default()
@@ -3967,6 +3990,7 @@ fn test_provider_alias_resolution() {
 
     let spec = Secrets::new(
         Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -4008,6 +4032,7 @@ fn test_provider_alias_not_found() {
 
     let spec = Secrets::new(
         Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -4082,6 +4107,7 @@ fn test_per_secret_provider_with_fallback_chain() {
     );
 
     let config = Config {
+        defaults: None,
         project: Project {
             name: "test_fallback".to_string(),
             ..Default::default()
@@ -4176,6 +4202,7 @@ fn test_get_secret_with_fallback_chain() {
     );
 
     let config = Config {
+        defaults: None,
         project: Project {
             name: "test_fallback_integration".to_string(),
             ..Default::default()
@@ -4260,6 +4287,7 @@ fn fallback_chains_resolve_concurrently_under_the_provider_cap() {
         })
         .collect();
     let config = Config {
+        defaults: None,
         project: Project {
             name: PROJECT.to_string(),
             ..Default::default()
@@ -4302,6 +4330,7 @@ fn fallback_chains_resolve_concurrently_under_the_provider_cap() {
 
 fn stateful_fallback_spec(project: &str, secret_name: &str, primary_file: &Path) -> Secrets {
     let config = Config {
+        defaults: None,
         project: Project {
             name: project.to_string(),
             ..Default::default()
@@ -4477,6 +4506,7 @@ fn test_validate_falls_back_on_primary_provider_error() {
     );
 
     let config = Config {
+        defaults: None,
         project: Project {
             name: "test_error_fallback".to_string(),
             ..Default::default()
@@ -4547,6 +4577,7 @@ fn test_validate_surfaces_error_when_all_providers_fail() {
     );
 
     let config = Config {
+        defaults: None,
         project: Project {
             name: "test_all_fail".to_string(),
             ..Default::default()
@@ -4642,6 +4673,7 @@ fn test_validate_with_per_secret_providers() {
     );
 
     let config = Config {
+        defaults: None,
         project: Project {
             name: "test_multi_provider".to_string(),
             ..Default::default()
@@ -4771,6 +4803,7 @@ fn test_secret_config_merges_providers_from_default() {
     );
 
     let config = Config {
+        defaults: None,
         project: Project {
             name: "test_merge".to_string(),
             ..Default::default()
@@ -6349,6 +6382,7 @@ fn test_resolve_secret_config_merges_type_and_generate() {
     );
 
     let config = Config {
+        defaults: None,
         project: Project {
             name: "test".to_string(),
             ..Default::default()
@@ -6383,6 +6417,7 @@ fn build_chain_scenario(
     fs::write(&team_path, "").unwrap();
 
     let config = Config {
+        defaults: None,
         project: Project {
             name: "test_project".to_string(),
             ..Default::default()
@@ -6904,6 +6939,7 @@ pub(crate) fn aliases_map(aliases: &[(&str, &str)]) -> HashMap<String, ProviderA
 
 fn config_with_project_aliases(aliases: &[(&str, &str)]) -> Config {
     Config {
+        defaults: None,
         project: Project {
             name: "alias-test".to_string(),
             ..Default::default()
@@ -6951,6 +6987,7 @@ fn config_with_project_alias_secret(
     );
 
     Config {
+        defaults: None,
         project: Project {
             name: "alias-validation".to_string(),
             ..Default::default()
@@ -7887,6 +7924,7 @@ fn dotenv_spec(
     fs::write(&env_file, env_contents).unwrap();
     Secrets::new(
         Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -8350,6 +8388,7 @@ fn audit_set_provider_construction_failure_records_error() {
 #[test]
 fn audit_set_readonly_provider_records_error() {
     let project_config = Config {
+        defaults: None,
         project: Project {
             name: "test".to_string(),
             ..Default::default()
@@ -11091,6 +11130,7 @@ fn a_built_provider_carries_the_operation_profile() {
     use crate::provider::Address;
 
     let config = Config {
+        defaults: None,
         project: Project {
             name: "myapp".to_string(),
             ..Default::default()
@@ -11133,6 +11173,7 @@ fn a_credential_source_provider_gets_no_profile() {
     use crate::provider::Address;
 
     let config = Config {
+        defaults: None,
         project: Project {
             name: "myapp".to_string(),
             ..Default::default()

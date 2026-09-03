@@ -8,8 +8,8 @@
 use crate::compiled_spec::CompiledSpec;
 use crate::config::{
     Config, GenerateConfig, GenerateOptions, NativeAddress, Profile as ConfigProfile,
-    ProfileDefaults, Project, ProviderAlias, RequireReason, Scope, Secret as ConfigSecret,
-    SecretEncoding, SecretExtract,
+    ProfileDefaults, Project, ProjectDefaults, ProviderAlias, RequireReason, Scope,
+    Secret as ConfigSecret, SecretEncoding, SecretExtract,
 };
 use crate::error::{Result, SecretSpecError};
 use std::collections::{HashMap, HashSet};
@@ -227,6 +227,7 @@ impl SpecBuilder {
                     ..Project::default()
                 },
                 profiles: HashMap::new(),
+                defaults: None,
                 providers: None,
                 scopes: None,
             },
@@ -440,6 +441,23 @@ impl SpecBuilder {
             self.errors
                 .push(format!("duplicate provider alias '{name}'"));
         }
+        self.refresh_effective_config();
+        self
+    }
+
+    /// Set the provider chain used across profiles when neither a profile nor
+    /// a secret selects one. Available starting with SecretSpec 0.21.
+    ///
+    /// This semantic edit clears any retained source document.
+    pub fn default_providers<I, S>(mut self, providers: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.source = None;
+        self.declarations_mut().defaults = Some(ProjectDefaults {
+            providers: providers.into_iter().map(Into::into).collect(),
+        });
         self.refresh_effective_config();
         self
     }
@@ -1085,6 +1103,7 @@ mod tests {
     #[test]
     fn rust_builder_and_toml_compile_to_the_same_shape() {
         let rust = Spec::builder("embedded")
+            .default_providers(["keyring"])
             .secret("TOKEN", Secret::required("API token").providers(["env"]))
             .secret("OPTIONAL", Secret::optional("Optional value"))
             .profile(
@@ -1100,6 +1119,9 @@ mod tests {
                 [project]
                 name = "embedded"
                 revision = "1.0"
+
+                [defaults]
+                providers = ["keyring"]
 
                 [profiles.default]
                 TOKEN = { description = "API token", required = true, providers = ["env"] }
@@ -1125,6 +1147,16 @@ mod tests {
                 toml.secrets(profile).unwrap().collect::<Vec<_>>()
             );
         }
+        assert_eq!(
+            rust.config
+                .defaults
+                .as_ref()
+                .map(|defaults| &defaults.providers),
+            toml.config
+                .defaults
+                .as_ref()
+                .map(|defaults| &defaults.providers)
+        );
     }
 
     #[test]

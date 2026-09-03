@@ -157,6 +157,10 @@ revision = "1.0"
 # Optional: extend other configuration files
 extends = ["../shared/common", "../shared/auth"]
 
+# SecretSpec 0.21+: use one provider chain unless a profile or secret overrides it.
+[defaults]
+providers = ["developer"]
+
 [profiles.default]
 DATABASE_URL = { description = "PostgreSQL connection string" }
 REDIS_URL = { description = "Redis connection string" }

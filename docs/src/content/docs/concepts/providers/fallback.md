@@ -15,11 +15,12 @@ SecretSpec selects each secret's route in this order:
 2. The `SECRETSPEC_PROVIDER` environment variable.
 3. The secret's effective `providers` list after profile inheritance and
    `[profiles.<name>.defaults]` are applied.
-4. The default provider in the user configuration.
+4. Project `[defaults].providers` (0.21+).
+5. The default provider in the user configuration.
 
 `--provider` and `SECRETSPEC_PROVIDER` replace the configured route for every
-secret. Without an override or effective `providers` list, SecretSpec uses the
-user-level default.
+secret. Without an override, effective `providers` list, or project default
+chain (0.21+), SecretSpec uses the user-level default.
 
 ## Ordered fallback routes
 
@@ -31,6 +32,9 @@ from left to right:
 prod_vault = "onepassword://Production"
 local = "keyring://"
 
+[defaults] # 0.21+
+providers = ["local"]
+
 [profiles.production.defaults]
 providers = ["prod_vault", "local"]
 
@@ -40,6 +44,10 @@ DATABASE_URL = { description = "Production database" }
 
 # Overrides the profile default and reads only from the environment.
 DEPLOY_TOKEN = { description = "Deployment token", providers = ["env"] }
+
+[profiles.development]
+# Uses the project default provider chain in SecretSpec 0.21+.
+DATABASE_URL = { description = "Development database" }
 ```
 
 Reads stop at the first value. Writes and generated values go only to the first

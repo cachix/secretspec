@@ -92,7 +92,8 @@ pub mod __private {
     }
 
     pub use crate::config::{
-        Config, GenerateConfig, GenerateOptions, Profile, ProfileDefaults, Project, Secret,
+        Config, GenerateConfig, GenerateOptions, Profile, ProfileDefaults, Project,
+        ProjectDefaults, Secret,
     };
     pub use crate::spec::load_for_codegen;
 }

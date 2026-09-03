@@ -216,7 +216,7 @@ public struct SecretSpecBuilder: Sendable {
                     "request_version": 1,
                     "operation": "resolve",
                     "source": [
-                        "kind": "inline", "spec_version": 1,
+                        "kind": "inline", "spec_version": 2,
                         "base_dir": inline.baseDir, "spec": declaration,
                     ],
                     "options": try JSONSerialization.jsonObject(with: JSONEncoder().encode(configured)),

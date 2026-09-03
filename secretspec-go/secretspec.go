@@ -433,7 +433,7 @@ func (b *Builder) execute(mode string) (string, error) {
 		"request_version": 1,
 		"operation":       "resolve",
 		"source": map[string]any{
-			"kind": "inline", "spec_version": 1,
+			"kind": "inline", "spec_version": 2,
 			"base_dir": b.inline.baseDir, "spec": b.inline.spec,
 		},
 		"options": options,

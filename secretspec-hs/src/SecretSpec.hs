@@ -329,7 +329,7 @@ requestBytes b mode =
       , "operation" .= ("resolve" :: Text)
       , "source" .= object
           [ "kind" .= ("inline" :: Text)
-          , "spec_version" .= (1 :: Int)
+          , "spec_version" .= (2 :: Int)
           , "base_dir" .= baseDir
           , "spec" .= spec
           ]

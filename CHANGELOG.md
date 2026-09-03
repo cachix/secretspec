@@ -100,9 +100,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Codex can retrieve OpenAI and compatible gateway API keys from any SecretSpec
   provider through native command-backed model-provider authentication.
   `secretspec codex configure` and `unconfigure` safely preserve unrelated user
-  configuration and the previous model provider; `login` and `logout` manage
-  credentials isolated by Codex home and API endpoint. ChatGPT OAuth and Codex
-  access-token lifecycle remain managed by Codex (0.21+).
+  configuration—including inline model-provider tables—and the previous model
+  provider. Blank stored overrides are rejected, and `login` only accepts an
+  active integration while `logout` remains available after unconfiguration.
+  Credentials are isolated by Codex home and API endpoint. ChatGPT OAuth and
+  Codex access-token lifecycle remain managed by Codex (0.21+).
 
 - The age provider supports deleting secrets in 0.20+: `secretspec delete`,
   `secretspec import --delete-source`, and cache invalidation now work with it,

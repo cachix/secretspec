@@ -335,6 +335,7 @@ fn configure(options: ConfigureOptions<'_>) -> Result<()> {
             true
         }
     };
+    validate_state(&state, &state_file)?;
     if !state_changed && !config_changed {
         println!(
             "Codex API-key integration is already configured in {}.",
@@ -416,6 +417,11 @@ fn login(
     caller: &Option<CallerContext>,
 ) -> Result<()> {
     let managed = lifecycle_config(file)?;
+    if !managed.configured {
+        return Err(miette!(
+            "Codex API-key integration is not active; rerun secretspec codex configure"
+        ));
+    }
     let (secrets, secret) =
         embedded_cli_secrets(&managed, provider.as_deref(), reason, caller, "login")?;
     let value = read_credential("Enter Codex API or gateway key:")?;
@@ -802,7 +808,7 @@ fn provider_entry<'a>(config: &'a DocumentMut, id: &str, path: &Path) -> Result<
     let Some(providers) = config.as_table().get("model_providers") else {
         return Ok(None);
     };
-    let providers = providers.as_table().ok_or_else(|| {
+    let providers = providers.as_table_like().ok_or_else(|| {
         miette!(
             "Codex model_providers in {} must be a table",
             path.display()
@@ -811,7 +817,10 @@ fn provider_entry<'a>(config: &'a DocumentMut, id: &str, path: &Path) -> Result<
     Ok(providers.get(id))
 }
 
-fn providers_table_mut<'a>(config: &'a mut DocumentMut, path: &Path) -> Result<&'a mut Table> {
+fn providers_table_mut<'a>(
+    config: &'a mut DocumentMut,
+    path: &Path,
+) -> Result<&'a mut dyn toml_edit::TableLike> {
     if !config.as_table().contains_key("model_providers") {
         config
             .as_table_mut()
@@ -820,7 +829,7 @@ fn providers_table_mut<'a>(config: &'a mut DocumentMut, path: &Path) -> Result<&
     config
         .as_table_mut()
         .get_mut("model_providers")
-        .and_then(Item::as_table_mut)
+        .and_then(Item::as_table_like_mut)
         .ok_or_else(|| {
             miette!(
                 "Codex model_providers in {} must be a table",
@@ -936,6 +945,11 @@ fn parse_state(contents: Option<&[u8]>, path: &Path) -> Result<ManagedState> {
     let state: ManagedState = serde_json::from_slice(contents)
         .into_diagnostic()
         .wrap_err_with(|| format!("Failed to parse {}", path.display()))?;
+    validate_state(&state, path)?;
+    Ok(state)
+}
+
+fn validate_state(state: &ManagedState, path: &Path) -> Result<()> {
     if state.version != STATE_VERSION {
         return Err(miette!(
             "Unsupported Codex integration state version {} in {}",
@@ -1004,10 +1018,11 @@ fn parse_state(contents: Option<&[u8]>, path: &Path) -> Result<ManagedState> {
             ));
         }
     }
-    Ok(state)
+    Ok(())
 }
 
 fn write_state(path: &Path, state: &ManagedState) -> Result<()> {
+    validate_state(state, path)?;
     let mut contents = serde_json::to_vec_pretty(state).into_diagnostic()?;
     contents.push(b'\n');
     write_bytes_atomically(path, &contents, true)

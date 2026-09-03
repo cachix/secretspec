@@ -236,6 +236,39 @@ fn configure_and_unconfigure_preserve_unrelated_codex_configuration() {
 }
 
 #[test]
+fn configure_and_unconfigure_support_inline_model_providers() {
+    let fixture = Fixture::new();
+    fs::write(
+        &fixture.config,
+        r#"model = "gpt-5.4"
+model_provider = "existing"
+model_providers = { existing = { name = "Existing provider", base_url = "https://existing.example/v1", wire_api = "responses", env_key = "EXISTING_API_KEY" } }
+"#,
+    )
+    .unwrap();
+
+    assert_success("Codex configure", &fixture.configure("null"));
+    let configured = parse_toml(&fixture.config);
+    let managed = configured["model_provider"].as_str().unwrap();
+    assert!(managed.starts_with("secretspec-"));
+    assert_eq!(
+        configured["model_providers"]["existing"]["base_url"].as_str(),
+        Some("https://existing.example/v1")
+    );
+    assert!(configured["model_providers"].get(managed).is_some());
+
+    let output = fixture
+        .command()
+        .args(["codex", "unconfigure", "--yes"])
+        .output()
+        .unwrap();
+    assert_success("Codex unconfigure", &output);
+    let restored = parse_toml(&fixture.config);
+    assert_eq!(restored["model_provider"].as_str(), Some("existing"));
+    assert_eq!(restored["model_providers"].as_table().unwrap().len(), 1);
+}
+
+#[test]
 fn embedded_login_credential_and_logout_reuse_the_configured_provider() {
     let fixture = Fixture::new();
     let store = fixture.root.join("codex.env");
@@ -454,6 +487,29 @@ fn logout_remains_available_after_unconfigure() {
 }
 
 #[test]
+fn login_is_rejected_after_unconfigure() {
+    let fixture = Fixture::new();
+    let store = fixture.root.join("codex.env");
+    let provider = format!("dotenv://{}", store.display());
+    assert_success("Codex configure", &fixture.configure(&provider));
+    let output = fixture
+        .command()
+        .args(["codex", "unconfigure", "--yes"])
+        .output()
+        .unwrap();
+    assert_success("Codex unconfigure", &output);
+
+    let output = command_with_stdin(
+        fixture.command(),
+        &["codex", "login"],
+        b"should-not-be-stored\n",
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("is not active"));
+    assert!(!store.exists());
+}
+
+#[test]
 fn configured_gateway_is_used_for_identity_and_audit_context() {
     let fixture = Fixture::new();
     let store = fixture.root.join("codex.env");
@@ -530,6 +586,45 @@ fn ambient_provider_is_not_persisted() {
     assert_success("ambient-provider Codex configure", &output);
     assert!(String::from_utf8_lossy(&output.stdout).contains("was not recorded"));
     assert!(fixture.state()["configs"][0]["provider"].is_null());
+}
+
+#[test]
+fn blank_provider_is_rejected_without_writing_configuration() {
+    let fixture = Fixture::new();
+    let original = fs::read(&fixture.config).unwrap();
+    let output = fixture.configure("");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Invalid Codex provider"));
+    assert_eq!(fs::read(&fixture.config).unwrap(), original);
+    assert!(!fixture.state_path().exists());
+}
+
+#[test]
+fn blank_custom_manifest_profile_is_rejected_without_writing_configuration() {
+    let fixture = Fixture::new();
+    let original = fs::read(&fixture.config).unwrap();
+    let output = fixture
+        .command()
+        .arg("--file")
+        .arg(&fixture.manifest)
+        .args([
+            "codex",
+            "configure",
+            "--yes",
+            "--token-secret",
+            "OPENAI_TOKEN",
+            "--profile",
+            "",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("Invalid Codex manifest credential source")
+    );
+    assert_eq!(fs::read(&fixture.config).unwrap(), original);
+    assert!(!fixture.state_path().exists());
 }
 
 #[test]

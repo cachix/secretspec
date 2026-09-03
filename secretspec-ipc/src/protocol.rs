@@ -8,9 +8,14 @@ pub const PROVIDER_PROTOCOL: &str = "secretspec.provider";
 pub const PROTOCOL_VERSION: u32 = 1;
 
 pub mod rpc {
+    /// Return this endpoint's OpenRPC description without initializing
+    /// application state (0.20+).
+    pub const DISCOVER: &str = "rpc.discover";
     pub const INITIALIZE: &str = "rpc.initialize";
     pub const CANCEL: &str = "rpc.cancel";
     pub const SHUTDOWN: &str = "rpc.shutdown";
+
+    pub const ALL: &[&str] = &[DISCOVER, INITIALIZE, CANCEL, SHUTDOWN];
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

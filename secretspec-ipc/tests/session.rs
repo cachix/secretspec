@@ -5,6 +5,7 @@ use secretspec_ipc::protocol::{InitializeParams, Limits, Product};
 use secretspec_ipc::server::{ApplicationHandler, RequestContext, RpcResult, ServerConfig, serve};
 use serde_json::{Value, json};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 struct Echo;
@@ -119,6 +120,202 @@ async fn initializes_calls_and_shuts_down() {
         .await
         .unwrap();
     server.await.unwrap().unwrap();
+}
+
+struct DiscoveryWitness {
+    initialized: AtomicUsize,
+    shutdown: AtomicUsize,
+}
+
+#[async_trait]
+impl ApplicationHandler for DiscoveryWitness {
+    fn protocol(&self) -> &'static str {
+        "secretspec.resolver"
+    }
+
+    fn capabilities(&self) -> Vec<String> {
+        vec!["resolver.get".into(), "resolver.release".into()]
+    }
+
+    async fn initialize(&self, _context: &RequestContext, application: Value) -> RpcResult<Value> {
+        self.initialized.fetch_add(1, Ordering::SeqCst);
+        Ok(application)
+    }
+
+    async fn call(
+        &self,
+        _context: RequestContext,
+        _method: &str,
+        params: Value,
+    ) -> RpcResult<Value> {
+        Ok(params)
+    }
+
+    async fn shutdown(&self) {
+        self.shutdown.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[tokio::test]
+async fn discovery_is_side_effect_free_before_and_available_after_initialization() {
+    let (mut client_io, server_io) = tokio::io::duplex(256 * 1024);
+    let (server_read, server_write) = tokio::io::split(server_io);
+    let witness = Arc::new(DiscoveryWitness {
+        initialized: AtomicUsize::new(0),
+        shutdown: AtomicUsize::new(0),
+    });
+    let server = tokio::spawn(serve(
+        server_read,
+        server_write,
+        witness.clone(),
+        ServerConfig {
+            product: Product {
+                name: "discovery-test".into(),
+                version: "20".into(),
+            },
+            ..ServerConfig::default()
+        },
+    ));
+
+    let expired = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "rpc.discover",
+        "_meta": {"deadline_unix_ms": 1},
+        "params": {},
+    });
+    write_frame(
+        &mut client_io,
+        &serde_json::to_vec(&expired).unwrap(),
+        1_048_576,
+    )
+    .await
+    .unwrap();
+    let expired_reply = read_frame(&mut client_io, 1_048_576)
+        .await
+        .unwrap()
+        .unwrap();
+    let expired_reply: Value = serde_json::from_slice(&expired_reply).unwrap();
+    assert_eq!(expired_reply["error"]["data"]["kind"], "deadline_exceeded");
+
+    let discover = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "rpc.discover",
+        "_meta": {"deadline_unix_ms": deadline(Duration::from_secs(2))},
+        "params": {},
+    });
+    write_frame(
+        &mut client_io,
+        &serde_json::to_vec(&discover).unwrap(),
+        1_048_576,
+    )
+    .await
+    .unwrap();
+    let discovered = read_frame(&mut client_io, 1_048_576)
+        .await
+        .unwrap()
+        .unwrap();
+    let discovered: Value = serde_json::from_slice(&discovered).unwrap();
+    assert_eq!(discovered["result"]["openrpc"], "1.3.2");
+    assert_eq!(
+        discovered["result"]["x-secretspec"]["protocol"],
+        "secretspec.resolver"
+    );
+    assert_eq!(
+        discovered["result"]["x-secretspec"]["server"]["name"],
+        "discovery-test"
+    );
+    assert_eq!(
+        discovered["result"]["x-secretspec"]["methods"],
+        json!(["resolver.get", "resolver.release"])
+    );
+    assert!(
+        discovered["result"]["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|method| method["name"] == "rpc.discover")
+    );
+    assert!(discovered["result"]["components"]["schemas"].is_object());
+    assert_eq!(witness.initialized.load(Ordering::SeqCst), 0);
+    assert_eq!(witness.shutdown.load(Ordering::SeqCst), 0);
+
+    let initialize = json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "rpc.initialize",
+        "_meta": {"deadline_unix_ms": deadline(Duration::from_secs(2))},
+        "params": {
+            "protocol": "secretspec.resolver",
+            "versions": [1],
+            "client": {"name": "test", "version": "1"},
+            "limits": {"max_frame_bytes": 256 * 1024, "max_in_flight": 4},
+            "application": {},
+        },
+    });
+    write_frame(
+        &mut client_io,
+        &serde_json::to_vec(&initialize).unwrap(),
+        1_048_576,
+    )
+    .await
+    .unwrap();
+    let initialized = read_frame(&mut client_io, 1_048_576)
+        .await
+        .unwrap()
+        .unwrap();
+    let initialized: Value = serde_json::from_slice(&initialized).unwrap();
+    assert!(initialized.get("result").is_some());
+    assert_eq!(witness.initialized.load(Ordering::SeqCst), 1);
+
+    let discover_again = json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "rpc.discover",
+        "_meta": {"deadline_unix_ms": deadline(Duration::from_secs(2))},
+        "params": {},
+    });
+    write_frame(
+        &mut client_io,
+        &serde_json::to_vec(&discover_again).unwrap(),
+        256 * 1024,
+    )
+    .await
+    .unwrap();
+    let discovered_again = read_frame(&mut client_io, 256 * 1024)
+        .await
+        .unwrap()
+        .unwrap();
+    let discovered_again: Value = serde_json::from_slice(&discovered_again).unwrap();
+    assert_eq!(
+        discovered_again["result"]["x-secretspec"]["protocol"],
+        "secretspec.resolver"
+    );
+    assert_eq!(witness.initialized.load(Ordering::SeqCst), 1);
+
+    let shutdown = json!({
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "rpc.shutdown",
+        "_meta": {"deadline_unix_ms": deadline(Duration::from_secs(2))},
+        "params": {},
+    });
+    write_frame(
+        &mut client_io,
+        &serde_json::to_vec(&shutdown).unwrap(),
+        256 * 1024,
+    )
+    .await
+    .unwrap();
+    let shutdown_reply = read_frame(&mut client_io, 256 * 1024)
+        .await
+        .unwrap()
+        .unwrap();
+    let shutdown_reply: Value = serde_json::from_slice(&shutdown_reply).unwrap();
+    assert!(shutdown_reply.get("result").is_some());
+    server.await.unwrap().unwrap();
+    assert_eq!(witness.shutdown.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

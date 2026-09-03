@@ -276,7 +276,11 @@ struct WriterCommand {
     committed: Option<oneshot::Sender<std::result::Result<(), ()>>>,
 }
 
-/// Serve exactly one initialized application session on a private byte stream.
+/// Serve exactly one application session on a private byte stream.
+///
+/// Before application initialization, a peer may issue side-effect-free
+/// `rpc.discover` requests. No application method is dispatched until
+/// `rpc.initialize` succeeds.
 pub async fn serve<R, W, H>(
     reader: R,
     mut writer: W,
@@ -381,6 +385,21 @@ where
                 last_seen_id = Some(request.id);
 
                 if !initialized {
+                    if request.method == rpc::DISCOVER {
+                        if let Err(error) = discover(
+                            &request,
+                            handler.as_ref(),
+                            &config,
+                            &writer_tx,
+                            active_limit,
+                        )
+                        .await
+                        {
+                            fatal = Some(error);
+                            break;
+                        }
+                        continue;
+                    }
                     if request.method != rpc::INITIALIZE {
                         let response = Response::error(
                             Some(request.id),
@@ -423,6 +442,22 @@ where
                         Response::error(Some(request.id), RpcError::new(ErrorKind::InvalidRequest));
                     let _ = commit(&writer_tx, response, active_limit).await;
                     break;
+                }
+
+                if request.method == rpc::DISCOVER {
+                    if let Err(error) = discover(
+                        &request,
+                        handler.as_ref(),
+                        &config,
+                        &writer_tx,
+                        active_limit,
+                    )
+                    .await
+                    {
+                        fatal = Some(error);
+                        break;
+                    }
+                    continue;
                 }
 
                 if request.method == rpc::SHUTDOWN {
@@ -542,6 +577,53 @@ where
         Some(error) => Err(error),
         None => Ok(()),
     }
+}
+
+async fn discover<H: ApplicationHandler>(
+    request: &Request,
+    handler: &H,
+    config: &ServerConfig,
+    writer: &mpsc::Sender<WriterCommand>,
+    limit: usize,
+) -> Result<()> {
+    let _: EmptyParams = match serde_json::from_value(request.params.clone()) {
+        Ok(params) => params,
+        Err(_) => {
+            return commit(
+                writer,
+                Response::error(Some(request.id), RpcError::new(ErrorKind::InvalidParams)),
+                limit,
+            )
+            .await;
+        }
+    };
+    if request_deadline(request) <= Instant::now() {
+        return commit(
+            writer,
+            Response::error(Some(request.id), RpcError::new(ErrorKind::DeadlineExceeded)),
+            limit,
+        )
+        .await;
+    }
+
+    let methods = handler.capabilities();
+    if crate::protocol::validate_capabilities(&methods).is_err()
+        || handler.validate_capabilities(&methods).is_err()
+    {
+        return commit(
+            writer,
+            Response::error(Some(request.id), RpcError::new(ErrorKind::Internal)),
+            limit,
+        )
+        .await;
+    }
+    let document = crate::description::openrpc(
+        handler.protocol(),
+        handler.versions(),
+        &config.product,
+        &methods,
+    )?;
+    commit(writer, Response::success(request.id, document), limit).await
 }
 
 async fn initialize<R, H: ApplicationHandler>(

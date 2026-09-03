@@ -102,8 +102,10 @@ registration file or changing PATH does not replace a running endpoint.
 
 ## Starting and initializing an endpoint
 
-The host launches one child with private stdin/stdout pipes and immediately
-sends `rpc.initialize`. The full initialization request follows the
+The host launches one child with private stdin/stdout pipes and normally sends
+`rpc.initialize` immediately. Inspection tooling may first call the
+side-effect-free `rpc.discover` method (0.20+) without initializing the provider.
+The full initialization request follows the
 [wire protocol](/reference/ipc-wire#initialization-and-capabilities).
 Its `application` member is:
 

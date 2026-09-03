@@ -9,6 +9,10 @@ fn schema_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../schema/ipc/v1")
 }
 
+fn packaged_schema_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("schema/ipc/v1")
+}
+
 #[test]
 fn schemas_openrpc_and_fixtures_are_valid_json() {
     let root = schema_root();
@@ -73,6 +77,25 @@ fn schemas_openrpc_and_fixtures_are_valid_json() {
 }
 
 #[test]
+fn embedded_discovery_documents_match_the_canonical_assets() {
+    let canonical = schema_root();
+    let packaged = packaged_schema_root();
+    for name in [
+        "common.schema.json",
+        "resolver.schema.json",
+        "provider.schema.json",
+        "resolver.openrpc.json",
+        "provider.openrpc.json",
+    ] {
+        assert_eq!(
+            fs::read(canonical.join(name)).unwrap(),
+            fs::read(packaged.join(name)).unwrap(),
+            "embedded discovery asset drifted: {name}"
+        );
+    }
+}
+
+#[test]
 fn method_catalogs_match_openrpc() {
     let root = schema_root();
     let cases = [
@@ -87,6 +110,16 @@ fn method_catalogs_match_openrpc() {
             "provider.openrpc.json",
             "provider.",
             secretspec_ipc::protocol::provider::method::ALL,
+        ),
+        (
+            "resolver.openrpc.json",
+            "rpc.",
+            secretspec_ipc::protocol::rpc::ALL,
+        ),
+        (
+            "provider.openrpc.json",
+            "rpc.",
+            secretspec_ipc::protocol::rpc::ALL,
         ),
         // The callbacks the endpoint sends the other way. Documented in the
         // resolver's own OpenRPC document because that is the protocol they
@@ -125,10 +158,24 @@ fn fixture_schema<'a>(role: &str, path: &Path, envelope: &'a Value) -> (&'static
             "https://secretspec.dev/schema/ipc/v1/common.schema.json#/$defs/ErrorResponseEnvelope",
             envelope,
         ),
+        ("wire", "discovery-result.json") => (
+            concat!(
+                "https://secretspec.dev/schema/ipc/v1/common.schema.json",
+                "#/$defs/DiscoveryDocument"
+            ),
+            &envelope["result"],
+        ),
         ("wire", "cancel.json") => (
             concat!(
                 "https://secretspec.dev/schema/ipc/v1/common.schema.json",
                 "#/$defs/CancelParams"
+            ),
+            &envelope["params"],
+        ),
+        ("wire", "discover.json") => (
+            concat!(
+                "https://secretspec.dev/schema/ipc/v1/common.schema.json",
+                "#/$defs/EmptyParams"
             ),
             &envelope["params"],
         ),

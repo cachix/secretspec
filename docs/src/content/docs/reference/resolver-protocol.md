@@ -55,10 +55,11 @@ must not let a project manifest, flake, repository, or working directory
 select it. An interactive unprivileged SDK may resolve `secretspec` through its
 normal installation mechanism.
 
-The caller sends `rpc.initialize` immediately and applies a 5-second startup
-timeout by default. A successful response is the readiness signal. The resolver
-must not open a global socket, daemonize, or detach from its parent in stdio
-mode.
+The caller normally sends `rpc.initialize` immediately and applies a 5-second
+startup timeout by default. Inspection tooling may first call `rpc.discover`
+(0.20+), which does not initialize the resolver. A successful initialization
+response is the readiness signal. The resolver must not open a global socket,
+daemonize, or detach from its parent in stdio mode.
 
 Protocol stdin and stdout are exclusively reserved for framed IPC messages.
 The stdio resolver MUST NOT prompt through stdin, stdout, or stderr. It has no

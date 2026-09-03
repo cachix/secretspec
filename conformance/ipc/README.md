@@ -40,6 +40,11 @@ compared by CI and by third-party provider endpoints. The checked-in
 `ipc-client-conformance-driver` has independent `c` and `rust` modes and runs
 the common wire cases plus `client.lifecycle` through each public client.
 
+Rust server coverage includes `rpc.discover` (0.20+): it works before and after
+initialization, returns a self-contained OpenRPC document, preserves increasing
+request IDs into initialization, and never initializes application state or
+issues a callback merely to describe the endpoint.
+
 Run the executable client matrix directly with:
 
 ```console

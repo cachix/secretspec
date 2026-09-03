@@ -11,6 +11,9 @@ pub mod jsonrpc;
 pub mod launch;
 pub mod protocol;
 
+#[cfg(feature = "tokio")]
+mod description;
+
 #[cfg(feature = "blocking")]
 pub mod blocking;
 

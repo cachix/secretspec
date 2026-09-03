@@ -801,6 +801,11 @@ standard output. SDKs launch this command directly and communicate with bounded
 newline-delimited JSON-RPC frames; it is not intended for interactive
 terminal use or as a network listener.
 
+Before initialization, inspection tooling may call `rpc.discover` (0.20+) to
+obtain the resolver's self-contained OpenRPC description. Discovery does not
+load the selected manifest, contact a provider, prompt, or make the resolver
+ready; ordinary SDK clients initialize immediately.
+
 ```bash
 $ secretspec serve [--read-only]
 ```

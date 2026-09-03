@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- IPC endpoints now answer side-effect-free `rpc.discover` requests before or
+  after initialization, returning a self-contained OpenRPC description with
+  endpoint metadata and embedded JSON Schemas for offline inspection tooling.
+
 - Windows external-provider discovery now distinguishes directory creation
   rights from file mutation rights, allowing endpoints below standard protected
   volume roots while continuing to reject replaceable path components.

@@ -93,23 +93,31 @@ offer `embedded` and `resolver` backends behind the same language-level API.
 discovery conventions, framing, typed errors, streaming replies, and runtime
 introspection. The maintained [zlink](https://docs.rs/zlink/0.7.0/zlink/)
 implementation also provides async Rust clients and services, code generation,
-and Tokio and smol integrations. SecretSpec does not use it for four reasons:
+and Tokio and smol integrations. SecretSpec does not use it for these reasons:
 
 - **No multiplexing.** Varlink pipelines calls in order but has no request IDs.
   One blocked call delays later replies and cannot be cancelled independently.
   A pool of connections avoids this, but adds channel scheduling, descriptor
   limits, and replacement after cancellation.
 - **Portability.** Version 1 requires private stdio sessions on Linux, macOS,
-  and Windows plus a pure-C client. zlink is Rust-only and its ready-made
-  transport is Unix-domain sockets. Passing anonymous sockets is a
-  transport-specific zlink extension, not standard Varlink, and Windows would
-  need a separate handle-transfer design.
+  and Windows plus a pure-C client. zlink is Rust-only. systemd's
+  [`varlinkctl`](https://www.freedesktop.org/software/systemd/man/latest/varlinkctl.html)
+  can launch a private endpoint over an AF_UNIX socket pair passed as file
+  descriptor 3, but that Linux-specific process contract does not supply the
+  portable stdio and Windows behavior SecretSpec needs.
+- **No bidirectional calls.** Varlink streams replies from a service, but does
+  not define a service issuing a new call to its client and awaiting the answer
+  on that connection. SecretSpec needs exactly that for `client.prompt` and
+  `client.credential` (0.20+); a second connection would add discovery,
+  correlation, authentication, and lifecycle state.
 - **Missing lifecycle semantics.** SecretSpec would still have to define
   version and capability negotiation, deadlines, cancellation, message bounds,
   leases, shutdown, and the trust model.
-- **No net simplification.** Named sockets require authentication, permissions,
-  discovery, and stale-socket cleanup. Connection pools replace the current
-  request-ID table with another security-sensitive state machine.
+- **No net simplification.** Varlink's direct-executable form avoids a named
+  socket, but not the portability, lifecycle, or callback work above. Its
+  persistent named-socket form additionally requires authentication,
+  permissions, discovery, and stale-socket cleanup. Connection pools replace
+  the current request-ID table with another security-sensitive state machine.
 
 See Varlink's documentation on
 [ordered connections](https://varlink.org/FAQ.html#why-are-there-no-sequence-numbers-in-calls-and-replies)
@@ -121,6 +129,12 @@ and application semantics explicit. The missing stream framing and
 cancellation rules are small enough to specify here and implement without a
 large runtime.
 
+SecretSpec adopts Varlink's most useful operator-facing property without
+adopting its wire protocol: `rpc.discover` (0.20+) returns a self-contained
+OpenRPC interface description before application initialization. It provides a
+safe foundation for generic inspection tooling without loading a manifest,
+opening a provider, or changing the private transport model.
+
 This is a portability and dependency decision, not a claim that Varlink is a
 bad protocol. Varlink improves interface description and generated Rust APIs,
 but does not simplify SecretSpec's required lifecycle. A Unix Varlink adapter
@@ -130,9 +144,10 @@ could still be added later without changing the canonical application methods.
 
 The layers are independently owned and versioned:
 
-1. The wire layer owns frames, JSON-RPC envelopes, initialization, request
-   IDs, deadlines, cancellation, shutdown, common errors, resource bounds, and
-   the callback direction an endpoint uses to ask its client something.
+1. The wire layer owns frames, JSON-RPC envelopes, side-effect-free discovery
+   (0.20+), initialization, request IDs, deadlines, cancellation, shutdown,
+   common errors, resource bounds, and the callback direction an endpoint uses
+   to ask its client something.
 2. `secretspec.resolver/1` owns resolver configuration, exact-name resolution,
    value/path representations, and path leases.
 3. `secretspec.provider/1` owns provider discovery, provider metadata,
@@ -165,6 +180,7 @@ platforms:
 
 - no global endpoint name is discoverable or connectable by another process;
 - possession of the inherited pipe handles is the session authority;
+- `rpc.discover` (0.20+) describes the endpoint but does not make it ready;
 - readiness is the successful `rpc.initialize` response;
 - EOF, `rpc.shutdown`, or child exit ends the session and releases every
   session resource;

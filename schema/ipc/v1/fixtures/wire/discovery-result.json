@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"result":{"openrpc":"1.3.2","info":{"title":"SecretSpec Secret Resolution Protocol","version":"1"},"methods":[],"components":{},"x-secretspec":{"protocol":"secretspec.resolver","versions":[1],"server":{"name":"secretspec-resolver","version":"0.20.0"},"methods":["resolver.get","resolver.release"],"absolute_max_frame_bytes":1048576}}}

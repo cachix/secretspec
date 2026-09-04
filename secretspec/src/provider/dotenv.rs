@@ -1,7 +1,7 @@
 use super::{Address, DiscoveryContext, Provider, ProviderUrl};
+use crate::SecretBytes;
 use crate::config::expand_tilde;
 use crate::{Result, SecretSpecError};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -263,7 +263,7 @@ impl Provider for DotEnvProvider {
     ///
     /// Uses dotenv-ng for parsing quoted values, multiline strings, and escape
     /// sequences without consulting or modifying the process environment.
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let lookup = super::flat_item(self, addr)?;
         // A name the format cannot represent can never be read back; reject it
         // like any other coordinate this store has no equivalent for.
@@ -276,7 +276,7 @@ impl Provider for DotEnvProvider {
 
         Ok(vars
             .get(&*lookup)
-            .map(|v| SecretString::new(v.clone().into())))
+            .map(|v| SecretBytes::new(v.clone().into())))
     }
 
     /// Refuses an unrepresentable name before the CLI prompts for a value,
@@ -307,7 +307,8 @@ impl Provider for DotEnvProvider {
     /// 1. Loads existing variables using dotenv-ng to preserve them
     /// 2. Updates or adds the new key-value pair
     /// 3. Serializes back with `serialize_dotenv` for proper escaping
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        let value = super::require_utf8("dotenv", value)?;
         let target = super::flat_item(self, addr)?;
         // Refuse before touching the file: writing this name would produce a
         // store no later read can parse.
@@ -318,7 +319,7 @@ impl Provider for DotEnvProvider {
             HashMap::new()
         };
 
-        vars.insert(target.into_owned(), value.expose_secret().to_string());
+        vars.insert(target.into_owned(), value.to_string());
 
         let content = serialize_dotenv(&vars)?;
         fs::write(&self.config.path, content)?;
@@ -491,7 +492,7 @@ mod tests {
         let value = provider
             .get(Address::convention("hello-world", "default", "USER"))
             .unwrap();
-        assert_eq!(value.unwrap().expose_secret(), "hello");
+        assert_eq!(value.unwrap().expose_secret(), b"hello");
     }
 
     #[test]
@@ -589,7 +590,7 @@ mod tests {
             provider
                 .set(
                     Address::convention("proj", "default", k),
-                    &SecretString::new(v.into()),
+                    &SecretBytes::new(v.into()),
                 )
                 .unwrap();
         }
@@ -599,7 +600,7 @@ mod tests {
                 .get(Address::convention("proj", "default", k))
                 .unwrap();
             assert_eq!(
-                got.map(|s| s.expose_secret().to_string()),
+                got.map(|s| s.try_as_utf8().unwrap().to_string()),
                 Some(v.to_string()),
                 "round-trip failed for {k}",
             );
@@ -622,7 +623,7 @@ mod tests {
         provider
             .set(
                 Address::convention("proj", "default", "BAR"),
-                &SecretString::new("foobar".into()),
+                &SecretBytes::new("foobar".into()),
             )
             .unwrap();
 
@@ -630,14 +631,14 @@ mod tests {
             .get(Address::convention("proj", "default", "FOO"))
             .unwrap();
         assert_eq!(
-            foo.map(|s| s.expose_secret().to_string()),
+            foo.map(|s| s.try_as_utf8().unwrap().to_string()),
             Some(r#"{"bar":"baz"}"#.to_string()),
         );
         let bar = provider
             .get(Address::convention("proj", "default", "BAR"))
             .unwrap();
         assert_eq!(
-            bar.map(|s| s.expose_secret().to_string()),
+            bar.map(|s| s.try_as_utf8().unwrap().to_string()),
             Some("foobar".to_string()),
         );
     }
@@ -658,7 +659,7 @@ mod tests {
             .get(Address::convention("test", "default", "TEST"))
             .unwrap()
             .unwrap();
-        assert_eq!(value.expose_secret(), VALUE);
+        assert_eq!(value.expose_secret(), VALUE.as_bytes());
     }
 
     /// A native address reads and writes the key its `item` names, regardless
@@ -674,11 +675,11 @@ mod tests {
         };
 
         provider
-            .set(Address::Native(&addr), &SecretString::new("v1".into()))
+            .set(Address::Native(&addr), &SecretBytes::new("v1".into()))
             .unwrap();
         let got = provider.get(Address::Native(&addr)).unwrap();
         assert_eq!(
-            got.map(|s| s.expose_secret().to_string()),
+            got.map(|s| s.try_as_utf8().unwrap().to_string()),
             Some("v1".into())
         );
 
@@ -704,7 +705,7 @@ mod tests {
         provider
             .set(
                 Address::convention("proj", "default", "KEEP"),
-                &SecretString::new("kept".into()),
+                &SecretBytes::new("kept".into()),
             )
             .unwrap();
 
@@ -714,7 +715,7 @@ mod tests {
                 ..Default::default()
             };
             for result in [
-                provider.set(Address::Native(&addr), &SecretString::new("v".into())),
+                provider.set(Address::Native(&addr), &SecretBytes::new("v".into())),
                 provider.get(Address::Native(&addr)).map(|_| ()),
                 provider.check_writable(Address::Native(&addr)),
             ] {
@@ -728,7 +729,7 @@ mod tests {
             .get(Address::convention("proj", "default", "KEEP"))
             .unwrap();
         assert_eq!(
-            kept.map(|s| s.expose_secret().to_string()),
+            kept.map(|s| s.try_as_utf8().unwrap().to_string()),
             Some("kept".to_string())
         );
 
@@ -745,11 +746,11 @@ mod tests {
                 ..Default::default()
             };
             provider
-                .set(Address::Native(&addr), &SecretString::new("key".into()))
+                .set(Address::Native(&addr), &SecretBytes::new("key".into()))
                 .unwrap();
             let got = provider.get(Address::Native(&addr)).unwrap();
             assert_eq!(
-                got.map(|s| s.expose_secret().to_string()),
+                got.map(|s| s.try_as_utf8().unwrap().to_string()),
                 Some("key".to_string()),
                 "`{good}` should round-trip"
             );
@@ -808,7 +809,7 @@ mod tests {
         let err = provider
             .set(
                 Address::convention("proj", "default", "invalid name"),
-                &SecretString::from("s3cr3t-plaintext"),
+                &SecretBytes::from("s3cr3t-plaintext"),
             )
             .unwrap_err()
             .to_string();

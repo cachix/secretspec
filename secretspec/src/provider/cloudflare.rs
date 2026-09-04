@@ -7,10 +7,10 @@
 //! current OAuth/API credentials via `wrangler auth token --json`.
 
 use super::{Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl};
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, Secret, SecretSpecError};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -473,12 +473,13 @@ impl CloudflareProvider {
         Ok(())
     }
 
-    async fn set_async(&self, name: &str, value: &SecretString) -> Result<()> {
+    async fn set_async(&self, name: &str, value: &SecretBytes) -> Result<()> {
+        let value = super::require_utf8("cloudflare", value)?;
         let account_id = self.account_id()?;
         let client = self.client()?;
         if let Some(existing) = self.lookup_secret(&client, &account_id, name).await? {
             return self
-                .update_secret(&client, &account_id, &existing.id, value.expose_secret())
+                .update_secret(&client, &account_id, &existing.id, value)
                 .await;
         }
 
@@ -487,7 +488,7 @@ impl CloudflareProvider {
             .json(&[CreateSecret {
                 name,
                 scopes: &self.config.scopes,
-                value: value.expose_secret(),
+                value,
             }])
             .send()
             .await
@@ -495,7 +496,7 @@ impl CloudflareProvider {
         if response.status() == reqwest::StatusCode::CONFLICT {
             if let Some(existing) = self.lookup_secret(&client, &account_id, name).await? {
                 return self
-                    .update_secret(&client, &account_id, &existing.id, value.expose_secret())
+                    .update_secret(&client, &account_id, &existing.id, value)
                     .await;
             }
             return Err(operation_error(format!(
@@ -590,7 +591,7 @@ impl Provider for CloudflareProvider {
         format!("cloudflare://{account_id}/{}", self.config.store_id)
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let _ = self.secret_name(addr)?;
         Err(operation_error(
             "Cloudflare Secrets Store is write-only at the management API: plaintext values can only be read by bound Cloudflare services; use this provider with `secretspec set`, `secretspec delete`, or `secretspec init --from`",
@@ -601,7 +602,7 @@ impl Provider for CloudflareProvider {
         self.secret_name(addr).map(|_| ())
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)?;
         if value.expose_secret().len() > MAX_SECRET_BYTES {
             return Err(operation_error(format!(
@@ -727,7 +728,7 @@ mod tests {
         provider.api_base = format!("http://{endpoint}");
         provider.with_credentials(ProviderCredentials::from([(
             API_TOKEN.to_string(),
-            SecretString::new("test-token".into()),
+            SecretBytes::new("test-token".into()),
         )]));
         provider
     }
@@ -847,7 +848,7 @@ mod tests {
     #[test]
     fn rejects_values_larger_than_cloudflares_limit_before_authentication() {
         let provider = CloudflareProvider::new(config(&format!("cloudflare://{STORE}")));
-        let oversized = SecretString::new("x".repeat(MAX_SECRET_BYTES + 1).into());
+        let oversized = SecretBytes::new("x".repeat(MAX_SECRET_BYTES + 1).into());
         let error = provider
             .set(
                 Address::convention("project", "production", "API_KEY"),
@@ -867,7 +868,7 @@ mod tests {
         provider
             .set(
                 Address::convention("project", "production", "API_KEY"),
-                &SecretString::new("super-secret".into()),
+                &SecretBytes::new("super-secret".into()),
             )
             .unwrap();
 
@@ -901,7 +902,7 @@ mod tests {
         provider
             .set(
                 Address::convention("project", "production", "API_KEY"),
-                &SecretString::new("replacement".into()),
+                &SecretBytes::new("replacement".into()),
             )
             .unwrap();
 

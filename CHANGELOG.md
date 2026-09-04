@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Secret values can flow through providers, fallback chains, imports, and the
+  cache as arbitrary bytes. `Secrets::set` and `secretspec set --from-file`
+  accept exact byte input, `as_path` preserves it byte-for-byte, the file and
+  systemd credential providers read binary values natively, and AWS Secrets
+  Manager supports `SecretBinary`; text-only consumers now return explicit
+  UTF-8 errors (0.20+).
+
 - Claude Code can retrieve Anthropic API and LLM gateway credentials from any
   SecretSpec provider through its native `apiKeyHelper`. `secretspec claude
   configure` and `unconfigure` safely manage repository or user settings,

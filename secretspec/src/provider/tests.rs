@@ -1,6 +1,6 @@
 use crate::Result;
+use crate::SecretBytes;
 use crate::provider::{Address, DiscoveryContext, Provider};
-use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -36,18 +36,18 @@ impl Provider for MockProvider {
         })
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let full_key = super::flat_item(self, addr)?;
         let storage = self.storage.lock().unwrap();
         Ok(storage
             .get(&*full_key)
-            .map(|v| SecretString::new(v.clone().into())))
+            .map(|v| SecretBytes::new(v.clone().into())))
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         let full_key = super::flat_item(self, addr)?.into_owned();
         let mut storage = self.storage.lock().unwrap();
-        storage.insert(full_key, value.expose_secret().to_string());
+        storage.insert(full_key, value.try_as_utf8().unwrap().to_string());
         Ok(())
     }
 
@@ -103,16 +103,16 @@ impl Provider for CountingProvider {
         })
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let item = super::flat_item(self, addr)?.into_owned();
         *self.gets.lock().unwrap().entry(item.clone()).or_insert(0) += 1;
         Ok(self
             .values
             .get(&item)
-            .map(|v| SecretString::new(v.clone().into())))
+            .map(|v| SecretBytes::new(v.clone().into())))
     }
 
-    fn set(&self, _addr: Address<'_>, _value: &SecretString) -> Result<()> {
+    fn set(&self, _addr: Address<'_>, _value: &SecretBytes) -> Result<()> {
         Ok(())
     }
 
@@ -175,21 +175,21 @@ impl Provider for MemTestProvider {
         })
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let item = super::flat_item(self, addr)?.into_owned();
         Ok(MEM_STORE
             .lock()
             .unwrap()
             .get(&item)
-            .map(|v| SecretString::new(v.clone().into())))
+            .map(|v| SecretBytes::new(v.clone().into())))
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         let item = super::flat_item(self, addr)?.into_owned();
         MEM_STORE
             .lock()
             .unwrap()
-            .insert(item, value.expose_secret().to_string());
+            .insert(item, value.try_as_utf8().unwrap().to_string());
         Ok(())
     }
 
@@ -260,7 +260,7 @@ impl Provider for SlowTestProvider {
         MemTestProvider.convention_address(project, profile, key)
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let item = super::flat_item(self, addr)?.into_owned();
         let current = SLOW_CURRENT.fetch_add(1, Ordering::SeqCst) + 1;
         SLOW_PEAK.fetch_max(current, Ordering::SeqCst);
@@ -270,10 +270,10 @@ impl Provider for SlowTestProvider {
             .lock()
             .unwrap()
             .get(&item)
-            .map(|value| SecretString::new(value.clone().into())))
+            .map(|value| SecretBytes::new(value.clone().into())))
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         MemTestProvider.set(addr, value)
     }
 
@@ -348,7 +348,7 @@ impl Provider for StatefulTestProvider {
         MemTestProvider.convention_address(project, profile, key)
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let item = super::flat_item(self, addr)?.into_owned();
         STATEFUL_REASON_READS
             .lock()
@@ -367,10 +367,10 @@ impl Provider for StatefulTestProvider {
             .get_or_init(|| MEM_STORE.lock().unwrap().clone());
         Ok(snapshot
             .get(&item)
-            .map(|value| SecretString::new(value.clone().into())))
+            .map(|value| SecretBytes::new(value.clone().into())))
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         MemTestProvider.set(addr, value)
     }
 
@@ -456,11 +456,11 @@ impl Provider for FailWriteProvider {
         })
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         MemTestProvider.get(addr)
     }
 
-    fn set(&self, _addr: Address<'_>, _value: &SecretString) -> Result<()> {
+    fn set(&self, _addr: Address<'_>, _value: &SecretBytes) -> Result<()> {
         Err(crate::SecretSpecError::ProviderOperationFailed(
             "failwrite always fails to write".to_string(),
         ))
@@ -521,11 +521,11 @@ impl Provider for FailDeleteProvider {
         MemTestProvider.convention_address(project, profile, key)
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         MemTestProvider.get(addr)
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         MemTestProvider.set(addr, value)
     }
 
@@ -596,18 +596,18 @@ impl Provider for ExpiringProvider {
         MemTestProvider.convention_address(project, profile, key)
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         MemTestProvider.get(addr)
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         MemTestProvider.set(addr, value)
     }
 
     fn set_expiring(
         &self,
         addr: Address<'_>,
-        value: &SecretString,
+        value: &SecretBytes,
         max_age: std::time::Duration,
     ) -> Result<()> {
         let item = super::flat_item(self, addr)?.into_owned();
@@ -640,8 +640,8 @@ fn get_each_dedupes_one_address_across_names() {
     let addr = Address::Native(&coords);
     let out = super::get_each(&p, &[("FIRST", addr), ("SECOND", addr)]).unwrap();
 
-    assert_eq!(out["FIRST"].expose_secret(), "val");
-    assert_eq!(out["SECOND"].expose_secret(), "val");
+    assert_eq!(out["FIRST"].expose_secret(), b"val");
+    assert_eq!(out["SECOND"].expose_secret(), b"val");
     assert_eq!(p.get_count("svc"), 1, "one address must be fetched once");
 }
 
@@ -673,8 +673,8 @@ fn get_each_fetches_distinct_addresses_and_omits_missing() {
     )
     .unwrap();
 
-    assert_eq!(out["A"].expose_secret(), "v1");
-    assert_eq!(out["B"].expose_secret(), "v2");
+    assert_eq!(out["A"].expose_secret(), b"v1");
+    assert_eq!(out["B"].expose_secret(), b"v2");
     assert!(!out.contains_key("C"), "a missing secret is omitted");
     assert_eq!(p.get_count("one"), 1);
     assert_eq!(p.get_count("two"), 1);
@@ -715,7 +715,7 @@ impl Provider for PeakConcurrencyProvider {
         })
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let item = super::flat_item(self, addr)?.into_owned();
         let now = self.current.fetch_add(1, Ordering::SeqCst) + 1;
         // Record peak without a CAS loop: sequential max under SeqCst is enough
@@ -732,10 +732,10 @@ impl Provider for PeakConcurrencyProvider {
         }
         std::thread::sleep(self.delay);
         self.current.fetch_sub(1, Ordering::SeqCst);
-        Ok(Some(SecretString::new(item.into())))
+        Ok(Some(SecretBytes::new(item.into())))
     }
 
-    fn set(&self, _addr: Address<'_>, _value: &SecretString) -> Result<()> {
+    fn set(&self, _addr: Address<'_>, _value: &SecretBytes) -> Result<()> {
         Ok(())
     }
 
@@ -1400,7 +1400,7 @@ mod integration_tests {
         }
 
         // Test 2: Try to set a secret (may fail for read-only providers)
-        let test_value = SecretString::new(format!("test_password_{}", provider_name).into());
+        let test_value = SecretBytes::new(format!("test_password_{}", provider_name).into());
 
         let writable = provider
             .check_writable(Address::convention("proj", "default", "KEY"))
@@ -1516,7 +1516,7 @@ mod integration_tests {
             }))
             .expect("official EJSON decrypt should succeed")
             .expect("the encrypted TOKEN should exist");
-        assert_eq!(value.expose_secret(), "official-cli-value");
+        assert_eq!(value.expose_secret(), b"official-cli-value");
     }
 
     #[test]
@@ -1587,17 +1587,17 @@ mod integration_tests {
         writer
             .set(
                 Address::convention(&project_name, "default", "HIDDEN_KEY"),
-                &SecretString::new("plaintext".into()),
+                &SecretBytes::new("plaintext".into()),
             )
             .expect("the writing identity should store a secret");
 
         // The same store, read by an identity that may not see values.
         let (mut restricted, _t) = create_provider_with_temp_path("infisical");
         let mut credentials = crate::provider::ProviderCredentials::new();
-        credentials.insert("client_id".to_string(), SecretString::new(client_id.into()));
+        credentials.insert("client_id".to_string(), SecretBytes::new(client_id.into()));
         credentials.insert(
             "client_secret".to_string(),
-            SecretString::new(client_secret.into()),
+            SecretBytes::new(client_secret.into()),
         );
         restricted.with_credentials(credentials);
 
@@ -1652,7 +1652,7 @@ mod integration_tests {
         let profiles = ["dev", "staging", "prod"];
 
         for profile in profiles {
-            let value = SecretString::new(format!("value_for_{profile}").into());
+            let value = SecretBytes::new(format!("value_for_{profile}").into());
             provider
                 .set(
                     Address::convention(&project_name, profile, "API_KEY"),
@@ -1670,7 +1670,7 @@ mod integration_tests {
                 .unwrap_or_else(|| panic!("[{provider_name}] '{profile}' lost its secret"));
             assert_eq!(
                 found.expose_secret(),
-                format!("value_for_{profile}"),
+                format!("value_for_{profile}").as_bytes(),
                 "[{provider_name}] profile '{profile}' reads another profile's value"
             );
         }
@@ -1690,7 +1690,7 @@ mod integration_tests {
         let project_name = generate_test_project_name();
 
         for (key, value) in &test_cases {
-            let secret_value = SecretString::new(value.to_string().into());
+            let secret_value = SecretBytes::new(value.to_string().into());
             provider
                 .set(
                     Address::convention(&project_name, "default", key),
@@ -1703,7 +1703,7 @@ mod integration_tests {
                 .expect("Should not error when getting");
 
             assert_eq!(
-                result.map(|s| s.expose_secret().to_string()),
+                result.map(|s| s.try_as_utf8().unwrap().to_string()),
                 Some(value.to_string()),
                 "Special characters should be preserved"
             );
@@ -1718,7 +1718,7 @@ mod integration_tests {
         let test_key = "API_KEY";
 
         for profile in &profiles {
-            let value = SecretString::new(format!("key_for_{}", profile).into());
+            let value = SecretBytes::new(format!("key_for_{}", profile).into());
             provider
                 .set(
                     Address::convention(&project_name, profile, test_key),
@@ -1731,8 +1731,8 @@ mod integration_tests {
                 .expect("Should get with profile");
 
             assert_eq!(
-                result.map(|s| s.expose_secret().to_string()),
-                Some(value.expose_secret().to_string()),
+                result.map(|s| s.try_as_utf8().unwrap().to_string()),
+                Some(value.try_as_utf8().unwrap().to_string()),
                 "Profile-specific value should match"
             );
         }
@@ -1744,7 +1744,7 @@ mod integration_tests {
                 .expect("Should not error");
             let expected_value = format!("key_for_{}", profile);
             assert_eq!(
-                result.map(|s| s.expose_secret().to_string()),
+                result.map(|s| s.try_as_utf8().unwrap().to_string()),
                 Some(expected_value),
                 "Should find profile-specific value"
             );
@@ -1890,7 +1890,7 @@ mod integration_tests {
             provider
                 .set(
                     Address::convention(&project_name, profile, key),
-                    &SecretString::new(value.to_string().into()),
+                    &SecretBytes::new(value.to_string().into()),
                 )
                 .unwrap();
         }
@@ -1909,9 +1909,9 @@ mod integration_tests {
         let result = provider.get_many(&requests).unwrap();
 
         assert_eq!(result.len(), 3);
-        assert_eq!(result["BATCH_TEST_1"].expose_secret(), "value1");
-        assert_eq!(result["BATCH_TEST_2"].expose_secret(), "value2");
-        assert_eq!(result["BATCH_TEST_3"].expose_secret(), "value3");
+        assert_eq!(result["BATCH_TEST_1"].expose_secret(), b"value1");
+        assert_eq!(result["BATCH_TEST_2"].expose_secret(), b"value2");
+        assert_eq!(result["BATCH_TEST_3"].expose_secret(), b"value3");
         assert!(!result.contains_key("NONEXISTENT"));
     }
 
@@ -1936,7 +1936,7 @@ mod integration_tests {
             provider
                 .set(
                     Address::convention(&project_name, profile, key),
-                    &SecretString::new(value.to_string().into()),
+                    &SecretBytes::new(value.to_string().into()),
                 )
                 .unwrap();
         }
@@ -1954,9 +1954,9 @@ mod integration_tests {
         let result = provider.get_many(&requests).unwrap();
 
         assert_eq!(result.len(), 3);
-        assert_eq!(result["BATCH_TEST_1"].expose_secret(), "value1");
-        assert_eq!(result["BATCH_TEST_2"].expose_secret(), "value2");
-        assert_eq!(result["BATCH_TEST_3"].expose_secret(), "value3");
+        assert_eq!(result["BATCH_TEST_1"].expose_secret(), b"value1");
+        assert_eq!(result["BATCH_TEST_2"].expose_secret(), b"value2");
+        assert_eq!(result["BATCH_TEST_3"].expose_secret(), b"value3");
         assert!(!result.contains_key("NONEXISTENT"));
     }
 
@@ -2278,7 +2278,7 @@ mod integration_tests {
             if let Some(token) = token {
                 credentials.insert(
                     "service_account_token".to_string(),
-                    SecretString::new(token.into()),
+                    SecretBytes::new(token.into()),
                 );
             }
             let url = ProviderUrl::new(Url::parse("onepassword://Private").unwrap());
@@ -2326,13 +2326,11 @@ const HOSTILE_ITEMS: &[&str] = &[
 /// name; what it may not do is accept a write it cannot serve back.
 #[cfg(test)]
 fn assert_write_read_symmetry(provider: &dyn Provider) {
-    use secrecy::ExposeSecret;
-
     // A convention secret written first must stay readable throughout.
     provider
         .set(
             Address::convention("proj", "default", "KEEP"),
-            &SecretString::new("kept".into()),
+            &SecretBytes::new("kept".into()),
         )
         .unwrap();
 
@@ -2342,12 +2340,12 @@ fn assert_write_read_symmetry(provider: &dyn Provider) {
             ..Default::default()
         };
         let wrote = provider
-            .set(Address::Native(&addr), &SecretString::new("v".into()))
+            .set(Address::Native(&addr), &SecretBytes::new("v".into()))
             .is_ok();
         if wrote {
             let got = provider.get(Address::Native(&addr)).unwrap();
             assert_eq!(
-                got.map(|s| s.expose_secret().to_string()),
+                got.map(|s| s.try_as_utf8().unwrap().to_string()),
                 Some("v".to_string()),
                 "provider `{}` accepted a write of `{item}` it cannot read back",
                 provider.name(),
@@ -2358,7 +2356,7 @@ fn assert_write_read_symmetry(provider: &dyn Provider) {
             .get(Address::convention("proj", "default", "KEEP"))
             .unwrap();
         assert_eq!(
-            kept.map(|s| s.expose_secret().to_string()),
+            kept.map(|s| s.try_as_utf8().unwrap().to_string()),
             Some("kept".to_string()),
             "provider `{}`: a write of `{item}` corrupted other secrets",
             provider.name(),
@@ -2409,11 +2407,11 @@ impl Provider for DeletingProvider {
         })
     }
 
-    fn get(&self, _addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, _addr: Address<'_>) -> Result<Option<SecretBytes>> {
         Ok(None)
     }
 
-    fn set(&self, _addr: Address<'_>, _value: &SecretString) -> Result<()> {
+    fn set(&self, _addr: Address<'_>, _value: &SecretBytes) -> Result<()> {
         Ok(())
     }
 

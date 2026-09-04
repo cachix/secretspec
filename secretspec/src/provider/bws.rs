@@ -40,8 +40,8 @@
 //! ```
 
 use super::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
+use crate::SecretBytes;
 use crate::{Result, SecretSpecError};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
@@ -258,13 +258,13 @@ impl BwsProvider {
     }
 
     /// Retrieves a secret value from BWS by its resolved key name.
-    fn get_secret(&self, target: &str) -> Result<Option<SecretString>> {
+    fn get_secret(&self, target: &str) -> Result<Option<SecretBytes>> {
         let secrets = self.ensure_secrets()?;
 
         // BWS uses flat key names -- match directly.
         for secret in secrets {
             if secret.key == target {
-                return Ok(Some(SecretString::new(secret.value.clone().into())));
+                return Ok(Some(SecretBytes::new(secret.value.clone().into())));
             }
         }
 
@@ -272,13 +272,13 @@ impl BwsProvider {
     }
 
     /// Creates or updates a secret in BWS at its resolved key name.
-    fn set_secret(&self, key: &str, value: &SecretString) -> Result<()> {
+    fn set_secret(&self, key: &str, value: &SecretBytes) -> Result<()> {
         // Fetch fresh secrets list (not cached) to avoid stale data when writing
         let fresh_secrets = self.fetch_secrets()?;
 
         // Look for an existing secret with the same key name
         let existing = fresh_secrets.iter().find(|s| s.key == key);
-        let secret_value = value.expose_secret();
+        let secret_value = super::require_utf8("bws", value)?;
 
         if let Some(existing_secret) = existing {
             // Keep option-like values attached to the option so clap cannot
@@ -346,19 +346,19 @@ impl Provider for BwsProvider {
         }
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let target = super::flat_item(self, addr)?;
         self.get_secret(&target)
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         let target = super::flat_item(self, addr)?;
         self.set_secret(&target, value)
     }
 
     /// Serves every request, convention or `ref`, from one cached listing of
     /// the project's secrets.
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         if requests.is_empty() {
             return Ok(HashMap::new());
         }
@@ -378,7 +378,7 @@ impl Provider for BwsProvider {
             if let Some(value) = by_key.get(&*target) {
                 results.insert(
                     name.to_string(),
-                    SecretString::new((*value).to_string().into()),
+                    SecretBytes::new((*value).to_string().into()),
                 );
             }
         }
@@ -389,7 +389,6 @@ impl Provider for BwsProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use secrecy::ExposeSecret;
     use url::Url;
 
     fn provider_url(s: &str) -> ProviderUrl {
@@ -404,7 +403,7 @@ mod tests {
         let mut credentials = ProviderCredentials::new();
         credentials.insert(
             ACCESS_TOKEN.to_string(),
-            SecretString::new("token-from-provider".to_string().into()),
+            SecretBytes::new("token-from-provider".to_string().into()),
         );
         provider.with_credentials(credentials);
         provider
@@ -647,8 +646,8 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(first.expose_secret(), "postgres://db");
-        assert_eq!(second.expose_secret(), "postgres://db");
+        assert_eq!(first.expose_secret(), b"postgres://db");
+        assert_eq!(second.expose_secret(), b"postgres://db");
         assert_eq!(std::fs::read_to_string(count).unwrap(), "x");
     }
 
@@ -679,7 +678,7 @@ mod tests {
         provider
             .set(
                 Address::convention("project", "default", "DATABASE_URL"),
-                &SecretString::new("--password".to_string().into()),
+                &SecretBytes::new("--password".to_string().into()),
             )
             .unwrap();
 
@@ -712,7 +711,7 @@ mod tests {
         provider
             .set(
                 Address::convention("project", "default", "--API_KEY"),
-                &SecretString::new("--password".to_string().into()),
+                &SecretBytes::new("--password".to_string().into()),
             )
             .unwrap();
 

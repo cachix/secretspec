@@ -5,9 +5,9 @@
 //! authored in a Dashlane app and read from here, so this provider implements
 //! [`Provider::get`] and refuses every write.
 
+use crate::SecretBytes;
 use crate::provider::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
-use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -246,7 +246,7 @@ impl VaultItem {
 /// titled the same as the one wanted, in a type searched earlier, must not
 /// abort the search before the type that actually holds the field.
 enum Found {
-    Value(SecretString),
+    Value(SecretBytes),
     /// Nothing to read here: no item of this content type is named that, or
     /// the one that is holds nothing in its default field.
     NoItem,
@@ -550,7 +550,7 @@ impl DashlaneProvider {
             return Ok(Found::NoItem);
         };
         match item.field(field.unwrap_or_else(|| item_type.default_field())) {
-            Some(value) => Ok(Found::Value(SecretString::new(value.into()))),
+            Some(value) => Ok(Found::Value(SecretBytes::new(value.into()))),
             // An empty default field just means the item holds nothing. A `ref`
             // naming a field is different: no other item can satisfy it, so the
             // caller reports it once every content type has been searched.
@@ -616,7 +616,7 @@ impl Provider for DashlaneProvider {
         }
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let coords = self.resolve_coords(addr)?;
         let mut lacked_field = false;
         for &item_type in self.types_to_search() {
@@ -637,7 +637,7 @@ impl Provider for DashlaneProvider {
     ///
     /// The default shells out once per secret, and each call decrypts the whole
     /// local vault; a `secretspec run` over twenty secrets pays that once.
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         let mut resolved = Vec::with_capacity(requests.len());
         for (name, addr) in requests {
             resolved.push((*name, self.resolve_coords(*addr)?));
@@ -674,7 +674,7 @@ impl Provider for DashlaneProvider {
         Ok(found)
     }
 
-    fn set(&self, addr: Address<'_>, _value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, _value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)
     }
 
@@ -948,8 +948,7 @@ mod tests {
             .unwrap();
         match found {
             Found::Value(value) => {
-                use secrecy::ExposeSecret;
-                assert_eq!(value.expose_secret(), "app_user");
+                assert_eq!(value.expose_secret(), b"app_user");
             }
             _ => panic!("the login carries the field and must resolve"),
         }
@@ -1069,7 +1068,7 @@ mod tests {
         let addr = Address::convention("p", "default", "K");
         let err = provider.check_writable(addr).unwrap_err();
         assert!(err.to_string().contains("read-only"), "{err}");
-        assert!(provider.set(addr, &SecretString::new("v".into())).is_err());
+        assert!(provider.set(addr, &SecretBytes::new("v".into())).is_err());
     }
 }
 
@@ -1210,7 +1209,6 @@ mod live {
                 )
             });
 
-        use secrecy::ExposeSecret;
         let len = value.expose_secret().len();
         assert!(len > 0, "the named item resolved to an empty value");
         println!(
@@ -1220,7 +1218,7 @@ mod live {
 
         // The value must not survive into a Debug rendering of the wrapper.
         assert!(
-            !format!("{value:?}").contains(value.expose_secret()),
+            !format!("{value:?}").contains(value.try_as_utf8().unwrap()),
             "the secret leaked through Debug"
         );
     }

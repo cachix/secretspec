@@ -1033,9 +1033,7 @@ fn composed_secrets_propagate_missingness_and_are_read_only() {
             .contains(&"OPTIONAL_RESULT".to_string())
     );
 
-    let error = spec
-        .set("REQUIRED_RESULT", Some("override".to_string()))
-        .unwrap_err();
+    let error = spec.set_text("REQUIRED_RESULT", "override").unwrap_err();
     assert!(matches!(
         error,
         SecretSpecError::ComposedSecretReadOnly(ref name) if name == "REQUIRED_RESULT"
@@ -2873,7 +2871,7 @@ fn test_set_with_undefined_secret() {
 
     // Test setting an undefined secret - env provider is read-only,
     // but we should get the SecretNotFound error before the provider error
-    let result = spec.set("UNDEFINED_SECRET", Some("test_value".to_string()));
+    let result = spec.set_text("UNDEFINED_SECRET", "test_value");
 
     assert!(result.is_err());
     match result {
@@ -2945,7 +2943,7 @@ fn test_set_with_defined_secret() {
     let spec = Secrets::new(project_config, Some(global_config), None, None);
 
     // This should succeed with dotenv provider
-    let result = spec.set("DEFINED_SECRET", Some("test_value".to_string()));
+    let result = spec.set_text("DEFINED_SECRET", "test_value");
 
     // Restore original directory
     env::set_current_dir(original_dir).unwrap();
@@ -3001,7 +2999,7 @@ fn test_set_with_readonly_provider() {
     let spec = Secrets::new(project_config, Some(global_config), None, None);
 
     // Test setting a defined secret with env provider (which is read-only)
-    let result = spec.set("DEFINED_SECRET", Some("test_value".to_string()));
+    let result = spec.set_text("DEFINED_SECRET", "test_value");
 
     assert!(result.is_err());
     match result {
@@ -4266,7 +4264,7 @@ fn fallback_chains_resolve_concurrently_under_the_provider_cap() {
         fallback
             .set(
                 crate::provider::Address::convention(PROJECT, "default", name),
-                &secrecy::SecretString::new(format!("value-{name}").into()),
+                &crate::SecretBytes::from_utf8(format!("value-{name}")),
             )
             .unwrap();
     }
@@ -4385,7 +4383,7 @@ fn operation_scoped_provider_cache_refreshes_snapshots_between_resolutions() {
     store
         .set(
             address,
-            &secrecy::SecretString::new("original".to_string().into()),
+            &crate::SecretBytes::from_utf8("original".to_string()),
         )
         .unwrap();
 
@@ -4396,7 +4394,7 @@ fn operation_scoped_provider_cache_refreshes_snapshots_between_resolutions() {
     store
         .set(
             address,
-            &secrecy::SecretString::new("rotated".to_string().into()),
+            &crate::SecretBytes::from_utf8("rotated".to_string()),
         )
         .unwrap();
     let second = spec
@@ -4426,7 +4424,7 @@ fn operation_scoped_provider_cache_applies_changed_session_context_on_later_reso
     store
         .set(
             crate::provider::Address::convention(PROJECT, "default", SECRET),
-            &secrecy::SecretString::new("value".to_string().into()),
+            &crate::SecretBytes::from_utf8("value".to_string()),
         )
         .unwrap();
 
@@ -5248,10 +5246,9 @@ HEX_TEXT = { description = "lowercase hex", encoding = "hex" }
     };
     let spec = Secrets::new(config, Some(global_config), None, None);
 
-    spec.set("BASE64_TEXT", Some("value".to_string())).unwrap();
-    spec.set("BASE64URL_TEXT", Some("hello?".to_string()))
-        .unwrap();
-    spec.set("HEX_TEXT", Some("value".to_string())).unwrap();
+    spec.set_text("BASE64_TEXT", "value").unwrap();
+    spec.set_text("BASE64URL_TEXT", "hello?").unwrap();
+    spec.set_text("HEX_TEXT", "value").unwrap();
 
     let stored = fs::read_to_string(&env_file).unwrap();
     let stored_value = |name: &str| {
@@ -5278,6 +5275,224 @@ HEX_TEXT = { description = "lowercase hex", encoding = "hex" }
         validated.resolved.secrets["HEX_TEXT"].expose_secret(),
         "value"
     );
+}
+
+#[test]
+fn binary_set_round_trips_through_native_file_storage_and_as_path() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let store = temp_dir.path().join("store");
+    let config_file = temp_dir.path().join("secretspec.toml");
+    let store_uri = toml::Value::String(format!("file:{}", store.display())).to_string();
+    fs::write(
+        &config_file,
+        format!(
+            r#"[project]
+name = "binary-native-set"
+revision = "1.0"
+
+[providers]
+store = {store_uri}
+
+[profiles.default]
+BINARY = {{ description = "binary", providers = ["store"], as_path = true }}
+"#,
+        ),
+    )
+    .unwrap();
+
+    let spec = Secrets::new(
+        Config::try_from(config_file.as_path()).unwrap(),
+        None,
+        None,
+        None,
+    );
+    let expected = [0x00, 0xff, 0x80, 0x0a];
+    spec.set("BINARY", crate::SecretBytes::from_slice(&expected))
+        .unwrap();
+    assert_eq!(
+        fs::read(store.join("binary-native-set/default/BINARY")).unwrap(),
+        expected
+    );
+
+    let validated = spec.validate().unwrap().unwrap();
+    let path = validated.resolved.secrets["BINARY"].expose_secret();
+    assert_eq!(fs::read(path).unwrap(), expected);
+}
+
+#[test]
+fn binary_set_uses_manifest_encoding_for_a_text_provider() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env");
+    let config_file = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &config_file,
+        r#"[project]
+name = "binary-encoded-set"
+revision = "1.0"
+
+[profiles.default]
+BINARY = { description = "binary", encoding = "base64", as_path = true }
+"#,
+    )
+    .unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+        audit: None,
+    };
+    let spec = Secrets::new(
+        Config::try_from(config_file.as_path()).unwrap(),
+        Some(global_config),
+        None,
+        None,
+    );
+    let expected = [0x00, 0xff, 0x80, 0x0a];
+    spec.set("BINARY", crate::SecretBytes::from_slice(&expected))
+        .unwrap();
+    assert!(fs::read_to_string(&env_file).unwrap().contains("AP+ACg=="));
+
+    let validated = spec.validate().unwrap().unwrap();
+    assert_eq!(
+        fs::read(validated.resolved.secrets["BINARY"].expose_secret()).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn text_provider_rejects_unencoded_binary_without_exposing_it() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let env_file = temp_dir.path().join(".env");
+    let config_file = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &config_file,
+        r#"[project]
+name = "binary-text-rejection"
+revision = "1.0"
+
+[profiles.default]
+BINARY = { description = "binary" }
+"#,
+    )
+    .unwrap();
+    let global_config = GlobalConfig {
+        defaults: GlobalDefaults {
+            provider: Some(format!("dotenv://{}", env_file.display())),
+            profile: None,
+            providers: None,
+        },
+        audit: None,
+    };
+    let spec = Secrets::new(
+        Config::try_from(config_file.as_path()).unwrap(),
+        Some(global_config),
+        None,
+        None,
+    );
+    let error = spec
+        .set("BINARY", crate::SecretBytes::from_slice(b"do-not-leak\xff"))
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("dotenv"), "{message}");
+    assert!(message.contains("requires UTF-8"), "{message}");
+    assert!(!message.contains("do-not-leak"), "{message}");
+}
+
+#[test]
+fn binary_fallback_value_is_materialized_exactly() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let primary = temp_dir.path().join("primary");
+    let fallback = temp_dir.path().join("fallback");
+    fs::create_dir_all(fallback.join("binary-fallback/default")).unwrap();
+    let expected = [0x00, 0xff, 0x80, 0x0a];
+    fs::write(fallback.join("binary-fallback/default/BINARY"), expected).unwrap();
+    let primary_uri = toml::Value::String(format!("file:{}", primary.display())).to_string();
+    let fallback_uri = toml::Value::String(format!("file:{}", fallback.display())).to_string();
+    let config_file = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &config_file,
+        format!(
+            r#"[project]
+name = "binary-fallback"
+revision = "1.0"
+
+[providers]
+primary = {primary_uri}
+fallback = {fallback_uri}
+
+[profiles.default]
+BINARY = {{ description = "binary", providers = ["primary", "fallback"], as_path = true }}
+"#,
+        ),
+    )
+    .unwrap();
+
+    let spec = Secrets::new(
+        Config::try_from(config_file.as_path()).unwrap(),
+        None,
+        None,
+        None,
+    );
+    let validated = spec.validate().unwrap().unwrap();
+    assert_eq!(
+        fs::read(validated.resolved.secrets["BINARY"].expose_secret()).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn binary_import_verifies_then_deletes_the_source() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let source = temp_dir.path().join("source");
+    let target = temp_dir.path().join("target");
+    let source_value = source.join("binary-import/default/BINARY");
+    fs::create_dir_all(source_value.parent().unwrap()).unwrap();
+    let expected = [0x00, 0xff, 0x80, 0x0a];
+    fs::write(&source_value, expected).unwrap();
+    let target_uri = toml::Value::String(format!("file:{}", target.display())).to_string();
+    let config_file = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &config_file,
+        format!(
+            r#"[project]
+name = "binary-import"
+revision = "1.0"
+
+[providers]
+target = {target_uri}
+
+[profiles.default]
+BINARY = {{ description = "binary", providers = ["target"], as_path = true }}
+"#,
+        ),
+    )
+    .unwrap();
+    let spec = Secrets::new(
+        Config::try_from(config_file.as_path()).unwrap(),
+        None,
+        None,
+        None,
+    );
+
+    spec.import_with_delete_source(&format!("file:{}", source.display()))
+        .unwrap();
+    assert_eq!(
+        fs::read(target.join("binary-import/default/BINARY")).unwrap(),
+        expected
+    );
+    assert!(!source_value.exists());
 }
 
 #[test]
@@ -5457,7 +5672,7 @@ FALLBACK = { description = "logical default", providers = ["documents"], ref = {
     );
 
     let original = fs::read_to_string(&document_path).unwrap();
-    let set_error = spec.set("PASSWORD", Some("new".to_string())).unwrap_err();
+    let set_error = spec.set_text("PASSWORD", "new").unwrap_err();
     assert!(matches!(
         set_error,
         SecretSpecError::ExtractedSecretReadOnly(ref name) if name == "PASSWORD"
@@ -5491,7 +5706,7 @@ fn test_json_extract_renders_a_null_while_a_provider_field_treats_it_as_absent()
     let rendered =
         Secrets::extract_stored_value(&extract, "PASSWORD", r#"{"database":{"password":null}}"#)
             .unwrap();
-    assert_eq!(rendered.expose_secret(), "null");
+    assert_eq!(rendered.expose_secret(), b"null");
 
     // A provider `field` is a lookup that can come up empty, so the same null
     // is absent and the provider chain continues.
@@ -5502,7 +5717,7 @@ fn test_json_extract_renders_a_null_while_a_provider_field_treats_it_as_absent()
     let port =
         Secrets::extract_stored_value(&extract, "PASSWORD", r#"{"database":{"password":5432}}"#)
             .unwrap();
-    assert_eq!(port.expose_secret(), "5432");
+    assert_eq!(port.expose_secret(), b"5432");
 }
 
 #[test]
@@ -5576,6 +5791,133 @@ fn test_extract_errors_do_not_expose_stored_documents() {
             assert!(!message.contains("sensitive"), "{message}");
         }
     }
+}
+
+#[test]
+fn extraction_rejects_binary_documents_without_leaking_them() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let store = temp_dir.path().join("store");
+    fs::create_dir(&store).unwrap();
+    fs::write(store.join("document.json"), b"do-not-leak\xff").unwrap();
+    let store_uri = toml::Value::String(format!("file:{}", store.display())).to_string();
+    let config_file = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &config_file,
+        format!(
+            r#"[project]
+name = "binary-extract"
+revision = "1.0"
+
+[providers]
+documents = {store_uri}
+
+[profiles.default]
+TOKEN = {{ description = "token", providers = ["documents"], ref = {{ item = "document.json" }}, extract = {{ format = "json", pointer = "/token" }} }}
+"#,
+        ),
+    )
+    .unwrap();
+
+    let error = Secrets::new(
+        Config::try_from(config_file.as_path()).unwrap(),
+        None,
+        None,
+        None,
+    )
+    .validate()
+    .err()
+    .expect("binary extraction should fail");
+    let message = error.to_string();
+    assert!(message.contains("UTF-8"), "{message}");
+    assert!(!message.contains("do-not-leak"), "{message}");
+}
+
+#[test]
+fn composition_rejects_inline_binary_inputs_without_leaking_them() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let store = temp_dir.path().join("store");
+    let value_path = store.join("binary-composition/default/RAW");
+    fs::create_dir_all(value_path.parent().unwrap()).unwrap();
+    fs::write(&value_path, b"do-not-leak\xff").unwrap();
+    let store_uri = toml::Value::String(format!("file:{}", store.display())).to_string();
+    let config_file = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &config_file,
+        format!(
+            r#"[project]
+name = "binary-composition"
+revision = "1.0"
+
+[providers]
+store = {store_uri}
+
+[profiles.default]
+RAW = {{ description = "binary", providers = ["store"] }}
+COMPOSED = {{ description = "composed", composed = "prefix:${{RAW}}" }}
+"#,
+        ),
+    )
+    .unwrap();
+    let error = Secrets::new(
+        Config::try_from(config_file.as_path()).unwrap(),
+        None,
+        None,
+        None,
+    )
+    .resolve_named("COMPOSED")
+    .unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("UTF-8"), "{message}");
+    assert!(message.contains("as_path"), "{message}");
+    assert!(!message.contains("do-not-leak"), "{message}");
+}
+
+#[test]
+fn environment_export_rejects_inline_binary_without_output_or_leak() {
+    use std::fs;
+
+    let temp_dir = TempDir::new().unwrap();
+    let store = temp_dir.path().join("store");
+    let value_path = store.join("binary-export/default/RAW");
+    fs::create_dir_all(value_path.parent().unwrap()).unwrap();
+    fs::write(&value_path, b"do-not-leak\xff").unwrap();
+    let store_uri = toml::Value::String(format!("file:{}", store.display())).to_string();
+    let config_file = temp_dir.path().join("secretspec.toml");
+    fs::write(
+        &config_file,
+        format!(
+            r#"[project]
+name = "binary-export"
+revision = "1.0"
+
+[providers]
+store = {store_uri}
+
+[profiles.default]
+RAW = {{ description = "binary", providers = ["store"] }}
+"#,
+        ),
+    )
+    .unwrap();
+    let spec = Secrets::new(
+        Config::try_from(config_file.as_path()).unwrap(),
+        None,
+        None,
+        None,
+    );
+    let mut output = Vec::new();
+    let error = spec
+        .export(crate::ExportFormat::Dotenv, &mut output)
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("UTF-8"), "{message}");
+    assert!(message.contains("as_path"), "{message}");
+    assert!(!message.contains("do-not-leak"), "{message}");
+    assert!(output.is_empty());
 }
 
 #[test]
@@ -6545,7 +6887,7 @@ fn test_set_provider_override_wins_over_chain() {
     // Builder-set provider mirrors `--provider team` from the CLI. Use the alias
     // name; the override resolver must look it up in the global providers map.
     let spec = Secrets::new(config, Some(global_config), Some("team".to_string()), None);
-    spec.set("MY_SECRET", Some("override_value".to_string()))
+    spec.set_text("MY_SECRET", "override_value")
         .expect("set should succeed");
 
     assert_eq!(
@@ -6568,7 +6910,7 @@ fn test_set_without_override_uses_chain_first() {
     let (config, global_config, personal_path, team_path) = build_chain_scenario(&temp_dir);
 
     let spec = Secrets::new(config, Some(global_config), None, None);
-    spec.set("MY_SECRET", Some("chain_value".to_string()))
+    spec.set_text("MY_SECRET", "chain_value")
         .expect("set should succeed");
 
     assert_eq!(
@@ -6608,7 +6950,7 @@ fn test_undefined_fallback_alias_is_ignored_when_the_primary_answers() {
         .expect("get reads the primary and ignores the undefined fallback");
 
     // A write targets only the primary, so the undefined fallback is irrelevant.
-    spec.set("MY_SECRET", Some("updated".to_string()))
+    spec.set_text("MY_SECRET", "updated")
         .expect("set writes to the primary and ignores the fallback");
     assert_eq!(
         read_env_var(&paths[0], "MY_SECRET").as_deref(),
@@ -7956,8 +8298,7 @@ fn write_target_reporting_is_opt_in_and_uses_resolved_provider_metadata() {
         captured.lock().unwrap().push(target.clone());
     });
 
-    spec.set("REQUIRED", Some("secret_value".to_string()))
-        .unwrap();
+    spec.set_text("REQUIRED", "secret_value").unwrap();
 
     let reports = reports.lock().unwrap();
     assert_eq!(reports.len(), 1);
@@ -8332,8 +8673,7 @@ fn audit_set_records_written_without_value() {
     let (logger, lines) = crate::audit::test_support::collecting_logger();
     spec.set_audit_for_test(logger);
 
-    spec.set("REQUIRED", Some("secret_value".to_string()))
-        .unwrap();
+    spec.set_text("REQUIRED", "secret_value").unwrap();
 
     let events = audit_events(&lines);
     assert_eq!(events.len(), 1);
@@ -8353,7 +8693,7 @@ fn audit_set_undefined_records_error() {
     spec.set_audit_for_test(logger);
 
     assert!(matches!(
-        spec.set("UNDEFINED", Some("v".to_string())),
+        spec.set_text("UNDEFINED", "v"),
         Err(SecretSpecError::SecretNotFound(_))
     ));
 
@@ -8373,7 +8713,7 @@ fn audit_set_provider_construction_failure_records_error() {
     spec.set_audit_for_test(logger);
 
     assert!(matches!(
-        spec.set("REQUIRED", Some("v".to_string())),
+        spec.set_text("REQUIRED", "v"),
         Err(SecretSpecError::ProviderNotFound(_))
     ));
 
@@ -8411,7 +8751,7 @@ fn audit_set_readonly_provider_records_error() {
     spec.set_audit_for_test(logger);
 
     assert!(matches!(
-        spec.set("REQUIRED", Some("v".to_string())),
+        spec.set_text("REQUIRED", "v"),
         Err(SecretSpecError::ProviderOperationFailed(_))
     ));
 
@@ -8541,7 +8881,7 @@ fn provider_credentials_read_convention_credential_from_source() {
     assert_eq!(
         credentials
             .get("access_token")
-            .map(|value| value.expose_secret().to_string()),
+            .map(|value| value.try_as_utf8().unwrap().to_string()),
         Some("secret-abc".to_string()),
     );
 }
@@ -8612,7 +8952,7 @@ fn provider_credentials_read_from_systemd_credential_source() {
     assert_eq!(
         credentials
             .get("test_token")
-            .map(|value| value.expose_secret().to_string()),
+            .map(|value| value.try_as_utf8().unwrap().to_string()),
         Some("systemd-delivered-token".to_string()),
     );
 }
@@ -8646,7 +8986,7 @@ fn provider_credentials_read_ref_addressed_credential() {
     assert_eq!(
         credentials
             .get("access_token")
-            .map(|value| value.expose_secret().to_string()),
+            .map(|value| value.try_as_utf8().unwrap().to_string()),
         Some("secret-xyz".to_string()),
     );
 }
@@ -8675,7 +9015,7 @@ fn configured_credential_is_resolved_even_when_provider_env_is_set() {
         credentials
             .get("access_token")
             .map(|value| value.expose_secret()),
-        Some("from-source")
+        Some(b"from-source".as_slice())
     );
 }
 
@@ -8822,7 +9162,7 @@ fn provider_credential_round_trips_through_its_source() {
         .store_provider_credential(
             source_spec,
             var,
-            &secrecy::SecretString::new("stored-value".into()),
+            &crate::SecretBytes::from_utf8("stored-value"),
         )
         .unwrap();
 
@@ -8833,7 +9173,7 @@ fn provider_credential_round_trips_through_its_source() {
     assert_eq!(
         resolved
             .get("access_token")
-            .map(|value| value.expose_secret().to_string()),
+            .map(|value| value.try_as_utf8().unwrap().to_string()),
         Some("stored-value".to_string()),
     );
 }
@@ -8902,7 +9242,7 @@ fn storing_a_provider_credential_invalidates_the_memo() {
     let credentials = secrets.declared_provider_credentials("target").unwrap();
     let (var, source_spec) = &credentials[0];
     secrets
-        .store_provider_credential(source_spec, var, &secrecy::SecretString::new("new".into()))
+        .store_provider_credential(source_spec, var, &crate::SecretBytes::from_utf8("new"))
         .unwrap();
 
     // Empty the source: only a memo hit could satisfy the next build, so a
@@ -8946,11 +9286,8 @@ fn store_provider_credential_rejects_a_read_only_source() {
     );
     let credentials = secrets.declared_provider_credentials("target").unwrap();
     let (var, source_spec) = &credentials[0];
-    let result = secrets.store_provider_credential(
-        source_spec,
-        var,
-        &secrecy::SecretString::new("x".into()),
-    );
+    let result =
+        secrets.store_provider_credential(source_spec, var, &crate::SecretBytes::from_utf8("x"));
     assert!(result.is_err(), "the env provider is read-only");
 }
 
@@ -9437,7 +9774,7 @@ secrets = ["DATABASE_URL", "SENTRY_DSN"]
         spec.set_scope("api");
 
         let err = spec
-            .set("UNDEFINED", Some("v".to_string()))
+            .set_text("UNDEFINED", "v")
             .expect_err("an undeclared secret cannot be written");
         let SecretSpecError::SecretNotFound(msg) = err else {
             panic!("expected SecretNotFound, got {err:?}");
@@ -9465,7 +9802,7 @@ secrets = ["DATABASE_URL", "SENTRY_DSN"]
 
         assert!(
             matches!(
-                spec.set("UNDEFINED", Some("v".to_string())),
+                spec.set_text("UNDEFINED", "v"),
                 Err(SecretSpecError::SecretNotFound(_))
             ),
             "the undefined scope must not mask the real error"
@@ -10514,7 +10851,7 @@ fn set_writes_authoritative_provider_then_refreshes_cache() {
     let cache = temp.path().join("cache.env");
     let secrets = cached_dotenv_secrets(&[&source], &cache, "1h");
 
-    secrets.set("API_KEY", Some("written".to_string())).unwrap();
+    secrets.set_text("API_KEY", "written").unwrap();
     assert_eq!(
         dotenv_values(&source).get("API_KEY").map(String::as_str),
         Some("written")
@@ -10609,12 +10946,8 @@ fn shared_flat_cache_does_not_cross_projects() {
     let project_a = cached_secrets_with("cache-project-a", providers.clone());
     let project_b = cached_secrets_with("cache-project-b", providers);
 
-    project_a
-        .set("API_KEY", Some("from-project-a".to_string()))
-        .unwrap();
-    project_b
-        .set("API_KEY", Some("from-project-b".to_string()))
-        .unwrap();
+    project_a.set_text("API_KEY", "from-project-a").unwrap();
+    project_b.set_text("API_KEY", "from-project-b").unwrap();
 
     assert_eq!(
         resolved_value(&project_a, "API_KEY"),
@@ -10642,13 +10975,9 @@ fn shared_flat_cache_does_not_cross_profiles() {
     config.providers = Some(cached_memtest_providers(&cache));
     let mut secrets = Secrets::new(config, None, None, None);
 
-    secrets
-        .set("API_KEY", Some("from-default".to_string()))
-        .unwrap();
+    secrets.set_text("API_KEY", "from-default").unwrap();
     secrets.set_profile("production");
-    secrets
-        .set("API_KEY", Some("from-production".to_string()))
-        .unwrap();
+    secrets.set_text("API_KEY", "from-production").unwrap();
     secrets.set_profile("default");
 
     assert_eq!(
@@ -10701,10 +11030,15 @@ fn rewrite_cache_entry_as_v2(cache: &Path, project: &str, name: &str) {
     let mut envelope: serde_json::Value = serde_json::from_str(payload).unwrap();
     let expires_at = envelope["expires_at"].as_u64().unwrap();
     let max_age_secs = envelope["max_age_secs"].as_u64().unwrap();
+    let value = data_encoding::BASE64
+        .decode(envelope["value_base64"].as_str().unwrap().as_bytes())
+        .unwrap();
+    envelope["value"] = serde_json::Value::String(String::from_utf8(value).unwrap());
     envelope["cached_at"] = serde_json::json!(expires_at - max_age_secs);
     let object = envelope.as_object_mut().unwrap();
     object.remove("expires_at");
     object.remove("max_age_secs");
+    object.remove("value_base64");
     write_cache_entry(
         cache,
         project,
@@ -10726,7 +11060,7 @@ fn write_cache_entry(cache: &Path, project: &str, name: &str, value: &str) {
     provider
         .set(
             crate::provider::Address::convention(project, "default", name),
-            &secrecy::SecretString::new(value.into()),
+            &crate::SecretBytes::from_utf8(value),
         )
         .unwrap();
 }
@@ -10809,7 +11143,7 @@ fn a_write_that_bypasses_the_cache_invalidates_it() {
     // outlive it for the rest of the freshness window.
     let mut direct = cached_dotenv_secrets(&[&source], &cache, "8h");
     direct.set_provider("source0");
-    direct.set("API_KEY", Some("remote-2".to_string())).unwrap();
+    direct.set_text("API_KEY", "remote-2").unwrap();
 
     assert_eq!(
         resolved_value(&secrets, "API_KEY"),
@@ -10833,9 +11167,7 @@ fn a_failed_cache_refresh_drops_the_superseded_entry() {
         cached_secrets_with(project, cached_providers(&[&source], "failwrite://", "8h"));
     assert_eq!(resolved_value(&cached, "API_KEY"), "remote-1");
 
-    unwritable_cache
-        .set("API_KEY", Some("remote-2".to_string()))
-        .unwrap();
+    unwritable_cache.set_text("API_KEY", "remote-2").unwrap();
 
     assert_eq!(
         resolved_value(&cached, "API_KEY"),

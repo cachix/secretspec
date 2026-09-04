@@ -5,12 +5,12 @@
 //! field. Native addresses may select an existing resource by UUID or exact
 //! name and may select its password, username, URI, or description field.
 
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::provider::{
     Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl, credential_or_env,
 };
 use crate::{Result, Secret, SecretSpecError};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -257,7 +257,7 @@ impl PassboltProvider {
     fn explicit_credential(&self, name: &str) -> Option<String> {
         self.credentials
             .get(name)
-            .map(|value| value.expose_secret().to_string())
+            .and_then(|value| value.try_as_utf8().ok().map(str::to_string))
             .filter(|value| !value.is_empty())
     }
 
@@ -559,7 +559,7 @@ impl Provider for PassboltProvider {
         }
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let coords = self.operation_coordinates(addr)?;
         let field = coords.field.as_deref().expect("operation fills field");
         let Some(id) = self.resolve_read_id(&coords.item)? else {
@@ -570,10 +570,10 @@ impl Provider for PassboltProvider {
         };
         Ok(resource
             .field(field)
-            .map(|value| SecretString::new(value.into())))
+            .map(|value| SecretBytes::new(value.into())))
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         if value.expose_secret().is_empty() {
             return Err(SecretSpecError::ProviderOperationFailed(
                 "Passbolt cannot store an empty value: go-passbolt-cli treats empty update \
@@ -584,7 +584,7 @@ impl Provider for PassboltProvider {
         let coords = self.operation_coordinates(addr)?;
         let field = coords.field.as_deref().expect("operation fills field");
         let flag = format!("--{field}");
-        let secret = value.expose_secret();
+        let secret = super::require_utf8("passbolt", value)?;
 
         let existing_id = match addr {
             Address::Native(_) => self
@@ -617,7 +617,7 @@ impl Provider for PassboltProvider {
         Ok(())
     }
 
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         if requests.is_empty() {
             return Ok(HashMap::new());
         }
@@ -679,7 +679,7 @@ impl Provider for PassboltProvider {
             };
             for (name, field) in requests {
                 if let Some(value) = resource.field(&field) {
-                    output.insert(name, SecretString::new(value.into()));
+                    output.insert(name, SecretBytes::new(value.into()));
                 }
             }
         }
@@ -1027,8 +1027,8 @@ esac
     fn explicit_provider_credentials_feed_cli_auth() {
         let mut provider = PassboltProvider::default();
         let mut credentials = ProviderCredentials::new();
-        credentials.insert(PRIVATE_KEY.into(), SecretString::new("key".into()));
-        credentials.insert(PASSPHRASE.into(), SecretString::new("phrase".into()));
+        credentials.insert(PRIVATE_KEY.into(), SecretBytes::new("key".into()));
+        credentials.insert(PASSPHRASE.into(), SecretBytes::new("phrase".into()));
         provider.with_credentials(credentials);
         let auth = provider.cli_auth();
         assert_eq!(auth.key_inline.as_deref(), Some("key"));
@@ -1086,7 +1086,7 @@ esac
         let error = PassboltProvider::default()
             .set(
                 Address::Native(&native),
-                &SecretString::new(String::new().into()),
+                &SecretBytes::new(String::new().into()),
             )
             .unwrap_err();
         assert!(error.to_string().contains("cannot store an empty value"));
@@ -1110,7 +1110,7 @@ esac
         provider
             .set(
                 Address::Native(&native),
-                &SecretString::new("updated".into()),
+                &SecretBytes::new("updated".into()),
             )
             .unwrap();
 
@@ -1145,7 +1145,7 @@ esac
         provider
             .set(
                 Address::Native(&native),
-                &SecretString::new("updated".into()),
+                &SecretBytes::new("updated".into()),
             )
             .unwrap();
 

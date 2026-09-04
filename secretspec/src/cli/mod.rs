@@ -5,13 +5,13 @@ use crate::provider::{Provider, providers, spec_names_known_provider};
 use crate::spec_edit::{
     add_description as add_secret_to_spec, validate_secret_name as validate_add_secret_name,
 };
-use crate::{CallerContext, ExportFormat, Secrets, Spec};
+use crate::{CallerContext, ExportFormat, SecretBytes, Secrets, Spec};
 use clap::parser::ValueSource;
 use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum, ValueHint};
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{IsTerminal, Write};
+use std::io::{IsTerminal, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -149,6 +149,9 @@ enum Commands {
         name: String,
         /// Value of the secret (will prompt if not provided)
         value: Option<String>,
+        /// Read the exact secret bytes from a file, or from stdin with `-` (0.20+)
+        #[arg(long, value_name = "FILE", conflicts_with = "value", value_hint = ValueHint::FilePath)]
+        from_file: Option<PathBuf>,
         /// Provider backend to use
         #[arg(short, long, env = "SECRETSPEC_PROVIDER", add = clap_complete::ArgValueCompleter::new(completion::providers))]
         provider: Option<String>,
@@ -1332,7 +1335,7 @@ pub fn main() -> Result<()> {
                                 .store_provider_credential(
                                     &source,
                                     &credential_name,
-                                    &secrecy::SecretString::new(entered.into()),
+                                    &SecretBytes::from_utf8(entered),
                                 )
                                 .into_diagnostic()?;
                             println!("✓ stored {credential_name} in {location}");
@@ -1355,6 +1358,7 @@ pub fn main() -> Result<()> {
         Commands::Set {
             name,
             value,
+            from_file,
             provider,
             profile,
         } => {
@@ -1365,9 +1369,23 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
-            app.set(&name, value)
-                .into_diagnostic()
-                .wrap_err("Failed to set secret")?;
+            let result = match (value, from_file) {
+                (Some(value), None) => app.set_text(&name, &value),
+                (None, Some(path)) if path == Path::new("-") => {
+                    let mut bytes = Vec::new();
+                    std::io::stdin().read_to_end(&mut bytes).into_diagnostic()?;
+                    app.set(&name, SecretBytes::from_vec(bytes))
+                }
+                (None, Some(path)) => {
+                    let bytes = fs::read(&path)
+                        .into_diagnostic()
+                        .wrap_err_with(|| format!("Failed to read {}", path.display()))?;
+                    app.set(&name, SecretBytes::from_vec(bytes))
+                }
+                (None, None) => app.prompt_and_set(&name),
+                (Some(_), Some(_)) => unreachable!("clap rejects conflicting set inputs"),
+            };
+            result.into_diagnostic().wrap_err("Failed to set secret")?;
             Ok(())
         }
         // Retrieve and display a secret value

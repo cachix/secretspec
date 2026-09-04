@@ -2,6 +2,7 @@
 use crate::{Result, SecretSpecError};
 
 use super::{Address, Provider, ProviderUrl};
+use crate::SecretBytes;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use json_patch::jsonptr::Token;
 use k8s_openapi::{
@@ -17,7 +18,6 @@ use kube::{
     Api, Client,
     api::{Patch, PatchParams, PostParams},
 };
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, format, sync::OnceLock, write};
 
@@ -220,7 +220,7 @@ impl KubernetesProvider {
         Ok(secret_name)
     }
 
-    async fn get_coords_async(&self, key: &str) -> Result<Option<SecretString>> {
+    async fn get_coords_async(&self, key: &str) -> Result<Option<SecretBytes>> {
         let client = self.client().await?;
         let namespace = match &self.config.namespace {
             Some(ns) => ns.as_str(),
@@ -246,9 +246,9 @@ impl KubernetesProvider {
             }
         };
         match value {
-            Ok(Some(StringRepresentation::Plain(s))) => Ok(Some(SecretString::new(s.into()))),
+            Ok(Some(StringRepresentation::Plain(s))) => Ok(Some(SecretBytes::new(s.into()))),
             Ok(Some(StringRepresentation::Base64(s))) => match String::from_utf8(s.0) {
-                Ok(decoded) => Ok(Some(SecretString::new(decoded.into()))),
+                Ok(decoded) => Ok(Some(SecretBytes::new(decoded.into()))),
                 Err(e) => Err(SecretSpecError::ProviderOperationFailed(format!(
                     "Cannot decode value for {}: {}",
                     key,
@@ -266,17 +266,17 @@ impl KubernetesProvider {
         }
     }
 
-    async fn set_secret_async(&self, key: &str, value: &SecretString) -> Result<()> {
+    async fn set_secret_async(&self, key: &str, value: &SecretBytes) -> Result<()> {
+        let value = super::require_utf8("kubernetes", value)?;
         let client = self.client().await?;
         let namespace = match &self.config.namespace {
             Some(ns) => ns.as_str(),
             None => client.default_namespace(),
         };
         let name = self.config.name.as_str();
-        let secret = value.expose_secret();
-        let base64_secret = STANDARD.encode(secret);
+        let base64_secret = STANDARD.encode(value.as_bytes());
         let secret = match self.config.kind {
-            KubernetesKind::ConfigMap => secret,
+            KubernetesKind::ConfigMap => value,
             KubernetesKind::Secret => base64_secret.as_str(),
         };
         let patch = serde_json::json!({
@@ -403,12 +403,12 @@ impl Provider for KubernetesProvider {
         })
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let coords = self.resolve_coords(addr)?;
         block_on(self.get_coords_async(&coords.item))
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)?;
         let coords = self.resolve_coords(addr)?;
         block_on(self.set_secret_async(&coords.item, value))

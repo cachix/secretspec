@@ -4,6 +4,7 @@
 //! Supported types: password, hex, base64, uuid, command, rsa_private_key,
 //! openpgp_private_key, ssh_private_key.
 
+use crate::SecretBytes;
 use crate::SecretSpecError;
 use crate::config::{
     GenerateConfig, OPENPGP_RSA_DEFAULT_BITS, OPENPGP_RSA_MAX_BITS, OPENPGP_RSA_MIN_BITS,
@@ -19,7 +20,6 @@ use rand::RngExt;
 use rand_08::rngs::OsRng as OpenPgpOsRng;
 use rsa::RsaPrivateKey;
 use rsa::pkcs1::EncodeRsaPrivateKey;
-use secrecy::SecretString;
 use smallvec::smallvec;
 use ssh_key::private::{KeypairData as SshKeypairData, RsaKeypair as SshRsaKeypair};
 use ssh_key::{
@@ -27,7 +27,7 @@ use ssh_key::{
 };
 
 /// Generate a secret value based on the secret type and generation config.
-pub fn generate(secret_type: &str, config: &GenerateConfig) -> crate::Result<SecretString> {
+pub fn generate(secret_type: &str, config: &GenerateConfig) -> crate::Result<SecretBytes> {
     match secret_type {
         "password" => generate_password(config),
         "hex" => generate_hex(config),
@@ -44,7 +44,7 @@ pub fn generate(secret_type: &str, config: &GenerateConfig) -> crate::Result<Sec
     }
 }
 
-fn generate_password(config: &GenerateConfig) -> crate::Result<SecretString> {
+fn generate_password(config: &GenerateConfig) -> crate::Result<SecretBytes> {
     let (length, charset_name) = match config {
         GenerateConfig::Bool(_) => (32, "alphanumeric"),
         GenerateConfig::Options(opts) => (
@@ -84,10 +84,10 @@ fn generate_password(config: &GenerateConfig) -> crate::Result<SecretString> {
         })
         .collect();
 
-    Ok(SecretString::new(password.into()))
+    Ok(SecretBytes::new(password.into()))
 }
 
-fn generate_hex(config: &GenerateConfig) -> crate::Result<SecretString> {
+fn generate_hex(config: &GenerateConfig) -> crate::Result<SecretBytes> {
     let bytes = match config {
         GenerateConfig::Bool(_) => 32,
         GenerateConfig::Options(opts) => opts.bytes.unwrap_or(32),
@@ -97,10 +97,10 @@ fn generate_hex(config: &GenerateConfig) -> crate::Result<SecretString> {
     let random_bytes: Vec<u8> = (0..bytes).map(|_| rng.random::<u8>()).collect();
     let hex = HEXLOWER.encode(&random_bytes);
 
-    Ok(SecretString::new(hex.into()))
+    Ok(SecretBytes::new(hex.into()))
 }
 
-fn generate_base64(config: &GenerateConfig) -> crate::Result<SecretString> {
+fn generate_base64(config: &GenerateConfig) -> crate::Result<SecretBytes> {
     let bytes = match config {
         GenerateConfig::Bool(_) => 32,
         GenerateConfig::Options(opts) => opts.bytes.unwrap_or(32),
@@ -110,15 +110,15 @@ fn generate_base64(config: &GenerateConfig) -> crate::Result<SecretString> {
     let random_bytes: Vec<u8> = (0..bytes).map(|_| rng.random::<u8>()).collect();
     let encoded = BASE64.encode(&random_bytes);
 
-    Ok(SecretString::new(encoded.into()))
+    Ok(SecretBytes::new(encoded.into()))
 }
 
-fn generate_uuid() -> crate::Result<SecretString> {
+fn generate_uuid() -> crate::Result<SecretBytes> {
     let id = uuid::Uuid::new_v4().to_string();
-    Ok(SecretString::new(id.into()))
+    Ok(SecretBytes::new(id.into()))
 }
 
-fn generate_rsa(config: &GenerateConfig) -> crate::Result<SecretString> {
+fn generate_rsa(config: &GenerateConfig) -> crate::Result<SecretBytes> {
     let bits = match config {
         GenerateConfig::Bool(_) => 2048,
         GenerateConfig::Options(opts) => opts.bits.unwrap_or(2048),
@@ -134,7 +134,7 @@ fn generate_rsa(config: &GenerateConfig) -> crate::Result<SecretString> {
             SecretSpecError::GenerationFailed(format!("failed to encode RSA key as PEM: {}", e))
         })?;
 
-    Ok(SecretString::new(pem.to_string().into()))
+    Ok(SecretBytes::new(pem.to_string().into()))
 }
 
 /// Generates a broadly interoperable OpenPGP v4 transferable secret key.
@@ -142,7 +142,7 @@ fn generate_rsa(config: &GenerateConfig) -> crate::Result<SecretString> {
 /// The certification-only primary key is Ed25519. Requested signing and
 /// encryption capabilities are placed on separate Ed25519 and Curve25519
 /// subkeys, respectively, so routine operations do not use the primary key.
-fn generate_openpgp(config: &GenerateConfig) -> crate::Result<SecretString> {
+fn generate_openpgp(config: &GenerateConfig) -> crate::Result<SecretBytes> {
     let opts = match config {
         GenerateConfig::Options(opts) => opts,
         GenerateConfig::Bool(_) => {
@@ -309,12 +309,12 @@ fn generate_openpgp(config: &GenerateConfig) -> crate::Result<SecretString> {
             ))
         })?;
 
-    Ok(SecretString::new(armored.into()))
+    Ok(SecretBytes::new(armored.into()))
 }
 
 /// Generates an unencrypted OpenSSH private key using a modern Ed25519 default
 /// or a configurable RSA compatibility profile.
-fn generate_ssh(config: &GenerateConfig) -> crate::Result<SecretString> {
+fn generate_ssh(config: &GenerateConfig) -> crate::Result<SecretBytes> {
     let opts = match config {
         GenerateConfig::Bool(_) => None,
         GenerateConfig::Options(opts) => Some(opts),
@@ -375,10 +375,10 @@ fn generate_ssh(config: &GenerateConfig) -> crate::Result<SecretString> {
     let encoded = key.to_openssh(SshLineEnding::LF).map_err(|error| {
         SecretSpecError::GenerationFailed(format!("failed to encode OpenSSH private key: {error}"))
     })?;
-    Ok(SecretString::new(encoded.to_string().into()))
+    Ok(SecretBytes::new(encoded.to_string().into()))
 }
 
-fn generate_from_command(config: &GenerateConfig) -> crate::Result<SecretString> {
+fn generate_from_command(config: &GenerateConfig) -> crate::Result<SecretBytes> {
     let command = match config {
         GenerateConfig::Bool(_) => {
             return Err(SecretSpecError::GenerationFailed(
@@ -428,7 +428,7 @@ fn generate_from_command(config: &GenerateConfig) -> crate::Result<SecretString>
         )));
     }
 
-    Ok(SecretString::new(trimmed.to_string().into()))
+    Ok(SecretBytes::new(trimmed.to_string().into()))
 }
 
 #[cfg(test)]
@@ -438,12 +438,11 @@ mod tests {
     use pgp::composed::{Deserializable, SignedSecretKey};
     use pgp::crypto::public_key::PublicKeyAlgorithm;
     use pgp::types::KeyDetails as _;
-    use secrecy::ExposeSecret;
 
     #[test]
     fn test_generate_password_default() {
         let value = generate("password", &GenerateConfig::Bool(true)).unwrap();
-        let s = value.expose_secret();
+        let s = value.try_as_utf8().unwrap();
         assert_eq!(s.len(), 32);
         assert!(s.chars().all(|c| c.is_alphanumeric()));
     }
@@ -455,7 +454,7 @@ mod tests {
             ..Default::default()
         });
         let value = generate("password", &config).unwrap();
-        assert_eq!(value.expose_secret().len(), 64);
+        assert_eq!(value.try_as_utf8().unwrap().len(), 64);
     }
 
     #[test]
@@ -466,7 +465,7 @@ mod tests {
             ..Default::default()
         });
         let value = generate("password", &config).unwrap();
-        let s = value.expose_secret();
+        let s = value.try_as_utf8().unwrap();
         assert_eq!(s.len(), 100);
         assert!(s.bytes().all(|b| (33..=126).contains(&b)));
     }
@@ -489,7 +488,7 @@ mod tests {
             ..Default::default()
         });
         let value = generate("password", &config).unwrap();
-        assert_eq!(value.expose_secret().len(), 0);
+        assert_eq!(value.try_as_utf8().unwrap().len(), 0);
     }
 
     #[test]
@@ -499,13 +498,13 @@ mod tests {
             ..Default::default()
         });
         let value = generate("password", &config).unwrap();
-        assert_eq!(value.expose_secret().len(), 10000);
+        assert_eq!(value.try_as_utf8().unwrap().len(), 10000);
     }
 
     #[test]
     fn test_generate_hex_default() {
         let value = generate("hex", &GenerateConfig::Bool(true)).unwrap();
-        let s = value.expose_secret();
+        let s = value.try_as_utf8().unwrap();
         // 32 bytes = 64 hex chars
         assert_eq!(s.len(), 64);
         assert!(s.chars().all(|c| c.is_ascii_hexdigit()));
@@ -518,7 +517,7 @@ mod tests {
             ..Default::default()
         });
         let value = generate("hex", &config).unwrap();
-        assert_eq!(value.expose_secret().len(), 32);
+        assert_eq!(value.try_as_utf8().unwrap().len(), 32);
     }
 
     #[test]
@@ -528,13 +527,13 @@ mod tests {
             ..Default::default()
         });
         let value = generate("hex", &config).unwrap();
-        assert_eq!(value.expose_secret().len(), 0);
+        assert_eq!(value.try_as_utf8().unwrap().len(), 0);
     }
 
     #[test]
     fn test_generate_base64_default() {
         let value = generate("base64", &GenerateConfig::Bool(true)).unwrap();
-        let s = value.expose_secret();
+        let s = value.try_as_utf8().unwrap();
         // 32 bytes base64 encoded = 44 chars (with padding)
         assert_eq!(s.len(), 44);
         assert!(
@@ -551,13 +550,13 @@ mod tests {
         });
         let value = generate("base64", &config).unwrap();
         // 64 bytes = 88 chars base64
-        assert_eq!(value.expose_secret().len(), 88);
+        assert_eq!(value.try_as_utf8().unwrap().len(), 88);
     }
 
     #[test]
     fn test_generate_uuid() {
         let value = generate("uuid", &GenerateConfig::Bool(true)).unwrap();
-        let s = value.expose_secret();
+        let s = value.try_as_utf8().unwrap();
         // UUID v4 format: 8-4-4-4-12 = 36 chars
         assert_eq!(s.len(), 36);
         let parts: Vec<&str> = s.split('-').collect();
@@ -578,7 +577,7 @@ mod tests {
             ..Default::default()
         });
         let value = generate("command", &config).unwrap();
-        assert_eq!(value.expose_secret(), "hello");
+        assert_eq!(value.try_as_utf8().unwrap(), "hello");
     }
 
     #[test]
@@ -630,7 +629,7 @@ mod tests {
     #[test]
     fn test_generate_rsa_default() {
         let value = generate("rsa_private_key", &GenerateConfig::Bool(true)).unwrap();
-        let s = value.expose_secret();
+        let s = value.try_as_utf8().unwrap();
         assert!(s.starts_with("-----BEGIN RSA PRIVATE KEY-----"));
         assert!(s.trim().ends_with("-----END RSA PRIVATE KEY-----"));
     }
@@ -642,7 +641,7 @@ mod tests {
             ..Default::default()
         });
         let value = generate("rsa_private_key", &config).unwrap();
-        let s = value.expose_secret();
+        let s = value.try_as_utf8().unwrap();
         assert!(s.starts_with("-----BEGIN RSA PRIVATE KEY-----"));
         // 4096-bit key PEM is longer than 2048-bit
         assert!(s.len() > 1700);
@@ -652,7 +651,7 @@ mod tests {
     fn test_generate_rsa_uniqueness() {
         let v1 = generate("rsa_private_key", &GenerateConfig::Bool(true)).unwrap();
         let v2 = generate("rsa_private_key", &GenerateConfig::Bool(true)).unwrap();
-        assert_ne!(v1.expose_secret(), v2.expose_secret());
+        assert_ne!(v1.try_as_utf8().unwrap(), v2.try_as_utf8().unwrap());
     }
 
     fn openpgp_config(
@@ -674,17 +673,19 @@ mod tests {
         let value = generate("openpgp_private_key", config).unwrap();
         assert!(
             value
-                .expose_secret()
+                .try_as_utf8()
+                .unwrap()
                 .starts_with("-----BEGIN PGP PRIVATE KEY BLOCK-----")
         );
         assert!(
             value
-                .expose_secret()
+                .try_as_utf8()
+                .unwrap()
                 .trim()
                 .ends_with("-----END PGP PRIVATE KEY BLOCK-----")
         );
         let (key, _) =
-            SignedSecretKey::from_armor_single(value.expose_secret().as_bytes()).unwrap();
+            SignedSecretKey::from_armor_single(value.try_as_utf8().unwrap().as_bytes()).unwrap();
         key.verify_bindings().unwrap();
         key
     }
@@ -771,16 +772,18 @@ mod tests {
         let value = generate("ssh_private_key", config).unwrap();
         assert!(
             value
-                .expose_secret()
+                .try_as_utf8()
+                .unwrap()
                 .starts_with("-----BEGIN OPENSSH PRIVATE KEY-----")
         );
         assert!(
             value
-                .expose_secret()
+                .try_as_utf8()
+                .unwrap()
                 .trim()
                 .ends_with("-----END OPENSSH PRIVATE KEY-----")
         );
-        SshPrivateKey::from_openssh(value.expose_secret()).unwrap()
+        SshPrivateKey::from_openssh(value.try_as_utf8().unwrap()).unwrap()
     }
 
     #[test]
@@ -862,6 +865,6 @@ mod tests {
     fn test_generate_uniqueness() {
         let v1 = generate("password", &GenerateConfig::Bool(true)).unwrap();
         let v2 = generate("password", &GenerateConfig::Bool(true)).unwrap();
-        assert_ne!(v1.expose_secret(), v2.expose_secret());
+        assert_ne!(v1.try_as_utf8().unwrap(), v2.try_as_utf8().unwrap());
     }
 }

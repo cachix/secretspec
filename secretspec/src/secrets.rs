@@ -1,6 +1,5 @@
 //! Core secrets management functionality
 
-use crate::CallerContext;
 use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
 use crate::cache::{self, CacheEntryStatus, CacheOwnership};
 use crate::compiled_spec::{CompiledSpec, MissingPolicy};
@@ -20,11 +19,12 @@ use crate::resolve::{
 };
 use crate::spec::Spec;
 use crate::validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
+use crate::{CallerContext, SecretBytes};
 use colored::Colorize;
 use data_encoding::{
     BASE64, BASE64_NOPAD, BASE64URL, BASE64URL_NOPAD, Encoding, HEXLOWER, HEXLOWER_PERMISSIVE,
 };
-use secrecy::{ExposeSecret, SecretSlice, SecretString};
+use secrecy::{ExposeSecret, SecretString};
 #[cfg(unix)]
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
 #[cfg(unix)]
@@ -252,7 +252,7 @@ fn group_names(group: &[&PlannedSecret]) -> String {
 /// What a stored cache entry can do for the read that found it.
 enum CachedEntry {
     /// Fresh, and written for this route: serve it.
-    Fresh(SecretString),
+    Fresh(SecretBytes),
     /// A SecretSpec entry no read will serve: expired regardless of owner, or
     /// ours but unreadable or written for another route or freshness policy.
     /// Safe to drop.
@@ -272,7 +272,7 @@ enum CachedEntry {
 fn cached_entry(
     planned: &PlannedSecret,
     cache: &ResolvedCache,
-    stored: &SecretString,
+    stored: &SecretBytes,
     project: &str,
     profile: &str,
 ) -> CachedEntry {
@@ -370,7 +370,7 @@ struct FallbackReadRequest<'a> {
 }
 
 struct FallbackRead {
-    value: Option<SecretString>,
+    value: Option<SecretBytes>,
     provider_uri: Option<String>,
     native_address: Option<NativeAddress>,
 }
@@ -392,8 +392,8 @@ struct PreparedImport {
     target_provider: Box<dyn ProviderTrait>,
     source_address: OwnedAddress,
     target_address: OwnedAddress,
-    source_value: Option<SecretString>,
-    target_value: Option<SecretString>,
+    source_value: Option<SecretBytes>,
+    target_value: Option<SecretBytes>,
     copied: bool,
     source_deleted: bool,
 }
@@ -1033,7 +1033,7 @@ struct ResolutionExecution<'secrets, 'plan, 'filter, 'addresses> {
     temp_files: Vec<tempfile::NamedTempFile>,
     resolution: Vec<SecretResolution>,
     group_uris: HashMap<Option<&'plan str>, String>,
-    fetched_values: HashMap<String, SecretString>,
+    fetched_values: HashMap<String, SecretBytes>,
     failed_primary_uris: HashMap<Option<&'plan str>, SecretSpecError>,
     cached_uris: HashMap<String, String>,
     fallback_results: HashMap<String, FallbackReadResult>,
@@ -1145,7 +1145,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             (provider_uri, group, provider): GroupFetch<'a>,
             project: &str,
             profile: &str,
-        ) -> (Option<&'a str>, Result<HashMap<String, SecretString>>) {
+        ) -> (Option<&'a str>, Result<HashMap<String, SecretBytes>>) {
             let result = manager.fetch_group(&*provider, provider_uri, &group, project, profile);
             (provider_uri, result)
         }
@@ -1404,7 +1404,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                                         &mut self.temp_files,
                                         planned,
                                         diagnostic_name,
-                                        SecretString::new(default_value.clone().into()),
+                                        SecretBytes::from_utf8(default_value),
                                         ResolvedRepresentation::Logical,
                                     )?;
                                     self.with_defaults
@@ -1509,7 +1509,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                         &mut self.temp_files,
                         planned,
                         Secrets::diagnostic_secret_name(&planned.name, self.output_filter),
-                        SecretString::new(rendered.into()),
+                        SecretBytes::from_utf8(rendered),
                         ResolvedRepresentation::Logical,
                     )?;
                 }
@@ -1791,7 +1791,7 @@ pub(crate) struct WriteTarget {
 }
 
 type WriteTargetReporter = Arc<dyn Fn(&WriteTarget) + Send + Sync>;
-type PromptReader = Arc<dyn Fn(&str, &str) -> Result<SecretString> + Send + Sync>;
+type PromptReader = Arc<dyn Fn(&str, &str) -> Result<SecretBytes> + Send + Sync>;
 
 /// secretspec's own opt-in for marking the current process as an agent. Lets any
 /// harness that the `detect-coding-agent` crate does not recognize identify itself.
@@ -2095,7 +2095,7 @@ impl Secrets {
     #[cfg(test)]
     pub(crate) fn set_prompt_reader(
         &mut self,
-        reader: impl Fn(&str, &str) -> Result<SecretString> + Send + Sync + 'static,
+        reader: impl Fn(&str, &str) -> Result<SecretBytes> + Send + Sync + 'static,
     ) {
         self.prompt_reader = Some(Arc::new(reader));
     }
@@ -2584,7 +2584,7 @@ impl Secrets {
         &self,
         source: &CredentialSource,
         name: &str,
-        value: &SecretString,
+        value: &SecretBytes,
     ) -> Result<String> {
         self.ensure_reason_for(AuditAction::Set, Some(name))?;
         // The store location is profile-independent (see `PROVIDER_CREDENTIAL_SCOPE`);
@@ -2864,19 +2864,13 @@ impl Secrets {
         Ok(())
     }
 
-    /// Decode a stored textual representation. Exactly one trailing LF or CRLF
-    /// is ignored to accommodate a value captured from command output; every
-    /// other non-alphabet character remains a hard error.
+    /// Decode a stored representation as strict ASCII base64/base64url/hex.
     fn decode_stored_value(
         encoding: SecretEncoding,
         diagnostic_name: &str,
-        value: &SecretString,
-    ) -> Result<SecretSlice<u8>> {
-        let encoded = value
-            .expose_secret()
-            .strip_suffix("\r\n")
-            .or_else(|| value.expose_secret().strip_suffix('\n'))
-            .unwrap_or_else(|| value.expose_secret());
+        value: &SecretBytes,
+    ) -> Result<SecretBytes> {
+        let encoded = value.expose_secret();
 
         fn decode_base(
             encoded: &[u8],
@@ -2894,12 +2888,10 @@ impl Secrets {
         }
 
         let decoded = match encoding {
-            SecretEncoding::Base64 => decode_base(encoded.as_bytes(), &BASE64, &BASE64_NOPAD),
-            SecretEncoding::Base64Url => {
-                decode_base(encoded.as_bytes(), &BASE64URL, &BASE64URL_NOPAD)
-            }
+            SecretEncoding::Base64 => decode_base(encoded, &BASE64, &BASE64_NOPAD),
+            SecretEncoding::Base64Url => decode_base(encoded, &BASE64URL, &BASE64URL_NOPAD),
             SecretEncoding::Hex => HEXLOWER_PERMISSIVE
-                .decode(encoded.as_bytes())
+                .decode(encoded)
                 .map_err(|error| error.to_string()),
         }
         .map_err(|reason| SecretSpecError::DecodeFailed {
@@ -2908,24 +2900,23 @@ impl Secrets {
             reason,
         })?;
 
-        Ok(decoded.into())
+        Ok(SecretBytes::from_vec(decoded))
     }
 
-    /// Encode a logical UTF-8 value into the canonical stored representation
-    /// for its declared encoding.
-    fn encode_logical_value(encoding: SecretEncoding, value: &SecretString) -> SecretString {
-        let bytes = value.expose_secret().as_bytes();
+    /// Encode logical bytes into the canonical stored representation.
+    fn encode_logical_value(encoding: SecretEncoding, value: &SecretBytes) -> SecretBytes {
+        let bytes = value.expose_secret();
         let encoded = match encoding {
             SecretEncoding::Base64 => BASE64.encode(bytes),
             SecretEncoding::Base64Url => BASE64URL_NOPAD.encode(bytes),
             SecretEncoding::Hex => HEXLOWER.encode(bytes),
         };
-        SecretString::new(encoded.into())
+        SecretBytes::from_utf8(encoded)
     }
 
     /// Return an encoded copy only when this secret declares an encoding. The
     /// caller can otherwise pass the original value through without cloning it.
-    fn encoded_for_storage(planned: &PlannedSecret, value: &SecretString) -> Option<SecretString> {
+    fn encoded_for_storage(planned: &PlannedSecret, value: &SecretBytes) -> Option<SecretBytes> {
         planned
             .encoding()
             .map(|encoding| Self::encode_logical_value(encoding, value))
@@ -2938,20 +2929,18 @@ impl Secrets {
     fn validate_import_value(
         planned: &PlannedSecret,
         diagnostic_name: &str,
-        value: &SecretString,
+        value: &SecretBytes,
     ) -> Result<()> {
         let Some(encoding) = planned.encoding() else {
             return Ok(());
         };
         let decoded = Self::decode_stored_value(encoding, diagnostic_name, value)?;
         if !planned.as_path() {
-            std::str::from_utf8(decoded.expose_secret()).map_err(|error| {
+            decoded.try_as_utf8().map_err(|error| {
                 SecretSpecError::DecodeFailed {
                     name: diagnostic_name.to_string(),
                     encoding: encoding.as_str(),
-                    reason: format!(
-                        "decoded bytes are not valid UTF-8 ({error}); set `as_path = true` to expose binary data"
-                    ),
+                    reason: format!("decoded bytes are not valid UTF-8 ({error}); set `as_path = true` to expose binary data"),
                 }
             })?;
         }
@@ -2965,7 +2954,7 @@ impl Secrets {
         extract: &SecretExtract,
         diagnostic_name: &str,
         value: &str,
-    ) -> Result<SecretString> {
+    ) -> Result<SecretBytes> {
         let failed = |reason: String| SecretSpecError::DecodeFailed {
             name: diagnostic_name.to_string(),
             encoding: extract.format.as_str(),
@@ -2986,13 +2975,15 @@ impl Secrets {
                 // pointer and reports what the document holds, unlike a
                 // provider `field`, where a null means "not set" and the chain
                 // continues. See crate::json_field.
-                Ok(crate::json_field::render(selected))
+                Ok(SecretBytes::from_utf8(
+                    crate::json_field::render(selected).expose_secret(),
+                ))
             }
             // The pointer grammar and the lookup that follows it live together
             // in crate::ini_field, next to the validation that rejects every
             // other shape at config time.
             ExtractFormat::Ini => crate::ini_field::select(value, &extract.pointer)
-                .map(|selected| SecretString::new(selected.into()))
+                .map(SecretBytes::from_utf8)
                 .map_err(failed),
         }
     }
@@ -3005,7 +2996,7 @@ impl Secrets {
         &self,
         planned: &PlannedSecret,
         diagnostic_name: &str,
-        value: SecretString,
+        value: SecretBytes,
         representation: ResolvedRepresentation,
     ) -> Result<PreparedSecret> {
         let decoded = match (representation, planned.encoding()) {
@@ -3020,7 +3011,7 @@ impl Secrets {
             (ResolvedRepresentation::Stored, Some(extract)) => {
                 let text = match &decoded {
                     Some((encoding, decoded)) => {
-                        std::str::from_utf8(decoded.expose_secret()).map_err(|error| {
+                        decoded.try_as_utf8().map_err(|error| {
                             SecretSpecError::DecodeFailed {
                                 name: diagnostic_name.to_string(),
                                 encoding: encoding.as_str(),
@@ -3031,7 +3022,16 @@ impl Secrets {
                             }
                         })?
                     }
-                    None => value.expose_secret(),
+                    None => value.try_as_utf8().map_err(|error| {
+                        SecretSpecError::DecodeFailed {
+                            name: diagnostic_name.to_string(),
+                            encoding: extract.format.as_str(),
+                            reason: format!(
+                                "stored bytes are not valid UTF-8 and cannot be extracted as {} ({error})",
+                                extract.format.as_str()
+                            ),
+                        }
+                    })?,
                 };
                 Some(Self::extract_stored_value(extract, diagnostic_name, text)?)
             }
@@ -3041,15 +3041,17 @@ impl Secrets {
         if planned.as_path() {
             let bytes = extracted
                 .as_ref()
-                .map(|value| value.expose_secret().as_bytes())
+                .map(|value| value.expose_secret())
                 .or_else(|| decoded.as_ref().map(|(_, decoded)| decoded.expose_secret()))
-                .unwrap_or_else(|| value.expose_secret().as_bytes());
+                .unwrap_or_else(|| value.expose_secret());
             let (owner, path) = self.write_secret_to_temp_file(bytes)?;
             Ok(PreparedSecret::File { owner, path })
         } else if let Some(extracted) = extracted {
-            Ok(PreparedSecret::Inline(extracted))
+            Ok(PreparedSecret::Inline(SecretString::new(
+                extracted.try_as_utf8()?.to_owned().into(),
+            )))
         } else if let Some((encoding, decoded)) = decoded {
-            let text = std::str::from_utf8(decoded.expose_secret()).map_err(|error| {
+            let text = decoded.try_as_utf8().map_err(|error| {
                 SecretSpecError::DecodeFailed {
                     name: diagnostic_name.to_string(),
                     encoding: encoding.as_str(),
@@ -3062,7 +3064,14 @@ impl Secrets {
                 text.to_owned().into(),
             )))
         } else {
-            Ok(PreparedSecret::Inline(value))
+            let text = value.try_as_utf8().map_err(|_| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "secret '{diagnostic_name}' contains non-UTF-8 bytes; declare `as_path = true` to consume binary values"
+                ))
+            })?;
+            Ok(PreparedSecret::Inline(SecretString::new(
+                text.to_owned().into(),
+            )))
         }
     }
 
@@ -3077,7 +3086,7 @@ impl Secrets {
         temp_files: &mut Vec<tempfile::NamedTempFile>,
         planned: &PlannedSecret,
         diagnostic_name: &str,
-        value: SecretString,
+        value: SecretBytes,
         representation: ResolvedRepresentation,
     ) -> Result<()> {
         match self.prepare_resolved(planned, diagnostic_name, value, representation)? {
@@ -3542,7 +3551,7 @@ impl Secrets {
         group: &[&PlannedSecret],
         project: &str,
         profile: &str,
-    ) -> Result<HashMap<String, SecretString>> {
+    ) -> Result<HashMap<String, SecretBytes>> {
         let addresses = group
             .iter()
             .map(|planned| self.address_for_spec(planned, provider_spec, project, profile))
@@ -3568,7 +3577,7 @@ impl Secrets {
         &self,
         plan: &ResolutionPlan,
         profile: &str,
-    ) -> HashMap<String, (SecretString, String)> {
+    ) -> HashMap<String, (SecretBytes, String)> {
         // Grouped by cache spec (not URI) so an alias's `credentials` stays
         // reachable at build time, and sorted so warnings come out in a stable
         // order.
@@ -3649,7 +3658,7 @@ impl Secrets {
         planned: &PlannedSecret,
         route: &Route,
         profile: &str,
-        value: &SecretString,
+        value: &SecretBytes,
     ) {
         let Some(cache) = route.cache() else {
             return;
@@ -3884,7 +3893,7 @@ impl Secrets {
         planned: &PlannedSecret,
         route: &Route,
         profile: &str,
-        value: &SecretString,
+        value: &SecretBytes,
     ) {
         if route.cache().is_some() {
             self.write_cached_secret(planned, route, profile, value);
@@ -4292,17 +4301,13 @@ impl Secrets {
         Ok(cleared)
     }
 
-    /// Sets a secret value in the provider
-    ///
-    /// If no value is provided, the user will be prompted to enter it securely.
+    /// Sets arbitrary secret bytes in the provider. Available starting with
+    /// SecretSpec 0.20.
     ///
     /// # Arguments
     ///
     /// * `name` - The name of the secret to set
-    /// * `value` - Optional value to set (prompts if None)
-    /// * `provider_arg` - Optional provider to use
-    /// * `profile` - Optional profile to use
-    ///
+    /// * `value` - Arbitrary bytes to set
     /// # Returns
     ///
     /// `Ok(())` if the secret was successfully set
@@ -4317,12 +4322,28 @@ impl Secrets {
     /// # Example
     ///
     /// ```no_run
-    /// use secretspec::Secrets;
+    /// use secretspec::{SecretBytes, Secrets};
     ///
-    /// let mut spec = Secrets::load().unwrap();
-    /// spec.set("DATABASE_URL", Some("postgres://localhost".to_string())).unwrap();
+    /// let spec = Secrets::load().unwrap();
+    /// spec.set("DATABASE_URL", SecretBytes::from_utf8("postgres://localhost"))
+    ///     .unwrap();
     /// ```
-    pub fn set(&self, name: &str, value: Option<String>) -> Result<()> {
+    pub fn set(&self, name: &str, value: SecretBytes) -> Result<()> {
+        self.set_inner(name, Some(value))
+    }
+
+    /// Stores a UTF-8 secret value. Available starting with SecretSpec 0.20.
+    pub fn set_text(&self, name: &str, value: &str) -> Result<()> {
+        self.set(name, SecretBytes::from_utf8(value))
+    }
+
+    /// Prompts for a textual secret value and stores it. Available starting
+    /// with SecretSpec 0.20.
+    pub fn prompt_and_set(&self, name: &str) -> Result<()> {
+        self.set_inner(name, None)
+    }
+
+    fn set_inner(&self, name: &str, value: Option<SecretBytes>) -> Result<()> {
         self.ensure_reason_for(AuditAction::Set, Some(name))?;
         // Check if the secret exists in the spec
         let profile_name = self.resolve_profile_name(None);
@@ -4411,20 +4432,20 @@ impl Secrets {
             return Err(err);
         }
 
-        let value = if let Some(v) = value {
-            SecretString::new(v.into())
+        let value = if let Some(value) = value {
+            value
         } else if io::stdin().is_terminal() {
             let secret = inquire::Password::new(&format!(
                 "Enter value for {name} (profile: {profile_name}):"
             ))
             .without_confirmation()
             .prompt()?;
-            SecretString::new(secret.into())
+            SecretBytes::from_utf8(secret)
         } else {
             // Read from stdin when input is piped
             let mut buffer = String::new();
             io::stdin().read_to_string(&mut buffer)?;
-            SecretString::new(buffer.trim().to_string().into())
+            SecretBytes::from_utf8(buffer.trim())
         };
 
         if value.expose_secret().is_empty() {
@@ -4721,7 +4742,7 @@ impl Secrets {
                                 format!("[{}/{}] Enter value for {}:", i + 1, total, secret_name,);
                             let prompt = inquire::Password::new(&prompt_msg).without_confirmation();
 
-                            let value = SecretString::new(prompt.prompt()?.into());
+                            let value = SecretBytes::from_utf8(prompt.prompt()?);
 
                             let encoded_value = Self::encoded_for_storage(&planned, &value);
                             let stored_value = encoded_value.as_ref().unwrap_or(&value);
@@ -5206,7 +5227,7 @@ impl Secrets {
         &self,
         planned: &PlannedSecret,
         profile_name: &str,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Option<SecretBytes>> {
         let name = planned.name.as_str();
         let gen_config = match &planned.config().generate {
             Some(config) if config.is_enabled() => config,
@@ -5298,7 +5319,7 @@ impl Secrets {
     /// input handle on Windows) when stdin is redirected, so the child retains
     /// its original stdin stream. Persistence is deliberately handled by
     /// [`Self::try_prompt_secret`], after this input-only step succeeds.
-    fn prompt_run_secret(&self, name: &str, profile: &str) -> Result<SecretString> {
+    fn prompt_run_secret(&self, name: &str, profile: &str) -> Result<SecretBytes> {
         let value = if let Some(reader) = &self.prompt_reader {
             reader(name, profile)?
         } else {
@@ -5312,7 +5333,7 @@ impl Secrets {
                     }
                     other => SecretSpecError::InquireError(other),
                 })?;
-            SecretString::new(entered.into())
+            SecretBytes::from_utf8(entered)
         };
 
         if value.expose_secret().is_empty() {
@@ -5329,7 +5350,7 @@ impl Secrets {
         &self,
         planned: &PlannedSecret,
         profile_name: &str,
-    ) -> Result<SecretString> {
+    ) -> Result<SecretBytes> {
         let name = planned.name.as_str();
         let route = planned
             .route
@@ -6602,11 +6623,11 @@ mod write_target_tests {
             })
         }
 
-        fn get(&self, _addr: Address<'_>) -> Result<Option<SecretString>> {
+        fn get(&self, _addr: Address<'_>) -> Result<Option<SecretBytes>> {
             Ok(None)
         }
 
-        fn set(&self, _addr: Address<'_>, _value: &SecretString) -> Result<()> {
+        fn set(&self, _addr: Address<'_>, _value: &SecretBytes) -> Result<()> {
             Ok(())
         }
 
@@ -6962,7 +6983,7 @@ mod provider_credentials_cache_tests {
                             // every caller to contend on the same key.
                             thread::sleep(Duration::from_millis(50));
                             let mut credentials = ProviderCredentials::new();
-                            credentials.insert("token".into(), SecretString::new("value".into()));
+                            credentials.insert("token".into(), SecretBytes::from_utf8("value"));
                             Ok(credentials)
                         })
                         .unwrap()
@@ -6974,7 +6995,7 @@ mod provider_credentials_cache_tests {
             let credentials = thread.join().unwrap();
             assert_eq!(
                 credentials.get("token").map(|value| value.expose_secret()),
-                Some("value")
+                Some(b"value".as_slice())
             );
         }
         assert_eq!(fetches.load(Ordering::SeqCst), 1);
@@ -7146,11 +7167,7 @@ mod provider_credential_scope_tests {
             .expect("alias declares one credential")
             .1;
         logged_in
-            .store_provider_credential(
-                &source,
-                "access_token",
-                &SecretString::new("tok-123".into()),
-            )
+            .store_provider_credential(&source, "access_token", &SecretBytes::from_utf8("tok-123"))
             .unwrap();
 
         // Resolving the same alias under `production` must still find it.
@@ -7162,7 +7179,7 @@ mod provider_credential_scope_tests {
             resolved
                 .get("access_token")
                 .map(|value| value.expose_secret()),
-            Some("tok-123"),
+            Some(b"tok-123".as_slice()),
         );
     }
 }
@@ -7270,15 +7287,8 @@ mod encoding_tests {
     use super::*;
 
     #[test]
-    fn decoding_accepts_exactly_one_trailing_line_ending() {
-        for encoded in ["Zg==\n", "Zg==\r\n"] {
-            let value = SecretString::new(encoded.to_string().into());
-            let decoded =
-                Secrets::decode_stored_value(SecretEncoding::Base64, "VALUE", &value).unwrap();
-            assert_eq!(decoded.expose_secret(), b"f");
-        }
-
-        let value = SecretString::new("Zg==\n\n".to_string().into());
+    fn decoding_rejects_non_alphabet_bytes() {
+        let value = SecretBytes::from_utf8("Zg==\n");
         let error =
             Secrets::decode_stored_value(SecretEncoding::Base64, "VALUE", &value).unwrap_err();
         assert_eq!(error.kind(), "decode_failed");
@@ -7293,9 +7303,9 @@ mod encoding_tests {
         ];
 
         for (encoding, logical, expected) in cases {
-            let logical = SecretString::new(logical.to_string().into());
+            let logical = SecretBytes::from_utf8(logical);
             let stored = Secrets::encode_logical_value(encoding, &logical);
-            assert_eq!(stored.expose_secret(), expected);
+            assert_eq!(stored.expose_secret(), expected.as_bytes());
         }
     }
 }
@@ -7396,7 +7406,7 @@ mod run_prompt_tests {
             assert_eq!(name, "DEPLOY_PASSWORD");
             assert_eq!(profile, "default");
             observed.fetch_add(1, Ordering::SeqCst);
-            Ok(SecretString::new("entered-once".into()))
+            Ok(SecretBytes::from_utf8("entered-once"))
         });
 
         for expected_prompts in 1..=2 {
@@ -7431,7 +7441,7 @@ mod run_prompt_tests {
             assert_eq!(name, "DEPLOY_PASSWORD");
             assert_eq!(profile, "default");
             observed.fetch_add(1, Ordering::SeqCst);
-            Ok(SecretString::new("persisted-answer".into()))
+            Ok(SecretBytes::from_utf8("persisted-answer"))
         });
 
         for _ in 0..2 {
@@ -7473,7 +7483,7 @@ mod run_prompt_tests {
     fn run_injects_the_prompted_value_into_the_child() {
         let _env = crate::tests::scrub_resolution_env();
         let mut spec = prompted_spec();
-        spec.set_prompt_reader(|_, _| Ok(SecretString::new("entered-once".into())));
+        spec.set_prompt_reader(|_, _| Ok(SecretBytes::from_utf8("entered-once")));
 
         let exit = spec
             .run_command(vec![

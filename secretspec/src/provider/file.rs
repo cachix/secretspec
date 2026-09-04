@@ -1,18 +1,18 @@
 use super::{Address, Provider, ProviderUrl};
+use crate::SecretBytes;
 use crate::config::{NativeAddress, expand_tilde};
 use crate::{Result, SecretSpecError};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 pub(crate) const MISSING_DIRECTORY_ERROR: &str = "file provider requires an explicit relative or absolute directory path (for example, 'file:./.secrets' or 'file:///run/secrets')";
 
 /// Configuration for the plaintext file provider.
 ///
-/// Each secret is stored in its own UTF-8 file beneath `directory`.
+/// Each secret is stored as arbitrary bytes in its own file beneath `directory`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileConfig {
     /// Root directory containing the provider's files.
@@ -279,26 +279,19 @@ impl Provider for FileProvider {
         })
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let path = self.entry_path(addr)?;
         if !self.inspect_entry(&path)? {
             return Ok(None);
         }
 
-        let mut file = fs::File::open(&path).map_err(|error| {
+        let value = fs::read(&path).map_err(|error| {
             Self::operation_error(format!(
-                "failed to open file provider entry '{}': {error}",
+                "failed to read file provider entry '{}': {error}",
                 path.display()
             ))
         })?;
-        let mut value = String::new();
-        file.read_to_string(&mut value).map_err(|error| {
-            Self::operation_error(format!(
-                "failed to read UTF-8 from file provider entry '{}': {error}",
-                path.display()
-            ))
-        })?;
-        Ok(Some(SecretString::new(value.into())))
+        Ok(Some(SecretBytes::from_vec(value)))
     }
 
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
@@ -310,7 +303,7 @@ impl Provider for FileProvider {
         Ok(self.entry_path(addr)?.display().to_string())
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)?;
         let path = self.entry_path(addr)?;
         let parent = path.parent().ok_or_else(|| {
@@ -337,7 +330,7 @@ impl Provider for FileProvider {
             ))
         })?;
         temporary
-            .write_all(value.expose_secret().as_bytes())
+            .write_all(value.expose_secret())
             .map_err(|error| {
                 Self::operation_error(format!(
                     "failed to write file provider entry '{}': {error}",
@@ -465,7 +458,7 @@ mod tests {
     fn convention_round_trip_is_exact_and_profile_isolated() {
         let directory = TempDir::new().unwrap();
         let provider = provider(directory.path());
-        let value = SecretString::new(" leading\nline two\n".to_string().into());
+        let value = SecretBytes::new(" leading\nline two\n".to_string().into());
 
         provider
             .set(Address::convention("app", "development", "TOKEN"), &value)
@@ -484,7 +477,7 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(directory.path().join("app/development/TOKEN")).unwrap(),
-            value.expose_secret()
+            value.try_as_utf8().unwrap()
         );
     }
 
@@ -504,7 +497,7 @@ mod tests {
         };
 
         let found = provider.get(Address::Native(&address)).unwrap().unwrap();
-        assert_eq!(found.expose_secret(), "external-value\n");
+        assert_eq!(found.expose_secret(), b"external-value\n");
     }
 
     #[test]
@@ -579,7 +572,7 @@ mod tests {
         let provider = provider(directory.path());
         let address = Address::convention("app", "default", "TOKEN");
         provider
-            .set(address, &SecretString::new("value".to_string().into()))
+            .set(address, &SecretBytes::new("value".to_string().into()))
             .unwrap();
 
         assert!(provider.delete(address).unwrap());
@@ -617,7 +610,7 @@ mod tests {
         provider
             .set(
                 Address::convention("app", "default", "TOKEN"),
-                &SecretString::new("value".to_string().into()),
+                &SecretBytes::new("value".to_string().into()),
             )
             .unwrap();
 
@@ -630,15 +623,17 @@ mod tests {
     }
 
     #[test]
-    fn binary_entries_are_rejected_by_the_text_provider_api() {
+    fn binary_entries_are_read_exactly() {
         let directory = TempDir::new().unwrap();
         fs::create_dir_all(directory.path().join("app/default")).unwrap();
-        fs::write(directory.path().join("app/default/TOKEN"), [0xff, 0xfe]).unwrap();
+        let expected = [0x00, 0xff, 0x80, 0x0a];
+        fs::write(directory.path().join("app/default/TOKEN"), expected).unwrap();
 
-        let error = provider(directory.path())
+        let value = provider(directory.path())
             .get(Address::convention("app", "default", "TOKEN"))
-            .unwrap_err();
-        assert!(error.to_string().contains("UTF-8"), "{error}");
+            .unwrap()
+            .unwrap();
+        assert_eq!(value.expose_secret(), expected);
     }
 
     #[test]

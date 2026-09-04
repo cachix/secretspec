@@ -3,7 +3,16 @@ title: Adding a New Provider
 description: Step-by-step guide for implementing custom provider backends
 ---
 
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
 ## Provider Trait
+
+<VersionCompatibility version="0.20" kind="changed">
+
+Provider values are now arbitrary bytes held in `SecretBytes`. Text-only
+providers must validate UTF-8 explicitly.
+
+</VersionCompatibility>
 
 All providers must implement the `Provider` trait. Every operation names its
 secret with an `Address`: either the store's own coordinates (a secret's
@@ -20,8 +29,12 @@ pub trait Provider: Send + Sync {
     fn convention_address(&self, project: &str, profile: &str, key: &str)
         -> Result<NativeAddress>;
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>>;
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()>;
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>>;
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()>;
+
+    /// SecretSpec 0.20+: optional expiry metadata. The default wraps `get`.
+    fn get_with_metadata(&self, addr: Address<'_>)
+        -> Result<Option<ProviderValue>> { /* default */ }
 
     /// Optional, defaults to empty. The `ref` coordinates your store can
     /// honor beyond `item`; every other coordinate is rejected for you.
@@ -57,7 +70,11 @@ pub trait Provider: Send + Sync {
     /// fetches every unique address once, concurrently; override it when the
     /// store has a real bulk surface (one listing, a batch API).
     fn get_many(&self, requests: &[(&str, Address<'_>)])
-        -> Result<HashMap<String, SecretString>> { /* default */ }
+        -> Result<HashMap<String, SecretBytes>> { /* default */ }
+
+    /// SecretSpec 0.20+: optional batch values with expiry metadata.
+    fn get_many_with_metadata(&self, requests: &[(&str, Address<'_>)])
+        -> Result<HashMap<String, ProviderValue>> { /* default */ }
 
     /// SecretSpec 0.18+: optional discovery hook used to build secret
     /// declarations from a provider. Return definitions only; never put values
@@ -75,6 +92,15 @@ written for another store fails loudly instead of resolving something else —
 you declare the set, you never write the check. Have `set` call
 `self.check_writable(addr)?` first, so the pre-check and the write agree on
 one refusal message.
+
+In SecretSpec 0.20+, construct returned text with `bytes_from_text` or
+`SecretBytes::from_utf8`. A provider with a byte-native API should use
+`SecretBytes::from_vec` or `SecretBytes::from_slice` and write
+`value.expose_secret()` directly. A text-only provider must call
+`require_utf8(Self::PROVIDER_NAME, value)?` before its own validation and
+write. The shared error names the provider and never formats the secret.
+`SecretBytes` deliberately has no generic Serde implementation, so each wire
+or file boundary must choose validated UTF-8 or an explicit binary encoding.
 
 SecretSpec 0.19+ also exposes `generated_value_persistence` and
 `prompted_value_persistence`. Leave their default of `Persist` for storage
@@ -353,15 +379,16 @@ impl Provider for MyBackendProvider {
         })
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let coords = self.resolve_coords(addr)?;
         // Reject coordinates the store cannot honor, then read coords.item
         Ok(None)
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         let coords = self.resolve_coords(addr)?;
-        // Write value at coords.item
+        let text = require_utf8(Self::PROVIDER_NAME, value)?;
+        // Write text at coords.item
         Ok(())
     }
 }

@@ -1,7 +1,7 @@
 use super::{Address, Provider, ProviderUrl};
+use crate::SecretBytes;
 use crate::{Result, SecretSpecError};
 use keyring::Entry;
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 /// Configuration for the keyring provider.
@@ -177,11 +177,11 @@ impl Provider for KeyringProvider {
     /// by the folder_prefix format string (defaults to `secretspec/{project}/{profile}/{key}`).
     ///
     /// The current system username is used as the account identifier.
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let (service, username) = self.entry_target(addr)?;
         let entry = Entry::new(&service, &username)?;
         match entry.get_password() {
-            Ok(password) => Ok(Some(SecretString::new(password.into()))),
+            Ok(password) => Ok(Some(SecretBytes::new(password.into()))),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -194,10 +194,10 @@ impl Provider for KeyringProvider {
     ///
     /// The current system username is used as the account identifier.
     /// If a secret already exists with the same key, it will be overwritten.
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         let (service, username) = self.entry_target(addr)?;
         let entry = Entry::new(&service, &username)?;
-        entry.set_password(value.expose_secret())?;
+        entry.set_password(super::require_utf8("keyring", value)?)?;
         Ok(())
     }
 

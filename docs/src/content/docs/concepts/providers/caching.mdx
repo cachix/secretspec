@@ -112,6 +112,13 @@ entry.
 
 ## Freshness and invalidation
 
+<VersionCompatibility version="0.20" kind="changed">
+
+Cache envelope v4 stores provider bytes as strict padded Base64. Existing v2
+and v3 text entries remain readable during migration.
+
+</VersionCompatibility>
+
 `max_age` requires a unit: `s`, `m`, `h`, `d`, or `w`; compound durations such
 as `1h30m` are accepted.
 
@@ -119,7 +126,11 @@ Entries use SecretSpec's logical `{project}/{profile}/{secret}` address, even
 when the authoritative secret has a provider-native `ref`. Each entry contains
 the value, absolute expiration time, originating `max_age`, format version, and
 a fingerprint of the fallback route and secret reference. Changing the route,
-reference, or `max_age` invalidates it.
+reference, or `max_age` invalidates it. In SecretSpec 0.20+, `value_base64` is
+the cache envelope's byte serialization; it is separate from a declaration's
+manifest `encoding` and preserves the cached provider representation exactly.
+SecretSpec always writes v4 and continues reading v2/v3 text values as UTF-8
+bytes.
 
 The cache must use a distinct store from every authoritative provider;
 otherwise, a refresh could overwrite the authoritative secret. SecretSpec

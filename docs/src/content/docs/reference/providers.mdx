@@ -30,7 +30,13 @@ dotenv://~/.config/app/.env  # Home-relative path (0.18+)
 
 <VersionCompatibility version="0.19" />
 
-**URI**: `file:ROOT` - Stores one plaintext UTF-8 file per secret beneath an
+<VersionCompatibility version="0.20" kind="changed">
+
+File entries now preserve arbitrary bytes instead of requiring UTF-8.
+
+</VersionCompatibility>
+
+**URI**: `file:ROOT` - Stores one plaintext file per secret beneath an
 explicitly configured local directory
 
 `ROOT` is required. The bare `file` provider name is rejected.
@@ -40,8 +46,8 @@ file:./.secrets              # Relative to secretspec.toml
 file:///run/secrets          # Absolute directory
 ```
 
-**Features**: Read/write/delete, project and profile isolation, exact UTF-8
-text, atomic writes, nested relative `ref.item` paths
+**Features**: Read/write/delete, project and profile isolation, exact bytes
+(0.20+), atomic writes, nested relative `ref.item` paths
 **Storage**: `ROOT/{project}/{profile}/{key}` by convention. A `ref.item`
 replaces the convention path with a relative path beneath `ROOT`.
 **Security**: No encryption. New files use mode `0600` on Unix; traversal and
@@ -79,6 +85,13 @@ resolution or run
 ## systemd Credential Provider {/* #systemd-credential-provider-017 */}
 
 <VersionCompatibility version="0.17" />
+
+<VersionCompatibility version="0.20" kind="changed">
+
+Credential files now preserve arbitrary bytes. Binary values require
+`as_path = true` at text consumption boundaries.
+
+</VersionCompatibility>
 
 **URI**: `systemd-credential://` - Reads credentials passed to the current
 service by systemd
@@ -386,6 +399,12 @@ gcsm://my-gcp-project         # GCP project ID
 
 ## AWS Secrets Manager Provider
 
+<VersionCompatibility version="0.20" kind="changed">
+
+Reads and writes now support AWS `SecretBinary` as well as `SecretString`.
+
+</VersionCompatibility>
+
 **URI**: `awssm://[profile@]REGION` - Stores secrets in AWS Secrets Manager
 
 ```text
@@ -394,7 +413,8 @@ awssm://production@us-east-1  # Specific AWS profile and region
 awssm://                      # SDK default region and credentials
 ```
 
-**Features**: Read/write, cloud sync, profiles, IAM/SSO authentication
+**Features**: Read/write, `SecretString` and `SecretBinary` (0.20+), cloud sync,
+profiles, IAM/SSO authentication
 **Prerequisites**: AWS credentials configured, build with `--features awssm`
 **Storage**: Secret name `secretspec/{project}/{profile}/{key}`
 

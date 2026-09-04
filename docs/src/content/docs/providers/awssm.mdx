@@ -3,6 +3,8 @@ title: AWS Secrets Manager Provider
 description: AWS Secrets Manager integration
 ---
 
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
 The [AWS Secrets Manager](https://aws.amazon.com/secrets-manager/) provider
 integrates with AWS for centralized secret management.
 
@@ -176,18 +178,31 @@ DATABASE_URL = { description = "Database URL", providers = ["prod"] }
 
 ## Storage model
 
+<VersionCompatibility version="0.20" kind="changed">
+
+AWS `SecretBinary` values are preserved as bytes, and non-UTF-8 writes use
+`SecretBinary` automatically.
+
+</VersionCompatibility>
+
 Secrets are stored as `[prefix/]secretspec/{project}/{profile}/{key}`.
 
 For example, `DATABASE_URL` in project `myapp` and profile `production` is
 stored as `secretspec/myapp/production/DATABASE_URL`. With `?prefix=myteam`,
 it becomes `myteam/secretspec/myapp/production/DATABASE_URL`.
 
+In SecretSpec 0.20+, reads accept both AWS `SecretString` and `SecretBinary`.
+Writes use `SecretString` for UTF-8 values and `SecretBinary` for other bytes.
+Declare a binary secret with `as_path = true`; existing inline and environment
+surfaces remain UTF-8 only.
+
 ## Use existing secrets
 
 A secret's [`ref`](/reference/configuration/#secret-references) field names an
 existing secret instead: `item` is the secret name (or ARN), and the optional
-`field` selects one key of a JSON secret value. Without `field`, the whole
-secret string is returned. References are **read-only** in this provider.
+`field` selects one key of a JSON secret value and therefore requires UTF-8.
+Without `field`, the whole secret is returned, including `SecretBinary` bytes
+in SecretSpec 0.20+. References are **read-only** in this provider.
 
 ```toml
 [profiles.production]

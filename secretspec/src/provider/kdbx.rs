@@ -6,12 +6,12 @@
 //! by default, while `field` can select another standard or custom field.
 
 use super::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use keepass::DatabaseKey;
 use keepass::config::DatabaseVersion;
 use keepass::db::{Database, EntryId, GroupId, fields};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -247,7 +247,7 @@ impl KdbxProvider {
         &self,
         database: &Database,
         addr: Address<'_>,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Option<SecretBytes>> {
         let location = self.location(addr)?;
         let Some(entry_id) = find_entry(database, &location)? else {
             return Ok(None);
@@ -255,7 +255,7 @@ impl KdbxProvider {
         Ok(database
             .entry(entry_id)
             .and_then(|entry| entry.get(&location.field).map(str::to_owned))
-            .map(|value| SecretString::new(value.into())))
+            .map(|value| SecretBytes::new(value.into())))
     }
 }
 
@@ -289,7 +289,7 @@ impl Provider for KdbxProvider {
         Ok(std::borrow::Cow::Owned(coords))
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let _guard = KDBX_IO_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -299,8 +299,9 @@ impl Provider for KdbxProvider {
         }
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)?;
+        let value = super::require_utf8("kdbx", value)?;
         let location = self.location(addr)?;
         let _guard = KDBX_IO_LOCK
             .lock()
@@ -322,7 +323,7 @@ impl Provider for KdbxProvider {
                     operation_error("KDBX entry disappeared while it was being updated.")
                 })?;
                 entry.edit_tracking(|entry| {
-                    entry.set_protected(&location.field, value.expose_secret());
+                    entry.set_protected(&location.field, value);
                 });
             }
             None => {
@@ -331,7 +332,7 @@ impl Provider for KdbxProvider {
                 })?;
                 group.add_entry().edit(|entry| {
                     entry.set_unprotected(fields::TITLE, &location.title);
-                    entry.set_protected(&location.field, value.expose_secret());
+                    entry.set_protected(&location.field, value);
                 });
             }
         }
@@ -414,7 +415,7 @@ impl Provider for KdbxProvider {
         self.credentials = credentials;
     }
 
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         let _guard = KDBX_IO_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -550,7 +551,6 @@ fn write_version_error() -> SecretSpecError {
 mod tests {
     use super::*;
     use keepass::db::Value;
-    use secrecy::ExposeSecret;
     use tempfile::TempDir;
     use url::Url;
 
@@ -571,7 +571,7 @@ mod tests {
         let mut credentials = ProviderCredentials::new();
         credentials.insert(
             PASSWORD_CREDENTIAL.to_string(),
-            SecretString::new(password.to_string().into()),
+            SecretBytes::new(password.to_string().into()),
         );
         provider.with_credentials(credentials);
         provider
@@ -715,7 +715,7 @@ mod tests {
         let path = temp.path().join("vault.kdbx");
         let provider = provider(path.clone(), "master");
         provider
-            .set(convention("TOKEN"), &SecretString::new("value".into()))
+            .set(convention("TOKEN"), &SecretBytes::new("value".into()))
             .unwrap();
 
         // KDBX stores its little-endian major version in header bytes 10..12.
@@ -772,7 +772,7 @@ mod tests {
         provider
             .set(
                 convention("API_KEY"),
-                &SecretString::new("first value".into()),
+                &SecretBytes::new("first value".into()),
             )
             .unwrap();
         assert_eq!(
@@ -781,7 +781,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "first value"
+            b"first value"
         );
     }
 
@@ -791,7 +791,7 @@ mod tests {
         let path = temp.path().join("vault.kdbx");
         let provider = provider(path.clone(), "master");
         provider
-            .set(convention("API_KEY"), &SecretString::new("old".into()))
+            .set(convention("API_KEY"), &SecretBytes::new("old".into()))
             .unwrap();
 
         let custom = NativeAddress {
@@ -802,11 +802,11 @@ mod tests {
         provider
             .set(
                 Address::Native(&custom),
-                &SecretString::new("service-user".into()),
+                &SecretBytes::new("service-user".into()),
             )
             .unwrap();
         provider
-            .set(convention("API_KEY"), &SecretString::new("new".into()))
+            .set(convention("API_KEY"), &SecretBytes::new("new".into()))
             .unwrap();
 
         assert_eq!(
@@ -815,7 +815,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "new"
+            b"new"
         );
         assert_eq!(
             provider
@@ -823,7 +823,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "service-user"
+            b"service-user"
         );
 
         let mut file = File::open(path).unwrap();
@@ -854,7 +854,7 @@ mod tests {
         provider.with_credentials(ProviderCredentials::new());
 
         provider
-            .set(convention("TOKEN"), &SecretString::new("value".into()))
+            .set(convention("TOKEN"), &SecretBytes::new("value".into()))
             .unwrap();
         assert_eq!(
             provider
@@ -862,7 +862,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "value"
+            b"value"
         );
     }
 
@@ -871,7 +871,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("vault.kdbx");
         provider(path.clone(), "right")
-            .set(convention("TOKEN"), &SecretString::new("value".into()))
+            .set(convention("TOKEN"), &SecretBytes::new("value".into()))
             .unwrap();
 
         let error = provider(path.clone(), "wrong")
@@ -893,10 +893,10 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let provider = provider(temp.path().join("vault.kdbx"), "master");
         provider
-            .set(convention("ONE"), &SecretString::new("one".into()))
+            .set(convention("ONE"), &SecretBytes::new("one".into()))
             .unwrap();
         provider
-            .set(convention("TWO"), &SecretString::new("two".into()))
+            .set(convention("TWO"), &SecretBytes::new("two".into()))
             .unwrap();
 
         let results = provider
@@ -906,8 +906,8 @@ mod tests {
                 ("MISSING", convention("THREE")),
             ])
             .unwrap();
-        assert_eq!(results["FIRST"].expose_secret(), "one");
-        assert_eq!(results["SECOND"].expose_secret(), "two");
+        assert_eq!(results["FIRST"].expose_secret(), b"one");
+        assert_eq!(results["SECOND"].expose_secret(), b"two");
         assert!(!results.contains_key("MISSING"));
     }
 
@@ -948,7 +948,7 @@ mod tests {
                 let provider = std::sync::Arc::clone(&provider);
                 scope.spawn(move || {
                     provider
-                        .set(convention(name), &SecretString::new(value.into()))
+                        .set(convention(name), &SecretBytes::new(value.into()))
                         .unwrap();
                 });
             }
@@ -959,7 +959,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "one"
+            b"one"
         );
         assert_eq!(
             provider
@@ -967,7 +967,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "two"
+            b"two"
         );
     }
 
@@ -989,7 +989,7 @@ mod tests {
             ..Default::default()
         };
         provider
-            .set(Address::Native(&address), &SecretString::new("new".into()))
+            .set(Address::Native(&address), &SecretBytes::new("new".into()))
             .unwrap();
         let loaded = provider.load().unwrap().unwrap();
         let location = provider.location(Address::Native(&address)).unwrap();

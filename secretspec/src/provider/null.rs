@@ -1,6 +1,6 @@
 use super::{Address, ProducedValuePersistence, Provider, ProviderUrl};
+use crate::SecretBytes;
 use crate::{Result, SecretSpecError};
-use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for the null provider.
@@ -82,14 +82,14 @@ impl Provider for NullProvider {
         &["field", "vault", "section", "version"]
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         // Resolve the address so native coordinates receive the same validation
         // as every other flat provider, even though no storage is consulted.
         let _ = super::flat_item(self, addr)?;
         Ok(None)
     }
 
-    fn set(&self, addr: Address<'_>, _value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, _value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)
     }
 
@@ -142,7 +142,7 @@ mod tests {
             ProducedValuePersistence::Ephemeral
         );
         let error = provider
-            .set(addr, &SecretString::new("8090".into()))
+            .set(addr, &SecretBytes::new("8090".into()))
             .unwrap_err();
         assert!(error.to_string().contains("never stores values"), "{error}");
     }

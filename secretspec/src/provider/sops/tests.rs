@@ -278,7 +278,7 @@ fn run_sops_single_file_test(ext: &str) {
             .get(Address::convention("some-project-name", profile, "foobar"))
             .expect("Failed to fetch secret")
         {
-            let secret = value.expose_secret();
+            let secret = value.try_as_utf8().unwrap();
 
             assert_eq!(
                 expected_value, secret,
@@ -316,7 +316,7 @@ fn test_sops_directory_get_json() {
         match provider.get(Address::convention("some-project-name", profile, "foobar")) {
             Ok(value) => match value {
                 Some(secret_box) => {
-                    let secret = secret_box.expose_secret();
+                    let secret = secret_box.try_as_utf8().unwrap();
 
                     assert_eq!(
                         expected_value, secret,
@@ -348,7 +348,7 @@ fn test_sops_directory_nested_get_json() {
         match provider.get(Address::convention("some-project-name", profile, "foobar")) {
             Ok(value) => match value {
                 Some(secret_box) => {
-                    let secret = secret_box.expose_secret();
+                    let secret = secret_box.try_as_utf8().unwrap();
 
                     assert_eq!(
                         expected_value, secret,
@@ -380,7 +380,7 @@ fn test_sops_directory_get_dotenv() {
         match provider.get(Address::convention("some-project-name", profile, "foobar")) {
             Ok(value) => match value {
                 Some(secret_box) => {
-                    let secret = secret_box.expose_secret();
+                    let secret = secret_box.try_as_utf8().unwrap();
 
                     assert_eq!(
                         expected_value, secret,
@@ -409,11 +409,11 @@ fn test_sops_set_directory_dotenv_with_format_override() {
     let addr = Address::convention("myapp", "production", "API_KEY");
 
     provider
-        .set(addr, &SecretString::new("dotenv-value".into()))
+        .set(addr, &SecretBytes::new("dotenv-value".into()))
         .expect("set failed");
     let value = provider.get(addr).unwrap().expect("missing value");
 
-    assert_eq!(value.expose_secret(), "dotenv-value");
+    assert_eq!(value.expose_secret(), b"dotenv-value");
 }
 
 #[test]
@@ -427,11 +427,11 @@ fn test_sops_set_single_file_dotenv_uses_a_flat_key() {
     let addr = Address::convention("myapp", "production", "API_KEY");
 
     provider
-        .set(addr, &SecretString::new("flat-value".into()))
+        .set(addr, &SecretBytes::new("flat-value".into()))
         .expect("set failed");
     let value = provider.get(addr).unwrap().expect("missing value");
 
-    assert_eq!(value.expose_secret(), "flat-value");
+    assert_eq!(value.expose_secret(), b"flat-value");
 }
 
 #[test]
@@ -445,11 +445,11 @@ fn test_sops_json_override_works_with_ini_extension() {
     let addr = Address::convention("myapp", "production", "API_KEY");
 
     provider
-        .set(addr, &SecretString::new("json-value".into()))
+        .set(addr, &SecretBytes::new("json-value".into()))
         .expect("set failed");
     let value = provider.get(addr).unwrap().expect("missing value");
 
-    assert_eq!(value.expose_secret(), "json-value");
+    assert_eq!(value.expose_secret(), b"json-value");
 }
 
 #[test]
@@ -466,7 +466,7 @@ fn test_sops_age_key_provider_credential_overrides_the_environment() {
         .find(|line| line.starts_with("AGE-SECRET-KEY-"))
         .unwrap();
     let mut credentials = ProviderCredentials::new();
-    credentials.insert(AGE_KEY.to_string(), SecretString::new(age_key.into()));
+    credentials.insert(AGE_KEY.to_string(), SecretBytes::new(age_key.into()));
     provider.with_credentials(credentials);
 
     let value = provider
@@ -478,7 +478,7 @@ fn test_sops_age_key_provider_credential_overrides_the_environment() {
         .unwrap()
         .expect("missing value");
 
-    assert_eq!(value.expose_secret(), "baz");
+    assert_eq!(value.expose_secret(), b"baz");
 }
 
 #[test]
@@ -492,7 +492,7 @@ fn test_sops_set_single_file_creates_tree_and_sets_value() {
     provider
         .set(
             Address::convention("myapp", "production", "database_url"),
-            &SecretString::new("postgres://prod".into()),
+            &SecretBytes::new("postgres://prod".into()),
         )
         .expect("set failed");
 
@@ -501,7 +501,7 @@ fn test_sops_set_single_file_creates_tree_and_sets_value() {
         .expect("get failed")
         .expect("missing value");
 
-    assert_eq!(value.expose_secret(), "postgres://prod");
+    assert_eq!(value.expose_secret(), b"postgres://prod");
 }
 
 #[test]
@@ -523,7 +523,7 @@ fn test_sops_set_directory_creates_file_and_sets_value() {
     provider
         .set(
             Address::convention("myapp", "development", "api_key"),
-            &SecretString::new("xyz123".into()),
+            &SecretBytes::new("xyz123".into()),
         )
         .expect("set failed");
 
@@ -536,7 +536,7 @@ fn test_sops_set_directory_creates_file_and_sets_value() {
         .expect("get failed")
         .expect("missing value");
 
-    assert_eq!(value.expose_secret(), "xyz123");
+    assert_eq!(value.expose_secret(), b"xyz123");
 }
 
 #[test]
@@ -552,14 +552,14 @@ fn test_sops_set_overwrites_existing_value() {
     provider
         .set(
             Address::convention("proj", "dev", "token"),
-            &SecretString::new("first".into()),
+            &SecretBytes::new("first".into()),
         )
         .expect("set failed");
 
     provider
         .set(
             Address::convention("proj", "dev", "token"),
-            &SecretString::new("second".into()),
+            &SecretBytes::new("second".into()),
         )
         .expect("set failed");
 
@@ -568,7 +568,7 @@ fn test_sops_set_overwrites_existing_value() {
         .expect("get failed")
         .expect("missing value");
 
-    assert_eq!(value.expose_secret(), "second");
+    assert_eq!(value.expose_secret(), b"second");
 }
 
 #[test]
@@ -582,7 +582,7 @@ fn test_sops_set_single_file_default_profile() {
     provider
         .set(
             Address::convention("myapp", "default", "service_url"),
-            &SecretString::new("http://localhost".into()),
+            &SecretBytes::new("http://localhost".into()),
         )
         .expect("set failed");
 
@@ -591,7 +591,7 @@ fn test_sops_set_single_file_default_profile() {
         .expect("get failed")
         .expect("missing value");
 
-    assert_eq!(value.expose_secret(), "http://localhost");
+    assert_eq!(value.expose_secret(), b"http://localhost");
 }
 
 #[test]
@@ -603,13 +603,13 @@ fn test_sops_single_file_default_profile_keeps_project_namespaces_separate() {
     provider
         .set(
             Address::convention("project-a", "default", "API_KEY"),
-            &SecretString::new("value-a".into()),
+            &SecretBytes::new("value-a".into()),
         )
         .unwrap();
     provider
         .set(
             Address::convention("project-b", "default", "API_KEY"),
-            &SecretString::new("value-b".into()),
+            &SecretBytes::new("value-b".into()),
         )
         .unwrap();
 
@@ -618,7 +618,7 @@ fn test_sops_single_file_default_profile_keeps_project_namespaces_separate() {
             .get(Address::convention(project, "default", "API_KEY"))
             .unwrap()
             .unwrap();
-        assert_eq!(value.expose_secret(), expected);
+        assert_eq!(value.expose_secret(), expected.as_bytes());
     }
 }
 
@@ -632,11 +632,11 @@ fn test_sops_templated_ini_set_round_trips_through_default_section() {
     let address = Address::convention("myapp", "production", "API_KEY");
 
     provider
-        .set(address, &SecretString::new("ini-value".into()))
+        .set(address, &SecretBytes::new("ini-value".into()))
         .unwrap();
     let value = provider.get(address).unwrap().unwrap();
 
-    assert_eq!(value.expose_secret(), "ini-value");
+    assert_eq!(value.expose_secret(), b"ini-value");
 }
 
 #[test]
@@ -651,11 +651,11 @@ fn test_sops_single_file_ini_native_ref_uses_default_section() {
     let address = Address::Native(&native);
 
     provider
-        .set(address, &SecretString::new("native-ini-value".into()))
+        .set(address, &SecretBytes::new("native-ini-value".into()))
         .unwrap();
     let value = provider.get(address).unwrap().unwrap();
 
-    assert_eq!(value.expose_secret(), "native-ini-value");
+    assert_eq!(value.expose_secret(), b"native-ini-value");
 }
 
 #[test]
@@ -674,7 +674,7 @@ fn test_sops_concurrent_writes_preserve_every_key() {
                 provider
                     .set(
                         Address::convention("myapp", "production", &format!("KEY_{index}")),
-                        &SecretString::new(format!("value-{index}").into()),
+                        &SecretBytes::new(format!("value-{index}").into()),
                     )
                     .unwrap();
             });
@@ -688,7 +688,7 @@ fn test_sops_concurrent_writes_preserve_every_key() {
             .get(Address::convention("myapp", "production", &key))
             .unwrap()
             .unwrap();
-        assert_eq!(value.expose_secret(), format!("value-{index}"));
+        assert_eq!(value.expose_secret(), format!("value-{index}").as_bytes());
     }
 }
 
@@ -701,10 +701,10 @@ fn test_sops_get_many_reads_multiple_keys_from_one_file() {
     let token = Address::convention("myapp", "production", "API_TOKEN");
 
     provider
-        .set(database, &SecretString::new("postgres://db".into()))
+        .set(database, &SecretBytes::new("postgres://db".into()))
         .unwrap();
     provider
-        .set(token, &SecretString::new("token-value".into()))
+        .set(token, &SecretBytes::new("token-value".into()))
         .unwrap();
 
     let values = provider
@@ -712,11 +712,11 @@ fn test_sops_get_many_reads_multiple_keys_from_one_file() {
         .unwrap();
     assert_eq!(
         values.get("DATABASE_URL").unwrap().expose_secret(),
-        "postgres://db"
+        b"postgres://db"
     );
     assert_eq!(
         values.get("API_TOKEN").unwrap().expose_secret(),
-        "token-value"
+        b"token-value"
     );
 }
 
@@ -742,11 +742,11 @@ fn test_sops_creation_rules_are_discovered_from_the_manifest_directory() {
     let address = Address::convention("myapp", "production", "API_KEY");
 
     provider
-        .set(address, &SecretString::new("project-config-value".into()))
+        .set(address, &SecretBytes::new("project-config-value".into()))
         .unwrap();
     let value = provider.get(address).unwrap().unwrap();
 
-    assert_eq!(value.expose_secret(), "project-config-value");
+    assert_eq!(value.expose_secret(), b"project-config-value");
 }
 
 #[test]
@@ -766,7 +766,7 @@ fn test_sops_failed_decrypt_does_not_modify_the_original_file() {
     let mut credentials = ProviderCredentials::new();
     credentials.insert(
         AGE_KEY.to_string(),
-        SecretString::new(
+        SecretBytes::new(
             "AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE".into(),
         ),
     );
@@ -775,7 +775,7 @@ fn test_sops_failed_decrypt_does_not_modify_the_original_file() {
 
     let result = provider.set(
         Address::convention("some-project-name", "production", "foobar"),
-        &SecretString::new("must-not-be-written".into()),
+        &SecretBytes::new("must-not-be-written".into()),
     );
 
     assert!(result.is_err());
@@ -800,14 +800,14 @@ fn test_sops_set_directory_multiple_profiles() {
     provider
         .set(
             Address::convention("myapp", "development", "db"),
-            &SecretString::new("dev-db".into()),
+            &SecretBytes::new("dev-db".into()),
         )
         .expect("set failed");
 
     provider
         .set(
             Address::convention("myapp", "production", "db"),
-            &SecretString::new("prod-db".into()),
+            &SecretBytes::new("prod-db".into()),
         )
         .expect("set failed");
 
@@ -815,14 +815,16 @@ fn test_sops_set_directory_multiple_profiles() {
         .get(Address::convention("myapp", "development", "db"))
         .unwrap()
         .unwrap()
-        .expose_secret()
+        .try_as_utf8()
+        .unwrap()
         .to_string();
 
     let prod = provider
         .get(Address::convention("myapp", "production", "db"))
         .unwrap()
         .unwrap()
-        .expose_secret()
+        .try_as_utf8()
+        .unwrap()
         .to_string();
 
     assert_eq!(dev, "dev-db");

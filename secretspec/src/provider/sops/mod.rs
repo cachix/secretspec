@@ -1,4 +1,5 @@
 use super::{Address, Provider, ProviderCredentials, ProviderUrl};
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::provider::sops::config::SopsConfig;
 #[cfg(test)]
@@ -8,7 +9,6 @@ use crate::provider::sops::format::SopsFormat;
 use crate::provider::sops::pattern::SopsPathPattern;
 use crate::{Result, SecretSpecError};
 use etcetera::{BaseStrategy, choose_base_strategy};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
@@ -149,7 +149,7 @@ impl SopsProvider {
         // URI, audit log, or launched application environment.
         for spec in CREDENTIAL_FIELDS {
             if let Some(value) = self.credentials.get(spec.name) {
-                command.env(spec.env_key, value.expose_secret());
+                command.env(spec.env_key, super::require_utf8("sops", value)?);
             }
         }
 
@@ -531,7 +531,7 @@ impl SopsProvider {
         &self,
         path: &Path,
         parts: &AddressParts<'_>,
-        value: &SecretString,
+        value: &SecretBytes,
     ) -> Result<()> {
         let mut temporary = Self::temporary_file_for(path)?;
 
@@ -559,7 +559,8 @@ impl SopsProvider {
             self.encrypt_plaintext_file(temporary.path(), path)?;
         }
 
-        let encoded_value = serde_json::to_string(value.expose_secret()).map_err(|error| {
+        let value = super::require_utf8("sops", value)?;
+        let encoded_value = serde_json::to_string(value).map_err(|error| {
             Self::provider_error(format!("Failed to encode the secret value: {error}"))
         })?;
         let args = self.set_command_args(temporary.path(), parts)?;
@@ -594,7 +595,7 @@ impl Provider for SopsProvider {
         })
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let parts = self.address_parts(addr)?;
         let Some(path) = self.resolve_file_path(parts.project, parts.profile)? else {
             return Ok(None);
@@ -602,7 +603,7 @@ impl Provider for SopsProvider {
         let decrypted = self.decrypt(&path)?;
         Ok(self
             .parse_decrypted_json(&decrypted, &parts)?
-            .map(|value| SecretString::new(value.into())))
+            .map(|value| SecretBytes::new(value.into())))
     }
 
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
@@ -615,7 +616,7 @@ impl Provider for SopsProvider {
         Ok(format!("{} {}", path.display(), self.set_path(&parts)?))
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)?;
         let parts = self.address_parts(addr)?;
         let path = self.writable_target_path(parts.project, parts.profile)?;
@@ -623,7 +624,7 @@ impl Provider for SopsProvider {
         self.set_atomically(&path, &parts, value)
     }
 
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         let mut decrypted_files = HashMap::<PathBuf, Vec<u8>>::new();
         let mut values = HashMap::new();
 
@@ -640,7 +641,7 @@ impl Provider for SopsProvider {
                 }
             };
             if let Some(value) = self.parse_decrypted_json(decrypted, &parts)? {
-                values.insert(name.to_string(), SecretString::new(value.into()));
+                values.insert(name.to_string(), SecretBytes::new(value.into()));
             }
         }
 

@@ -6,9 +6,9 @@
 //! than placed in process arguments.
 
 use super::{Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl};
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, Secret, SecretSpecError};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, Write};
@@ -281,7 +281,7 @@ impl Provider for FlyProvider {
         format!("fly://{}", self.config.app)
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let _ = self.secret_name(addr)?;
         Err(SecretSpecError::ProviderOperationFailed(
             "Fly.io application secrets are write-only and their plaintext values cannot be read back; use the fly provider with `secretspec set`, `secretspec delete`, or `secretspec init --from`"
@@ -293,9 +293,9 @@ impl Provider for FlyProvider {
         self.secret_name(addr).map(|_| ())
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)?;
-        let value = value.expose_secret();
+        let value = super::require_utf8("fly", value)?;
         if value.trim() != value {
             return Err(SecretSpecError::ProviderOperationFailed(
                 "flyctl trims leading and trailing whitespace from values supplied on stdin; refusing to store a changed secret value"
@@ -484,7 +484,7 @@ mod tests {
         let mut credentials = ProviderCredentials::new();
         credentials.insert(
             ACCESS_TOKEN.to_string(),
-            SecretString::new("fly-token".into()),
+            SecretBytes::new("fly-token".into()),
         );
         provider.with_credentials(credentials);
         let command = provider.command();
@@ -575,7 +575,7 @@ esac
             let mut credentials = ProviderCredentials::new();
             credentials.insert(
                 ACCESS_TOKEN.to_string(),
-                SecretString::new("injected-token".into()),
+                SecretBytes::new("injected-token".into()),
             );
             provider.with_credentials(credentials);
             Self { dir, provider }
@@ -590,7 +590,7 @@ esac
     #[test]
     fn set_keeps_the_value_off_argv_and_sends_it_on_stdin() {
         let fake = FakeFlyctl::new("fly://my-app?stage=true&detach=true");
-        let value = SecretString::new("super-secret-value\nwith-newline".into());
+        let value = SecretBytes::new("super-secret-value\nwith-newline".into());
         fake.provider
             .set(
                 Address::convention("project", "production", "API_KEY"),
@@ -604,7 +604,7 @@ esac
             "{invocation}"
         );
         assert!(!invocation.contains("super-secret-value"));
-        assert_eq!(fake.read("stdin.log"), value.expose_secret());
+        assert_eq!(fake.read("stdin.log").as_bytes(), value.expose_secret());
         assert_eq!(fake.read("token.log"), "injected-token");
     }
 
@@ -617,7 +617,7 @@ esac
                 .provider
                 .set(
                     Address::convention("project", "production", "API_KEY"),
-                    &SecretString::new(value.into()),
+                    &SecretBytes::new(value.into()),
                 )
                 .unwrap_err();
             assert!(error.to_string().contains("whitespace"), "{error}");

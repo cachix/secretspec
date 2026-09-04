@@ -66,6 +66,7 @@ use super::{
     Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl, credential_or_env,
     get_each_concurrency, map_concurrently,
 };
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use azure_core::credentials::{Secret as AzureSecret, TokenCredential};
@@ -73,7 +74,6 @@ use reqwest::header::{
     AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, IF_MATCH, IF_NONE_MATCH,
 };
 use reqwest::{Method, StatusCode};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -874,7 +874,7 @@ enum ValueType {
 }
 
 enum SelectedValue {
-    Direct(SecretString),
+    Direct(SecretBytes),
     Reference {
         key: String,
         reference: VaultReference,
@@ -1084,7 +1084,7 @@ impl AacProvider {
         match Self::value_type(record.content_type.as_deref()) {
             ValueType::Direct => record
                 .value
-                .map(|value| SelectedValue::Direct(SecretString::new(value.into())))
+                .map(|value| SelectedValue::Direct(SecretBytes::new(value.into())))
                 .ok_or_else(|| {
                     operation_error(format!(
                         "Azure App Configuration key '{key}' has no direct value"
@@ -1156,7 +1156,8 @@ impl AacProvider {
         Ok(Some(record))
     }
 
-    async fn set_async(&self, key: &str, value: &SecretString) -> Result<()> {
+    async fn set_async(&self, key: &str, value: &SecretBytes) -> Result<()> {
+        let value = super::require_utf8("aac", value)?;
         let existing = self.mutation_record(key).await?;
         let created_tags;
         let (tags, content_type, description, conditional) = match &existing {
@@ -1177,7 +1178,7 @@ impl AacProvider {
             }
         };
         let body = serde_json::to_vec(&KeyValueWrite {
-            value: value.expose_secret(),
+            value,
             content_type,
             tags,
             description,
@@ -1438,7 +1439,7 @@ impl AacProvider {
         Ok(provider)
     }
 
-    fn resolve_vault_reference(&self, reference: &VaultReference) -> Result<SecretString> {
+    fn resolve_vault_reference(&self, reference: &VaultReference) -> Result<SecretBytes> {
         let provider = self.vault_provider(reference)?;
         let address = NativeAddress {
             item: reference.secret_name.clone(),
@@ -1457,7 +1458,7 @@ impl AacProvider {
         &self,
         key: &str,
         reference: &VaultReference,
-    ) -> Result<SecretString> {
+    ) -> Result<SecretBytes> {
         self.resolve_vault_reference(reference).map_err(|error| {
             operation_error(format!(
                 "failed to resolve Key Vault reference from Azure App Configuration key '{key}' through vault '{}': {error}",
@@ -1474,7 +1475,7 @@ impl AacProvider {
     fn get_many_selected(
         &self,
         requests: &[(&str, Address<'_>)],
-    ) -> Result<HashMap<String, SecretString>> {
+    ) -> Result<HashMap<String, SecretBytes>> {
         let mut groups: HashMap<Address<'_>, Vec<&str>> = HashMap::new();
         for (name, address) in requests {
             groups.entry(*address).or_default().push(name);
@@ -1675,7 +1676,7 @@ impl Provider for AacProvider {
         self.credentials = credentials;
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         match self.get_selected(addr)? {
             Some(SelectedValue::Direct(value)) => Ok(Some(value)),
             Some(SelectedValue::Reference { key, reference }) => {
@@ -1685,11 +1686,11 @@ impl Provider for AacProvider {
         }
     }
 
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         self.get_many_selected(requests)
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         if matches!(addr, Address::Native(_)) {
             return self.check_writable(addr);
         }
@@ -2551,7 +2552,7 @@ mod tests {
         );
         super::super::block_on(provider.set_async(
             "secretspec:checkout:prod:API_KEY",
-            &SecretString::new("new-value".to_string().into()),
+            &SecretBytes::new("new-value".to_string().into()),
         ))
         .unwrap();
 
@@ -2624,7 +2625,7 @@ mod tests {
         let secret = "redirect-secret-value";
 
         let error = super::super::block_on(
-            provider.set_async("redirected", &SecretString::new(secret.to_string().into())),
+            provider.set_async("redirected", &SecretBytes::new(secret.to_string().into())),
         )
         .unwrap_err();
         assert!(error.to_string().contains("HTTP 307"), "{error}");
@@ -2658,7 +2659,7 @@ mod tests {
         });
         let provider = fixture_provider(&fixture.endpoint, "aac://shared?tag=app=payments");
         let error = super::super::block_on(
-            provider.set_async("key", &SecretString::new("new".to_string().into())),
+            provider.set_async("key", &SecretBytes::new("new".to_string().into())),
         )
         .unwrap_err();
         assert!(
@@ -2684,7 +2685,7 @@ mod tests {
         });
         let provider = fixture_provider(&fixture.endpoint, "aac://shared?tag=app=payments");
         let error = super::super::block_on(
-            provider.set_async("key", &SecretString::new("new".to_string().into())),
+            provider.set_async("key", &SecretBytes::new("new".to_string().into())),
         )
         .unwrap_err();
         assert!(
@@ -2716,7 +2717,7 @@ mod tests {
             });
             let provider = fixture_provider(&fixture.endpoint, "aac://shared");
             let error = super::super::block_on(
-                provider.set_async("key", &SecretString::new("new".to_string().into())),
+                provider.set_async("key", &SecretBytes::new("new".to_string().into())),
             )
             .unwrap_err();
             assert!(error.to_string().contains(expected), "{error}");
@@ -2816,7 +2817,7 @@ mod tests {
         assert_eq!(read.value.as_deref(), Some("value"));
 
         let write_error = super::super::block_on(
-            provider.set_async("key", &SecretString::new("new".to_string().into())),
+            provider.set_async("key", &SecretBytes::new("new".to_string().into())),
         )
         .unwrap_err();
         assert!(write_error.to_string().contains("HTTP 403"));
@@ -2941,8 +2942,8 @@ mod tests {
                 ("SECOND", Address::Native(&address)),
             ])
             .unwrap();
-        assert_eq!(values["FIRST"].expose_secret(), "secret-value");
-        assert_eq!(values["SECOND"].expose_secret(), "secret-value");
+        assert_eq!(values["FIRST"].expose_secret(), b"secret-value");
+        assert_eq!(values["SECOND"].expose_secret(), b"secret-value");
         assert_eq!(fixture.finish().len(), 1);
     }
 
@@ -2975,8 +2976,8 @@ mod tests {
                 ("SECOND", Address::Native(&second)),
             ])
             .unwrap();
-        assert_eq!(values["FIRST"].expose_secret(), "resolved-value");
-        assert_eq!(values["SECOND"].expose_secret(), "resolved-value");
+        assert_eq!(values["FIRST"].expose_secret(), b"resolved-value");
+        assert_eq!(values["SECOND"].expose_secret(), b"resolved-value");
         assert_eq!(transport.paths.lock().unwrap().len(), 1);
         assert_eq!(fixture.finish().len(), 2);
     }
@@ -3061,7 +3062,7 @@ mod tests {
                 .values()
                 .map(|value| value.expose_secret())
                 .collect::<BTreeSet<_>>(),
-            BTreeSet::from(["first-value", "second-value"])
+            BTreeSet::from([b"first-value".as_slice(), b"second-value".as_slice()])
         );
         assert_eq!(first_transport.paths.lock().unwrap().len(), 1);
         assert_eq!(second_transport.paths.lock().unwrap().len(), 1);

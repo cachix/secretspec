@@ -122,6 +122,29 @@ The Rust-first API complements `declare_secrets!`: `Spec` describes and
 resolves names dynamically, while the macro continues to generate statically
 typed fields from a manifest at compile time.
 
+## Setting byte values {/* #setting-byte-values-020 */}
+
+<VersionCompatibility version="0.20" />
+
+`SecretBytes` is the zeroizing byte container used by provider and write APIs.
+It has redacted `Debug` output and no generic Serde implementation:
+
+```rust
+use secretspec::{SecretBytes, Secrets};
+
+let secrets = Secrets::load()?;
+secrets.set("TLS_KEYSTORE", SecretBytes::from_vec(binary_keystore))?;
+secrets.set_text("DATABASE_URL", "postgres://localhost/app")?;
+```
+
+`Secrets::set` accepts arbitrary non-empty bytes. `set_text` is the UTF-8
+convenience method, and `prompt_and_set` opens the existing text prompt.
+Manifest `encoding` transforms logical bytes before provider storage, which
+allows binary values to use a text-only provider. Declare binary values with
+`as_path = true`; generated `String` fields, inline JSON responses,
+composition, extraction, and environment export reject non-UTF-8 values with
+an error.
+
 ## Profile-specific types
 
 Use `load_profile()` when code should receive the exact shape of the selected

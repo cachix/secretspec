@@ -1,6 +1,6 @@
 use super::{Address, Provider, ProviderUrl};
+use crate::SecretBytes;
 use crate::{Result, SecretSpecError};
-use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::env;
 
@@ -162,9 +162,9 @@ impl Provider for EnvProvider {
     /// let value = provider.get(Address::convention("myproject", "production", "MY_SECRET")).unwrap();
     /// assert_eq!(value, Some("value123".to_string()));
     /// ```
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let var = super::flat_item(self, addr)?;
-        Ok(env::var(&*var).ok().map(|v| SecretString::new(v.into())))
+        Ok(env::var(&*var).ok().map(super::bytes_from_text))
     }
 
     /// Attempts to set a secret value (always fails).
@@ -193,7 +193,7 @@ impl Provider for EnvProvider {
     /// let result = provider.set(Address::convention("myproject", "production", "MY_SECRET"), "value");
     /// assert!(result.is_err());
     /// ```
-    fn set(&self, addr: Address<'_>, _value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, _value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)
     }
 

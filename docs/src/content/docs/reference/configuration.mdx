@@ -213,6 +213,13 @@ Field notes:
 
 <VersionCompatibility version="0.16" />
 
+<VersionCompatibility version="0.20" kind="changed">
+
+Composition now validates that every inline input is UTF-8. An `as_path`
+dependency contributes its path as text.
+
+</VersionCompatibility>
+
 A composed secret derives a value from other secrets in the effective profile.
 See [Composed Secrets](/concepts/composed-secrets/) for the dependency model,
 CLI behavior, profile inheritance, and the differences from dotenv expansion:
@@ -248,7 +255,9 @@ Composition intentionally does **not** implement dotenv or shell expansion:
 
 If a dependency uses `as_path = true`, its exported temporary-file path is the
 text inserted into the composed value. Applying `as_path = true` to the
-composed secret materializes the final combined value.
+composed secret materializes the final combined value. In SecretSpec 0.20+,
+every other dependency must be valid UTF-8; binary declarations should use
+`as_path = true`.
 
 Composition is raw string concatenation. SecretSpec cannot know whether a
 component occupies a URL username, password, host, path, query, or structured
@@ -675,6 +684,13 @@ URIs are redacted. Audit failures never block secret access. See
 
 ### as_path Option
 
+<VersionCompatibility version="0.20" kind="changed">
+
+Temporary files now preserve arbitrary secret bytes exactly, including NULs
+and trailing newlines.
+
+</VersionCompatibility>
+
 When `as_path = true`, the secret value is written to a temporary file and the file path is returned instead of the value:
 
 ```toml
@@ -683,9 +699,11 @@ TLS_CERT = { description = "TLS certificate", as_path = true }
 GOOGLE_APPLICATION_CREDENTIALS = { description = "GCP service account", as_path = true }
 ```
 
-When combined with `encoding` (0.19+), the file contains the decoded bytes
-rather than the stored textual representation. When combined with `extract`
-(0.19+), it contains only the selected logical value.
+In SecretSpec 0.20+, the file always contains the exact logical bytes. When
+combined with `encoding` (0.19+), those are the decoded bytes rather than the
+stored representation. When combined with `extract` (0.19+), it contains only
+the selected logical value. Binary declarations should use `as_path`; inline
+SDK values and environment exports require UTF-8.
 
 | Context | Behavior |
 |---------|----------|
@@ -697,10 +715,18 @@ rather than the stored textual representation. When combined with `extract`
 
 <VersionCompatibility version="0.19" />
 
-`encoding` (0.19+) defines the textual representation stored by providers and
-the cache. It is independent of `as_path`: decoded UTF-8 remains an ordinary
-environment or SDK value, while arbitrary decoded bytes can be materialized to
-a file.
+<VersionCompatibility version="0.20" kind="changed">
+
+Encoding now transforms provider bytes rather than Rust strings, so binary
+values can be stored through text-only providers. Decoding is strict ASCII and
+does not trim line endings or whitespace.
+
+</VersionCompatibility>
+
+`encoding` (0.19+) defines the textual representation stored by providers. It
+is independent of the cache envelope and of `as_path`: decoded UTF-8 remains
+an ordinary environment or SDK value, while arbitrary decoded bytes can be
+materialized to a file.
 
 ```toml
 [profiles.default]
@@ -717,15 +743,15 @@ HEX_KEY = { description = "Hex-encoded key", encoding = "hex", as_path = true }
 | `base64url` | RFC 4648 URL-safe Base64 without padding | Padded or unpadded URL-safe Base64 |
 | `hex` | Lowercase RFC 4648 Base16 | Uppercase, lowercase, or mixed-case Base16 |
 
-Exactly one trailing LF or CRLF is accepted so command-captured values work
-without preprocessing. Other whitespace and non-alphabet characters are
-rejected. Without `as_path = true`, decoded bytes must be valid UTF-8.
+In SecretSpec 0.20+, the stored representation must be ASCII and contain only
+the selected encoding's alphabet; whitespace, including a final LF or CRLF,
+is rejected. Without `as_path = true`, decoded bytes must be valid UTF-8.
 
-`secretspec set`, interactive prompts, and generated secrets provide logical
-text; SecretSpec encodes it before writing to a provider or cache. Defaults and
-composed results are already logical and are not transformed. The
-`secretspec import` command copies the stored representation verbatim, avoiding
-double encoding.
+`Secrets::set` and `secretspec set --from-file` (0.20+) provide logical bytes;
+positional CLI values, interactive prompts, defaults, generated secrets, and
+composed results provide UTF-8 logical bytes. SecretSpec encodes logical bytes
+before writing to a provider. The `secretspec import` command copies the stored
+representation verbatim, avoiding double encoding.
 
 ### Structured Extraction {/* #structured-extraction-019 */}
 
@@ -734,6 +760,7 @@ double encoding.
 <VersionCompatibility version="0.20" kind="changed">
 
 Structured extraction now supports INI documents with `format = "ini"`.
+In 0.20+, extraction also rejects non-UTF-8 decoded documents before parsing.
 
 </VersionCompatibility>
 
@@ -908,10 +935,10 @@ entry declares neither, it inherits whichever form `[profiles.default]` uses.
 | [Keeper (0.18+)](/providers/keeper/#use-existing-records) | Record UID or exact title | Standard field type/label or custom field label | Reads `password` | ✅ for existing records and fields |
 | [keyring](/providers/keyring/#use-existing-secrets) | Service | Account (defaults to the current system username) | Current user's entry | ✅ |
 | [dotenv](/providers/dotenv/#use-existing-secrets) | `.env` key | Rejected | Reads the key | ✅ |
-| [file (0.19+)](/providers/file/#use-existing-files) | Relative file path beneath the configured root | Rejected | Reads the complete UTF-8 file | ✅ |
+| [file (0.19+)](/providers/file/#use-existing-files) | Relative file path beneath the configured root | Rejected | Reads the complete file as arbitrary bytes (0.20+) | ✅ |
 | [env](/providers/env/#use-existing-secrets) | Variable name | Rejected | Reads the variable | — (read-only) |
 | [EJSON (0.20+)](/providers/ejson/#use-existing-secrets) | RFC 6901 JSON Pointer | Rejected | Reads the selected JSON string | — (read-only) |
-| [systemd credentials (0.17+)](/providers/systemd-credential/#use-an-existing-credential-name) | Credential filename | Rejected | Reads the credential | — (read-only) |
+| [systemd credentials (0.17+)](/providers/systemd-credential/#use-an-existing-credential-name) | Credential filename | Rejected | Reads arbitrary credential bytes (0.20+) | — (read-only) |
 | [Fly.io secrets (0.20+)](/providers/fly/#use-existing-secrets) | Fly app secret name | Rejected | Error: Fly.io does not expose plaintext values | ✅ write-only via `flyctl secrets set` |
 | [Cloudflare Secrets Store (0.20+)](/providers/cloudflare/#use-existing-secrets-020) | Account-secret name in the selected store | Rejected | Error: Cloudflare's management API does not expose plaintext values | ✅ write-only via the Cloudflare API |
 | [pass](/providers/pass/#use-existing-secrets) | Entry path | Rejected | Reads the entry | ✅ |
@@ -922,7 +949,7 @@ entry declares neither, it inherits whichever form `[profiles.default]` uses.
 | [Passbolt (0.19+)](/providers/passbolt/#use-existing-resources) | Resource UUID or exact name | `password`, `username`, `uri`, or `description` | Reads `password` | ✅ for existing resources; never creates through `ref` |
 | [Vault](/providers/vault/#use-existing-secrets) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
 | [OpenBao](/providers/openbao/#use-existing-secrets) (0.17+) | KV path relative to the mount | Required (KV entries are maps) | Error | — (read-only) |
-| [AWS Secrets Manager](/providers/awssm/#use-existing-secrets) | Secret name or ARN | JSON key | Whole secret string | — (read-only) |
+| [AWS Secrets Manager](/providers/awssm/#use-existing-secrets) | Secret name or ARN | JSON key (UTF-8 only) | Whole `SecretString` or `SecretBinary` value (0.20+) | — (read-only) |
 | [AWS Parameter Store (0.18+)](/providers/awsps/#use-existing-parameters) | Parameter name or ARN; `version` selects a version or label | Rejected | Reads the decrypted value | ✅ by unversioned parameter name; version, label, and ARN refs are read-only |
 | [GCSM](/providers/gcsm/#use-existing-secrets) | Secret id; `version` also applies | Rejected | Reads latest or the pinned version | — (read-only) |
 | [Bitwarden (bws)](/providers/bws/#use-existing-secrets) | BWS key name | Rejected | Reads the key | ✅ |

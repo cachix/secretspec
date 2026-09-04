@@ -1,4 +1,4 @@
-use secrecy::{ExposeSecret, SecretString};
+use crate::SecretBytes;
 use std::collections::HashMap;
 
 /// Credentials handed to a provider at construction.
@@ -6,7 +6,7 @@ use std::collections::HashMap;
 /// Maps semantic provider-specific names (for example `access_token`) to
 /// secret values. Providers may retain environment-variable fallback for
 /// standalone compatibility, but environment names are not part of this API.
-pub(crate) type ProviderCredentials = HashMap<String, SecretString>;
+pub(crate) type ProviderCredentials = HashMap<String, SecretBytes>;
 
 /// Resolves a semantic provider credential, falling back to the provider's
 /// conventional environment variable when no explicit credential was supplied.
@@ -27,7 +27,7 @@ pub(crate) fn credential_or_envs(
 ) -> Option<String> {
     credentials
         .get(name)
-        .map(|secret| secret.expose_secret().to_string())
+        .and_then(|secret| secret.try_as_utf8().ok().map(str::to_string))
         .filter(|value| !value.is_empty())
         .or_else(|| preferred_env(env_vars))
 }
@@ -49,12 +49,12 @@ pub(crate) fn preferred_env(names: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{ProviderCredentials, credential_or_env, preferred_env};
+    use crate::SecretBytes;
     use crate::tests::EnvVarGuard;
-    use secrecy::SecretString;
 
     fn credentials(name: &str, value: &str) -> ProviderCredentials {
         let mut credentials = ProviderCredentials::new();
-        credentials.insert(name.to_string(), SecretString::new(value.into()));
+        credentials.insert(name.to_string(), SecretBytes::from_utf8(value));
         credentials
     }
 

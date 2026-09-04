@@ -27,11 +27,11 @@ use super::{
     Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl, credential_or_env,
     flat_item,
 };
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, Secret, SecretSpecError};
 use age::armor::{ArmoredReader, ArmoredWriter, Format};
 use age::{Decryptor, Encryptor, Identity, IdentityFile, NoCallbacks, Recipient};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
@@ -417,18 +417,18 @@ impl Provider for AgeProvider {
         }
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let key = flat_item(self, addr)?;
         Ok(self
             .load()?
             .get(&*key)
-            .map(|v| SecretString::new(v.clone().into())))
+            .map(|v| SecretBytes::new(v.clone().into())))
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         let key = flat_item(self, addr)?.into_owned();
         let mut vars = self.load()?;
-        vars.insert(key, value.expose_secret().to_string());
+        vars.insert(key, super::require_utf8("age", value)?.to_string());
         self.store(&vars)
     }
 
@@ -452,13 +452,13 @@ impl Provider for AgeProvider {
     }
 
     /// Decrypts the blob once and serves every requested key from it
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         let vars = self.load()?;
         let mut out = HashMap::new();
         for (name, addr) in requests {
             let key = flat_item(self, *addr)?;
             if let Some(value) = vars.get(&*key) {
-                out.insert(name.to_string(), SecretString::new(value.clone().into()));
+                out.insert(name.to_string(), SecretBytes::new(value.clone().into()));
             }
         }
         Ok(out)
@@ -630,7 +630,7 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
         provider
             .set(
                 addr("API_KEY"),
-                &SecretString::new("sekret".to_string().into()),
+                &SecretBytes::new("sekret".to_string().into()),
             )
             .unwrap();
 
@@ -638,7 +638,7 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
         assert!(bytes.starts_with(b"-----BEGIN AGE ENCRYPTED FILE-----"));
 
         provider
-            .set(addr("OTHER"), &SecretString::new("two".to_string().into()))
+            .set(addr("OTHER"), &SecretBytes::new("two".to_string().into()))
             .unwrap();
 
         assert_eq!(
@@ -647,7 +647,7 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "sekret"
+            b"sekret"
         );
         assert_eq!(
             provider
@@ -655,7 +655,7 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "two"
+            b"two"
         );
         assert!(provider.get(addr("MISSING")).unwrap().is_none());
     }
@@ -675,11 +675,11 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
         provider
             .set(
                 addr("API_KEY"),
-                &SecretString::new("sekret".to_string().into()),
+                &SecretBytes::new("sekret".to_string().into()),
             )
             .unwrap();
         provider
-            .set(addr("OTHER"), &SecretString::new("two".to_string().into()))
+            .set(addr("OTHER"), &SecretBytes::new("two".to_string().into()))
             .unwrap();
 
         assert!(provider.delete(addr("API_KEY")).unwrap());
@@ -690,7 +690,7 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "two"
+            b"two"
         );
 
         // Idempotent: the second delete reports nothing removed.
@@ -717,7 +717,7 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
         provider
             .set(
                 addr("API_KEY"),
-                &SecretString::new("sekret".to_string().into()),
+                &SecretBytes::new("sekret".to_string().into()),
             )
             .unwrap();
         let before = std::fs::read(&provider.config.path).unwrap();
@@ -740,12 +740,12 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
         });
         let addr = Address::convention("proj", "default", "API_KEY");
         provider
-            .set(addr, &SecretString::new("bin".to_string().into()))
+            .set(addr, &SecretBytes::new("bin".to_string().into()))
             .unwrap();
 
         let bytes = std::fs::read(&provider.config.path).unwrap();
         assert!(!bytes.starts_with(b"-----BEGIN"));
-        assert_eq!(provider.get(addr).unwrap().unwrap().expose_secret(), "bin");
+        assert_eq!(provider.get(addr).unwrap().unwrap().expose_secret(), b"bin");
     }
 
     #[test]
@@ -763,11 +763,11 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
         });
         let addr = Address::convention("proj", "default", "API_KEY");
         provider
-            .set(addr, &SecretString::new("teamsecret".to_string().into()))
+            .set(addr, &SecretBytes::new("teamsecret".to_string().into()))
             .unwrap();
         assert_eq!(
             provider.get(addr).unwrap().unwrap().expose_secret(),
-            "teamsecret"
+            b"teamsecret"
         );
     }
 
@@ -786,18 +786,18 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
         let mut credentials = ProviderCredentials::new();
         credentials.insert(
             IDENTITY.to_string(),
-            SecretString::new(TEST_SSH_IDENTITY.to_string().into()),
+            SecretBytes::new(TEST_SSH_IDENTITY.to_string().into()),
         );
         provider.with_credentials(credentials);
 
         let addr = Address::convention("proj", "default", "API_KEY");
         provider
-            .set(addr, &SecretString::new("ssh-secret".to_string().into()))
+            .set(addr, &SecretBytes::new("ssh-secret".to_string().into()))
             .unwrap();
 
         assert_eq!(
             provider.get(addr).unwrap().unwrap().expose_secret(),
-            "ssh-secret"
+            b"ssh-secret"
         );
     }
 }

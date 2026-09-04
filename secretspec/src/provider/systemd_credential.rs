@@ -1,6 +1,6 @@
 use super::{Address, Provider, ProviderUrl};
+use crate::SecretBytes;
 use crate::{Result, SecretSpecError};
-use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::fs;
@@ -138,7 +138,7 @@ impl Provider for SystemdCredentialProvider {
         })
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let name = super::flat_item(self, addr)?;
         let path = self.credential_path(&name)?;
 
@@ -160,16 +160,16 @@ impl Provider for SystemdCredentialProvider {
             )));
         }
 
-        let value = fs::read_to_string(&path).map_err(|error| {
+        let value = fs::read(&path).map_err(|error| {
             SecretSpecError::ProviderOperationFailed(format!(
                 "failed to read systemd credential '{}': {error}",
                 path.display()
             ))
         })?;
-        Ok(Some(SecretString::new(value.into())))
+        Ok(Some(SecretBytes::from_vec(value)))
     }
 
-    fn set(&self, addr: Address<'_>, _value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, _value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)
     }
 
@@ -194,7 +194,6 @@ impl Provider for SystemdCredentialProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use secrecy::ExposeSecret;
     use tempfile::TempDir;
     use url::Url;
 
@@ -212,7 +211,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(value.expose_secret(), "line one\nline two\n");
+        assert_eq!(value.expose_secret(), b"line one\nline two\n");
     }
 
     #[test]
@@ -229,7 +228,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(value.expose_secret(), "ops_example");
+        assert_eq!(value.expose_secret(), b"ops_example");
     }
 
     #[test]
@@ -309,15 +308,16 @@ mod tests {
     }
 
     #[test]
-    fn binary_credential_is_rejected_by_text_provider_api() {
+    fn binary_credential_is_read_exactly() {
         let directory = TempDir::new().unwrap();
-        fs::write(directory.path().join("TOKEN"), [0xff, 0xfe]).unwrap();
+        let expected = [0x00, 0xff, 0x80, 0x0a];
+        fs::write(directory.path().join("TOKEN"), expected).unwrap();
 
-        let error = provider(directory.path())
+        let value = provider(directory.path())
             .get(Address::convention("project", "default", "TOKEN"))
-            .unwrap_err();
-        assert!(error.to_string().contains("failed to read"), "{error}");
-        assert!(error.to_string().contains("UTF-8"), "{error}");
+            .unwrap()
+            .unwrap();
+        assert_eq!(value.expose_secret(), expected);
     }
 
     #[test]
@@ -342,7 +342,7 @@ mod tests {
         let address = Address::convention("project", "default", "TOKEN");
         let check_error = provider.check_writable(address).unwrap_err().to_string();
         let set_error = provider
-            .set(address, &SecretString::new("value".into()))
+            .set(address, &SecretBytes::new("value".into()))
             .unwrap_err()
             .to_string();
 

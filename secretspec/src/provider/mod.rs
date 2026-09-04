@@ -105,7 +105,24 @@ pub use macros::{
 pub use registry::ProviderInfo;
 #[cfg(feature = "cli")]
 pub use registry::providers;
-pub use traits::{DiscoveryContext, ProducedValuePersistence, Provider};
+pub use traits::{DiscoveryContext, ProducedValuePersistence, Provider, ProviderValue};
+
+/// Wraps text returned by a provider in SecretSpec's byte-native value type.
+pub(crate) fn bytes_from_text(value: impl Into<String>) -> crate::SecretBytes {
+    crate::SecretBytes::from(value.into())
+}
+
+/// Validates a value at a provider boundary that only accepts text.
+pub(crate) fn require_utf8<'a>(
+    provider: &str,
+    value: &'a crate::SecretBytes,
+) -> crate::Result<&'a str> {
+    std::str::from_utf8(value.expose_secret()).map_err(|_| {
+        crate::SecretSpecError::ProviderOperationFailed(format!(
+            "provider '{provider}' requires UTF-8 secret values"
+        ))
+    })
+}
 
 // Shared implementation support used by provider backends and orchestration.
 pub(crate) use address::{OwnedAddress, flat_item};

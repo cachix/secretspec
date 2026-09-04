@@ -76,10 +76,10 @@
 use super::{
     Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env, join_slash_path,
 };
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use reqwest::StatusCode;
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
@@ -272,7 +272,7 @@ struct Location {
 /// The distinction an environment diagnostic needs to retain after a secret
 /// read. An HTTP 200 without a usable value is not Infisical's ambiguous 404.
 enum SecretRead {
-    Response(Option<SecretString>),
+    Response(Option<SecretBytes>),
     NotFound,
 }
 
@@ -291,7 +291,7 @@ pub struct InfisicalProvider {
     /// then discard all but one. Infisical supports client secrets with a
     /// one-use limit, for which the surplus exchanges are not just waste but a
     /// hard failure.
-    token: tokio::sync::OnceCell<SecretString>,
+    token: tokio::sync::OnceCell<SecretBytes>,
     /// One HTTP client for every request, so a run of secrets reuses the
     /// connection rather than building a pool per call.
     http: OnceLock<reqwest::Client>,
@@ -461,7 +461,7 @@ impl InfisicalProvider {
     /// The login is awaited rather than blocked on: this runs inside the
     /// runtime that [`block_on`](super::block_on) already entered for the
     /// request, and blocking there would panic.
-    async fn resolve_token(&self) -> Result<&SecretString> {
+    async fn resolve_token(&self) -> Result<&SecretBytes> {
         // `get_or_try_init` runs one initializer at a time: a concurrent caller
         // waits for the in-flight exchange and takes its token rather than
         // starting a second one. On failure the cell stays empty, so a later
@@ -471,7 +471,7 @@ impl InfisicalProvider {
                 // `credential_or_env` never yields an empty value, so a blank
                 // INFISICAL_TOKEN reads as absent rather than as a broken token.
                 match credential_or_env(&self.credentials, TOKEN, INFISICAL_TOKEN_ENV) {
-                    Some(token) => Ok(SecretString::new(token.into())),
+                    Some(token) => Ok(SecretBytes::new(token.into())),
                     None => self.login().await,
                 }
             })
@@ -479,7 +479,7 @@ impl InfisicalProvider {
     }
 
     /// Exchanges the machine identity's credentials for an access token.
-    async fn login(&self) -> Result<SecretString> {
+    async fn login(&self) -> Result<SecretBytes> {
         let client_id = credential_or_env(&self.credentials, CLIENT_ID, INFISICAL_CLIENT_ID_ENV);
         let client_secret = credential_or_env(
             &self.credentials,
@@ -556,7 +556,7 @@ impl InfisicalProvider {
             )
         })?;
 
-        Ok(SecretString::new(token.to_string().into()))
+        Ok(SecretBytes::new(token.to_string().into()))
     }
 
     /// Infisical's error envelope carries a human-readable `message`; the
@@ -627,7 +627,7 @@ impl InfisicalProvider {
     /// `secretValueHidden` is set. Passing that placeholder on would export a
     /// literal `<hidden-by-infisical>` to the process SecretSpec runs, so it is
     /// reported as the refusal it is.
-    fn secret_value(secret: &serde_json::Value, key: &str) -> Result<Option<SecretString>> {
+    fn secret_value(secret: &serde_json::Value, key: &str) -> Result<Option<SecretBytes>> {
         if secret["secretValueHidden"].as_bool() == Some(true) {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "Infisical withheld the value of '{key}': this identity may see that the \
@@ -636,7 +636,7 @@ impl InfisicalProvider {
         }
         Ok(secret["secretValue"]
             .as_str()
-            .map(|v| SecretString::new(v.to_string().into())))
+            .map(|v| SecretBytes::new(v.to_string().into())))
     }
 
     /// The URL naming one secret.
@@ -708,7 +708,7 @@ impl InfisicalProvider {
     /// in reverse, taking the first value it finds for a key).
     fn merge_imports(
         parsed: &serde_json::Value,
-        listed: &mut HashMap<String, SecretString>,
+        listed: &mut HashMap<String, SecretBytes>,
     ) -> Result<()> {
         // Absent rather than empty on an instance that predates imports, or on
         // a folder that imports nothing.
@@ -746,7 +746,7 @@ impl InfisicalProvider {
         &self,
         environment: &str,
         secret_path: &str,
-    ) -> Result<Option<HashMap<String, SecretString>>> {
+    ) -> Result<Option<HashMap<String, SecretBytes>>> {
         let url = format!("{}/api/v4/secrets", self.config.endpoint);
         let query = self.read_query(environment, secret_path);
 
@@ -815,7 +815,7 @@ impl InfisicalProvider {
     /// fails and stores nothing, not even part of the path. Each request is
     /// chosen from the status of the one before it, so updating an existing
     /// secret costs a single call, and only a new secret costs more.
-    async fn set_async(&self, loc: &Location, value: &SecretString) -> Result<()> {
+    async fn set_async(&self, loc: &Location, value: &SecretBytes) -> Result<()> {
         // A secret that is merely absent, and a folder that is absent, both
         // answer 404 here.
         if self
@@ -857,14 +857,15 @@ impl InfisicalProvider {
         &self,
         method: reqwest::Method,
         loc: &Location,
-        value: &SecretString,
+        value: &SecretBytes,
     ) -> Result<bool> {
+        let value = super::require_utf8("infisical", value)?;
         let url = self.secret_url(&loc.key)?;
         let body = serde_json::json!({
             "projectId": self.config.project_id,
             "environment": loc.environment,
             "secretPath": loc.secret_path,
-            "secretValue": value.expose_secret(),
+            "secretValue": value,
         });
 
         let response = self.send(method, &url, &[], Some(body)).await?;
@@ -966,7 +967,7 @@ impl InfisicalProvider {
         let mut request = self
             .http()
             .request(method, url)
-            .bearer_auth(token.expose_secret())
+            .bearer_auth(super::require_utf8("infisical", &token)?)
             .query(query);
         if let Some(body) = body {
             request = request.json(&body);
@@ -1143,7 +1144,7 @@ impl Provider for InfisicalProvider {
         &["version"]
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let loc = self.locate(addr)?;
         let version = match addr {
             Address::Native(native) => native.version.as_deref(),
@@ -1165,7 +1166,7 @@ impl Provider for InfisicalProvider {
     /// Secrets sharing a folder and environment are read with one list call
     /// each, rather than one round trip per secret: Infisical's cloud rate
     /// limits are per-minute, and a fan-out of single reads burns them.
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         // A pinned version names one historical value, which the folder
         // listing (always latest) cannot answer.
         let (versioned, listable): (Vec<_>, Vec<_>) = requests.iter().partition(
@@ -1262,7 +1263,7 @@ impl Provider for InfisicalProvider {
         })
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)?;
         let loc = self.locate(addr)?;
         super::block_on(self.set_async(&loc, value))
@@ -1417,11 +1418,11 @@ mod tests {
         provider.with_credentials(ProviderCredentials::from([
             (
                 CLIENT_ID.to_string(),
-                SecretString::new("test-client-id".to_string().into()),
+                SecretBytes::new("test-client-id".to_string().into()),
             ),
             (
                 CLIENT_SECRET.to_string(),
-                SecretString::new("test-client-secret".to_string().into()),
+                SecretBytes::new("test-client-secret".to_string().into()),
             ),
         ]));
         let address = NativeAddress {
@@ -1433,7 +1434,7 @@ mod tests {
             .get(Address::Native(&address))
             .expect("the secret read must succeed")
             .expect("the fixture must return DATABASE_HOST");
-        assert_eq!(value.expose_secret(), "db.internal");
+        assert_eq!(value.expose_secret(), b"db.internal");
 
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 2, "{requests:#?}");
@@ -1461,7 +1462,7 @@ mod tests {
         ));
         provider.with_credentials(ProviderCredentials::from([(
             TOKEN.to_string(),
-            SecretString::new("test-token".to_string().into()),
+            SecretBytes::new("test-token".to_string().into()),
         )]));
         provider
     }
@@ -1780,7 +1781,7 @@ mod tests {
         let refusal = p.check_writable(Address::Native(&addr)).unwrap_err();
         assert!(refusal.to_string().contains("read-only"), "{refusal}");
         let err = p
-            .set(Address::Native(&addr), &SecretString::new("v".into()))
+            .set(Address::Native(&addr), &SecretBytes::new("v".into()))
             .unwrap_err();
         assert_eq!(err.to_string(), refusal.to_string());
     }
@@ -1815,7 +1816,7 @@ mod tests {
         let value = InfisicalProvider::secret_value(&visible, "API_KEY")
             .unwrap()
             .expect("a readable value");
-        assert_eq!(value.expose_secret(), "s3cret");
+        assert_eq!(value.expose_secret(), b"s3cret");
     }
 
     /// Builds a list-response import entry holding one key.
@@ -1832,14 +1833,14 @@ mod tests {
     }
 
     fn merged(parsed: &serde_json::Value, direct: &[(&str, &str)]) -> HashMap<String, String> {
-        let mut listed: HashMap<String, SecretString> = direct
+        let mut listed: HashMap<String, SecretBytes> = direct
             .iter()
-            .map(|(k, v)| (k.to_string(), SecretString::new((*v).into())))
+            .map(|(k, v)| (k.to_string(), SecretBytes::new((*v).into())))
             .collect();
         InfisicalProvider::merge_imports(parsed, &mut listed).expect("merge");
         listed
             .into_iter()
-            .map(|(k, v)| (k, v.expose_secret().to_string()))
+            .map(|(k, v)| (k, v.try_as_utf8().unwrap().to_string()))
             .collect()
     }
 

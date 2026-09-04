@@ -44,11 +44,11 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [keyring](/providers/keyring/) | [macOS Keychain](https://support.apple.com/guide/security/keychain-data-protection-secb0694df1a/web), [Windows Credential Manager](https://learn.microsoft.com/windows/win32/secauthn/credentials-management), or [Linux Secret Service](https://gnome.pages.gitlab.gnome.org/libsecret/) | ✓ | ✓ | ✓ | — |
 | [kdbx](/providers/kdbx/) (0.17+) | KeePass KDBX file (requires the `kdbx` build feature) | ✓ | KDBX 4 | ✓ | — |
 | [dotenv](/providers/dotenv/) | A `.env` file | ✓ | ✓ | ✗ | — |
-| [file](/providers/file/) (0.19+) | One plaintext UTF-8 file per secret | ✓ | ✓ | ✗ | — |
+| [file](/providers/file/) (0.19+) | One plaintext byte file per secret (arbitrary bytes in 0.20+) | ✓ | ✓ | ✗ | — |
 | [env](/providers/env/) | Current process environment | ✓ | ✗ | ✗ | — |
 | [ejson](/providers/ejson/) (0.20+) | EJSON encrypted file (requires the `ejson` build feature and EJSON CLI) | ✓ | ✗ | ✓ | — |
 | [null](/providers/null/) (0.19+) | No storage; uses a manifest default, ephemeral generation, or an ephemeral run prompt | ✗ | ✗ | N/A | — |
-| [systemd-credential](/providers/systemd-credential/) (0.17+) | Credentials passed to the current systemd service | ✓ | ✗ | Depends on the unit's credential source | [Via systemd-creds](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html) |
+| [systemd-credential](/providers/systemd-credential/) (0.17+) | Credentials passed to the current systemd service (arbitrary bytes in 0.20+) | ✓ | ✗ | Depends on the unit's credential source | [Via systemd-creds](https://www.freedesktop.org/software/systemd/man/latest/systemd-creds.html) |
 | [fly](/providers/fly/) (0.20+) | Fly.io application secrets through `flyctl` | ✗ | ✓ | ✓ | — |
 | [cloudflare](/providers/cloudflare/) (0.20+) | Cloudflare account-level Secrets Store through its REST API | ✗ | ✓ | ✓ | — |
 | [pass](/providers/pass/) | Unix `pass` password store | ✓ | ✓ | ✓ | [Via GnuPG](https://gnupg.org/blog/20210315-using-tpm-with-gnupg-2.3.html) |
@@ -60,7 +60,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [dashlane](/providers/dashlane/) (0.18+) | Dashlane, through the `dcli` CLI | ✓ | ✗ | ✓ | — |
 | [keeper](/providers/keeper/) (0.18+) | Keeper Secrets Manager (requires the `keeper` build feature) | ✓ | ✓ | ✓ | — |
 | [gcsm](/providers/gcsm/) | Google Cloud Secret Manager (requires the `gcsm` build feature) | ✓ | ✓ | ✓ | — |
-| [awssm](/providers/awssm/) | AWS Secrets Manager (requires the `awssm` build feature) | ✓ | ✓ | ✓ | — |
+| [awssm](/providers/awssm/) | AWS Secrets Manager, including `SecretBinary` (0.20+; requires the `awssm` build feature) | ✓ | ✓ | ✓ | — |
 | [awsps](/providers/awsps/) (0.18+) | AWS Systems Manager Parameter Store (requires the `awsps` build feature in 0.18+) | ✓ | ✓ | ✓ (`SecureString`) | — |
 | [scaleway](/providers/scaleway/) (0.17+) | Scaleway Secret Manager (requires the `scaleway` build feature) | ✓ | ✓ | ✓ | — |
 | [vault](/providers/vault/) | HashiCorp Vault (requires the `vault` build feature) | ✓ | ✓ | ✓ | — |

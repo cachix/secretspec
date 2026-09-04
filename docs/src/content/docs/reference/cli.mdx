@@ -650,17 +650,31 @@ from `default` or an extended manifest.
 ### set
 Set a secret value.
 
+<VersionCompatibility version="0.20" kind="changed">
+
+`set` can read exact bytes from a file or stdin with `--from-file`.
+
+</VersionCompatibility>
+
 ```bash
 $ secretspec set [OPTIONS] <NAME> [VALUE]
+$ secretspec set <NAME> --from-file <FILE|-> # 0.20+
 ```
 
 **Options:**
+
 - `-p, --provider <PROVIDER>` - Provider backend to use
 - `-P, --profile <PROFILE>` - Profile to use
+- `--from-file <FILE>` - Read the exact value bytes from `FILE`; use `-` for
+  stdin (0.20+). This conflicts with the positional `VALUE`.
 
 **Example:**
 ```bash
 $ secretspec set API_KEY sk-1234567890 --profile production --provider sops://secrets.enc.yaml
+
+$ secretspec set TLS_KEYSTORE --from-file client.p12 # 0.20+
+
+$ generate-key | secretspec set TLS_KEYSTORE --from-file - # 0.20+
 # SecretSpec 0.19+:
 Writing secret 'API_KEY' to sops://secrets.enc.yaml?format=yaml (profile: production)
   target: /work/my-app/secrets.enc.yaml ["my-app"]["production"]["API_KEY"]
@@ -671,6 +685,11 @@ In SecretSpec 0.19+, `set` shows the resolved provider, profile, and native
 write target before reading a piped value or opening the password prompt. For
 SOPS this includes the exact encrypted file and `sops set` selector, making a
 missing `--profile` visible before the write.
+
+`--from-file` preserves every byte, including NULs, whitespace, and a final
+newline. Empty input is rejected. Positional values and interactive prompts
+remain text. A binary declaration normally uses `as_path = true`; add a
+manifest `encoding` when its provider accepts only text.
 
 `set` rejects composed secrets because their values are derived and read-only.
 Available since SecretSpec 0.16.

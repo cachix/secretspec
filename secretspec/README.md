@@ -329,6 +329,7 @@ secretspec config global init    # Set up user defaults (0.17+)
 secretspec check                  # Verify all secrets are set
 secretspec add KEY --description "Purpose" # Declare a secret (0.18+)
 secretspec set KEY               # Set a secret interactively
+secretspec set KEY --from-file secret.bin # Set exact bytes (0.20+)
 secretspec get KEY               # Retrieve a secret
 secretspec delete KEY            # Delete a stored provider value (0.18+)
 secretspec import PROVIDER       # Import secrets from another provider

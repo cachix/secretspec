@@ -18,11 +18,11 @@
 //! never belongs in the URI or environment.
 
 use super::{Address, Provider, ProviderCredentials, ProviderUrl};
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use percent_encoding::{AsciiSet, CONTROLS, percent_encode};
 use secrecy::zeroize::Zeroizing;
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -693,7 +693,7 @@ impl EjsonProvider {
                 "No EJSON private key configured. Add the `private_key` provider credential to this provider alias.",
             )
         })?;
-        let value = value.expose_secret().trim();
+        let value = super::require_utf8("ejson", value)?.trim();
         if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(provider_err(
                 "Invalid EJSON `private_key` credential: expected exactly 64 hexadecimal characters.",
@@ -867,11 +867,11 @@ impl EjsonProvider {
             })
     }
 
-    fn select(document: &serde_json::Value, pointer: &str) -> Result<Option<SecretString>> {
+    fn select(document: &serde_json::Value, pointer: &str) -> Result<Option<SecretBytes>> {
         match document.pointer(pointer) {
             None => Ok(None),
             Some(serde_json::Value::String(value)) => {
-                Ok(Some(SecretString::new(value.clone().into())))
+                Ok(Some(SecretBytes::new(value.clone().into())))
             }
             Some(_) => Err(provider_err(format!(
                 "ejson item '{pointer}' does not select a string value"
@@ -919,7 +919,7 @@ impl Provider for EjsonProvider {
         Some(&self.config.path)
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let pointer = self.pointer(addr)?;
         let Some(document) = self.decrypt()? else {
             return Ok(None);
@@ -927,7 +927,7 @@ impl Provider for EjsonProvider {
         Self::select(&document, &pointer)
     }
 
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         let pointers = requests
             .iter()
             .map(|(name, addr)| Ok((name.to_string(), self.pointer(*addr)?.into_owned())))
@@ -954,7 +954,7 @@ impl Provider for EjsonProvider {
         ))
     }
 
-    fn set(&self, addr: Address<'_>, _value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, _value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)
     }
 }
@@ -962,7 +962,6 @@ impl Provider for EjsonProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use secrecy::ExposeSecret;
     use std::fs;
     use url::Url;
 
@@ -1081,7 +1080,7 @@ mod tests {
             .with_cli_timeout(Duration::from_secs(5));
         provider.credentials.insert(
             PRIVATE_KEY.to_string(),
-            SecretString::new(TEST_PRIVATE_KEY.into()),
+            SecretBytes::new(TEST_PRIVATE_KEY.into()),
         );
 
         let value = provider
@@ -1091,7 +1090,7 @@ mod tests {
             }))
             .unwrap()
             .unwrap();
-        assert_eq!(value.expose_secret(), "value");
+        assert_eq!(value.expose_secret(), b"value");
     }
 
     #[cfg(windows)]
@@ -1197,7 +1196,7 @@ mod tests {
         let addr = Address::convention("app", "default", "TOKEN");
         let preflight = provider.check_writable(addr).unwrap_err().to_string();
         let write = provider
-            .set(addr, &SecretString::new("value".into()))
+            .set(addr, &SecretBytes::new("value".into()))
             .unwrap_err()
             .to_string();
         assert_eq!(preflight, write);
@@ -1227,7 +1226,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "value"
+            b"value"
         );
         assert!(
             EjsonProvider::select(&document, "/missing")
@@ -1274,7 +1273,7 @@ mod tests {
                 EjsonProvider::new(EjsonConfig { path: encrypted }).with_cli_binary(cli);
             provider.credentials.insert(
                 PRIVATE_KEY.to_string(),
-                SecretString::new(TEST_PRIVATE_KEY.into()),
+                SecretBytes::new(TEST_PRIVATE_KEY.into()),
             );
             assert_eq!(
                 provider
@@ -1285,7 +1284,7 @@ mod tests {
                     .unwrap()
                     .unwrap()
                     .expose_secret(),
-                "value"
+                b"value"
             );
             return;
         }
@@ -1327,7 +1326,7 @@ mod tests {
                 EjsonProvider::new(EjsonConfig { path: encrypted }).with_cli_binary(cli);
             provider.credentials.insert(
                 PRIVATE_KEY.to_string(),
-                SecretString::new(TEST_PRIVATE_KEY.into()),
+                SecretBytes::new(TEST_PRIVATE_KEY.into()),
             );
             assert_eq!(
                 provider
@@ -1338,7 +1337,7 @@ mod tests {
                     .unwrap()
                     .unwrap()
                     .expose_secret(),
-                "value"
+                b"value"
             );
             return;
         }
@@ -1370,7 +1369,7 @@ mod tests {
         let mut provider = EjsonProvider::new(EjsonConfig { path: encrypted }).with_cli_binary(cli);
         provider.credentials.insert(
             PRIVATE_KEY.to_string(),
-            SecretString::new(TEST_PRIVATE_KEY.into()),
+            SecretBytes::new(TEST_PRIVATE_KEY.into()),
         );
 
         let results = provider
@@ -1388,8 +1387,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(results.len(), 2);
-        assert_eq!(results["API_KEY"].expose_secret(), "one");
-        assert_eq!(results["OTHER"].expose_secret(), "two");
+        assert_eq!(results["API_KEY"].expose_secret(), b"one");
+        assert_eq!(results["OTHER"].expose_secret(), b"two");
         assert_eq!(fs::read_to_string(count).unwrap(), "x");
     }
 
@@ -1412,13 +1411,13 @@ mod tests {
         ] {
             provider
                 .credentials
-                .insert(PRIVATE_KEY.to_string(), SecretString::new(invalid.into()));
+                .insert(PRIVATE_KEY.to_string(), SecretBytes::new(invalid.into()));
             assert!(provider.private_key().is_err());
         }
 
         provider.credentials.insert(
             PRIVATE_KEY.to_string(),
-            SecretString::new(format!("  {TEST_PRIVATE_KEY}\n").into()),
+            SecretBytes::new(format!("  {TEST_PRIVATE_KEY}\n").into()),
         );
         assert_eq!(provider.private_key().unwrap().as_str(), TEST_PRIVATE_KEY);
     }
@@ -1454,7 +1453,7 @@ mod tests {
         let mut provider = EjsonProvider::new(EjsonConfig { path: encrypted }).with_cli_binary(cli);
         provider.credentials.insert(
             PRIVATE_KEY.to_string(),
-            SecretString::new("x".repeat(1024 * 1024).into()),
+            SecretBytes::new("x".repeat(1024 * 1024).into()),
         );
 
         let error = provider
@@ -1501,7 +1500,7 @@ mod tests {
         let mut provider = EjsonProvider::new(EjsonConfig { path: encrypted }).with_cli_binary(cli);
         provider.credentials.insert(
             PRIVATE_KEY.to_string(),
-            SecretString::new(TEST_PRIVATE_KEY.into()),
+            SecretBytes::new(TEST_PRIVATE_KEY.into()),
         );
 
         let error = provider
@@ -1533,7 +1532,7 @@ mod tests {
             .with_cli_timeout(Duration::from_millis(500));
         provider.credentials.insert(
             PRIVATE_KEY.to_string(),
-            SecretString::new(TEST_PRIVATE_KEY.into()),
+            SecretBytes::new(TEST_PRIVATE_KEY.into()),
         );
 
         let started = Instant::now();
@@ -1573,7 +1572,7 @@ mod tests {
             .with_cli_timeout(Duration::from_secs(2));
         provider.credentials.insert(
             PRIVATE_KEY.to_string(),
-            SecretString::new(TEST_PRIVATE_KEY.into()),
+            SecretBytes::new(TEST_PRIVATE_KEY.into()),
         );
 
         let started = Instant::now();
@@ -1629,7 +1628,7 @@ mod tests {
             .with_cli_timeout(Duration::from_secs(5));
         provider.credentials.insert(
             PRIVATE_KEY.to_string(),
-            SecretString::new(TEST_PRIVATE_KEY.into()),
+            SecretBytes::new(TEST_PRIVATE_KEY.into()),
         );
 
         let started = Instant::now();
@@ -1700,7 +1699,7 @@ mod tests {
         let mut provider = EjsonProvider::new(EjsonConfig { path: encrypted }).with_cli_binary(cli);
         provider.credentials.insert(
             PRIVATE_KEY.to_string(),
-            SecretString::new(TEST_PRIVATE_KEY.into()),
+            SecretBytes::new(TEST_PRIVATE_KEY.into()),
         );
 
         let error = provider
@@ -1724,7 +1723,7 @@ mod tests {
         let mut provider = EjsonProvider::new(EjsonConfig { path: encrypted }).with_cli_binary(cli);
         provider.credentials.insert(
             PRIVATE_KEY.to_string(),
-            SecretString::new(TEST_PRIVATE_KEY.into()),
+            SecretBytes::new(TEST_PRIVATE_KEY.into()),
         );
 
         let error = provider
@@ -1759,7 +1758,7 @@ mod tests {
         let mut provider = EjsonProvider::new(EjsonConfig { path: encrypted }).with_cli_binary(cli);
         provider.credentials.insert(
             PRIVATE_KEY.to_string(),
-            SecretString::new(TEST_PRIVATE_KEY.into()),
+            SecretBytes::new(TEST_PRIVATE_KEY.into()),
         );
 
         let error = provider
@@ -1816,7 +1815,7 @@ mod tests {
         .with_cli_binary(cli);
         provider.credentials.insert(
             PRIVATE_KEY.to_string(),
-            SecretString::new(TEST_PRIVATE_KEY.into()),
+            SecretBytes::new(TEST_PRIVATE_KEY.into()),
         );
 
         let reader = std::thread::spawn(move || {
@@ -1834,7 +1833,7 @@ mod tests {
         fs::write(&proceed, "go").unwrap();
 
         let value = reader.join().unwrap().unwrap().unwrap();
-        assert_eq!(value.expose_secret(), "original");
+        assert_eq!(value.expose_secret(), b"original");
     }
 
     #[cfg(unix)]

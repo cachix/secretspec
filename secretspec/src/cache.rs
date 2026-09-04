@@ -4,8 +4,9 @@
 //! [`crate::secrets`]. This module owns the provider-independent envelope
 //! format and the decisions that can be made from a stored value alone.
 
+use crate::SecretBytes;
+use data_encoding::BASE64;
 use secrecy::zeroize::Zeroizing;
-use secrecy::{ExposeSecret, SecretString};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Marker every cache entry starts with, identifying the value as SecretSpec's
@@ -15,7 +16,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// truncated write leaves something only SecretSpec could have put there, which
 /// is safe to replace; a value with no marker belongs to someone else and must
 /// never be touched.
-pub(crate) const CACHE_ENVELOPE_MARKER: &str = "secretspec-cache-v3:";
+pub(crate) const CACHE_ENVELOPE_MARKER: &str = "secretspec-cache-v4:";
+
+/// The 0.18/0.19 envelope stored plaintext as a JSON string. Read it as UTF-8
+/// bytes during migration, but never write it again.
+const V3_CACHE_ENVELOPE_MARKER: &str = "secretspec-cache-v3:";
 
 /// The 0.17 envelope recorded when an entry was written rather than when it
 /// expires. Keep recognizing it so an upgrade can replace its own entries
@@ -32,8 +37,19 @@ struct CacheEnvelope {
     expires_at: u64,
     max_age_secs: u64,
     route_fingerprint: String,
-    /// The cached plaintext stays in a zeroizing buffer on both serialization
-    /// and deserialization.
+    /// Strict padded base64 is the cache envelope's byte serialization. It is
+    /// independent of a declaration's manifest `encoding`.
+    #[serde(with = "zeroizing_string")]
+    value_base64: Zeroizing<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct V3CacheEnvelope {
+    project: String,
+    profile: String,
+    expires_at: u64,
+    max_age_secs: u64,
+    route_fingerprint: String,
     #[serde(with = "zeroizing_string")]
     value: Zeroizing<String>,
 }
@@ -54,6 +70,7 @@ struct LegacyCacheEnvelope {
 
 enum DecodedEnvelope {
     Current(CacheEnvelope),
+    V3(V3CacheEnvelope),
     Legacy(LegacyCacheEnvelope),
 }
 
@@ -96,7 +113,7 @@ pub(crate) enum CacheOwnership {
 /// What a stored cache entry can do for the read that found it.
 pub(crate) enum CacheEntryStatus {
     /// Fresh, and written for the expected authoritative route.
-    Fresh(SecretString),
+    Fresh(SecretBytes),
     /// Expired (regardless of owner), or ours but no longer usable because its
     /// authoritative route or freshness policy changed.
     Stale,
@@ -119,14 +136,34 @@ pub(crate) enum CacheEncodeError {
     Serialize(#[from] serde_json::Error),
 }
 
-fn decode(stored: &SecretString) -> Option<Result<DecodedEnvelope, serde_json::Error>> {
+fn decode(stored: &SecretBytes) -> Option<Result<DecodedEnvelope, String>> {
+    fn text(payload: &[u8]) -> Result<&str, String> {
+        std::str::from_utf8(payload).map_err(|_| "cache envelope is not UTF-8".to_string())
+    }
     let stored = stored.expose_secret();
-    if let Some(payload) = stored.strip_prefix(CACHE_ENVELOPE_MARKER) {
-        return Some(serde_json::from_str(payload).map(DecodedEnvelope::Current));
+    if let Some(payload) = stored.strip_prefix(CACHE_ENVELOPE_MARKER.as_bytes()) {
+        return Some(text(payload).and_then(|payload| {
+            serde_json::from_str(payload)
+                .map(DecodedEnvelope::Current)
+                .map_err(|error| error.to_string())
+        }));
+    }
+    if let Some(payload) = stored.strip_prefix(V3_CACHE_ENVELOPE_MARKER.as_bytes()) {
+        return Some(text(payload).and_then(|payload| {
+            serde_json::from_str(payload)
+                .map(DecodedEnvelope::V3)
+                .map_err(|error| error.to_string())
+        }));
     }
     stored
-        .strip_prefix(LEGACY_CACHE_ENVELOPE_MARKER)
-        .map(|payload| serde_json::from_str(payload).map(DecodedEnvelope::Legacy))
+        .strip_prefix(LEGACY_CACHE_ENVELOPE_MARKER.as_bytes())
+        .map(|payload| {
+            text(payload).and_then(|payload| {
+                serde_json::from_str(payload)
+                    .map(DecodedEnvelope::Legacy)
+                    .map_err(|error| error.to_string())
+            })
+        })
 }
 
 fn unix_timestamp() -> Result<u64, std::time::SystemTimeError> {
@@ -136,12 +173,12 @@ fn unix_timestamp() -> Result<u64, std::time::SystemTimeError> {
 }
 
 /// Classify cache ownership without trusting the provider address.
-pub(crate) fn ownership(stored: &SecretString, project: &str, profile: &str) -> CacheOwnership {
+pub(crate) fn ownership(stored: &SecretBytes, project: &str, profile: &str) -> CacheOwnership {
     ownership_at(stored, project, profile, unix_timestamp().ok())
 }
 
 fn ownership_at(
-    stored: &SecretString,
+    stored: &SecretBytes,
     project: &str,
     profile: &str,
     now: Option<u64>,
@@ -150,6 +187,18 @@ fn ownership_at(
         None => CacheOwnership::Unrecognized,
         Some(Err(_)) => CacheOwnership::OursUnreadable,
         Some(Ok(DecodedEnvelope::Current(envelope))) => {
+            if now.is_some_and(|now| now >= envelope.expires_at) {
+                CacheOwnership::Expired
+            } else if envelope.project == project && envelope.profile == profile {
+                CacheOwnership::Ours
+            } else {
+                CacheOwnership::Foreign {
+                    project: envelope.project,
+                    profile: envelope.profile,
+                }
+            }
+        }
+        Some(Ok(DecodedEnvelope::V3(envelope))) => {
             if now.is_some_and(|now| now >= envelope.expires_at) {
                 CacheOwnership::Expired
             } else if envelope.project == project && envelope.profile == profile {
@@ -178,7 +227,7 @@ fn ownership_at(
 /// Clock errors are returned separately so the caller can preserve the
 /// fail-open cache policy while deciding how to report the failure.
 pub(crate) fn inspect_entry(
-    stored: &SecretString,
+    stored: &SecretBytes,
     project: &str,
     profile: &str,
     route_fingerprint: &str,
@@ -195,7 +244,7 @@ pub(crate) fn inspect_entry(
 }
 
 fn inspect_entry_with_clock<E>(
-    stored: &SecretString,
+    stored: &SecretBytes,
     project: &str,
     profile: &str,
     route_fingerprint: &str,
@@ -205,8 +254,30 @@ fn inspect_entry_with_clock<E>(
     let Some(decoded) = decode(stored) else {
         return Ok(CacheEntryStatus::Unrecognized);
     };
-    let envelope = match decoded {
-        Ok(DecodedEnvelope::Current(envelope)) => envelope,
+    let (project_owner, profile_owner, expires_at, envelope_max_age, route, value) = match decoded {
+        Ok(DecodedEnvelope::Current(envelope)) => {
+            let value = BASE64
+                .decode(envelope.value_base64.as_bytes())
+                .map(SecretBytes::from_vec)
+                .map_err(|_| ())
+                .ok();
+            (
+                envelope.project,
+                envelope.profile,
+                envelope.expires_at,
+                envelope.max_age_secs,
+                envelope.route_fingerprint,
+                value,
+            )
+        }
+        Ok(DecodedEnvelope::V3(envelope)) => (
+            envelope.project,
+            envelope.profile,
+            envelope.expires_at,
+            envelope.max_age_secs,
+            envelope.route_fingerprint,
+            Some(SecretBytes::from_utf8(envelope.value.as_str())),
+        ),
         Ok(DecodedEnvelope::Legacy(envelope)) => {
             if envelope.project != project || envelope.profile != profile {
                 return Ok(CacheEntryStatus::Foreign {
@@ -221,43 +292,44 @@ fn inspect_entry_with_clock<E>(
             if envelope.cached_at > now || now.saturating_sub(envelope.cached_at) > max_age_secs {
                 return Ok(CacheEntryStatus::Stale);
             }
-            return Ok(CacheEntryStatus::Fresh(SecretString::new(
-                envelope.value.as_str().into(),
+            return Ok(CacheEntryStatus::Fresh(SecretBytes::from_utf8(
+                envelope.value.as_str(),
             )));
         }
         Err(_) => return Ok(CacheEntryStatus::OursUnreadable),
     };
     let now = clock()?;
-    if now >= envelope.expires_at {
-        // Expiration is intrinsic to a v3 entry, so whoever encounters it can
+    if now >= expires_at {
+        // Expiration is intrinsic to v3 and v4 entries, so whoever encounters it can
         // discard it even when its project/profile no longer has a manifest.
         return Ok(CacheEntryStatus::Stale);
     }
-    if envelope.project != project || envelope.profile != profile {
+    if project_owner != project || profile_owner != profile {
         return Ok(CacheEntryStatus::Foreign {
-            project: envelope.project,
-            profile: envelope.profile,
+            project: project_owner,
+            profile: profile_owner,
         });
     }
-    // Reconstructing the write time from the self-contained v3 policy preserves
+    // Reconstructing the write time from the self-contained v3/v4 policy preserves
     // clock-rollback detection without retaining `cached_at` in the envelope.
-    let Some(cached_at) = envelope.expires_at.checked_sub(envelope.max_age_secs) else {
+    let Some(cached_at) = expires_at.checked_sub(envelope_max_age) else {
         return Ok(CacheEntryStatus::Stale);
     };
-    if cached_at > now || envelope.max_age_secs != max_age_secs {
+    if cached_at > now || envelope_max_age != max_age_secs {
         return Ok(CacheEntryStatus::Stale);
     }
-    if envelope.route_fingerprint != route_fingerprint {
+    if route != route_fingerprint {
         return Ok(CacheEntryStatus::Stale);
     }
-    Ok(CacheEntryStatus::Fresh(SecretString::new(
-        envelope.value.as_str().into(),
-    )))
+    Ok(match value {
+        Some(value) => CacheEntryStatus::Fresh(value),
+        None => CacheEntryStatus::OursUnreadable,
+    })
 }
 
 #[cfg(test)]
 fn inspect_entry_at(
-    stored: &SecretString,
+    stored: &SecretBytes,
     project: &str,
     profile: &str,
     route_fingerprint: &str,
@@ -281,8 +353,8 @@ pub(crate) fn encode_entry(
     profile: &str,
     max_age_secs: u64,
     route_fingerprint: String,
-    value: &SecretString,
-) -> Result<SecretString, CacheEncodeError> {
+    value: &SecretBytes,
+) -> Result<SecretBytes, CacheEncodeError> {
     encode_entry_at(
         project,
         profile,
@@ -299,8 +371,8 @@ fn encode_entry_at(
     now: u64,
     max_age_secs: u64,
     route_fingerprint: String,
-    value: &SecretString,
-) -> Result<SecretString, CacheEncodeError> {
+    value: &SecretBytes,
+) -> Result<SecretBytes, CacheEncodeError> {
     let expires_at = now
         .checked_add(max_age_secs)
         .ok_or(CacheEncodeError::ExpirationOverflow)?;
@@ -310,13 +382,13 @@ fn encode_entry_at(
         expires_at,
         max_age_secs,
         route_fingerprint,
-        value: Zeroizing::new(value.expose_secret().to_string()),
+        value_base64: Zeroizing::new(BASE64.encode(value.expose_secret())),
     };
     // Both plaintext renderings of the envelope are held in buffers that
     // zeroize on drop.
-    let json = serde_json::to_string(&envelope)?;
-    let serialized = Zeroizing::new(format!("{CACHE_ENVELOPE_MARKER}{json}"));
-    Ok(SecretString::new(serialized.as_str().into()))
+    let json = Zeroizing::new(serde_json::to_string(&envelope)?);
+    let serialized = Zeroizing::new(format!("{CACHE_ENVELOPE_MARKER}{}", json.as_str()));
+    Ok(SecretBytes::from_utf8(serialized.as_str()))
 }
 
 #[cfg(test)]
@@ -330,14 +402,14 @@ mod tests {
     const MAX_AGE: u64 = 60;
     const EXPIRES_AT: u64 = 1_060;
 
-    fn entry() -> SecretString {
+    fn entry() -> SecretBytes {
         encode_entry_at(
             PROJECT,
             PROFILE,
             WRITTEN_AT,
             MAX_AGE,
             FINGERPRINT.to_string(),
-            &SecretString::new("sensitive".into()),
+            &SecretBytes::new("sensitive".into()),
         )
         .expect("cache envelope serializes")
     }
@@ -363,7 +435,66 @@ mod tests {
         };
         assert_eq!(envelope.expires_at, EXPIRES_AT);
         assert_eq!(envelope.max_age_secs, MAX_AGE);
-        assert_eq!(value.expose_secret(), "sensitive");
+        assert_eq!(value.expose_secret(), b"sensitive");
+    }
+
+    #[test]
+    fn v4_round_trips_arbitrary_bytes_with_padded_base64() {
+        let expected = [0x00, 0xff, 0x80, 0x0a];
+        let entry = encode_entry_at(
+            PROJECT,
+            PROFILE,
+            WRITTEN_AT,
+            MAX_AGE,
+            FINGERPRINT.to_string(),
+            &SecretBytes::from_slice(&expected),
+        )
+        .unwrap();
+        let payload = entry
+            .expose_secret()
+            .strip_prefix(CACHE_ENVELOPE_MARKER.as_bytes())
+            .unwrap();
+        let envelope: serde_json::Value = serde_json::from_slice(payload).unwrap();
+        assert_eq!(envelope["value_base64"], "AP+ACg==");
+        assert!(envelope.get("value").is_none());
+
+        let CacheEntryStatus::Fresh(value) = inspect_entry_at(
+            &entry,
+            PROJECT,
+            PROFILE,
+            FINGERPRINT,
+            MAX_AGE,
+            EXPIRES_AT - 1,
+        ) else {
+            panic!("v4 entry should be fresh");
+        };
+        assert_eq!(value.expose_secret(), expected);
+    }
+
+    #[test]
+    fn v3_text_entries_remain_readable_as_utf8_bytes() {
+        let entry = SecretBytes::from_utf8(format!(
+            "{V3_CACHE_ENVELOPE_MARKER}{}",
+            serde_json::json!({
+                "project": PROJECT,
+                "profile": PROFILE,
+                "expires_at": EXPIRES_AT,
+                "max_age_secs": MAX_AGE,
+                "route_fingerprint": FINGERPRINT,
+                "value": "legacy text",
+            })
+        ));
+        let CacheEntryStatus::Fresh(value) = inspect_entry_at(
+            &entry,
+            PROJECT,
+            PROFILE,
+            FINGERPRINT,
+            MAX_AGE,
+            EXPIRES_AT - 1,
+        ) else {
+            panic!("v3 entry should remain fresh");
+        };
+        assert_eq!(value.expose_secret(), b"legacy text");
     }
 
     #[test]
@@ -409,9 +540,9 @@ mod tests {
         let entry = entry();
         let payload = entry
             .expose_secret()
-            .strip_prefix(CACHE_ENVELOPE_MARKER)
+            .strip_prefix(CACHE_ENVELOPE_MARKER.as_bytes())
             .expect("marker present");
-        let envelope: serde_json::Value = serde_json::from_str(payload).unwrap();
+        let envelope: serde_json::Value = serde_json::from_slice(payload).unwrap();
         assert_eq!(envelope["expires_at"], EXPIRES_AT);
         assert_eq!(envelope["max_age_secs"], MAX_AGE);
         assert!(envelope.get("cached_at").is_none());
@@ -426,7 +557,7 @@ mod tests {
                 u64::MAX,
                 MAX_AGE,
                 FINGERPRINT.to_string(),
-                &SecretString::new("sensitive".into()),
+                &SecretBytes::new("sensitive".into()),
             ),
             Err(CacheEncodeError::ExpirationOverflow)
         ));
@@ -447,7 +578,7 @@ mod tests {
         );
         assert_eq!(
             ownership(
-                &SecretString::new(format!("{CACHE_ENVELOPE_MARKER}{{truncated").into()),
+                &SecretBytes::new(format!("{CACHE_ENVELOPE_MARKER}{{truncated").into()),
                 PROJECT,
                 PROFILE
             ),
@@ -455,7 +586,7 @@ mod tests {
         );
         assert_eq!(
             ownership(
-                &SecretString::new("someone else's value".into()),
+                &SecretBytes::new("someone else's value".into()),
                 PROJECT,
                 PROFILE
             ),
@@ -482,8 +613,8 @@ mod tests {
         ));
     }
 
-    fn legacy_entry() -> SecretString {
-        SecretString::new(
+    fn legacy_entry() -> SecretBytes {
+        SecretBytes::new(
             format!(
                 "{LEGACY_CACHE_ENVELOPE_MARKER}{}",
                 serde_json::json!({
@@ -521,7 +652,7 @@ mod tests {
         let CacheEntryStatus::Fresh(value) = status else {
             panic!("v2 preserves its original inclusive freshness boundary");
         };
-        assert_eq!(value.expose_secret(), "sensitive");
+        assert_eq!(value.expose_secret(), b"sensitive");
     }
 
     #[test]

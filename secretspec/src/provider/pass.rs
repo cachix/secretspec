@@ -1,6 +1,6 @@
 use super::{Address, Provider, ProviderUrl};
+use crate::SecretBytes;
 use crate::{Result, SecretSpecError};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 
@@ -184,10 +184,10 @@ impl Provider for PassProvider {
     ///
     /// # Returns
     ///
-    /// * `Ok(Some(SecretString))` - The secret value if found
+    /// * `Ok(Some(SecretBytes))` - The secret value if found
     /// * `Ok(None)` - If the secret doesn't exist in the password store
     /// * `Err` - If there was an error executing `pass` or reading the output
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let entry_name = super::flat_item(self, addr)?;
 
         let output = self
@@ -225,7 +225,7 @@ impl Provider for PassProvider {
             .trim()
             .to_string();
 
-        Ok(Some(SecretString::new(content.into())))
+        Ok(Some(SecretBytes::new(content.into())))
     }
 
     /// Sets a secret value in the password store.
@@ -241,7 +241,8 @@ impl Provider for PassProvider {
     ///
     /// * `Ok(())` - If the value was successfully written
     /// * `Err(SecretSpecError)` - If writing the pass entry fails
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        let value = super::require_utf8("pass", value)?;
         let entry_name = super::flat_item(self, addr)?;
 
         let mut child = self
@@ -265,14 +266,12 @@ impl Provider for PassProvider {
         })?;
 
         use std::io::Write;
-        stdin
-            .write_all(value.expose_secret().as_bytes())
-            .map_err(|e| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to write to pass stdin: {}",
-                    e
-                ))
-            })?;
+        stdin.write_all(value.as_bytes()).map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to write to pass stdin: {}",
+                e
+            ))
+        })?;
 
         // Drop stdin to close the pipe so pass process receives EOF
         drop(stdin);

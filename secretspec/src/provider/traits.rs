@@ -1,8 +1,7 @@
 use super::address::reject_unsupported_coords;
 use super::{Address, ProviderCredentials};
 use crate::config::NativeAddress;
-use crate::{Result, SecretSpecError};
-use secrecy::SecretString;
+use crate::{Result, SecretBytes, SecretSpecError};
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -40,11 +39,26 @@ pub enum ProducedValuePersistence {
     Ephemeral,
 }
 
+/// A provider value together with provider-supplied expiry metadata.
+///
+/// Available starting with SecretSpec 0.20.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderValue {
+    /// The exact bytes returned by the provider.
+    pub value: SecretBytes,
+    /// Provider-reported expiry as milliseconds since the Unix epoch.
+    pub expires_at_unix_ms: Option<u64>,
+}
+
 /// Trait defining the interface for secret storage providers.
 ///
 /// All secret storage backends must implement this trait to integrate with SecretSpec.
 /// The trait is designed to be flexible enough to support various storage mechanisms
 /// while maintaining a consistent interface.
+///
+/// Provider values are arbitrary bytes starting with SecretSpec 0.20. A
+/// provider whose own API accepts only text must reject non-UTF-8 writes
+/// without formatting the secret value.
 ///
 /// # Thread Safety
 ///
@@ -138,11 +152,22 @@ pub trait Provider: Send + Sync {
     /// ```rust,ignore
     /// let addr = Address::Convention { project: "myapp", profile: "production", key: "DATABASE_URL" };
     /// match provider.get(addr)? {
-    ///     Some(url) => println!("Database URL: {}", url),
+    ///     Some(value) => connect(value.expose_secret()),
     ///     None => println!("DATABASE_URL not found"),
     /// }
     /// ```
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>>;
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>>;
+
+    /// Retrieves a secret and any expiry time reported by the provider.
+    /// Available starting with SecretSpec 0.20.
+    fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<ProviderValue>> {
+        self.get(addr).map(|value| {
+            value.map(|value| ProviderValue {
+                value,
+                expires_at_unix_ms: None,
+            })
+        })
+    }
 
     /// Stores a secret value at `addr`.
     ///
@@ -155,7 +180,7 @@ pub trait Provider: Send + Sync {
     ///
     /// This method should return an error whenever
     /// [`check_writable`](Provider::check_writable) does, for the same address.
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()>;
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()>;
 
     /// Writes a secret at `addr` that need not outlive `max_age`. Available
     /// since SecretSpec 0.17.
@@ -174,7 +199,7 @@ pub trait Provider: Send + Sync {
     fn set_expiring(
         &self,
         addr: Address<'_>,
-        value: &SecretString,
+        value: &SecretBytes,
         max_age: std::time::Duration,
     ) -> Result<()> {
         let _ = max_age;
@@ -541,8 +566,30 @@ pub trait Provider: Send + Sync {
     /// The default deduplicates identical addresses and fetches each unique
     /// address once, concurrently. Providers with a real batch surface (one
     /// listing, a bulk API) should override this to cut round-trips further.
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         get_each(self, requests)
+    }
+
+    /// Retrieves multiple secrets with provider-supplied expiry metadata.
+    /// Available starting with SecretSpec 0.20.
+    fn get_many_with_metadata(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, ProviderValue>> {
+        self.get_many(requests).map(|values| {
+            values
+                .into_iter()
+                .map(|(name, value)| {
+                    (
+                        name,
+                        ProviderValue {
+                            value,
+                            expires_at_unix_ms: None,
+                        },
+                    )
+                })
+                .collect()
+        })
     }
 }
 
@@ -646,7 +693,7 @@ where
 pub(crate) fn get_each<P: Provider + ?Sized>(
     provider: &P,
     requests: &[(&str, Address<'_>)],
-) -> Result<HashMap<String, SecretString>> {
+) -> Result<HashMap<String, SecretBytes>> {
     get_each_with(requests, |addr| provider.get(addr))
 }
 
@@ -657,9 +704,9 @@ pub(crate) fn get_each<P: Provider + ?Sized>(
 pub(crate) fn get_each_with<'a, F>(
     requests: &[(&str, Address<'a>)],
     fetch: F,
-) -> Result<HashMap<String, SecretString>>
+) -> Result<HashMap<String, SecretBytes>>
 where
-    F: Fn(Address<'a>) -> Result<Option<SecretString>> + Sync,
+    F: Fn(Address<'a>) -> Result<Option<SecretBytes>> + Sync,
 {
     let mut groups: HashMap<Address<'_>, Vec<&str>> = HashMap::new();
     for (name, addr) in requests {
@@ -673,7 +720,7 @@ where
     // One address is the common case (a single secret, or several sharing a
     // `ref`); `map_concurrently` keeps it on this thread. Larger sets fan out in
     // capped waves so they do not stampede a provider.
-    let fetched: Vec<(Vec<&str>, Result<Option<SecretString>>)> =
+    let fetched: Vec<(Vec<&str>, Result<Option<SecretBytes>>)> =
         map_concurrently(&groups, get_each_concurrency(), |(addr, names)| {
             (names.clone(), fetch(*addr))
         });
@@ -702,16 +749,19 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn entry_coordinates<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
         (**self).entry_coordinates(addr)
     }
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         (**self).get(addr)
     }
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<ProviderValue>> {
+        (**self).get_with_metadata(addr)
+    }
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         (**self).set(addr, value)
     }
     fn set_expiring(
         &self,
         addr: Address<'_>,
-        value: &SecretString,
+        value: &SecretBytes,
         max_age: std::time::Duration,
     ) -> Result<()> {
         (**self).set_expiring(addr, value, max_age)
@@ -778,7 +828,13 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn reflect(&self, context: DiscoveryContext<'_>) -> Result<HashMap<String, crate::Secret>> {
         (**self).reflect(context)
     }
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         (**self).get_many(requests)
+    }
+    fn get_many_with_metadata(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, ProviderValue>> {
+        (**self).get_many_with_metadata(requests)
     }
 }

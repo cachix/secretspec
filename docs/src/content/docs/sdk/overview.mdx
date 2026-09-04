@@ -3,6 +3,8 @@ title: SDK Overview
 description: How the SecretSpec language SDKs work
 ---
 
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
 SecretSpec ships SDKs for Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell,
 PHP, C# (0.16+), Swift (0.18+) and JVM languages (0.20+). They all resolve
 secrets from the same declarative `secretspec.toml`, and they all behave
@@ -50,11 +52,21 @@ result.
 
 ## The runtime API
 
+<VersionCompatibility version="0.20" kind="changed">
+
+Existing SDK responses remain text-or-path projections. Inline binary values
+fail with guidance to declare `as_path = true`.
+
+</VersionCompatibility>
+
 Each SDK mirrors the Rust derive crate's vocabulary: a builder that takes a
 provider, profile, and an access reason, and a `load`/`resolve` that returns the
 resolved secrets plus the provider and profile used. A missing required secret
 is a typed error, distinct from a transport failure (which carries a stable
-`kind`). Secrets exposed `as_path` come back as a readable file path.
+`kind`). Secrets exposed `as_path` come back as a readable file path. In
+SecretSpec 0.20+, provider and cache internals preserve arbitrary bytes, but
+the existing JSON and typed `String` SDK surfaces still validate UTF-8. They do
+not silently return Base64 for binary values.
 
 ```python
 from secretspec import SecretSpec

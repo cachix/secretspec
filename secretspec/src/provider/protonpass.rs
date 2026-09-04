@@ -1,6 +1,6 @@
+use crate::SecretBytes;
 use crate::provider::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, Write};
@@ -398,7 +398,7 @@ impl Provider for ProtonPassProvider {
         *self.session_reason.lock().unwrap() = reason;
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let title = crate::provider::flat_item(self, addr)?;
         match self.run_pass_cli(
             &[
@@ -426,7 +426,7 @@ impl Provider for ProtonPassProvider {
                     .content
                     .note
                     .filter(|n| !n.is_empty())
-                    .map(|n| SecretString::new(n.into())))
+                    .map(|n| SecretBytes::new(n.into())))
             }
             Err(SecretSpecError::ProviderOperationFailed(msg)) if msg.contains("No item found") => {
                 Ok(None)
@@ -435,7 +435,7 @@ impl Provider for ProtonPassProvider {
         }
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         let title = crate::provider::flat_item(self, addr)?;
         let maybe_existing_item = {
             let output = self.run_pass_cli(
@@ -466,7 +466,7 @@ impl Provider for ProtonPassProvider {
 
         let template = serde_json::to_string(&ProtonPassNoteTemplate {
             title: title.into_owned(),
-            note: value.expose_secret().to_string(),
+            note: super::require_utf8("protonpass", value)?.to_string(),
         })
         .map_err(|e| {
             SecretSpecError::ProviderOperationFailed(format!(
@@ -493,7 +493,7 @@ impl Provider for ProtonPassProvider {
 
     /// Serves every request, convention or `ref`, from one vault listing plus
     /// parallel `item view` calls for the titles that exist.
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         use std::thread;
 
         if requests.is_empty() {
@@ -557,7 +557,7 @@ impl Provider for ProtonPassProvider {
                             if let Ok(res) = serde_json::from_str::<ProtonPassViewResponse>(&stdout)
                                 && let Some(note) = res.item.content.note.filter(|n| !n.is_empty())
                             {
-                                return Some((key_owned, SecretString::new(note.into())));
+                                return Some((key_owned, SecretBytes::new(note.into())));
                             }
                             None
                         }

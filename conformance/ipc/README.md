@@ -66,6 +66,30 @@ isolation across provider URIs and reasons:
 cargo test -p secretspec-ipc-conformance --test provider_cases
 ```
 
+Third-party endpoints can run the same target with a transport-only endpoint
+profile (0.20+). The executable still comes from `--endpoint`; the profile
+supplies its arguments, replacement environment, provider scheme/URI, expected
+identity, and advertised method set:
+
+```console
+cargo run -p secretspec-ipc-conformance -- run provider-endpoint \
+  ipc-provider-conformance-driver \
+  --implementation endpoint \
+  --endpoint /path/to/provider-endpoint \
+  --profile conformance/ipc/profiles/transport-only.example.json
+```
+
+This profile runs framing, strict-wire, initialization, notification, and
+connection-lifecycle cases without assuming provider storage semantics. Cases
+that require the deterministic memory provider's disposable state, magic error
+fixtures, or crash hooks are reported as `not applicable` rather than failed.
+Because a transport-only profile has no operation that can safely trigger an
+arbitrary provider's callbacks, callback brokerage is also outside this layer.
+The bundled memory endpoint remains the full provider-operation matrix, and
+callback paths require their own declared fixture. Profile `environment`
+entries replace, rather than extend, the driver's environment so endpoint tests
+do not accidentally depend on ambient secrets.
+
 The resolver cases are consumed by integration tests that launch the real
 `secretspec serve` executable. They verify inline initialization, exact-name
 value/missing/undeclared results, file mode, duplicate release, disconnect

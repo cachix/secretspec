@@ -376,12 +376,15 @@ impl Transport {
             if let Some(frame) = self.frames.pop_front() {
                 return match Envelope::parse(&frame) {
                     Ok(Envelope::Response(response)) => Ok(response),
-                    // The broker answers requests and nothing else, so a
-                    // request or notification arriving here is as fatal as an
-                    // unparseable frame.
-                    Ok(_) => {
+                    // Notifications have no response channel. Structurally
+                    // valid notifications, including methods introduced by a
+                    // later revision, are ignored.
+                    Ok(Envelope::Notification(_)) => continue,
+                    // This client advertises no callbacks, so an inbound
+                    // request remains a protocol violation.
+                    Ok(Envelope::Request(_)) => {
                         self.closed = true;
-                        Err(Error::Protocol("peer sent a non-response envelope"))
+                        Err(Error::Protocol("peer sent an unexpected request"))
                     }
                     Err(error) => {
                         self.closed = true;

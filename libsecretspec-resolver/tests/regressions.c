@@ -440,6 +440,113 @@ done:
     return outcome;
 }
 
+static int a_prompt_cannot_outlive_its_parent(const char *peer) {
+    secretspec_resolver_options options;
+    secretspec_resolver_client *client = NULL;
+    secretspec_resolver_call *call = NULL;
+    secretspec_resolver_prompt *prompt = NULL;
+    secretspec_resolver_buffer server = {NULL, 0};
+    secretspec_resolver_buffer error = {NULL, 0};
+    secretspec_resolver_buffer result = {NULL, 0};
+    static const unsigned char params[] = "{}";
+    static const unsigned char answer[] = "too-late";
+    secretspec_resolver_status status;
+    int outcome = 0;
+
+    set_options(&options, peer, "--parent-terminal-prompt", client_initialize);
+    options.flags |= SECRETSPEC_RESOLVER_ANSWER_PROMPTS;
+    status = secretspec_resolver_client_open(
+        &options, now_ms() + UINT64_C(2000), &client, &server, &error);
+    secretspec_resolver_buffer_free(server);
+    if (status != SECRETSPEC_RESOLVER_OK) goto done;
+    status = secretspec_resolver_call_start(
+        client, (const unsigned char *)"resolver.get", strlen("resolver.get"),
+        params, sizeof(params) - 1, now_ms() + UINT64_C(2000), &call, &error);
+    if (status != SECRETSPEC_RESOLVER_OK) goto done;
+    if (secretspec_resolver_call_wait(call, &result, &error) !=
+        SECRETSPEC_RESOLVER_PROMPT_PENDING) goto done;
+    if (secretspec_resolver_prompt_take(client, &prompt, &error) !=
+            SECRETSPEC_RESOLVER_OK || prompt == NULL) goto done;
+    pause_ms(UINT64_C(200));
+    if (secretspec_resolver_prompt_answer(prompt, answer, sizeof(answer) - 1, &error) !=
+        SECRETSPEC_RESOLVER_CANCELLED) goto done;
+    secretspec_resolver_buffer_free(error);
+    ss_reset(&error);
+    outcome = secretspec_resolver_call_wait(call, &result, &error) ==
+              SECRETSPEC_RESOLVER_OK;
+done:
+    if (prompt != NULL) secretspec_resolver_prompt_free(prompt);
+    if (call != NULL) secretspec_resolver_call_free(call);
+    secretspec_resolver_buffer_free(result);
+    secretspec_resolver_buffer_free(error);
+    if (client != NULL) {
+        secretspec_resolver_buffer close_error = {NULL, 0};
+        (void)secretspec_resolver_client_close(client, now_ms() + UINT64_C(500), &close_error);
+        secretspec_resolver_buffer_free(close_error);
+        secretspec_resolver_client_free(client);
+    }
+    return outcome;
+}
+
+static int rejects_a_callback_deadline_after_its_parent(const char *peer) {
+    secretspec_resolver_client *client = NULL;
+    secretspec_resolver_call *call = NULL;
+    secretspec_resolver_buffer error = {NULL, 0};
+    secretspec_resolver_buffer result = {NULL, 0};
+    static const unsigned char params[] = "{}";
+    secretspec_resolver_status status;
+    int outcome = 0;
+    secretspec_resolver_options options;
+    secretspec_resolver_buffer server = {NULL, 0};
+
+    set_options(&options, peer, "--late-deadline-prompt", client_initialize);
+    options.flags |= SECRETSPEC_RESOLVER_ANSWER_PROMPTS;
+    status = secretspec_resolver_client_open(
+        &options, now_ms() + UINT64_C(2000), &client, &server, &error);
+    secretspec_resolver_buffer_free(server);
+    if (status != SECRETSPEC_RESOLVER_OK) goto done;
+    status = secretspec_resolver_call_start(
+        client, (const unsigned char *)"resolver.get", strlen("resolver.get"),
+        params, sizeof(params) - 1, now_ms() + UINT64_C(1000), &call, &error);
+    if (status != SECRETSPEC_RESOLVER_OK) goto done;
+    status = secretspec_resolver_call_wait(call, &result, &error);
+    outcome = status == SECRETSPEC_RESOLVER_PROTOCOL;
+done:
+    if (call != NULL) secretspec_resolver_call_free(call);
+    secretspec_resolver_buffer_free(result);
+    secretspec_resolver_buffer_free(error);
+    if (client != NULL) secretspec_resolver_client_free(client);
+    return outcome;
+}
+
+static int notification_semantics_are_consistent(const char *peer) {
+    static const unsigned char params[] = "{}";
+    const char *modes[] = {"--unknown-notification", "--invalid-notification"};
+    size_t index;
+    for (index = 0; index < sizeof(modes) / sizeof(modes[0]); index++) {
+        secretspec_resolver_client *client = NULL;
+        secretspec_resolver_buffer error = {NULL, 0};
+        secretspec_resolver_buffer result = {NULL, 0};
+        secretspec_resolver_status status;
+        if (!open_client(peer, modes[index], &client, &error)) goto failed;
+        status = secretspec_resolver_client_call(
+            client, (const unsigned char *)"resolver.get", strlen("resolver.get"),
+            params, sizeof(params) - 1, now_ms() + UINT64_C(1000), &result, &error);
+        if ((index == 0 && status != SECRETSPEC_RESOLVER_OK) ||
+            (index == 1 && status != SECRETSPEC_RESOLVER_PROTOCOL)) goto failed;
+        secretspec_resolver_buffer_free(result);
+        secretspec_resolver_buffer_free(error);
+        secretspec_resolver_client_free(client);
+        continue;
+failed:
+        secretspec_resolver_buffer_free(result);
+        secretspec_resolver_buffer_free(error);
+        if (client != NULL) secretspec_resolver_client_free(client);
+        return 0;
+    }
+    return 1;
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) return EXIT_FAILURE;
     if (!launches_with_a_sorted_environment(argv[1])) return EXIT_FAILURE;
@@ -447,6 +554,9 @@ int main(int argc, char **argv) {
     if (!answers_a_prompt_and_completes_the_call(argv[1])) return EXIT_FAILURE;
     if (!an_expired_prompt_does_not_block_later_calls(argv[1])) return EXIT_FAILURE;
     if (!an_answer_cannot_outlive_its_prompt(argv[1])) return EXIT_FAILURE;
+    if (!a_prompt_cannot_outlive_its_parent(argv[1])) return EXIT_FAILURE;
+    if (!rejects_a_callback_deadline_after_its_parent(argv[1])) return EXIT_FAILURE;
+    if (!notification_semantics_are_consistent(argv[1])) return EXIT_FAILURE;
     if (!a_future_error_kind_does_not_kill_the_session(argv[1])) return EXIT_FAILURE;
     if (!rejects_bad_shutdown(argv[1])) return EXIT_FAILURE;
     if (!freed_calls_expire(argv[1])) return EXIT_FAILURE;

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "wire.initialization-state",
+  "targets": ["provider-endpoint", "rust-server"],
+  "timeout_ms": 10000,
+  "actions": [
+    {"kind": "application_before_initialize"},
+    {"kind": "response_before_initialize"},
+    {"kind": "second_initialize"},
+    {"kind": "unsupported_version"},
+    {"kind": "invalid_params"}
+  ],
+  "required_events": [
+    "application_before_initialize_rejected",
+    "response_before_initialize_closed",
+    "second_initialize_rejected",
+    "unsupported_version_rejected",
+    "invalid_params_rejected",
+    "closed"
+  ]
+}

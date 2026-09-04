@@ -10,7 +10,7 @@ use secretspec_ipc::protocol::provider::{
     ReflectResult, ResolveAddressResult, SetExpiringParams, SetParams,
 };
 use secretspec_ipc::protocol::{
-    InitializeParams, Limits, PROTOCOL_VERSION, PROVIDER_PROTOCOL, Product,
+    InitializeParams, InitializeResult, Limits, PROTOCOL_VERSION, PROVIDER_PROTOCOL, Product,
 };
 use secretspec_ipc::{Error, ErrorKind};
 use serde::Deserialize;
@@ -36,6 +36,27 @@ struct Case {
     timeout_ms: u64,
     actions: Vec<Value>,
     required_events: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EndpointProfile {
+    schema_version: u32,
+    kind: ProfileKind,
+    scheme: String,
+    uri: String,
+    provider_name: String,
+    expected_methods: Vec<String>,
+    #[serde(default)]
+    arguments: Vec<String>,
+    #[serde(default)]
+    environment: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ProfileKind {
+    TransportOnly,
 }
 
 #[derive(Clone, Copy)]
@@ -78,7 +99,10 @@ fn stage_endpoint(_endpoint: &Path) -> Result<Option<(tempfile::TempDir, PathBuf
     Ok(None)
 }
 fn execute() -> Result<(), String> {
-    let (implementation, endpoint) = arguments()?;
+    let (implementation, endpoint, profile) = arguments()?;
+    if profile.is_some() && !matches!(implementation, Implementation::Endpoint) {
+        return Err("transport-only profiles require --implementation endpoint".into());
+    }
     let staged = stage_endpoint(&endpoint)?;
     let endpoint = match &staged {
         Some((_directory, path)) => path.clone(),
@@ -94,15 +118,42 @@ fn execute() -> Result<(), String> {
     }
     let case: Case = serde_json::from_slice(&input).map_err(|error| error.to_string())?;
     validate_case(&case)?;
+    if let Some(profile) = &profile
+        && profile.kind == ProfileKind::TransportOnly
+        && !case.id.starts_with("wire.")
+    {
+        serde_json::to_writer(
+            io::stdout().lock(),
+            &json!({
+                "case": case.id,
+                "status": "not_applicable",
+                "reason": "transport-only endpoint profile does not declare provider fixtures",
+                "events": []
+            }),
+        )
+        .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
     let events = match case.id.as_str() {
         "wire.fragmented-frame" => match implementation {
-            Implementation::Endpoint => run_fragmented_server(&endpoint, &case)?,
+            Implementation::Endpoint => run_fragmented_server(&endpoint, &case, profile.as_ref())?,
             Implementation::Adapter => run_fragmented_adapter(&endpoint, &case)?,
         },
         "wire.strict-rejections" => match implementation {
-            Implementation::Endpoint => run_strict_server_rejections(&endpoint, &case)?,
+            Implementation::Endpoint => {
+                run_strict_server_rejections(&endpoint, &case, profile.as_ref())?
+            }
             Implementation::Adapter => run_strict_adapter_rejections(&endpoint, &case)?,
         },
+        "wire.initialization-state" if matches!(implementation, Implementation::Endpoint) => {
+            run_initialization_state(&endpoint, &case, profile.as_ref())?
+        }
+        "wire.notifications" if matches!(implementation, Implementation::Endpoint) => {
+            run_notifications(&endpoint, &case, profile.as_ref())?
+        }
+        "wire.lifecycle" if matches!(implementation, Implementation::Endpoint) => {
+            run_wire_lifecycle(&endpoint, &case, profile.as_ref())?
+        }
         "provider.operations" => {
             require_methods(
                 &case,
@@ -157,7 +208,7 @@ fn execute() -> Result<(), String> {
     Ok(())
 }
 
-fn arguments() -> Result<(Implementation, PathBuf), String> {
+fn arguments() -> Result<(Implementation, PathBuf, Option<EndpointProfile>), String> {
     let mut arguments = std::env::args_os().skip(1);
     if arguments.next().as_deref() != Some(std::ffi::OsStr::new("--implementation")) {
         return Err("expected --implementation endpoint|adapter --endpoint PATH".into());
@@ -174,10 +225,56 @@ fn arguments() -> Result<(Implementation, PathBuf), String> {
         .next()
         .map(PathBuf::from)
         .ok_or_else(|| "missing endpoint path".to_string())?;
+    let profile = match arguments.next() {
+        None => None,
+        Some(argument) if argument == "--profile" => {
+            let path = arguments
+                .next()
+                .map(PathBuf::from)
+                .ok_or_else(|| "missing profile path".to_string())?;
+            let bytes = std::fs::read(&path)
+                .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+            let profile: EndpointProfile =
+                serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+            validate_profile(&profile)?;
+            Some(profile)
+        }
+        Some(_) => return Err("expected optional --profile PATH".into()),
+    };
     if arguments.next().is_some() {
         return Err("unexpected driver argument".into());
     }
-    Ok((implementation, endpoint))
+    Ok((implementation, endpoint, profile))
+}
+
+fn validate_profile(profile: &EndpointProfile) -> Result<(), String> {
+    if profile.schema_version != 1
+        || profile.scheme.is_empty()
+        || profile.provider_name.is_empty()
+        || profile.expected_methods.is_empty()
+        || profile
+            .expected_methods
+            .iter()
+            .any(|method| method.is_empty() || method.len() > 256)
+        || profile
+            .expected_methods
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != profile.expected_methods.len()
+        || !profile.uri.starts_with(&format!("{}://", profile.scheme))
+        || profile
+            .environment
+            .keys()
+            .any(|name| name.is_empty() || name.contains('=') || name.contains('\0'))
+        || profile
+            .arguments
+            .iter()
+            .any(|argument| argument.contains('\0'))
+    {
+        return Err("invalid endpoint profile".into());
+    }
+    Ok(())
 }
 
 fn validate_case(case: &Case) -> Result<(), String> {
@@ -230,6 +327,15 @@ fn deadline_after(duration: Duration) -> u64 {
 }
 
 fn initialize_params() -> InitializeParams<InitializeApplication> {
+    initialize_params_for(None)
+}
+
+fn initialize_params_for(
+    profile: Option<&EndpointProfile>,
+) -> InitializeParams<InitializeApplication> {
+    let (scheme, uri) = profile
+        .map(|profile| (profile.scheme.clone(), profile.uri.clone()))
+        .unwrap_or_else(|| ("memory".into(), "memory://conformance".into()));
     InitializeParams {
         protocol: PROVIDER_PROTOCOL.into(),
         versions: vec![PROTOCOL_VERSION],
@@ -243,8 +349,8 @@ fn initialize_params() -> InitializeParams<InitializeApplication> {
         },
         client_methods: Vec::new(),
         application: InitializeApplication {
-            scheme: "memory".into(),
-            uri: "memory://conformance".into(),
+            scheme,
+            uri,
             context: ApplicationContext {
                 project: Some("conformance".into()),
                 profile: Some("default".into()),
@@ -1030,7 +1136,11 @@ fn stable(error: secretspec_ipc::Error) -> String {
     error.stable_message().to_string()
 }
 
-fn run_fragmented_server(endpoint: &Path, case: &Case) -> Result<Vec<Value>, String> {
+fn run_fragmented_server(
+    endpoint: &Path,
+    case: &Case,
+    profile: Option<&EndpointProfile>,
+) -> Result<Vec<Value>, String> {
     require_action(&case.actions, "launch")?;
     require_action(&case.actions, "shutdown")?;
     let chunks = require_action(&case.actions, "peer_write")?
@@ -1046,7 +1156,7 @@ fn run_fragmented_server(endpoint: &Path, case: &Case) -> Result<Vec<Value>, Str
                 .ok_or_else(|| "invalid fragment size".to_string())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut child = spawn_raw_endpoint(endpoint)?;
+    let mut child = spawn_raw_endpoint(endpoint, profile)?;
     let mut input = child
         .stdin
         .take()
@@ -1060,13 +1170,14 @@ fn run_fragmented_server(endpoint: &Path, case: &Case) -> Result<Vec<Value>, Str
         "id": 1,
         "method": "rpc.initialize",
         "_meta": {"deadline_unix_ms": deadline_after(Duration::from_secs(2))},
-        "params": initialize_params(),
+        "params": initialize_params_for(profile),
     }))?;
     write_fragmented(&mut input, &initialize, &chunks)?;
     let response = read_json_frame(&mut output)?;
-    if response.get("id").and_then(Value::as_u64) != Some(1) || response.get("result").is_none() {
+    if response.get("id").and_then(Value::as_u64) != Some(1) {
         return Err("provider endpoint rejected fragmented initialization".into());
     }
+    expect_initialized(&response, profile)?;
     write_json_frame(
         &mut input,
         &json!({
@@ -1122,7 +1233,321 @@ fn run_fragmented_adapter(endpoint: &Path, case: &Case) -> Result<Vec<Value>, St
     Ok(events(&["initialized", "frame_accepted", "closed"]))
 }
 
-fn run_strict_server_rejections(endpoint: &Path, case: &Case) -> Result<Vec<Value>, String> {
+fn raw_initialize(profile: Option<&EndpointProfile>, id: u64) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "rpc.initialize",
+        "_meta": {"deadline_unix_ms": deadline_after(Duration::from_secs(2))},
+        "params": initialize_params_for(profile),
+    })
+}
+
+fn expect_initialized(response: &Value, profile: Option<&EndpointProfile>) -> Result<(), String> {
+    let result = response
+        .get("result")
+        .ok_or_else(|| "endpoint rejected valid initialization".to_string())?;
+    let initialized: InitializeResult<Value> = serde_json::from_value(result.clone())
+        .map_err(|error| format!("invalid initialize result: {error}"))?;
+    initialized
+        .validate_common(
+            PROVIDER_PROTOCOL,
+            &[PROTOCOL_VERSION],
+            Limits {
+                max_frame_bytes: 32 * 1024,
+                max_in_flight: 8,
+            },
+        )
+        .map_err(|error| error.stable_message().to_string())?;
+    let Some(profile) = profile else {
+        return Ok(());
+    };
+    if initialized.application["provider"]["name"] != profile.provider_name {
+        return Err("provider endpoint returned the wrong configured identity".into());
+    }
+    let methods = initialized.methods.into_iter().collect::<BTreeSet<_>>();
+    let expected = profile
+        .expected_methods
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if methods != expected {
+        return Err("provider endpoint returned methods that differ from its profile".into());
+    }
+    Ok(())
+}
+
+fn expect_error_kind(response: &Value, kind: &str) -> Result<(), String> {
+    if response["error"]["data"]["kind"] != kind || response["error"]["data"].get("value").is_some()
+    {
+        return Err(format!("expected value-free {kind} response"));
+    }
+    Ok(())
+}
+
+fn finish_closed(mut child: Child, input: impl Write, mut output: impl Read) -> Result<(), String> {
+    drop(input);
+    let mut trailing = Vec::new();
+    output
+        .read_to_end(&mut trailing)
+        .map_err(|error| error.to_string())?;
+    if !trailing.is_empty() {
+        return Err("endpoint wrote more than one terminal response".into());
+    }
+    if !child.wait().map_err(|error| error.to_string())?.success() {
+        return Err("endpoint failed while closing a rejected session".into());
+    }
+    Ok(())
+}
+
+fn run_initialization_state(
+    endpoint: &Path,
+    case: &Case,
+    profile: Option<&EndpointProfile>,
+) -> Result<Vec<Value>, String> {
+    require_action(&case.actions, "application_before_initialize")?;
+    require_action(&case.actions, "response_before_initialize")?;
+    require_action(&case.actions, "second_initialize")?;
+    require_action(&case.actions, "unsupported_version")?;
+    require_action(&case.actions, "invalid_params")?;
+
+    // Application request before initialization.
+    {
+        let mut child = spawn_raw_endpoint(endpoint, profile)?;
+        let mut input = child.stdin.take().ok_or("endpoint stdin was not piped")?;
+        let mut output = child.stdout.take().ok_or("endpoint stdout was not piped")?;
+        write_json_frame(
+            &mut input,
+            &json!({
+                "jsonrpc":"2.0", "id":1, "method":"provider.get",
+                "_meta":{"deadline_unix_ms":deadline_after(Duration::from_secs(2))},
+                "params":{}
+            }),
+        )?;
+        expect_error_kind(&read_json_frame(&mut output)?, "invalid_request")?;
+        finish_closed(child, input, output)?;
+    }
+
+    // An unmatched response has no response channel and closes immediately.
+    {
+        let mut child = spawn_raw_endpoint(endpoint, profile)?;
+        let mut input = child.stdin.take().ok_or("endpoint stdin was not piped")?;
+        let output = child.stdout.take().ok_or("endpoint stdout was not piped")?;
+        write_json_frame(&mut input, &json!({"jsonrpc":"2.0", "id":1, "result":{}}))?;
+        finish_closed(child, input, output)?;
+    }
+
+    // Invalid parameters and unsupported versions have distinct terminal
+    // errors, and neither leaves a partially initialized connection alive.
+    for (mut initialize, expected) in [
+        (
+            {
+                let mut value = raw_initialize(profile, 1);
+                value["params"]["limits"]["max_in_flight"] = json!(0);
+                value
+            },
+            "invalid_params",
+        ),
+        (
+            {
+                let mut value = raw_initialize(profile, 1);
+                value["params"]["versions"] = json!([u32::MAX]);
+                value
+            },
+            "unsupported_version",
+        ),
+    ] {
+        initialize["_meta"]["deadline_unix_ms"] = json!(deadline_after(Duration::from_secs(2)));
+        let mut child = spawn_raw_endpoint(endpoint, profile)?;
+        let mut input = child.stdin.take().ok_or("endpoint stdin was not piped")?;
+        let mut output = child.stdout.take().ok_or("endpoint stdout was not piped")?;
+        write_json_frame(&mut input, &initialize)?;
+        expect_error_kind(&read_json_frame(&mut output)?, expected)?;
+        finish_closed(child, input, output)?;
+    }
+
+    // A second initialize after readiness is terminal.
+    {
+        let mut child = spawn_raw_endpoint(endpoint, profile)?;
+        let mut input = child.stdin.take().ok_or("endpoint stdin was not piped")?;
+        let mut output = child.stdout.take().ok_or("endpoint stdout was not piped")?;
+        write_json_frame(&mut input, &raw_initialize(profile, 1))?;
+        expect_initialized(&read_json_frame(&mut output)?, profile)?;
+        write_json_frame(&mut input, &raw_initialize(profile, 2))?;
+        expect_error_kind(&read_json_frame(&mut output)?, "invalid_request")?;
+        finish_closed(child, input, output)?;
+    }
+
+    Ok(events(&[
+        "application_before_initialize_rejected",
+        "response_before_initialize_closed",
+        "second_initialize_rejected",
+        "unsupported_version_rejected",
+        "invalid_params_rejected",
+        "closed",
+    ]))
+}
+
+fn run_notifications(
+    endpoint: &Path,
+    case: &Case,
+    profile: Option<&EndpointProfile>,
+) -> Result<Vec<Value>, String> {
+    require_action(&case.actions, "unknown_method")?;
+    require_action(&case.actions, "malformed_cancel")?;
+    require_action(&case.actions, "unknown_cancel_id")?;
+    require_action(&case.actions, "terminal_cancel_id")?;
+    require_action(&case.actions, "unknown_member")?;
+
+    let mut child = spawn_raw_endpoint(endpoint, profile)?;
+    let mut input = child.stdin.take().ok_or("endpoint stdin was not piped")?;
+    let mut output = child.stdout.take().ok_or("endpoint stdout was not piped")?;
+    write_json_frame(&mut input, &raw_initialize(profile, 1))?;
+    expect_initialized(&read_json_frame(&mut output)?, profile)?;
+
+    for (notification, request_id) in [
+        (
+            json!({"jsonrpc":"2.0","method":"future.notice","params":{}}),
+            2,
+        ),
+        (
+            json!({"jsonrpc":"2.0","method":"rpc.cancel","params":{"id":"bad"}}),
+            3,
+        ),
+        (
+            json!({"jsonrpc":"2.0","method":"rpc.cancel","params":{"id":999}}),
+            4,
+        ),
+        (
+            json!({"jsonrpc":"2.0","method":"rpc.cancel","params":{"id":1}}),
+            5,
+        ),
+    ] {
+        write_json_frame(&mut input, &notification)?;
+        write_json_frame(
+            &mut input,
+            &json!({
+                "jsonrpc":"2.0", "id":request_id, "method":"rpc.discover",
+                "_meta":{"deadline_unix_ms":deadline_after(Duration::from_secs(2))},
+                "params":{}
+            }),
+        )?;
+        let response = read_json_frame(&mut output)?;
+        if response.get("id").and_then(Value::as_u64) != Some(request_id)
+            || response.get("result").is_none()
+        {
+            return Err("ignored notification made the session unusable".into());
+        }
+    }
+
+    write_json_frame(
+        &mut input,
+        &json!({"jsonrpc":"2.0","method":"future.notice","params":{},"extra":true}),
+    )?;
+    expect_error_kind(&read_json_frame(&mut output)?, "invalid_request")?;
+    finish_closed(child, input, output)?;
+    Ok(events(&[
+        "unknown_notification_ignored",
+        "malformed_cancel_ignored",
+        "unknown_cancel_ignored",
+        "terminal_cancel_ignored",
+        "unknown_member_rejected",
+        "closed",
+    ]))
+}
+
+fn run_wire_lifecycle(
+    endpoint: &Path,
+    case: &Case,
+    profile: Option<&EndpointProfile>,
+) -> Result<Vec<Value>, String> {
+    require_action(&case.actions, "initialize")?;
+    require_action(&case.actions, "shutdown")?;
+    require_action(&case.actions, "disconnect")?;
+    require_action(&case.actions, "reconnect")?;
+    require_action(&case.actions, "unknown_method")?;
+
+    // An orderly shutdown produces one response and then EOF.
+    {
+        let mut child = spawn_raw_endpoint(endpoint, profile)?;
+        let mut input = child.stdin.take().ok_or("endpoint stdin was not piped")?;
+        let mut output = child.stdout.take().ok_or("endpoint stdout was not piped")?;
+        write_json_frame(&mut input, &raw_initialize(profile, 1))?;
+        expect_initialized(&read_json_frame(&mut output)?, profile)?;
+        write_json_frame(
+            &mut input,
+            &json!({
+                "jsonrpc":"2.0", "id":2, "method":"provider.future_method",
+                "_meta":{"deadline_unix_ms":deadline_after(Duration::from_secs(2))},
+                "params":{}
+            }),
+        )?;
+        expect_error_kind(&read_json_frame(&mut output)?, "capability_required")?;
+        write_json_frame(
+            &mut input,
+            &json!({
+                "jsonrpc":"2.0", "id":3, "method":"rpc.shutdown",
+                "_meta":{"deadline_unix_ms":deadline_after(Duration::from_secs(2))},
+                "params":{}
+            }),
+        )?;
+        let response = read_json_frame(&mut output)?;
+        if response.get("id").and_then(Value::as_u64) != Some(3)
+            || response.get("result") != Some(&json!({}))
+        {
+            return Err("endpoint returned an invalid shutdown response".into());
+        }
+        finish_closed(child, input, output)?;
+    }
+
+    // Losing the private transport cleans up this session without requiring a
+    // provider-specific crash hook.
+    {
+        let mut child = spawn_raw_endpoint(endpoint, profile)?;
+        let mut input = child.stdin.take().ok_or("endpoint stdin was not piped")?;
+        let output = child.stdout.take().ok_or("endpoint stdout was not piped")?;
+        write_json_frame(&mut input, &raw_initialize(profile, 1))?;
+        let mut output = output;
+        expect_initialized(&read_json_frame(&mut output)?, profile)?;
+        finish_closed(child, input, output)?;
+    }
+
+    // A fresh process must initialize successfully after either terminal path.
+    {
+        let mut child = spawn_raw_endpoint(endpoint, profile)?;
+        let mut input = child.stdin.take().ok_or("endpoint stdin was not piped")?;
+        let mut output = child.stdout.take().ok_or("endpoint stdout was not piped")?;
+        write_json_frame(&mut input, &raw_initialize(profile, 1))?;
+        expect_initialized(&read_json_frame(&mut output)?, profile)?;
+        write_json_frame(
+            &mut input,
+            &json!({
+                "jsonrpc":"2.0", "id":2, "method":"rpc.shutdown",
+                "_meta":{"deadline_unix_ms":deadline_after(Duration::from_secs(2))},
+                "params":{}
+            }),
+        )?;
+        if read_json_frame(&mut output)?.get("result") != Some(&json!({})) {
+            return Err("reconnected endpoint rejected shutdown".into());
+        }
+        finish_closed(child, input, output)?;
+    }
+
+    Ok(events(&[
+        "initialized",
+        "capability_gated",
+        "shutdown",
+        "disconnect_cleaned_up",
+        "reconnected",
+        "closed",
+    ]))
+}
+
+fn run_strict_server_rejections(
+    endpoint: &Path,
+    case: &Case,
+    profile: Option<&EndpointProfile>,
+) -> Result<Vec<Value>, String> {
     let actions = case
         .actions
         .iter()
@@ -1134,7 +1559,7 @@ fn run_strict_server_rejections(endpoint: &Path, case: &Case) -> Result<Vec<Valu
     let mut transcript = Vec::with_capacity(actions.len() + 1);
     for action in actions {
         let bytes = rejection_frame(action)?;
-        let mut child = spawn_raw_endpoint(endpoint)?;
+        let mut child = spawn_raw_endpoint(endpoint, profile)?;
         let mut input = child
             .stdin
             .take()
@@ -1189,13 +1614,19 @@ fn run_strict_adapter_rejections(endpoint: &Path, case: &Case) -> Result<Vec<Val
     Ok(transcript)
 }
 
-fn spawn_raw_endpoint(endpoint: &Path) -> Result<Child, String> {
-    Command::new(endpoint)
+fn spawn_raw_endpoint(endpoint: &Path, profile: Option<&EndpointProfile>) -> Result<Child, String> {
+    let mut command = Command::new(endpoint);
+    command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| error.to_string())
+        .stderr(Stdio::piped());
+    if let Some(profile) = profile {
+        command
+            .args(&profile.arguments)
+            .env_clear()
+            .envs(&profile.environment);
+    }
+    command.spawn().map_err(|error| error.to_string())
 }
 
 fn frame(value: &Value) -> Result<Vec<u8>, String> {

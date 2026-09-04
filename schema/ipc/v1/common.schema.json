@@ -197,12 +197,12 @@
     },
     "NotificationEnvelope": {
       "type": "object",
-      "additionalProperties": true,
+      "additionalProperties": false,
       "required": ["jsonrpc", "method", "params"],
       "properties": {
         "jsonrpc": { "const": "2.0" },
-        "method": { "const": "rpc.cancel" },
-        "params": { "$ref": "#/$defs/CancelParams" }
+        "method": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "params": { "type": "object" }
       }
     },
     "SuccessResponseEnvelope": {

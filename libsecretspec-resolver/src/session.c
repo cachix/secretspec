@@ -88,6 +88,7 @@ typedef struct ss_prompt ss_prompt;
 struct ss_prompt {
     struct secretspec_resolver_client *client;
     uint64_t id;
+    uint64_t parent_request_id;
     uint64_t deadline_unix_ms;
     secretspec_resolver_buffer params;
     bool answered;
@@ -303,16 +304,12 @@ unavailable:
     return SECRETSPEC_RESOLVER_UNAVAILABLE;
 }
 
-static bool write_payload(secretspec_resolver_client *client, const unsigned char *payload, size_t size) {
+/* Queue while client->mutex is held. This lets callback answers validate their
+ * parent and enqueue atomically with respect to the reader making it terminal. */
+static bool write_payload_locked(secretspec_resolver_client *client, const unsigned char *payload, size_t size) {
     ss_outbound *outbound;
-    size_t limit;
-    mutex_lock(&client->mutex);
-    limit = client->max_frame_bytes;
-    if (client->closed) {
-        mutex_unlock(&client->mutex);
-        return false;
-    }
-    mutex_unlock(&client->mutex);
+    size_t limit = client->max_frame_bytes;
+    if (client->closed) return false;
 
     if (size == 0 || size > limit) return false;
     outbound = (ss_outbound *)calloc(1, sizeof(*outbound));
@@ -339,6 +336,14 @@ static bool write_payload(secretspec_resolver_client *client, const unsigned cha
     condition_broadcast(&client->write_ready);
     mutex_unlock(&client->write_mutex);
     return true;
+}
+
+static bool write_payload(secretspec_resolver_client *client, const unsigned char *payload, size_t size) {
+    bool written;
+    mutex_lock(&client->mutex);
+    written = write_payload_locked(client, payload, size);
+    mutex_unlock(&client->mutex);
+    return written;
 }
 
 static bool build_request(
@@ -479,9 +484,39 @@ static void prompts_expire(secretspec_resolver_client *client, uint64_t now_unix
     }
 }
 
+/* A callback is a child of exactly one active request. Remove queued children
+ * as soon as that parent is cancelled or terminal. A prompt already handed to
+ * the caller is checked again by answer_prompt. Must hold client->mutex. */
+static void prompts_cancel_parent(secretspec_resolver_client *client, uint64_t parent_request_id) {
+    ss_prompt **cursor = &client->prompts;
+    while (*cursor != NULL) {
+        ss_prompt *prompt = *cursor;
+        if (prompt->parent_request_id != parent_request_id) {
+            cursor = &prompt->next;
+            continue;
+        }
+        *cursor = prompt->next;
+        client->prompt_count--;
+        secretspec_resolver_buffer_free(prompt->params);
+        ss_secure_clear(prompt, sizeof(*prompt));
+        free(prompt);
+    }
+}
+
 static bool string_equals(yyjson_val *value, const char *expected) {
     return yyjson_is_str(value) && yyjson_get_len(value) == strlen(expected) &&
            memcmp(yyjson_get_str(value), expected, yyjson_get_len(value)) == 0;
+}
+
+static bool ignorable_notification(yyjson_val *root) {
+    static const char *const keys[] = {"jsonrpc", "method", "params"};
+    yyjson_val *method = yyjson_obj_get(root, "method");
+    size_t method_size = yyjson_is_str(method) ? yyjson_get_len(method) : 0;
+    return ss_json_is_closed_object(root, keys, 3) &&
+           yyjson_obj_size(root) == 3 &&
+           string_equals(yyjson_obj_get(root, "jsonrpc"), "2.0") &&
+           method_size > 0 && method_size <= 256 &&
+           yyjson_is_obj(yyjson_obj_get(root, "params"));
 }
 
 static bool error_kind(
@@ -685,13 +720,19 @@ static bool accept_prompt(secretspec_resolver_client *client, yyjson_val *root) 
     }
     prompt->client = client;
     prompt->id = id;
+    prompt->parent_request_id = yyjson_get_uint(parent);
     prompt->deadline_unix_ms = deadline_unix_ms;
     mutex_lock(&client->mutex);
-    if (find_request(client, yyjson_get_uint(parent)) == NULL) {
-        mutex_unlock(&client->mutex);
-        secretspec_resolver_buffer_free(prompt->params);
-        free(prompt);
-        return false;
+    {
+        ss_request *parent_request = find_request(client, prompt->parent_request_id);
+        if (parent_request == NULL || !parent_request->running || parent_request->cancel_sent ||
+            deadline_unix_ms > parent_request->deadline_unix_ms) {
+            mutex_unlock(&client->mutex);
+            secretspec_resolver_buffer_free(prompt->params);
+            ss_secure_clear(prompt, sizeof(*prompt));
+            free(prompt);
+            return false;
+        }
     }
     prompts_expire(client, ss_now_unix_ms());
     if (deadline_unix_ms <= ss_now_unix_ms()) {
@@ -824,11 +865,11 @@ static SS_THREAD_RETURN reader_main(void *context) {
             if (ss_json_validate(payload.data, payload.size, &document)) {
                 yyjson_val *root = yyjson_doc_get_root(document);
                 prompted = accept_prompt(client, root);
-                /* Notifications have no response path. Ignore unknown and
-                 * malformed ones so a cancellation race cannot kill a useful
-                 * resolver session. Requests (which have an ID) stay strict. */
-                notification = yyjson_is_str(yyjson_obj_get(root, "method")) &&
-                               yyjson_obj_get(root, "id") == NULL;
+                /* Notifications have no response path. Ignore structurally
+                 * valid unknown methods and malformed cancellation params so
+                 * a cancellation race cannot kill a useful resolver session.
+                 * The envelope itself stays strict. */
+                notification = ignorable_notification(root);
                 yyjson_doc_free(document);
             }
             secretspec_resolver_buffer_free(payload);
@@ -848,10 +889,12 @@ static SS_THREAD_RETURN reader_main(void *context) {
             break;
         }
         if (request->abandoned) {
+            prompts_cancel_parent(client, id);
             remove_request(client, request);
             release_list_reference = true;
         } else if (request->running) {
             request->running = false;
+            prompts_cancel_parent(client, id);
             request->status = response_status;
             request->result = result;
             request->error = error;
@@ -927,6 +970,7 @@ static SS_THREAD_RETURN deadline_main(void *context) {
             if (request->deadline_unix_ms <= now) {
                 request->running = false;
                 request->abandoned = true;
+                prompts_cancel_parent(client, request->id);
                 request->status = SECRETSPEC_RESOLVER_DEADLINE_EXCEEDED;
                 client->in_flight--;
                 ss_set_error(&request->error, "deadline_exceeded", "deadline exceeded");
@@ -1188,6 +1232,7 @@ static secretspec_resolver_status wait_call(
             if (request->running) {
                 request->running = false;
                 request->abandoned = true;
+                prompts_cancel_parent(client, request->id);
                 request->status = SECRETSPEC_RESOLVER_DEADLINE_EXCEEDED;
                 client->in_flight--;
                 ss_set_error(&request->error, "deadline_exceeded", "deadline exceeded");
@@ -1586,6 +1631,7 @@ void secretspec_resolver_call_cancel(secretspec_resolver_call *call) {
     mutex_lock(&call->client->mutex);
     if (call->request->running && !call->request->cancel_sent) {
         call->request->cancel_sent = true;
+        prompts_cancel_parent(call->client, call->request->id);
         send = true;
     }
     mutex_unlock(&call->client->mutex);
@@ -1677,6 +1723,15 @@ static secretspec_resolver_status answer_prompt(
         ss_set_error(error, "unavailable", "session closed");
         return SECRETSPEC_RESOLVER_UNAVAILABLE;
     }
+    {
+        ss_request *parent = find_request(client, prompt->parent_request_id);
+        if (parent == NULL || !parent->running || parent->cancel_sent ||
+            prompt->deadline_unix_ms > parent->deadline_unix_ms) {
+            mutex_unlock(&client->mutex);
+            ss_set_error(error, "cancelled", "prompt parent is no longer active");
+            return SECRETSPEC_RESOLVER_CANCELLED;
+        }
+    }
     if (prompt->deadline_unix_ms <= ss_now_unix_ms()) {
         mutex_unlock(&client->mutex);
         ss_set_error(error, "deadline_exceeded", "prompt deadline exceeded");
@@ -1718,7 +1773,22 @@ static secretspec_resolver_status answer_prompt(
         ss_set_error(error, "unavailable", "allocation failed");
         return SECRETSPEC_RESOLVER_UNAVAILABLE;
     }
-    written = write_payload(client, (const unsigned char *)json, size);
+    /* Recheck after serialization and queue under the same lock. The reader
+     * cannot make the parent terminal between this check and the enqueue. */
+    mutex_lock(&client->mutex);
+    {
+        ss_request *parent = find_request(client, prompt->parent_request_id);
+        if (parent == NULL || !parent->running || parent->cancel_sent ||
+            prompt->deadline_unix_ms > parent->deadline_unix_ms) {
+            mutex_unlock(&client->mutex);
+            ss_secure_clear(json, size);
+            free(json);
+            ss_set_error(error, "cancelled", "prompt parent is no longer active");
+            return SECRETSPEC_RESOLVER_CANCELLED;
+        }
+    }
+    written = write_payload_locked(client, (const unsigned char *)json, size);
+    mutex_unlock(&client->mutex);
     /* The answer is a secret, so this copy goes before the pointer does. */
     ss_secure_clear(json, size);
     free(json);

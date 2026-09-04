@@ -63,6 +63,7 @@ struct PeerInner {
     calls: Mutex<PeerCalls>,
     next_id: AtomicU64,
     limit: AtomicUsize,
+    semaphore: std::sync::RwLock<Arc<Semaphore>>,
     capabilities: std::sync::RwLock<HashSet<String>>,
 }
 
@@ -80,6 +81,7 @@ impl Peer {
                 calls: Mutex::new(PeerCalls::default()),
                 next_id: AtomicU64::new(1),
                 limit: AtomicUsize::new(ABSOLUTE_MAX_FRAME_BYTES),
+                semaphore: std::sync::RwLock::new(Arc::new(Semaphore::new(1))),
                 capabilities: std::sync::RwLock::new(HashSet::new()),
             }),
         }
@@ -119,9 +121,21 @@ impl Peer {
         params: &P,
         context: &RequestContext,
     ) -> RpcResult<R> {
+        if context.cancellation.is_cancelled() {
+            return Err(RpcError::new(ErrorKind::Cancelled));
+        }
         if !self.supports(method) {
             return Err(RpcError::new(ErrorKind::CapabilityRequired));
         }
+        let semaphore = self
+            .inner
+            .semaphore
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let _permit = semaphore
+            .try_acquire_owned()
+            .map_err(|_| RpcError::unavailable(None))?;
         let params =
             serde_json::to_value(params).map_err(|_| RpcError::new(ErrorKind::Internal))?;
         let deadline_unix_ms =
@@ -149,13 +163,19 @@ impl Peer {
         };
         let (sender, receiver) = oneshot::channel();
         self.inner.calls.lock().await.pending.insert(id, sender);
-        let queued = writer
-            .send(WriterCommand {
-                payload,
-                limit,
-                committed: None,
-            })
-            .await;
+        let command = WriterCommand {
+            payload,
+            limit,
+            committed: None,
+        };
+        let queued = tokio::select! {
+            biased;
+            _ = context.cancellation.cancelled() => {
+                self.inner.calls.lock().await.pending.remove(&id);
+                return Err(RpcError::new(ErrorKind::Cancelled));
+            }
+            queued = writer.send(command) => queued,
+        };
         if queued.is_err() {
             self.inner.calls.lock().await.pending.remove(&id);
             return Err(RpcError::new(ErrorKind::Unavailable));
@@ -430,6 +450,12 @@ where
                     peer.inner
                         .limit
                         .store(limits.max_frame_bytes, Ordering::Release);
+                    *peer
+                        .inner
+                        .semaphore
+                        .write()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                        Arc::new(Semaphore::new(limits.max_in_flight));
                     active_limit = limits.max_frame_bytes;
                     semaphore = Arc::new(Semaphore::new(limits.max_in_flight));
                     advertised_capabilities = capabilities.into_iter().collect();
@@ -646,11 +672,16 @@ where
             return Ok(None);
         }
     };
-    if params.validate_common(handler.protocol()).is_err() {
+    if params.protocol != handler.protocol() {
         let response = Response::error(
             Some(request.id),
             RpcError::new(ErrorKind::UnsupportedVersion),
         );
+        commit(writer, response, ABSOLUTE_MAX_FRAME_BYTES).await?;
+        return Ok(None);
+    }
+    if params.validate_common(handler.protocol()).is_err() {
+        let response = Response::error(Some(request.id), RpcError::new(ErrorKind::InvalidParams));
         commit(writer, response, ABSOLUTE_MAX_FRAME_BYTES).await?;
         return Ok(None);
     }
@@ -796,6 +827,9 @@ where
         break match outcome {
             Ok(application) => application,
             Err(error) => {
+                // Stop every initialize-time callback before making its
+                // parent terminal on the wire.
+                context.cancellation.cancel();
                 commit(
                     writer,
                     Response::error(Some(request.id), error),
@@ -815,8 +849,16 @@ where
         limits,
         application,
     };
-    let value =
-        serde_json::to_value(result).map_err(|_| Error::Protocol("serialize initialize result"))?;
+    let value = match serde_json::to_value(result) {
+        Ok(value) => value,
+        Err(_) => {
+            context.cancellation.cancel();
+            return Err(Error::Protocol("serialize initialize result"));
+        }
+    };
+    // Negotiated limits take effect only after this response commits. Cancel
+    // initialize-time callbacks first so none can cross that boundary.
+    context.cancellation.cancel();
     commit(
         writer,
         Response::success(request.id, value),
@@ -983,6 +1025,11 @@ async fn commit_application_before(
         return false;
     }
 
+    // The terminal response now precedes any later writer command. End the
+    // child callback lifetime before waiting for the bytes to commit so no
+    // detached callback can be queued behind its parent response.
+    cancellation.cancel();
+
     match tokio::time::timeout_at(deadline, committed_rx).await {
         Ok(Ok(Ok(()))) => application_response,
         Ok(Ok(Err(()))) | Ok(Err(_)) | Err(_) => {
@@ -1097,6 +1144,152 @@ mod tests {
         assert_eq!(error.data.kind, ErrorKind::Unavailable);
     }
 
+    #[tokio::test]
+    async fn callbacks_obey_the_pre_negotiation_outbound_limit() {
+        let (writer_tx, mut writer_rx) = mpsc::channel::<WriterCommand>(4);
+        let peer = Peer::new(&writer_tx);
+        peer.inner
+            .capabilities
+            .write()
+            .unwrap()
+            .insert("client.prompt".to_string());
+        let cancellation = CancellationToken::new();
+        let context = RequestContext {
+            request_id: RequestId::new(1).unwrap(),
+            deadline: Instant::now() + Duration::from_secs(2),
+            cancellation: cancellation.clone(),
+            peer: peer.clone(),
+        };
+
+        let first_peer = peer.clone();
+        let first_context = context.clone();
+        let first = tokio::spawn(async move {
+            first_peer
+                .call::<_, Value>("client.prompt", &json!({}), &first_context)
+                .await
+        });
+        let _first_frame = writer_rx.recv().await.expect("first callback frame");
+
+        let second = peer
+            .call::<_, Value>("client.prompt", &json!({}), &context)
+            .await;
+        assert!(matches!(
+            second,
+            Err(ref error) if error.data.kind == ErrorKind::Unavailable
+        ));
+        assert!(writer_rx.try_recv().is_err(), "a second callback was sent");
+
+        cancellation.cancel();
+        assert!(matches!(
+            first.await.unwrap(),
+            Err(ref error) if error.data.kind == ErrorKind::Cancelled
+        ));
+    }
+
+    #[tokio::test]
+    async fn pre_negotiation_callbacks_use_the_absolute_frame_limit() {
+        let (writer_tx, mut writer_rx) = mpsc::channel::<WriterCommand>(2);
+        let peer = Peer::new(&writer_tx);
+        peer.inner
+            .capabilities
+            .write()
+            .unwrap()
+            .insert("client.prompt".to_string());
+        let context = RequestContext {
+            request_id: RequestId::new(1).unwrap(),
+            deadline: Instant::now() + Duration::from_secs(2),
+            cancellation: CancellationToken::new(),
+            peer: peer.clone(),
+        };
+
+        let outcome = peer
+            .call::<_, Value>(
+                "client.prompt",
+                &json!({"value": "x".repeat(ABSOLUTE_MAX_FRAME_BYTES)}),
+                &context,
+            )
+            .await;
+        assert!(matches!(
+            outcome,
+            Err(ref error) if error.data.kind == ErrorKind::MessageTooLarge
+        ));
+        assert!(writer_rx.try_recv().is_err(), "oversized callback was sent");
+    }
+
+    #[tokio::test]
+    async fn callbacks_switch_to_the_negotiated_outbound_limit() {
+        let (writer_tx, mut writer_rx) = mpsc::channel::<WriterCommand>(6);
+        let peer = Peer::new(&writer_tx);
+        peer.inner
+            .capabilities
+            .write()
+            .unwrap()
+            .insert("client.prompt".to_string());
+        *peer.inner.semaphore.write().unwrap() = Arc::new(Semaphore::new(2));
+        peer.inner.limit.store(32 * 1024, Ordering::Release);
+        let cancellation = CancellationToken::new();
+        let context = RequestContext {
+            request_id: RequestId::new(1).unwrap(),
+            deadline: Instant::now() + Duration::from_secs(2),
+            cancellation: cancellation.clone(),
+            peer: peer.clone(),
+        };
+
+        let mut calls = Vec::new();
+        for _ in 0..2 {
+            let peer = peer.clone();
+            let context = context.clone();
+            calls.push(tokio::spawn(async move {
+                peer.call::<_, Value>("client.prompt", &json!({}), &context)
+                    .await
+            }));
+            writer_rx.recv().await.expect("negotiated callback frame");
+        }
+        let third = peer
+            .call::<_, Value>("client.prompt", &json!({}), &context)
+            .await;
+        assert!(matches!(
+            third,
+            Err(ref error) if error.data.kind == ErrorKind::Unavailable
+        ));
+
+        cancellation.cancel();
+        for call in calls {
+            assert!(matches!(
+                call.await.unwrap(),
+                Err(ref error) if error.data.kind == ErrorKind::Cancelled
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_callback_cannot_start_after_its_parent_is_terminal() {
+        let (writer_tx, mut writer_rx) = mpsc::channel::<WriterCommand>(2);
+        let peer = Peer::new(&writer_tx);
+        peer.inner
+            .capabilities
+            .write()
+            .unwrap()
+            .insert("client.prompt".to_string());
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let context = RequestContext {
+            request_id: RequestId::new(1).unwrap(),
+            deadline: Instant::now() + Duration::from_secs(2),
+            cancellation,
+            peer: peer.clone(),
+        };
+
+        let outcome = peer
+            .call::<_, Value>("client.prompt", &json!({}), &context)
+            .await;
+        assert!(matches!(
+            outcome,
+            Err(ref error) if error.data.kind == ErrorKind::Cancelled
+        ));
+        assert!(writer_rx.try_recv().is_err(), "late callback was sent");
+    }
+
     // Most dispatcher behavior is exercised through the black-box integration
     // tests; keep this module focused on wall-to-monotonic conversion.
     #[test]
@@ -1149,20 +1342,23 @@ mod tests {
             .unwrap()
             .insert("client.prompt".to_string());
         let cancellation = CancellationToken::new();
-        cancellation.cancel();
         let context = RequestContext {
             request_id: RequestId::new(10).unwrap(),
             deadline: Instant::now() + Duration::from_secs(1),
-            cancellation,
+            cancellation: cancellation.clone(),
             peer: peer.clone(),
         };
 
-        let error = peer
-            .call::<_, Value>("client.prompt", &json!({}), &context)
-            .await
-            .unwrap_err();
-        assert_eq!(error.data.kind, ErrorKind::Cancelled);
+        let call_peer = peer.clone();
+        let call = tokio::spawn(async move {
+            call_peer
+                .call::<_, Value>("client.prompt", &json!({}), &context)
+                .await
+        });
         let _request = writer_rx.recv().await.unwrap();
+        cancellation.cancel();
+        let error = call.await.unwrap().unwrap_err();
+        assert_eq!(error.data.kind, ErrorKind::Cancelled);
         let terminal = Response::error(
             Some(RequestId::new(1).unwrap()),
             RpcError::new(ErrorKind::Cancelled),

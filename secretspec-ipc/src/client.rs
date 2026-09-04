@@ -15,7 +15,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{Mutex, Notify, RwLock, Semaphore, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use zeroize::Zeroizing;
+use tokio_util::sync::CancellationToken;
+use zeroize::{Zeroize, Zeroizing};
 
 const INITIALIZING: u8 = 0;
 const READY: u8 = 1;
@@ -50,7 +51,7 @@ struct Inner {
     /// needs no lock and cannot drift from what the server was told.
     advertised: HashSet<String>,
     inbound: StdMutex<InboundCallbacks>,
-    pending: StdMutex<HashMap<RequestId, oneshot::Sender<Response>>>,
+    pending: StdMutex<HashMap<RequestId, PendingRequest>>,
     abandoned: StdMutex<HashSet<RequestId>>,
     next_id: AtomicU64,
     max_frame_bytes: AtomicUsize,
@@ -62,6 +63,12 @@ struct Inner {
     closed: Notify,
     reader_task: Mutex<Option<JoinHandle<()>>>,
     writer_task: Mutex<Option<JoinHandle<()>>>,
+}
+
+struct PendingRequest {
+    sender: oneshot::Sender<Response>,
+    deadline_unix_ms: u64,
+    cancellation: CancellationToken,
 }
 
 #[derive(Default)]
@@ -214,8 +221,8 @@ impl Client {
                         continue;
                     }
                     // Notifications have no response channel. Ignore unknown
-                    // or malformed future notifications rather than turning a
-                    // harmless race into a session-fatal condition.
+                    // methods and malformed method-specific parameters after
+                    // the strict envelope itself has parsed.
                     Ok(Envelope::Notification(_)) => continue,
                     _ => {
                         fail_session_weak(&reader_inner);
@@ -229,12 +236,13 @@ impl Client {
                 let Some(inner) = reader_inner.upgrade() else {
                     break;
                 };
-                let sender = lock_unpoisoned(&inner.pending).remove(&id);
-                if let Some(sender) = sender {
+                let pending = lock_unpoisoned(&inner.pending).remove(&id);
+                if let Some(pending) = pending {
                     // A deadline can race a response after marking this ID as
                     // abandoned but before removing it from `pending`.
                     lock_unpoisoned(&inner.abandoned).remove(&id);
-                    let _ = sender.send(response);
+                    pending.cancellation.cancel();
+                    let _ = pending.sender.send(response);
                     continue;
                 }
                 if lock_unpoisoned(&inner.abandoned).remove(&id) {
@@ -322,9 +330,16 @@ impl Client {
         let id = self.next_id()?;
         let request = Request::new(id, method, deadline_unix_ms, params)?;
         let (sender, receiver) = oneshot::channel();
-        lock_unpoisoned(&self.inner.pending).insert(id, sender);
+        lock_unpoisoned(&self.inner.pending).insert(
+            id,
+            PendingRequest {
+                sender,
+                deadline_unix_ms,
+                cancellation: CancellationToken::new(),
+            },
+        );
         if let Err(error) = self.queue_request(request, deadline).await {
-            lock_unpoisoned(&self.inner.pending).remove(&id);
+            remove_pending(&self.inner, id);
             return Err(error);
         }
         Ok(Call {
@@ -472,12 +487,26 @@ impl Client {
 
     async fn request_internal(&self, request: Request, limit: usize) -> Result<Response> {
         let id = request.id;
-        let deadline = instant_from_unix_ms(request.deadline_unix_ms());
+        let deadline_unix_ms = request.deadline_unix_ms();
+        let deadline = instant_from_unix_ms(deadline_unix_ms);
         let (sender, receiver) = oneshot::channel();
-        lock_unpoisoned(&self.inner.pending).insert(id, sender);
-        let payload = Zeroizing::new(Envelope::Request(request).to_vec()?);
+        lock_unpoisoned(&self.inner.pending).insert(
+            id,
+            PendingRequest {
+                sender,
+                deadline_unix_ms,
+                cancellation: CancellationToken::new(),
+            },
+        );
+        let payload = match Envelope::Request(request).to_vec() {
+            Ok(payload) => Zeroizing::new(payload),
+            Err(error) => {
+                remove_pending(&self.inner, id);
+                return Err(error);
+            }
+        };
         if payload.len() > limit {
-            lock_unpoisoned(&self.inner.pending).remove(&id);
+            remove_pending(&self.inner, id);
             return Err(Error::Protocol("request exceeds the active frame limit"));
         }
         match tokio::time::timeout_at(
@@ -490,11 +519,11 @@ impl Client {
         {
             Ok(Ok(())) => {}
             Ok(Err(_)) => {
-                lock_unpoisoned(&self.inner.pending).remove(&id);
+                remove_pending(&self.inner, id);
                 return Err(Error::Closed);
             }
             Err(_) => {
-                lock_unpoisoned(&self.inner.pending).remove(&id);
+                remove_pending(&self.inner, id);
                 return Err(Error::DeadlineExceeded);
             }
         }
@@ -529,6 +558,7 @@ impl Call {
         let Some(client) = self.client.upgrade() else {
             return Err(Error::Closed);
         };
+        cancel_parent_callbacks(&client, self.id);
         match tokio::time::timeout_at(self.deadline, queue_cancel(&client, self.id)).await {
             Ok(result) => result,
             Err(_) => Err(Error::DeadlineExceeded),
@@ -622,10 +652,17 @@ fn serve_callback(inner: &Arc<Inner>, handler: Arc<dyn CallbackHandler>, request
     let Some(parent_id) = request.meta.parent_request_id else {
         return false;
     };
-    if !lock_unpoisoned(&inner.pending).contains_key(&parent_id) {
-        return false;
-    }
-    {
+    let parent_cancellation = {
+        // Hold the parent table while reserving the inbound slot. A terminal
+        // response cannot remove the parent between validation and attaching
+        // the callback's cancellation state.
+        let pending = lock_unpoisoned(&inner.pending);
+        let Some(parent) = pending.get(&parent_id) else {
+            return false;
+        };
+        if request.deadline_unix_ms() > parent.deadline_unix_ms {
+            return false;
+        }
         let mut inbound = lock_unpoisoned(&inner.inbound);
         let active_limit = inner.max_in_flight.load(Ordering::Acquire);
         if inbound.active >= active_limit
@@ -635,19 +672,33 @@ fn serve_callback(inner: &Arc<Inner>, handler: Arc<dyn CallbackHandler>, request
         }
         inbound.last_seen_id = Some(request.id);
         inbound.active += 1;
-    }
+        parent.cancellation.clone()
+    };
     let deadline = instant_from_unix_ms(request.deadline_unix_ms());
     let task_inner = Arc::downgrade(inner);
     tokio::spawn(async move {
-        let outcome =
-            tokio::time::timeout_at(deadline, handler.call(&request.method, request.params))
-                .await
-                .unwrap_or_else(|_| Err(RpcError::new(ErrorKind::DeadlineExceeded)));
-        let response = match outcome {
+        let mut outcome = tokio::select! {
+            biased;
+            _ = parent_cancellation.cancelled() => Err(RpcError::new(ErrorKind::Cancelled)),
+            outcome = tokio::time::timeout_at(
+                deadline,
+                handler.call(&request.method, request.params),
+            ) => outcome.unwrap_or_else(|_| Err(RpcError::new(ErrorKind::DeadlineExceeded))),
+        };
+        // A terminal parent may race a ready handler. Cancellation wins and
+        // any returned secret is scrubbed before it can be serialized.
+        if parent_cancellation.is_cancelled() {
+            if let Ok(value) = &mut outcome {
+                zeroize_json(value);
+            }
+            outcome = Err(RpcError::new(ErrorKind::Cancelled));
+        }
+        let mut response = match outcome {
             Ok(result) => Response::success(request.id, result),
             Err(error) => Response::error(Some(request.id), error),
         };
         let Some(inner) = task_inner.upgrade() else {
+            zeroize_response(&mut response);
             return;
         };
         {
@@ -655,7 +706,9 @@ fn serve_callback(inner: &Arc<Inner>, handler: Arc<dyn CallbackHandler>, request
             inbound.active = inbound.active.saturating_sub(1);
         }
         let limit = inner.max_frame_bytes.load(Ordering::Acquire);
-        let payload = match Envelope::Response(response).to_vec().map(Zeroizing::new) {
+        let encoded = serde_json::to_vec(&response).map(Zeroizing::new);
+        zeroize_response(&mut response);
+        let payload = match encoded {
             Ok(payload) if payload.len() <= limit => payload,
             // An answer that cannot fit still owes the server one terminal
             // frame, or its callback would hang until the deadline.
@@ -668,10 +721,24 @@ fn serve_callback(inner: &Arc<Inner>, handler: Arc<dyn CallbackHandler>, request
                 }
             }
         };
-        let _ = inner
-            .writer
-            .send(WriterCommand::Frame { payload, limit })
-            .await;
+        let send = inner.writer.send(WriterCommand::Frame { payload, limit });
+        tokio::select! {
+            biased;
+            _ = parent_cancellation.cancelled() => {
+                // Dropping the competing send zeroizes its serialized payload.
+                // Only a value-free cancellation may be queued after the
+                // parent has become terminal.
+                let replacement =
+                    Response::error(Some(request.id), RpcError::new(ErrorKind::Cancelled));
+                if let Ok(payload) = Envelope::Response(replacement).to_vec().map(Zeroizing::new) {
+                    let _ = inner
+                        .writer
+                        .send(WriterCommand::Frame { payload, limit })
+                        .await;
+                }
+            }
+            _ = send => {}
+        }
     });
     true
 }
@@ -696,7 +763,9 @@ fn fail_session_weak(inner: &Weak<Inner>) {
 
 fn fail_session(inner: &Arc<Inner>) {
     inner.state.store(CLOSED, Ordering::Release);
-    lock_unpoisoned(&inner.pending).clear();
+    for (_, pending) in lock_unpoisoned(&inner.pending).drain() {
+        pending.cancellation.cancel();
+    }
     lock_unpoisoned(&inner.abandoned).clear();
     inner.closed.notify_waiters();
 }
@@ -713,11 +782,38 @@ fn abandon_request(inner: &Arc<Inner>, id: RequestId) {
             false
         }
     };
-    lock_unpoisoned(&inner.pending).remove(&id);
+    remove_pending(inner, id);
     if overflow {
         // A peer that never terminates cancelled/timed-out requests cannot
         // grow client memory without bound. Close and reconnect instead.
         fail_session(inner);
+    }
+}
+
+fn cancel_parent_callbacks(inner: &Arc<Inner>, id: RequestId) {
+    if let Some(pending) = lock_unpoisoned(&inner.pending).get(&id) {
+        pending.cancellation.cancel();
+    }
+}
+
+fn remove_pending(inner: &Arc<Inner>, id: RequestId) {
+    if let Some(pending) = lock_unpoisoned(&inner.pending).remove(&id) {
+        pending.cancellation.cancel();
+    }
+}
+
+fn zeroize_response(response: &mut Response) {
+    if let Response::Success(response) = response {
+        zeroize_json(&mut response.result);
+    }
+}
+
+fn zeroize_json(value: &mut Value) {
+    match value {
+        Value::String(value) => value.zeroize(),
+        Value::Array(values) => values.iter_mut().for_each(zeroize_json),
+        Value::Object(values) => values.values_mut().for_each(zeroize_json),
+        _ => {}
     }
 }
 

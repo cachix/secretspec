@@ -492,6 +492,25 @@ mod tests {
     }
 
     #[test]
+    fn notifications_are_closed_envelopes_with_open_methods() {
+        for payload in [
+            br#"{"jsonrpc":"2.0","method":"future.notice","params":{}}"#.as_slice(),
+            br#"{"jsonrpc":"2.0","method":"rpc.cancel","params":{"id":"bad"}}"#.as_slice(),
+        ] {
+            assert!(matches!(
+                Envelope::parse(payload),
+                Ok(Envelope::Notification(_))
+            ));
+        }
+        assert!(
+            Envelope::parse(
+                br#"{"jsonrpc":"2.0","method":"future.notice","params":{},"extra":true}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn request_deadline_is_required_and_round_trips() {
         assert!(Envelope::parse(br#"{"jsonrpc":"2.0","id":1,"method":"x","params":{}}"#).is_err());
         let parsed = Envelope::parse(

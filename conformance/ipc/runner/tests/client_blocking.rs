@@ -139,6 +139,21 @@ fn resolves_releases_and_shuts_down() {
 }
 
 #[test]
+fn unknown_notifications_do_not_interrupt_a_blocking_exchange() {
+    let mut session = session(&["--notify-init"]);
+    let resolved = session
+        .get(
+            &resolve_params("RESOLVED_VALUE"),
+            deadline_after(Duration::from_secs(5)),
+        )
+        .unwrap();
+    assert!(matches!(resolved, GetResult::Value(_)));
+    session
+        .close(deadline_after(Duration::from_secs(5)))
+        .unwrap();
+}
+
+#[test]
 fn missing_and_undeclared_are_domain_results_rather_than_errors() {
     let mut session = session(&[]);
     let missing = session

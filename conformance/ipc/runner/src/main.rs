@@ -23,7 +23,19 @@ struct Case {
 #[serde(deny_unknown_fields)]
 struct Transcript {
     case: String,
+    #[serde(default)]
+    status: TranscriptStatus,
+    #[serde(default)]
+    reason: Option<String>,
     events: Vec<Value>,
+}
+
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum TranscriptStatus {
+    #[default]
+    Passed,
+    NotApplicable,
 }
 
 fn main() {
@@ -221,6 +233,24 @@ fn run_case(
         .map_err(|error| format!("{}: invalid transcript: {error}", case.id))?;
     if transcript.case != case.id {
         return Err(format!("{}: transcript case mismatch", case.id));
+    }
+    if transcript.status == TranscriptStatus::NotApplicable {
+        let reason = transcript
+            .reason
+            .as_deref()
+            .filter(|reason| !reason.trim().is_empty())
+            .ok_or_else(|| format!("{}: not-applicable transcript has no reason", case.id))?;
+        if !transcript.events.is_empty() {
+            return Err(format!(
+                "{}: not-applicable transcript contains events",
+                case.id
+            ));
+        }
+        println!("not applicable {}: {reason}", case.id);
+        return Ok(());
+    }
+    if transcript.reason.is_some() {
+        return Err(format!("{}: passed transcript contains a reason", case.id));
     }
     let event_kinds = transcript
         .events

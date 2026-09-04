@@ -32,6 +32,10 @@ typedef enum {
     MODE_FUTURE_ERROR_KIND,
     MODE_PROMPT,
     MODE_EXPIRED_PROMPT,
+    MODE_PARENT_TERMINAL_PROMPT,
+    MODE_LATE_DEADLINE_PROMPT,
+    MODE_UNKNOWN_NOTIFICATION,
+    MODE_INVALID_NOTIFICATION,
     MODE_CHECK_ENVIRONMENT
 } peer_mode;
 
@@ -47,6 +51,17 @@ static void pause_for_backpressure(void) {
     Sleep(10000);
 #else
     struct timespec delay = {10, 0};
+    (void)nanosleep(&delay, NULL);
+#endif
+}
+
+static void pause_milliseconds(uint64_t milliseconds) {
+#ifdef _WIN32
+    Sleep(milliseconds > MAXDWORD ? MAXDWORD : (DWORD)milliseconds);
+#else
+    struct timespec delay;
+    delay.tv_sec = (time_t)(milliseconds / UINT64_C(1000));
+    delay.tv_nsec = (long)((milliseconds % UINT64_C(1000)) * UINT64_C(1000000));
     (void)nanosleep(&delay, NULL);
 #endif
 }
@@ -154,6 +169,10 @@ static peer_mode parse_mode(int argc, char **argv) {
     if (strcmp(argv[1], "--future-error-kind") == 0) return MODE_FUTURE_ERROR_KIND;
     if (strcmp(argv[1], "--prompt") == 0) return MODE_PROMPT;
     if (strcmp(argv[1], "--expired-prompt") == 0) return MODE_EXPIRED_PROMPT;
+    if (strcmp(argv[1], "--parent-terminal-prompt") == 0) return MODE_PARENT_TERMINAL_PROMPT;
+    if (strcmp(argv[1], "--late-deadline-prompt") == 0) return MODE_LATE_DEADLINE_PROMPT;
+    if (strcmp(argv[1], "--unknown-notification") == 0) return MODE_UNKNOWN_NOTIFICATION;
+    if (strcmp(argv[1], "--invalid-notification") == 0) return MODE_INVALID_NOTIFICATION;
     if (strcmp(argv[1], "--check-environment") == 0) return MODE_CHECK_ENVIRONMENT;
     return MODE_NORMAL;
 }
@@ -247,12 +266,13 @@ int main(int argc, char **argv) {
             yyjson_doc *reply;
             yyjson_val *value;
             uint64_t call_id = yyjson_get_uint(id);
+            uint64_t call_deadline = yyjson_get_uint(deadline);
             yyjson_doc_free(document);
             length = snprintf(response, sizeof(response),
                 "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"client.prompt\","
                 "\"_meta\":{\"deadline_unix_ms\":%llu,\"parent_request_id\":%llu},\"params\":{\"name\":\"DEPLOY_PASSWORD\","
                 "\"profile\":\"default\",\"target_provider\":\"dotenv:values.env\"}}",
-                (unsigned long long)(now_ms() + UINT64_C(5000)), (unsigned long long)call_id);
+                (unsigned long long)call_deadline, (unsigned long long)call_id);
             if (length <= 0 || (size_t)length >= sizeof(response) ||
                 !write_frame(response) || !read_frame(&answer, &answer_size)) return EXIT_FAILURE;
             reply = yyjson_read((char *)answer, answer_size, 0);
@@ -283,6 +303,45 @@ int main(int argc, char **argv) {
             yyjson_doc_free(document);
             if (length <= 0 || (size_t)length >= sizeof(response) ||
                 !write_frame(response)) return EXIT_FAILURE;
+            continue;
+        } else if (mode == MODE_PARENT_TERMINAL_PROMPT && !expired_prompt_sent) {
+            uint64_t call_id = yyjson_get_uint(id);
+            expired_prompt_sent = 1;
+            length = snprintf(response, sizeof(response),
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"client.prompt\","
+                "\"_meta\":{\"deadline_unix_ms\":%llu,\"parent_request_id\":%llu},"
+                "\"params\":{\"name\":\"LATE_SECRET\",\"profile\":\"default\",\"target_provider\":null}}",
+                (unsigned long long)yyjson_get_uint(deadline), (unsigned long long)call_id);
+            yyjson_doc_free(document);
+            if (length <= 0 || (size_t)length >= sizeof(response) || !write_frame(response)) return EXIT_FAILURE;
+            pause_milliseconds(UINT64_C(100));
+            length = snprintf(response, sizeof(response),
+                "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{\"terminal\":true}}",
+                (unsigned long long)call_id);
+            if (length <= 0 || (size_t)length >= sizeof(response) || !write_frame(response)) return EXIT_FAILURE;
+            continue;
+        } else if (mode == MODE_LATE_DEADLINE_PROMPT && !expired_prompt_sent) {
+            expired_prompt_sent = 1;
+            length = snprintf(response, sizeof(response),
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"client.prompt\","
+                "\"_meta\":{\"deadline_unix_ms\":%llu,\"parent_request_id\":%llu},\"params\":{}}",
+                (unsigned long long)(yyjson_get_uint(deadline) + UINT64_C(1)),
+                (unsigned long long)yyjson_get_uint(id));
+            yyjson_doc_free(document);
+            if (length <= 0 || (size_t)length >= sizeof(response) || !write_frame(response)) return EXIT_FAILURE;
+            continue;
+        } else if (mode == MODE_UNKNOWN_NOTIFICATION) {
+            uint64_t call_id = yyjson_get_uint(id);
+            yyjson_doc_free(document);
+            if (!write_frame("{\"jsonrpc\":\"2.0\",\"method\":\"future.notice\",\"params\":{}}")) return EXIT_FAILURE;
+            length = snprintf(response, sizeof(response),
+                "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{\"alive\":true}}",
+                (unsigned long long)call_id);
+            if (length <= 0 || (size_t)length >= sizeof(response) || !write_frame(response)) return EXIT_FAILURE;
+            continue;
+        } else if (mode == MODE_INVALID_NOTIFICATION) {
+            yyjson_doc_free(document);
+            if (!write_frame("{\"jsonrpc\":\"2.0\",\"method\":\"future.notice\",\"params\":{},\"extra\":true}")) return EXIT_FAILURE;
             continue;
         } else {
             length = snprintf(response, sizeof(response),

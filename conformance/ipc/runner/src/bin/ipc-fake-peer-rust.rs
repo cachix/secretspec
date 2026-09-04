@@ -8,6 +8,7 @@ enum Mode {
     Normal,
     SilentInitialize,
     FragmentInitialize(Vec<usize>),
+    NotifyInitialize,
     RejectInitialize(Rejection),
     DescendantHoldsPipes,
     HoldPipes,
@@ -50,6 +51,7 @@ fn parse_mode() -> Result<Mode, ()> {
             Ok(Mode::DescendantHoldsPipes)
         }
         Some("--hold-pipes") if arguments.next().is_none() => Ok(Mode::HoldPipes),
+        Some("--notify-init") if arguments.next().is_none() => Ok(Mode::NotifyInitialize),
         Some("--fragment-init") => {
             let chunks = arguments
                 .next()
@@ -114,6 +116,17 @@ fn serve(mode: Mode) -> Result<(), ()> {
                     Mode::SilentInitialize => {}
                     Mode::FragmentInitialize(chunks) => {
                         write_frame_fragmented(&mut output, &response, &chunks)?
+                    }
+                    Mode::NotifyInitialize => {
+                        write_frame(
+                            &mut output,
+                            &json!({
+                                "jsonrpc": "2.0",
+                                "method": "future.notice",
+                                "params": {}
+                            }),
+                        )?;
+                        write_frame(&mut output, &response)?;
                     }
                     Mode::DescendantHoldsPipes => {
                         write_frame(&mut output, &response)?;

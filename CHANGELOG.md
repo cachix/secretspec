@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- IPC v1 now defines and enforces directional callback limits during
+  initialization, ties callbacks to their parent request's deadline and
+  lifetime in both Rust and C clients, and consistently ignores unknown but
+  structurally valid notifications. Initialization-state failures have
+  deterministic errors and connection closure, while the provider conformance
+  runner can use transport-only third-party endpoint profiles and report
+  provider-specific cases as not applicable.
+
 - IPC endpoints now answer side-effect-free `rpc.discover` requests before or
   after initialization, returning a self-contained OpenRPC description with
   endpoint metadata and embedded JSON Schemas for offline inspection tooling.

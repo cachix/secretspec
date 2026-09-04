@@ -57,7 +57,9 @@ close the transport if LF has not arrived before `max_frame_bytes` JSON bytes.
 
 Discovery (0.20+) and initialization use the same absolute limit.
 Initialization negotiates a possibly smaller `max_frame_bytes` for the rest of
-the session.
+the session. Until the successful initialization response is committed, that
+1 MiB ceiling applies in both directions, including callback requests and
+responses.
 
 ## JSON-RPC profile
 
@@ -96,10 +98,12 @@ The receiver MUST reject requests with:
   (0.20+) or `rpc.initialize`;
 - a second `rpc.initialize` request.
 
-A notification has no response channel. Unknown notifications, cancellation
-for an unknown or completed ID, and malformed cancellation parameters are
-ignored (and may produce redacted diagnostics). Malformed JSON, duplicate keys,
-and an oversize or unterminated frame remain transport-fatal.
+A notification has no response channel. Its envelope is nevertheless closed:
+it contains exactly `jsonrpc`, `method`, and an object-valued `params` member.
+Unknown notification methods, cancellation for an unknown or completed ID, and
+malformed `rpc.cancel` parameters are ignored (and may produce redacted
+diagnostics). An unknown top-level notification member, malformed JSON,
+duplicate keys, and an oversize or unterminated frame remain transport-fatal.
 
 Unknown advertised capabilities are ignored. Strict parameter parsing is
 intentional: extensions use capabilities and protocol versions rather than
@@ -265,6 +269,20 @@ Rules:
 Discovery and initialization requests are constrained by the pre-negotiation
 limits of one frame and one in-flight request.
 
+Initialization has one terminal failed state. Before readiness, the only valid
+requests are discovery before the initial `rpc.initialize` and that
+initialization request; responses may only answer callbacks raised by the
+initialize. Structurally valid notifications retain their normal semantics, so
+cancellation of the initialize and unknown notification methods are accepted.
+An application request or another request while initialization is active
+receives at most one value-free `invalid_request` response and the connection
+closes. Invalid initialization parameters receive `invalid_params` and close;
+an unsupported protocol or version receives `unsupported_version` and closes.
+A second initialization after readiness receives `invalid_request` and closes.
+A response that does not match an initialization callback has no response
+channel and closes the connection immediately. No application request is
+processed after initialization fails.
+
 ## Application requests
 
 Every request contains `_meta.deadline_unix_ms`. It is an unsigned integer
@@ -336,14 +354,19 @@ mirror image of an ordinary request, with one addition:
   response, under the same rules an endpoint follows.
 - A callback's `_meta.parent_request_id` MUST name the active request it serves;
   its deadline MUST NOT be later than that request's deadline, and
-  cancelling that request cancels the callback.
+  cancelling that request cancels the callback. A missing, unknown, terminal,
+  or otherwise invalid parent association is a protocol violation and closes
+  the connection immediately.
 - Both sides MUST keep reading while a callback is outstanding. The connection
   that carries the callback also carries the response the client is waiting for,
   so a client that blocks its reader to answer deadlocks the session until the
   deadline elapses.
-- The negotiated `max_in_flight` also bounds server-to-client callbacks. A
-  client MUST reject callbacks beyond that selected limit, so a peer cannot
-  grow its state by never letting callbacks finish.
+- In-flight counts are directional. The initialization request occupies the
+  client-to-server space independently of callbacks in the server-to-client
+  space. Until its successful response commits, at most one callback may be
+  outstanding. The negotiated `max_in_flight` bounds callbacks after readiness.
+  A server MUST NOT send beyond the active bound, and a client closes when a
+  peer violates it.
 - Callbacks carry secrets in the same way responses do, and are subject to the
   same logging and redaction rules.
 
@@ -490,12 +513,16 @@ The rules an implementation must follow to keep version 1 extensible:
    never seen may arrive with a kind it has never seen. A known code paired with
    an unknown kind is a peer defect and is still rejected, so tolerance never
    becomes a way to smuggle one error past a receiver as another.
-4. **Requests are strict and results are tolerant.** Request and notification
-   objects reject unknown members. Receivers ignore unknown members in response
-   and result objects, so descriptive output can grow without a new capability.
-5. **New methods, notifications, and callbacks are capability-gated.** An
-   unknown notification method remains a protocol violation, so a later
-   notification is sent only to a peer that advertised it.
+4. **Requests are strict and results are tolerant.** Request objects and
+   notification envelopes reject unknown members. Receivers ignore unknown
+   members in response and result objects, so descriptive output can grow
+   without a new capability.
+5. **New methods, notifications, and callbacks are capability-gated.** A
+   receiver ignores an unknown notification method because it has no response
+   channel. A sender nevertheless sends a later notification only when the
+   receiving side advertised its defining capability. Server capabilities gate
+   client-to-server notifications; a future server-to-client notification needs
+   an explicitly negotiated client capability or a later protocol version.
 6. **Codes and names are reserved, not recycled.** A server-error code, a method
    name, or a capability name that this document has assigned is never reused
    for a different meaning in the same protocol version.

@@ -270,8 +270,8 @@ of the title so the same collection or personal vault can safely hold
 `secretspec/{project}/{profile}` prefix, and the key is appended to it.
 
 The prefix is an item-title namespace, not a Bitwarden `folderId`. Explicit
-`ref.item` coordinates always name the complete existing item title and do not
-receive the prefix.
+`ref.item` coordinates name either the complete existing item title or, in
+0.21+, its exact item UUID. Neither form receives the prefix.
 
 The Bitwarden provider supports every Password Manager item type. When an item
 type is selected through `BITWARDEN_DEFAULT_TYPE` or `?type=`, it filters reads
@@ -375,8 +375,15 @@ unintended partial match. `field = "notes"` addresses a Secure Note's body.
 
 <VersionCompatibility version="0.18" />
 
-Resolved item titles are matched **in full, case-insensitively** — `test database` finds
-`Test Database`, but `API_KEY` never matches `API_KEY_OLD`. The `bw` CLI itself
+<VersionCompatibility version="0.21" kind="changed">
+
+`ref.item` also accepts an exact Bitwarden item UUID.
+
+</VersionCompatibility>
+
+An exact item UUID selects that item directly. Otherwise, resolved item titles
+are matched **in full, case-insensitively** — `test database` finds `Test
+Database`, but `API_KEY` never matches `API_KEY_OLD`. The `bw` CLI itself
 accepts a substring here, which works well interactively because it prints the
 candidates and lets you choose; a name in `secretspec.toml` is resolved with
 nobody watching, so a partial match would quietly read — or overwrite — a
@@ -387,8 +394,10 @@ SecretSpec refuses the address and lists the colliding IDs rather than picking
 one. Rename the items so the selected name is unique, or use `?type=` when the
 collisions have different item types.
 
-Adding `?type=` narrows the match to that item type, on both reads and writes.
-That is how a Card and a Login of the same name stay separately addressable:
+Adding `?type=` narrows a name match to that item type, on both reads and
+writes. An exact item UUID takes precedence because it already identifies one
+item. That is how a Card and a Login of the same name stay separately
+addressable:
 
 ```bash
 $ secretspec get API_KEY --provider "bw://?type=card"
@@ -405,7 +414,8 @@ item title, or when a specific field is required:
 DATABASE_URL = { description = "Application database", ref = { item = "MyApp Database", field = "password" }, providers = ["bw"] }
 ```
 
-`ref.item` is matched against the Bitwarden item name, not its item ID.
+`ref.item` accepts either an exact Bitwarden item UUID or a complete,
+case-insensitive item title.
 
 ### Migrating bare item names {/* #migrating-bare-item-names-020 */}
 

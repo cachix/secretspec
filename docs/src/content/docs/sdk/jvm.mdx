@@ -63,9 +63,12 @@ secret. A missing required secret throws `MissingRequiredException`; its
 `missing()` method returns the secret names. Other failures throw
 `SecretSpecException`, whose `kind()` method returns a stable error category.
 
-## Inline Spec (0.20+)
+## Inline specifications {/* #inline-specifications-021 */}
 
-Use `withInlineSpec(spec, baseDir)` to use an inline specification.
+<VersionCompatibility version="0.21" />
+
+Use `withInlineSpec(spec, baseDir)` to resolve strict inline-spec v1 declarations.
+`baseDir` resolves relative provider paths.
 Can be useful if you want to embed the specification inside your application.
 
 <Code code={inlineSpecExample} lang="java" meta='title="InlineSpecExample.java"' />

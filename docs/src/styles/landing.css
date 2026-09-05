@@ -14,20 +14,14 @@
   --landing-active-border: 36%;
   --landing-active-glow: 10%;
   --landing-token-glow: 8%;
-  --landing-active-duration: 0.28s;
+  --landing-active-duration: var(--csk-interaction-duration);
+  --csk-landing-glow-primary: rgba(45, 69, 102, 0.1);
+  --csk-landing-glow-secondary: rgba(142, 163, 192, 0.1);
 }
 
-/* Remove Starlight's content panel constraints on the landing page only.
-   The DOM nests as `.content-panel > .sl-container`, so we anchor on the
-   content panel (which contains the hero) and clear its padding/border too —
-   otherwise its 1.5rem padding pushes the hero grid down from the navbar.
-   Scoped via `:has(.landing-hero)` so other splash pages keep their layout. */
-.content-panel:has(.landing-hero),
-.content-panel:has(.landing-hero) .sl-container {
-  max-width: none;
-  padding: 0;
-  border: none;
-  overflow-x: hidden;
+:root[data-theme='dark'] {
+  --csk-landing-glow-primary: rgba(142, 163, 192, 0.12);
+  --csk-landing-glow-secondary: rgba(45, 69, 102, 0.18);
 }
 
 /* Grid/flex children that contain pre/code need min-width:0 so
@@ -103,57 +97,23 @@
 /* ── Hero ── */
 
 .landing-hero {
-  position: relative;
-  padding: 2rem 1rem 2.5rem;
-  overflow: hidden;
-  isolation: isolate;
+  padding-block-end: 2.5rem;
 }
 
 @media (min-width: 640px) {
   .landing-hero {
-    padding: 2.5rem 1.5rem 4rem;
+    padding-block-end: 4rem;
   }
-}
 
-.landing-hero::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background:
-    radial-gradient(60rem 30rem at 20% 0%, rgba(45, 69, 102, 0.10), transparent 60%),
-    radial-gradient(50rem 25rem at 90% 20%, rgba(142, 163, 192, 0.10), transparent 60%);
-  pointer-events: none;
-}
-
-[data-theme='dark'] .landing-hero::before {
-  background:
-    radial-gradient(60rem 30rem at 20% 0%, rgba(142, 163, 192, 0.12), transparent 60%),
-    radial-gradient(50rem 25rem at 90% 20%, rgba(45, 69, 102, 0.18), transparent 60%);
-}
-
-.landing-hero::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background-image:
-    linear-gradient(to right, rgba(0, 0, 0, 0.04) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(0, 0, 0, 0.04) 1px, transparent 1px);
-  background-size: 48px 48px;
-  mask-image: radial-gradient(ellipse 60% 50% at 50% 30%, #000 30%, transparent 80%);
-  pointer-events: none;
-}
-
-[data-theme='dark'] .landing-hero::after {
-  background-image:
-    linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  .landing-hero-inner {
+    padding-inline: 1.5rem;
+  }
 }
 
 .landing-hero-inner {
   max-width: 76rem;
   margin: 0 auto;
+  padding-inline: 1rem;
 }
 
 .landing-hero-head {
@@ -206,32 +166,30 @@
    so three of them in one sentence don't compete with the headline; only the
    underline carries the accent. */
 .landing-subtitle-link {
+  --csk-text-link-color: inherit;
+  --csk-text-link-hover-color: var(--color-accent-700);
   color: inherit;
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, var(--color-accent-600) 45%, transparent);
   text-decoration-thickness: 1px;
   text-underline-offset: 0.2em;
-  transition: color 0.15s, text-decoration-color 0.15s;
 }
 
 .landing-subtitle-link:hover {
-  color: var(--color-accent-700);
   text-decoration-color: var(--color-accent-700);
 }
 
 [data-theme='dark'] .landing-subtitle-link {
+  --csk-text-link-hover-color: var(--color-accent-200);
   text-decoration-color: color-mix(in srgb, var(--color-accent-200) 55%, transparent);
 }
 
 [data-theme='dark'] .landing-subtitle-link:hover {
-  color: var(--color-accent-200);
   text-decoration-color: var(--color-accent-200);
 }
 
 .landing-hero-actions {
-  display: flex;
   flex-direction: column;
-  gap: 0.75rem;
   justify-content: center;
   margin-top: 2rem;
 }
@@ -292,81 +250,39 @@
   display: none;
 }
 
-/* ── Buttons ── */
-
-.landing-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.625rem 1.5rem;
-  font-size: 0.9375rem;
-  font-weight: 600;
-  border-radius: 0.5rem;
-  transition: all 0.15s;
-  text-decoration: none;
-  white-space: nowrap;
-  cursor: pointer;
-  border: none;
+.landing {
+  --csk-button-font-size: 0.9375rem;
+  --csk-button-font-weight: 600;
+  --csk-button-padding-inline: 1.5rem;
+  --csk-button-primary-background: var(--color-accent-600);
+  --csk-button-primary-color: #fff;
+  --csk-button-primary-glow: color-mix(in srgb, var(--color-accent-500) 52%, transparent);
+  --csk-button-secondary-background: transparent;
+  --csk-button-secondary-border: var(--color-gray-300);
+  --csk-button-secondary-color: var(--color-gray-700);
+  --csk-button-secondary-glow: color-mix(in srgb, var(--color-accent-500) 34%, transparent);
 }
 
-.landing-btn-primary {
-  background-color: var(--color-accent-600);
-  color: #fff;
-}
-
-.landing-btn-primary:hover {
-  background-color: var(--color-accent-700);
-  color: #fff;
-}
-
-[data-theme='dark'] .landing-btn-primary {
-  background-color: var(--color-accent-500);
-}
-
-[data-theme='dark'] .landing-btn-primary:hover {
-  background-color: var(--color-accent-400);
-}
-
-.landing-btn-secondary {
-  background-color: transparent;
-  color: var(--color-gray-700);
-  border: 1px solid var(--color-gray-300);
-}
-
-.landing-btn-secondary:hover {
-  background-color: var(--color-gray-100);
-  color: var(--color-gray-900);
-}
-
-[data-theme='dark'] .landing-btn-secondary {
-  color: var(--color-gray-300);
-  border-color: var(--color-gray-700);
-}
-
-[data-theme='dark'] .landing-btn-secondary:hover {
-  background-color: var(--color-gray-800);
-  color: #fff;
+[data-theme='dark'] .landing {
+  --csk-button-primary-background: var(--color-accent-500);
+  --csk-button-secondary-border: var(--color-gray-700);
+  --csk-button-secondary-color: var(--color-gray-300);
 }
 
 /* ── Links ── */
 
 .landing-link {
+  --csk-text-link-color: var(--color-accent-600);
+  --csk-text-link-hover-color: var(--color-accent-700);
   color: var(--color-accent-600);
   font-weight: 600;
   text-decoration: none;
-  transition: color 0.15s;
-}
-
-.landing-link:hover {
-  color: var(--color-accent-700);
 }
 
 [data-theme='dark'] .landing-link {
+  --csk-text-link-color: var(--color-accent-200);
+  --csk-text-link-hover-color: #fff;
   color: var(--color-accent-200);
-}
-
-[data-theme='dark'] .landing-link:hover {
-  color: #fff;
 }
 
 /* ── Inline code ── */
@@ -506,7 +422,7 @@
 }
 
 .landing-hero .landing-pipeline-grid {
-  --pipeline-gap: clamp(1rem, 2.4vw, 2.25rem);
+  --pipeline-gap: clamp(1.5rem, 3vw, 2.75rem);
   max-width: 1320px;
   padding: 0;
   gap: 0;
@@ -549,7 +465,7 @@
 .landing-pipeline-action .landing-btn-flow {
   position: relative;
   border-color: color-mix(in srgb, var(--color-accent-500) 42%, var(--sl-color-hairline));
-  box-shadow:
+  --csk-button-shadow:
     0 0 0 1px color-mix(in srgb, var(--color-accent-400) 12%, transparent),
     0 16px 34px -24px color-mix(in srgb, var(--color-accent-500) 70%, transparent);
 }
@@ -572,7 +488,7 @@
 
 [data-theme='dark'] .landing-pipeline-action .landing-btn-flow {
   border-color: color-mix(in srgb, var(--color-accent-300) 36%, var(--sl-color-hairline));
-  box-shadow:
+  --csk-button-shadow:
     0 0 0 1px color-mix(in srgb, var(--color-accent-300) 12%, transparent),
     0 18px 36px -24px color-mix(in srgb, var(--color-accent-300) 70%, transparent);
 }
@@ -582,10 +498,8 @@
 }
 
 .landing-hero-lower-actions {
-  display: flex;
   justify-content: center;
-  gap: 0.875rem;
-  flex-wrap: wrap;
+  --csk-button-group-gap: 0.875rem;
   margin-top: 1rem;
 }
 
@@ -593,7 +507,7 @@
   margin-top: 0.25rem;
 }
 
-.landing-pipeline-center .landing-hero-lower-actions .landing-btn {
+.landing-pipeline-center .landing-hero-lower-actions .csk-button {
   width: 9rem;
 }
 
@@ -731,7 +645,7 @@
   background: var(--sl-color-bg);
   color: var(--color-gray-700);
   font-weight: 500;
-  transition: color 0.34s ease;
+  transition: color var(--csk-interaction-duration) ease;
 }
 
 /* The accent ring and glow sit on their own layer, exactly over the pill's
@@ -748,7 +662,7 @@
     0 0 0 4px color-mix(in srgb, var(--reel-color) 18%, transparent),
     0 10px 24px -8px color-mix(in srgb, var(--reel-color) 45%, transparent);
   opacity: 0;
-  transition: opacity 0.34s ease;
+  transition: opacity var(--csk-interaction-duration) ease;
   pointer-events: none;
 }
 
@@ -822,222 +736,27 @@
 }
 
 .landing-pipeline-flow-arrow {
-  position: relative;
-  align-self: stretch;
-  min-height: 100%;
-  color: color-mix(in srgb, var(--color-accent-500) 58%, var(--color-gray-400));
-  pointer-events: none;
-}
-
-.landing-pipeline-flow-arrow {
+  --csk-flow-color: color-mix(in srgb, var(--color-accent-500) 58%, var(--color-gray-400));
+  --csk-flow-delay: 0s;
+  --csk-flow-duration: 3.2s;
+  --csk-flow-head: 0.42rem;
+  --csk-flow-length: calc(100% - 0.55rem);
+  --csk-flow-timing: ease-in-out;
   --pipeline-flow-line: calc(var(--pipeline-control-row-height) + 0.75rem + 114px);
-  --pipeline-head-size: 0.42rem;
-  /* Rotating the head 45deg puts its point, and the far end of each of its two
-     strokes, this far from the head's centre. */
-  --pipeline-head-reach: calc(var(--pipeline-head-size) * 0.7071);
-  --pipeline-pulse-length: 0.34rem;
-  /* Where the pulse's centre has to stop for its leading edge to land exactly on
-     the head's point rather than carrying on through it. */
-  --pipeline-pulse-stop: calc(
-    var(--pipeline-head-centre) - var(--pipeline-head-reach) + var(--pipeline-pulse-length) / 2
-  );
-}
-
-.landing-pipeline-flow-arrow::before,
-.landing-pipeline-flow-arrow::after {
-  content: '';
-  position: absolute;
-  top: var(--pipeline-flow-line);
-}
-
-.landing-pipeline-flow-head,
-.landing-pipeline-flow-rail {
-  position: absolute;
-  top: var(--pipeline-flow-line);
+  box-sizing: border-box;
+  inline-size: 100%;
+  min-height: 100%;
+  padding-block-start: calc(var(--pipeline-flow-line) - max(var(--csk-flow-packet), var(--csk-flow-head)) / 2);
   pointer-events: none;
-}
-
-.landing-pipeline-flow-arrow::before {
-  height: 1px;
-  background: currentColor;
-}
-
-.landing-pipeline-flow-arrow::after,
-.landing-pipeline-flow-head {
-  width: var(--pipeline-head-size);
-  height: var(--pipeline-head-size);
-  border-top: 1.5px solid currentColor;
-  border-right: 1.5px solid currentColor;
-  transform: translateY(calc(-50% + 0.5px)) rotate(45deg);
-}
-
-/* The shaft pulse used to stop dead at the arrowhead. These two carry it on
-   into the head itself: each starts at the far end of one stroke and runs down
-   to the point, where they meet and the head flares. They move with `translate`
-   and `opacity`, so they stay on the compositor like the rest of the arrow, and
-   they sit above the solid head so they read as light travelling along it. */
-.landing-pipeline-flow-edge {
-  position: absolute;
-  z-index: 1;
-  top: var(--pipeline-flow-line);
-  right: var(--pipeline-head-centre);
-  width: calc(var(--pipeline-head-size) * 0.44);
-  height: 0.085rem;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--color-accent-300) 70%, white);
-  box-shadow: 0 0 0.15rem 0.03rem color-mix(in srgb, var(--color-accent-400) 70%, transparent);
-  opacity: 0;
-  pointer-events: none;
-}
-
-.landing-pipeline-flow-edge-a {
-  transform: translate(50%, calc(-50% + 0.5px)) rotate(45deg);
-  animation: landing-pipeline-flow-edge-a 3.2s ease-in-out infinite;
-}
-
-.landing-pipeline-flow-edge-b {
-  transform: translate(50%, calc(-50% + 0.5px)) rotate(-45deg);
-  animation: landing-pipeline-flow-edge-b 3.2s ease-in-out infinite;
-}
-
-/* The arrowhead flare used to animate `filter`, which forced a main-thread
-   repaint on every frame for the life of the page. A pre-blurred copy sitting
-   under the solid arrowhead fades in instead, so the compositor can run it. */
-.landing-pipeline-flow-head {
-  filter: drop-shadow(0 0 0.3rem color-mix(in srgb, var(--color-accent-300) 80%, white));
-  opacity: 0;
-  animation: landing-pipeline-arrowhead-glow 3.2s ease-in-out infinite;
-}
-
-/* The rail is exactly as wide as the pulse's travel, so moving the pulse is a
-   composited `translate: 100%` rather than an animated `left`, which relaid
-   out the hero on every frame. */
-.landing-pipeline-flow-rail {
-  height: 0.12rem;
-  opacity: 0;
-  transform: translateY(calc(-50% + 0.5px));
-  animation: landing-pipeline-flow 3.2s ease-in-out infinite;
-  will-change: translate, opacity;
-}
-
-.landing-pipeline-flow-arrow-in::before {
-  left: 0;
-  right: 0.55rem;
-}
-
-.landing-pipeline-flow-arrow-in .landing-pipeline-flow-rail {
-  left: 0;
-  right: var(--pipeline-pulse-stop);
 }
 
 .landing-pipeline-flow-arrow-in {
-  --pipeline-head-centre: 0.71rem;
-}
-
-.landing-pipeline-flow-arrow-in::after,
-.landing-pipeline-flow-arrow-in .landing-pipeline-flow-head {
-  right: calc(var(--pipeline-head-centre) - var(--pipeline-head-size) / 2);
-}
-
-.landing-pipeline-flow-arrow-out::before {
-  left: 0.55rem;
-  right: 0;
-}
-
-.landing-pipeline-flow-arrow-out .landing-pipeline-flow-rail {
-  left: 0.55rem;
-  right: var(--pipeline-pulse-stop);
+  align-items: flex-start;
 }
 
 .landing-pipeline-flow-arrow-out {
-  --pipeline-head-centre: 0.16rem;
-}
-
-.landing-pipeline-flow-arrow-out::after,
-.landing-pipeline-flow-arrow-out .landing-pipeline-flow-head {
-  right: calc(var(--pipeline-head-centre) - var(--pipeline-head-size) / 2);
-}
-
-.landing-pipeline-flow-pulse {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: var(--pipeline-pulse-length);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--color-accent-300) 58%, white);
-  box-shadow:
-    0 0 0.18rem 0.05rem color-mix(in srgb, var(--color-accent-400) 72%, transparent),
-    -0.28rem 0 0.36rem color-mix(in srgb, var(--color-accent-500) 34%, transparent);
-  transform: translateX(-50%);
-}
-
-.landing-pipeline-flow-arrow-out .landing-pipeline-flow-rail,
-.landing-pipeline-flow-arrow-out .landing-pipeline-flow-head,
-.landing-pipeline-flow-arrow-out .landing-pipeline-flow-edge {
-  animation-delay: 0.8s;
-}
-
-@keyframes landing-pipeline-flow {
-  0%, 10% {
-    translate: 0 0;
-    opacity: 0;
-  }
-  18% {
-    opacity: 1;
-  }
-  72% {
-    translate: 100% 0;
-    opacity: 1;
-  }
-  80%, 100% {
-    translate: 100% 0;
-    opacity: 0;
-  }
-}
-
-@keyframes landing-pipeline-flow-edge-a {
-  0%, 66% {
-    translate: var(--pipeline-head-reach) 0;
-    opacity: 0;
-  }
-  69% {
-    opacity: 1;
-  }
-  76% {
-    translate: 0 calc(-1 * var(--pipeline-head-reach));
-    opacity: 1;
-  }
-  83%, 100% {
-    translate: 0 calc(-1 * var(--pipeline-head-reach));
-    opacity: 0;
-  }
-}
-
-@keyframes landing-pipeline-flow-edge-b {
-  0%, 66% {
-    translate: var(--pipeline-head-reach) 0;
-    opacity: 0;
-  }
-  69% {
-    opacity: 1;
-  }
-  76% {
-    translate: 0 var(--pipeline-head-reach);
-    opacity: 1;
-  }
-  83%, 100% {
-    translate: 0 var(--pipeline-head-reach);
-    opacity: 0;
-  }
-}
-
-/* Peaks as the pulse lands on the point and the two sparks launch from it. */
-@keyframes landing-pipeline-arrowhead-glow {
-  0%, 62%, 84%, 100% {
-    opacity: 0;
-  }
-  71% {
-    opacity: 1;
-  }
+  --csk-flow-delay: 0.8s;
+  align-items: flex-end;
 }
 
 .landing-pipeline-terminal .landing-terminal-header {
@@ -1059,14 +778,6 @@
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .landing-pipeline-flow-rail,
-  .landing-pipeline-flow-head,
-  .landing-pipeline-flow-edge {
-    animation: none;
   }
 }
 
@@ -1124,129 +835,16 @@
   }
 
   .landing-pipeline-flow-arrow {
-    --pipeline-head-centre: calc(0.5rem + var(--pipeline-head-size) / 2);
-    display: block;
-    align-self: auto;
+    --csk-flow-length: 2rem;
+    align-items: center;
+    align-self: center;
     justify-self: center;
-    width: 1.5rem;
-    height: 2rem;
+    width: 2rem;
+    height: max(var(--csk-flow-packet), var(--csk-flow-head));
     min-height: 0;
     margin-block: 0;
-  }
-
-  .landing-pipeline-flow-arrow::before,
-  .landing-pipeline-flow-arrow::after,
-  .landing-pipeline-flow-head {
-    top: auto;
-    left: 50%;
-  }
-
-  .landing-pipeline-flow-arrow::before {
-    top: 0;
-    bottom: 0.55rem;
-    right: auto;
-    width: 1px;
-    height: auto;
-  }
-
-  .landing-pipeline-flow-arrow::after,
-  .landing-pipeline-flow-head {
-    bottom: calc(var(--pipeline-head-centre) - var(--pipeline-head-size) / 2);
-    right: auto;
-    transform: translateX(-50%) rotate(135deg);
-  }
-
-  .landing-pipeline-flow-edge {
-    top: auto;
-    right: auto;
-    left: 50%;
-    bottom: var(--pipeline-head-centre);
-  }
-
-  .landing-pipeline-flow-edge-a {
-    transform: translate(-50%, 50%) rotate(135deg);
-    animation-name: landing-pipeline-flow-edge-a-mobile;
-  }
-
-  .landing-pipeline-flow-edge-b {
-    transform: translate(-50%, 50%) rotate(45deg);
-    animation-name: landing-pipeline-flow-edge-b-mobile;
-  }
-
-  @keyframes landing-pipeline-flow-edge-a-mobile {
-    0%, 66% {
-      translate: 0 var(--pipeline-head-reach);
-      opacity: 0;
-    }
-    69% {
-      opacity: 1;
-    }
-    76% {
-      translate: var(--pipeline-head-reach) 0;
-      opacity: 1;
-    }
-    83%, 100% {
-      translate: var(--pipeline-head-reach) 0;
-      opacity: 0;
-    }
-  }
-
-  @keyframes landing-pipeline-flow-edge-b-mobile {
-    0%, 66% {
-      translate: 0 var(--pipeline-head-reach);
-      opacity: 0;
-    }
-    69% {
-      opacity: 1;
-    }
-    76% {
-      translate: calc(-1 * var(--pipeline-head-reach)) 0;
-      opacity: 1;
-    }
-    83%, 100% {
-      translate: calc(-1 * var(--pipeline-head-reach)) 0;
-      opacity: 0;
-    }
-  }
-
-  .landing-pipeline-flow-arrow-in .landing-pipeline-flow-rail,
-  .landing-pipeline-flow-arrow-out .landing-pipeline-flow-rail {
-    top: 0;
-    bottom: var(--pipeline-pulse-stop);
-    left: 50%;
-    right: auto;
-    width: 0.12rem;
-    height: auto;
-    transform: translateX(-50%);
-    animation-name: landing-pipeline-flow-mobile;
-  }
-
-  .landing-pipeline-flow-pulse {
-    inset: 0 0 auto 0;
-    width: auto;
-    height: var(--pipeline-pulse-length);
-    box-shadow:
-      0 0 0.24rem 0.08rem color-mix(in srgb, var(--color-accent-400) 72%, transparent),
-      0 -0.3rem 0.4rem color-mix(in srgb, var(--color-accent-500) 38%, transparent);
-    transform: translateY(-50%);
-  }
-
-  @keyframes landing-pipeline-flow-mobile {
-    0%, 10% {
-      translate: 0 0;
-      opacity: 0;
-    }
-    18% {
-      opacity: 1;
-    }
-    72% {
-      translate: 0 100%;
-      opacity: 1;
-    }
-    80%, 100% {
-      translate: 0 100%;
-      opacity: 0;
-    }
+    padding: 0;
+    transform: rotate(90deg);
   }
 
   .landing-pipeline-side:first-child {
@@ -1732,6 +1330,8 @@
 
 .landing-sdk-logo-card {
   --sdk-color: var(--syntax-blue);
+  --csk-button-glow: color-mix(in srgb, var(--sdk-color) var(--landing-active-glow), transparent);
+  --csk-button-hover-ring: color-mix(in srgb, var(--sdk-color) var(--landing-active-border), transparent);
   appearance: none;
   border: 1px solid var(--sl-color-hairline);
   border-radius: 0.75rem;
@@ -1746,12 +1346,6 @@
   gap: 0.55rem;
   cursor: pointer;
   opacity: 0.68;
-  transition:
-    opacity var(--landing-active-duration) ease,
-    background-color var(--landing-active-duration) ease,
-    border-color var(--landing-active-duration) ease,
-    box-shadow var(--landing-active-duration) ease,
-    color var(--landing-active-duration) ease;
 }
 
 [data-theme='dark'] .landing-sdk-logo-card {
@@ -1765,7 +1359,6 @@
   color: var(--sdk-color);
   background: color-mix(in srgb, var(--sdk-color) var(--landing-active-fill), var(--sl-color-bg-nav));
   border-color: color-mix(in srgb, var(--sdk-color) var(--landing-active-border), var(--sl-color-hairline));
-  box-shadow: 0 0 1rem color-mix(in srgb, var(--sdk-color) var(--landing-active-glow), transparent);
 }
 
 .landing-sdk-logo-card:focus-visible {
@@ -1902,6 +1495,9 @@
 }
 
 .landing-remote-motion {
+  --csk-button-glow: color-mix(in srgb, var(--remote-cache) 34%, transparent);
+  --csk-button-hover-ring: color-mix(in srgb, var(--remote-cache) 45%, transparent);
+  --csk-button-min-height: auto;
   position: relative;
   display: grid;
   place-items: center;
@@ -2516,13 +2112,14 @@
 }
 
 .landing-bento-card {
+  --csk-interactive-surface-glow: color-mix(in srgb, var(--color-accent-400) 32%, transparent);
+  --csk-interactive-surface-ring: var(--color-accent-400);
   position: relative;
   padding: 1.5rem;
   border-radius: 1rem;
   background: var(--sl-color-bg-nav);
   border: 1px solid var(--sl-color-hairline);
   overflow: hidden;
-  transition: border-color 0.2s, transform 0.2s;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -2530,7 +2127,6 @@
 
 .landing-bento-card:hover {
   border-color: var(--color-accent-400);
-  transform: translateY(-2px);
 }
 
 .landing-bento-card.is-link {
@@ -2612,57 +2208,40 @@
 /* ── Terminal ── */
 
 .landing-terminal {
-  border-radius: 0.75rem;
-  overflow: hidden;
-  background: var(--color-gray-900);
-  border: 1px solid var(--color-gray-800);
-  box-shadow:
+  --csk-terminal-background: var(--color-gray-900);
+  --csk-terminal-border: var(--color-gray-800);
+  --csk-terminal-body-padding: 1rem 1.25rem;
+  --csk-terminal-color: rgba(255, 255, 255, 0.85);
+  --csk-terminal-dot: rgba(255, 255, 255, 0.15);
+  --csk-terminal-dot-gap: 6px;
+  --csk-terminal-dot-opacity: 1;
+  --csk-terminal-dot-size: 10px;
+  --csk-terminal-header-background: rgba(255, 255, 255, 0.04);
+  --csk-terminal-header-border: rgba(255, 255, 255, 0.08);
+  --csk-terminal-header-gap: 0.5rem;
+  --csk-terminal-header-height: auto;
+  --csk-terminal-header-padding-block: 0.625rem;
+  --csk-terminal-shadow:
     0 1px 3px rgba(0, 0, 0, 0.08),
     0 8px 24px rgba(0, 0, 0, 0.04);
+  --csk-terminal-title-color: rgba(255, 255, 255, 0.5);
+  --csk-terminal-title-size: 0.75rem;
 }
 
 [data-theme='dark'] .landing-terminal {
-  border-color: var(--color-gray-700);
-  box-shadow:
+  --csk-terminal-border: var(--color-gray-700);
+  --csk-terminal-shadow:
     0 1px 3px rgba(0, 0, 0, 0.3),
     0 8px 24px rgba(0, 0, 0, 0.15);
 }
 
 .landing-terminal-header {
   position: relative;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.625rem 1rem;
-  background: rgba(255, 255, 255, 0.04);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.landing-terminal-dots {
-  display: flex;
-  gap: 6px;
-}
-
-.landing-terminal-dots span {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.15);
-}
-
-.landing-terminal-title {
-  font-size: 0.75rem;
-  color: rgba(255, 255, 255, 0.5);
-  font-family: var(--sl-font-mono, monospace);
 }
 
 .landing-terminal-body {
-  padding: 1rem 1.25rem;
-  margin: 0;
   font-size: 0.8125rem;
   line-height: 1.65;
-  color: rgba(255, 255, 255, 0.85);
-  overflow-x: auto;
   min-height: 16rem;
 }
 
@@ -2804,8 +2383,8 @@
   font-weight: 700;
   transform: var(--landing-provider-cursor-transform, translate(0.28rem, 0));
   transition:
-    color 0.18s ease,
-    transform 0.18s ease;
+    color var(--csk-interaction-duration) ease,
+    transform var(--csk-interaction-duration) ease;
 }
 
 .landing-provider-slot {
@@ -2818,8 +2397,8 @@
   cursor: pointer;
   text-decoration: none;
   transition:
-    color 0.18s ease,
-    transform 0.18s ease;
+    color var(--csk-interaction-duration) ease,
+    transform var(--csk-interaction-duration) ease;
   will-change: color, transform;
 }
 
@@ -3258,6 +2837,8 @@
 }
 
 .landing-community-card {
+  --csk-interactive-surface-glow: color-mix(in srgb, var(--color-accent-400) 32%, transparent);
+  --csk-interactive-surface-ring: var(--color-accent-400);
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -3267,12 +2848,10 @@
   border: 1px solid var(--sl-color-hairline);
   text-decoration: none;
   color: inherit;
-  transition: border-color 0.2s, transform 0.2s;
 }
 
 .landing-community-card:hover {
   border-color: var(--color-accent-400);
-  transform: translateY(-2px);
 }
 
 .landing-community-stat {
@@ -3307,130 +2886,19 @@
   color: var(--color-gray-400);
 }
 
-/* ── Latest blog post banner ── */
-
 .landing-blog-banner {
-  display: flex;
-  align-items: center;
-  gap: 1.25rem;
-  max-width: 60rem;
-  /* Bottom gap matches the hero's padding-top so the tile is evenly spaced
-     between the navbar above and the hero badge below. */
-  margin: 0 auto 2rem;
-  padding: 1.1rem 1.5rem;
-  border-radius: 1rem;
-  background: var(--sl-color-bg-nav);
-  border: 1px solid var(--sl-color-hairline);
-  text-decoration: none;
-  color: inherit;
-  transition: border-color 0.2s, transform 0.2s;
+  --csk-latest-post-action-color: var(--color-accent-600);
+  --csk-latest-post-hover-border: var(--color-accent-400);
+  --csk-latest-post-label-background: var(--color-accent-100);
+  --csk-latest-post-label-border: var(--color-accent-200);
+  --csk-latest-post-label-color: var(--color-accent-600);
 }
 
-.landing-blog-banner:hover {
-  border-color: var(--color-accent-400);
-  transform: translateY(-2px);
-}
-
-.landing-blog-aside {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.5rem;
-  flex-shrink: 0;
-  align-self: flex-start;
-}
-
-.landing-blog-flag {
-  flex-shrink: 0;
-  font-size: 0.6875rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 0.3rem 0.6rem;
-  border-radius: 999px;
-  background: var(--color-accent-100);
-  color: var(--color-accent-600);
-  border: 1px solid var(--color-accent-200);
-}
-
-[data-theme='dark'] .landing-blog-flag {
-  background: var(--color-accent-800);
-  color: var(--color-accent-200);
-  border-color: var(--color-accent-700);
-}
-
-.landing-blog-main {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  min-width: 0;
-  flex: 1;
-}
-
-.landing-blog-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--color-gray-900);
-}
-
-[data-theme='dark'] .landing-blog-title {
-  color: #fff;
-}
-
-.landing-blog-date {
-  flex-shrink: 0;
-  font-family: var(--sl-font-mono, monospace);
-  font-size: 0.75rem;
-  color: var(--color-gray-500);
-}
-
-[data-theme='dark'] .landing-blog-date {
-  color: var(--color-gray-400);
-}
-
-.landing-blog-cta {
-  flex-shrink: 0;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--color-accent-600);
-}
-
-[data-theme='dark'] .landing-blog-cta {
-  color: var(--color-accent-200);
-}
-
-@media (min-width: 640px) {
-  .landing-blog-banner {
-    margin-bottom: 2.5rem;
-  }
-}
-
-@media (max-width: 40rem) {
-  .landing-blog-banner {
-    /* Block flow so the title and CTA collapse into one inline run: the CTA
-       reads as the tail of the heading sentence rather than a separate item. */
-    display: block;
-  }
-  .landing-blog-aside {
-    /* Flag and date on one row above the heading, date pushed to the right. */
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.75rem;
-  }
-  .landing-blog-main,
-  .landing-blog-title {
-    display: inline;
-  }
-  .landing-blog-cta {
-    /* Inline so it flows as the tail of the heading, a touch smaller than the
-       title so it still reads as a secondary call to action. */
-    display: inline;
-    font-size: 0.875rem;
-  }
-  .landing-blog-date {
-    font-size: 0.75rem;
-  }
+[data-theme='dark'] .landing-blog-banner {
+  --csk-latest-post-action-color: var(--color-accent-200);
+  --csk-latest-post-label-background: var(--color-accent-800);
+  --csk-latest-post-label-border: var(--color-accent-700);
+  --csk-latest-post-label-color: var(--color-accent-200);
 }
 
 /* ── Final CTA card ── */

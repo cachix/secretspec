@@ -50,49 +50,6 @@
   --sl-badge-note-text: var(--sl-color-blue-high);
 }
 
-.sl-markdown-content a:not([class]) {
-  color: var(--sl-color-accent);
-}
-
-.sl-markdown-content a:not([class]):hover {
-  color: var(--sl-color-accent-high);
-}
-
-/* Each prompted command gets a copy button aligned with its first line. */
-.sl-markdown-content
-  .expressive-code
-  figure
-  .terminal-command-start {
-  align-items: center;
-  min-block-size: 2.5rem;
-}
-
-.sl-markdown-content
-  .expressive-code
-  figure
-  .terminal-command-start
-  > .code {
-  padding-inline-end: 3rem;
-}
-
-.sl-markdown-content
-  .expressive-code
-  figure
-  .terminal-line-copy {
-  inset-block-start: 50%;
-  inset-inline-end: 0.5rem;
-  transform: translateY(-50%);
-}
-
-@media (hover: hover) {
-  .sl-markdown-content
-    .expressive-code
-    figure
-    .terminal-command-start {
-    min-block-size: 2rem;
-  }
-}
-
 /* Keep captured command output visually quieter than commands readers run. */
 .sl-markdown-content .muted-code-output code,
 .sl-markdown-content .muted-code-output code span {

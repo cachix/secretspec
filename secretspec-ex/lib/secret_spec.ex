@@ -14,7 +14,8 @@ defmodule SecretSpec do
     Report,
     Resolved,
     ResolvedSecret,
-    SecretReport
+    SecretReport,
+    Subprocess
   }
 
   @doc "Starts a fluent SecretSpec builder."
@@ -41,11 +42,19 @@ defmodule SecretSpec do
   def checked_response({request, versioned}, kind, expected_version) do
     request_json = Jason.encode!(request)
 
-    # Rust's LastPass provider uses waitpid, which fails while OTP ignores SIGCHLD.
+    # CLI-backed providers (LastPass, 1Password, …) waitpid, which fails while
+    # OTP ignores SIGCHLD. The flip is VM-wide, so engage it only for requests
+    # that may reach such a provider; Subprocess stays fail-safe.
+    native_call = fn ->
+      if versioned, do: Native.call(request_json), else: Native.resolve(request_json)
+    end
+
     raw =
-      with_default_sigchld(fn ->
-        if versioned, do: Native.call(request_json), else: Native.resolve(request_json)
-      end)
+      if Subprocess.engaged_by?(request) do
+        with_default_sigchld(native_call)
+      else
+        native_call.()
+      end
 
     raw
     |> Jason.decode!()

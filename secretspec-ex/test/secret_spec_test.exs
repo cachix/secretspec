@@ -57,24 +57,33 @@ defmodule SecretSpecTest do
 
     resolved =
       SecretSpec.builder()
-      |> SecretSpec.Builder.with_inline_spec(
-        %{
-          "project" => %{"name" => "elixir-inline"},
-          "providers" => %{"env" => "dotenv://inline.env"},
-          "profiles" => %{
-            "default" => %{
-              "secrets" => %{
-                "TOKEN" => %{"description" => "token", "providers" => ["env"]}
-              }
-            }
-          }
-        },
-        base_dir
-      )
+      |> SecretSpec.Builder.with_inline_spec(inline_spec(), base_dir)
       |> SecretSpec.Builder.with_reason("inline test")
       |> SecretSpec.Builder.load()
 
     assert resolved.secrets["TOKEN"].value == "inline-elixir"
+  end
+
+  test "inline spec returns a value-free report" do
+    {manifest, _provider} = project("")
+    base_dir = Path.dirname(manifest)
+    File.write!(Path.join(base_dir, "inline.env"), "TOKEN=inline-elixir\n")
+
+    report =
+      SecretSpec.builder()
+      |> SecretSpec.Builder.with_inline_spec(inline_spec(), base_dir)
+      |> SecretSpec.Builder.report()
+
+    assert %SecretSpec.Report{
+             profile: "default",
+             secrets: [
+               %SecretSpec.SecretReport{
+                 name: "TOKEN",
+                 status: "resolved",
+                 required: true
+               }
+             ]
+           } = report
   end
 
   test "scope is selected and returned" do
@@ -118,6 +127,35 @@ defmodule SecretSpecTest do
 
     assert Enum.find(report.secrets, &(&1.name == "DEV_SESSION_SECRET")).default_applied
     assert Enum.find(report.secrets, &(&1.name == "SENTRY_DSN")).status == "missing_optional"
+  end
+
+  test "report preserves constraint violations" do
+    manifest = """
+    [project]
+    name = "constraint-report"
+    revision = "1.0"
+
+    [profiles.default]
+    PASSWORD = { description = "Account password", required = { at_least_one = "account_auth" } }
+    ACCESS_TOKEN = { description = "Personal access token", required = { at_least_one = "account_auth" } }
+    """
+
+    {manifest_path, provider} = project("", manifest)
+
+    report =
+      SecretSpec.builder()
+      |> SecretSpec.Builder.with_path(manifest_path)
+      |> SecretSpec.Builder.with_provider(provider)
+      |> SecretSpec.Builder.report()
+
+    assert [
+             %{
+               "kind" => "at_least_one",
+               "group" => "account_auth",
+               "secrets" => ["ACCESS_TOKEN", "PASSWORD"],
+               "present" => []
+             }
+           ] = report.constraint_violations
   end
 
   test "no_values returns nil fields" do
@@ -200,6 +238,15 @@ defmodule SecretSpecTest do
     end
   end
 
+  test "an ok envelope without a response raises an ffi error" do
+    error =
+      assert_raise SecretSpec.Error, fn ->
+        SecretSpec.checked_envelope(%{"ok" => true}, "resolve", 2)
+      end
+
+    assert error.kind == "ffi"
+  end
+
   test "set_as_env exports resolved secrets" do
     {manifest, provider} = project("DATABASE_URL=postgres://db\n")
     System.delete_env("DATABASE_URL")
@@ -227,6 +274,20 @@ defmodule SecretSpecTest do
     File.write!(manifest_path, manifest)
     File.write!(env_path, dotenv)
     {manifest_path, "dotenv://#{env_path}"}
+  end
+
+  defp inline_spec do
+    %{
+      "project" => %{"name" => "elixir-inline"},
+      "providers" => %{"env" => "dotenv://inline.env"},
+      "profiles" => %{
+        "default" => %{
+          "secrets" => %{
+            "TOKEN" => %{"description" => "token", "providers" => ["env"]}
+          }
+        }
+      }
+    }
   end
 
   defp manifest do

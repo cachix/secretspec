@@ -115,6 +115,8 @@ const consumerMetadata: ConsumerMetadata[] = [
     secrets: ['DATABASE_URL', 'API_KEY', 'SENTRY_DSN'] },
   { icon: 'openjdk', label: 'JVM', href: '/sdk/jvm/',
     secrets: ['DATABASE_URL', 'API_KEY', 'SENTRY_DSN'] },
+  { icon: 'elixir', label: 'Elixir (0.21+)', href: '/sdk/elixir/',
+    secrets: ['DATABASE_URL', 'SECRET_KEY_BASE', 'API_KEY'] },
   { icon: 'githubactions', label: 'GitHub Actions', href: '/ci/github-actions/',
     secrets: ['NPM_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'CODECOV_TOKEN'] },
   { label: 'Forgejo Actions', href: '/ci/github-actions/',
@@ -183,6 +185,7 @@ const consumerColors: Record<string, SyntaxColorName> = {
   Haskell: 'magenta',
   Swift: 'red',
   JVM: 'blue',
+  'Elixir (0.21+)': 'magenta',
   'GitHub Actions': 'comment',
   'Forgejo Actions': 'orange',
   'devenv & Nix': 'cyan',
@@ -315,6 +318,21 @@ const languageSdkMetadata = [
     <span class="tok-pun">.</span><span class="tok-fn">withReason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">)</span>
     <span class="tok-pun">.</span><span class="tok-fn">load</span><span class="tok-pun">();</span>
 <span class="tok-var">System</span><span class="tok-pun">.</span><span class="tok-var">out</span><span class="tok-pun">.</span><span class="tok-fn">println</span><span class="tok-pun">(</span><span class="tok-var">s</span><span class="tok-pun">.</span><span class="tok-fn">secret</span><span class="tok-pun">(</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">).</span><span class="tok-fn">get</span><span class="tok-pun">());</span>`,
+  },
+  {
+    id: 'elixir',
+    icon: 'elixir',
+    label: 'Elixir (0.21+)',
+    href: '/sdk/elixir/',
+    color: consumerTone({ label: 'Elixir (0.21+)', href: '/sdk/elixir/', secrets: [] }),
+    code: `<span class="tok-var">resolved</span> <span class="tok-pun">=</span>
+  <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-fn">builder</span><span class="tok-pun">()</span>
+  <span class="tok-pun">|&gt;</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-var">Builder</span><span class="tok-pun">.</span><span class="tok-fn">with_provider</span><span class="tok-pun">(</span><span class="tok-str">"keyring://"</span><span class="tok-pun">)</span>
+  <span class="tok-pun">|&gt;</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-var">Builder</span><span class="tok-pun">.</span><span class="tok-fn">with_reason</span><span class="tok-pun">(</span><span class="tok-str">"boot"</span><span class="tok-pun">)</span>
+  <span class="tok-pun">|&gt;</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-var">Builder</span><span class="tok-pun">.</span><span class="tok-fn">load</span><span class="tok-pun">()</span>
+
+<span class="tok-var">resolved</span><span class="tok-pun">.</span><span class="tok-var">secrets</span><span class="tok-pun">[</span><span class="tok-str">"DATABASE_URL"</span><span class="tok-pun">]</span>
+<span class="tok-pun">|&gt;</span> <span class="tok-var">SecretSpec</span><span class="tok-pun">.</span><span class="tok-var">ResolvedSecret</span><span class="tok-pun">.</span><span class="tok-fn">get</span><span class="tok-pun">()</span>`,
   },
 ];
 
@@ -1835,7 +1853,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       <span class="landing-showcase-eyebrow">Language SDKs</span>
       <h2 class="landing-section-title">Resolve secrets directly from your language.</h2>
       <p class="landing-section-lead landing-section-lead-narrow">
-        One resolver across {sdkCount} SDKs—Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, PHP, C#, Swift and JVM. Same profiles. Same providers. <a href="/sdk/overview/" class="landing-link csk-text-link">SDKs →</a>
+        One resolver across {sdkCount} SDKs—Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell, PHP, C#, Swift, JVM and Elixir (0.21+). Same profiles. Same providers. <a href="/sdk/overview/" class="landing-link csk-text-link">SDKs →</a>
       </p>
     </div>
 

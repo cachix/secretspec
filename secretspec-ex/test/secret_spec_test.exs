@@ -1,20 +1,30 @@
 defmodule SecretSpecTest do
   use ExUnit.Case, async: true
 
-  test "builder stores request options" do
-    builder =
-      SecretSpec.builder()
-      |> SecretSpec.Builder.with_path("secretspec.toml")
-      |> SecretSpec.Builder.with_provider("dotenv://.env")
-      |> SecretSpec.Builder.with_profile("development")
-      |> SecretSpec.Builder.with_reason("test")
+  test "profile selects its default value" do
+    manifest = """
+    [project]
+    name = "profile-selection"
+    revision = "1.0"
 
-    assert builder.request == %{
-             "path" => "secretspec.toml",
-             "provider" => "dotenv://.env",
-             "profile" => "development",
-             "reason" => "test"
-           }
+    [profiles.default]
+    API_KEY = { description = "API key", required = false, default = "default" }
+
+    [profiles.production]
+    API_KEY = { description = "API key", required = false, default = "production" }
+    """
+
+    {manifest_path, provider} = project("", manifest)
+
+    resolved =
+      SecretSpec.builder()
+      |> SecretSpec.Builder.with_path(manifest_path)
+      |> SecretSpec.Builder.with_provider(provider)
+      |> SecretSpec.Builder.with_profile("production")
+      |> SecretSpec.Builder.load()
+
+    assert resolved.profile == "production"
+    assert resolved.secrets["API_KEY"].value == "production"
   end
 
   test "caller context omits unset fields" do
@@ -242,6 +252,28 @@ defmodule SecretSpecTest do
     error =
       assert_raise SecretSpec.Error, fn ->
         SecretSpec.checked_envelope(%{"ok" => true}, "resolve", 2)
+      end
+
+    assert error.kind == "ffi"
+  end
+
+  test "an unsupported schema version raises a version error" do
+    error =
+      assert_raise SecretSpec.Error, fn ->
+        SecretSpec.checked_envelope(
+          %{"ok" => true, "response" => %{"schema_version" => 999}},
+          "resolve",
+          2
+        )
+      end
+
+    assert error.kind == "version"
+  end
+
+  test "an invalid envelope raises an ffi error" do
+    error =
+      assert_raise SecretSpec.Error, fn ->
+        SecretSpec.checked_envelope(%{"unexpected" => true}, "resolve", 2)
       end
 
     assert error.kind == "ffi"

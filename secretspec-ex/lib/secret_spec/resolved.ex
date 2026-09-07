@@ -15,8 +15,9 @@ defmodule SecretSpec.Resolved do
   end
 
   @doc "Returns a flat map of secret names to usable values."
-  def fields(%__MODULE__{secrets: secrets}),
-    do: Map.new(secrets, fn {name, secret} -> {name, ResolvedSecret.get(secret)} end)
+  def fields(%__MODULE__{secrets: secrets}) do
+    Map.new(secrets, fn {name, secret} -> {name, ResolvedSecret.get(secret)} end)
+  end
 
   @doc "Removes materialized files belonging to this resolution."
   def close(%__MODULE__{secrets: secrets}) do

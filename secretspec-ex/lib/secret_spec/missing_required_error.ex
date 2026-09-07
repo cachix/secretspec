@@ -4,6 +4,7 @@ defmodule SecretSpec.MissingRequiredError do
   defexception [:missing]
 
   @impl true
-  def message(%__MODULE__{missing: missing}),
-    do: "missing required secret(s): #{Enum.join(missing, ", ")}"
+  def message(%__MODULE__{missing: missing}) do
+    "missing required secret(s): #{Enum.join(missing, ", ")}"
+  end
 end

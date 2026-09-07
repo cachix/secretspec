@@ -4,5 +4,7 @@ defmodule SecretSpec.Error do
   defexception [:kind, :message]
 
   @impl true
-  def message(%__MODULE__{kind: kind, message: message}), do: "#{message} (kind: #{kind})"
+  def message(%__MODULE__{kind: kind, message: message}) do
+    "#{message} (kind: #{kind})"
+  end
 end

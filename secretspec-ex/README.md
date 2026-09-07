@@ -1,6 +1,6 @@
 # SecretSpec Elixir SDK
 
-The Elixir SDK is a thin Rustler binding over the shared SecretSpec Rust
+The Elixir SDK (0.21+) is a thin Rustler binding over the shared SecretSpec Rust
 resolver. The Elixir layer builds the JSON request and exposes the response as
 small structs; providers, profiles, fallback chains, and materialized paths
 remain in Rust.

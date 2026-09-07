@@ -47,41 +47,58 @@ defmodule SecretSpec do
         if versioned, do: Native.call(request_json), else: Native.resolve(request_json)
       end)
 
-    envelope = Jason.decode!(raw)
+    raw
+    |> Jason.decode!()
+    |> checked_envelope(kind, expected_version)
+  end
 
+  @doc false
+  def checked_envelope(envelope, kind, expected_version) do
     case envelope do
       %{"ok" => true, "response" => %{"schema_version" => ^expected_version} = response} ->
         response
 
-      %{"ok" => true, "response" => response} ->
+      %{"ok" => true, "response" => response} when is_map(response) ->
         raise %Error{
           kind: "version",
           message:
             "unsupported #{kind} schema version #{response["schema_version"]} (expected #{expected_version})"
         }
 
+      %{"ok" => true} ->
+        raise %Error{kind: "ffi", message: "secretspec_#{kind} reported ok with no response"}
+
       %{"ok" => false, "error" => %{"kind" => error_kind, "message" => message}} ->
         raise %Error{kind: error_kind, message: message}
+
+      _ ->
+        raise %Error{kind: "ffi", message: "invalid secretspec_#{kind} response envelope"}
     end
   end
 
-  @doc false
   defp with_default_sigchld(fun) do
-    :global.trans({__MODULE__, :sigchld}, fn ->
-      :ok = :os.set_signal(:sigchld, :default)
+    case :os.type() do
+      {:unix, _} ->
+        :global.trans({__MODULE__, self()}, fn ->
+          :ok = :os.set_signal(:sigchld, :default)
 
-      try do
+          try do
+            fun.()
+          after
+            # OTP normally starts with SIGCHLD ignored, but the public Erlang API has no
+            # getter, so restore that assumed original disposition.
+            :ok = :os.set_signal(:sigchld, :ignore)
+          end
+        end)
+
+      {:win32, _} ->
         fun.()
-      after
-        # OTP normally starts with SIGCHLD ignored, but the public Erlang API has no
-        # getter, so restore that assumed original disposition.
-        :ok = :os.set_signal(:sigchld, :ignore)
-      end
-    end)
+    end
   end
 
-  def to_resolved(%{"missing_required" => [_ | _] = missing}),
-    do: raise(%MissingRequiredError{missing: missing})
+  def to_resolved(%{"missing_required" => [_ | _] = missing}) do
+    raise %MissingRequiredError{missing: missing}
+  end
 
   def to_resolved(response) do
     secrets =
@@ -124,7 +141,8 @@ defmodule SecretSpec do
       provider: response["provider"],
       profile: response["profile"],
       secrets: secrets,
-      scope: response["scope"]
+      scope: response["scope"],
+      constraint_violations: response["constraint_violations"] || []
     }
   end
 end

@@ -6,27 +6,46 @@ defmodule SecretSpec.Builder do
 
   @doc "Creates an empty builder."
   def new, do: %__MODULE__{}
+
   @doc "Sets the manifest path."
-  def with_path(%__MODULE__{} = builder, path),
-    do: %{builder | request: Map.put(builder.request, "path", path), inline: nil}
+  def with_path(%__MODULE__{} = builder, path) do
+    %{builder | request: Map.put(builder.request, "path", path), inline: nil}
+  end
 
   @doc "Sets the provider URI or name."
-  def with_provider(%__MODULE__{} = builder, provider), do: put(builder, "provider", provider)
+  def with_provider(%__MODULE__{} = builder, provider) do
+    put(builder, "provider", provider)
+  end
+
   @doc "Sets the profile."
-  def with_profile(%__MODULE__{} = builder, profile), do: put(builder, "profile", profile)
+  def with_profile(%__MODULE__{} = builder, profile) do
+    put(builder, "profile", profile)
+  end
+
   @doc "Sets the manifest scope."
-  def with_scope(%__MODULE__{} = builder, scope), do: put(builder, "scope", scope)
+  def with_scope(%__MODULE__{} = builder, scope) do
+    put(builder, "scope", scope)
+  end
+
   @doc "Sets the audit reason."
-  def with_reason(%__MODULE__{} = builder, reason), do: put(builder, "reason", reason)
+  def with_reason(%__MODULE__{} = builder, reason) do
+    put(builder, "reason", reason)
+  end
+
   @doc "Sets caller audit context."
-  def with_caller(%__MODULE__{} = builder, caller),
-    do: put(builder, "caller", CallerContext.to_request(caller))
+  def with_caller(%__MODULE__{} = builder, caller) do
+    put(builder, "caller", CallerContext.to_request(caller))
+  end
 
   @doc "Controls whether values are omitted."
-  def with_no_values(%__MODULE__{} = builder, value \\ true), do: put(builder, "no_values", value)
+  def with_no_values(%__MODULE__{} = builder, value \\ true) do
+    put(builder, "no_values", value)
+  end
+
   @doc "Sets an inline specification and its logical base directory."
-  def with_inline_spec(%__MODULE__{} = builder, spec, base_dir),
-    do: %{builder | request: Map.delete(builder.request, "path"), inline: {spec, base_dir}}
+  def with_inline_spec(%__MODULE__{} = builder, spec, base_dir) do
+    %{builder | request: Map.delete(builder.request, "path"), inline: {spec, base_dir}}
+  end
 
   @doc "Applies one-shot options to a builder."
   def configure(builder, opts) do
@@ -42,40 +61,53 @@ defmodule SecretSpec.Builder do
   end
 
   @doc "Resolves and returns a `SecretSpec.Resolved`."
-  def load(%__MODULE__{} = builder),
-    do:
-      builder
-      |> native_request()
-      |> SecretSpec.checked_response("resolve", 2)
-      |> SecretSpec.to_resolved()
+  def load(%__MODULE__{} = builder) do
+    builder
+    |> native_request()
+    |> SecretSpec.checked_response("resolve", 2)
+    |> SecretSpec.to_resolved()
+  end
 
   @doc "Resolves without returning secret values."
-  def report(%__MODULE__{} = builder),
-    do:
-      builder
-      |> native_request("report")
-      |> SecretSpec.checked_response("report", 1)
-      |> SecretSpec.to_report()
+  def report(%__MODULE__{} = builder) do
+    builder
+    |> native_request("report")
+    |> SecretSpec.checked_response("report", 1)
+    |> SecretSpec.to_report()
+  end
 
-  defp put(builder, key, value), do: %{builder | request: Map.put(builder.request, key, value)}
-  defp native_request(%__MODULE__{request: request, inline: nil}), do: {request, false}
+  defp put(builder, key, value) do
+    %{builder | request: Map.put(builder.request, key, value)}
+  end
 
-  defp native_request(%__MODULE__{request: request, inline: {spec, base_dir}}),
-    do:
-      {%{
-         "request_version" => 1,
-         "operation" => "resolve",
-         "source" => %{
-           "kind" => "inline",
-           "spec_version" => 1,
-           "base_dir" => base_dir,
-           "spec" => spec
-         },
-         "options" => request
-       }, true}
+  defp native_request(%__MODULE__{request: request, inline: nil}) do
+    {request, false}
+  end
+
+  defp native_request(%__MODULE__{request: request, inline: {spec, base_dir}}) do
+    {%{
+       "request_version" => 1,
+       "operation" => "resolve",
+       "source" => %{
+         "kind" => "inline",
+         "spec_version" => 2,
+         "base_dir" => base_dir,
+         "spec" => spec
+       },
+       "options" => request
+     }, true}
+  end
 
   defp native_request(builder, mode) do
     {request, versioned} = native_request(builder)
-    {Map.put(request, "mode", mode), versioned}
+    {put_mode(request, mode, versioned), versioned}
+  end
+
+  defp put_mode(%{"options" => options} = request, mode, true) do
+    %{request | "options" => Map.put(options, "mode", mode)}
+  end
+
+  defp put_mode(request, mode, false) do
+    Map.put(request, "mode", mode)
   end
 end

@@ -3,8 +3,8 @@ defmodule SecretSpec.Native do
 
   version = Mix.Project.config()[:version]
 
-  # local_checkout? =
-  #   File.exists?(Path.expand("../../native/secretspec_native/Cargo.toml", __DIR__))
+  local_checkout? =
+    File.exists?(Path.expand("../../native/secretspec_native/Cargo.toml", __DIR__))
 
   use RustlerPrecompiled,
     otp_app: :secretspec,
@@ -16,10 +16,20 @@ defmodule SecretSpec.Native do
       "x86_64-pc-windows-msvc"
     ],
     base_url: "https://github.com/cachix/secretspec/releases/download/v#{version}",
-    # force_build: local_checkout?,
+    force_build: local_checkout?,
     version: version
 
-  def resolve(_request), do: :erlang.nif_error(:nif_not_loaded)
-  def call(_request), do: :erlang.nif_error(:nif_not_loaded)
+  def resolve(_request) do
+    :erlang.nif_error(:nif_not_loaded)
+  end
+
+  # Rustler replaces this fallback when the loaded NIF exports `call/1`.
+  def call(_request) do
+    raise %SecretSpec.Error{
+      kind: "capability",
+      message: "loaded libsecretspec does not support inline specs (missing secretspec_call)"
+    }
+  end
+
   def abi_version, do: :erlang.nif_error(:nif_not_loaded)
 end

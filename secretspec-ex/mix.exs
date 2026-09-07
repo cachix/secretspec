@@ -36,7 +36,7 @@ defmodule SecretSpec.MixProject do
       {:jason, "~> 1.4"},
       {:rustler_precompiled, "~> 0.9.0"},
       {:ex_doc, "~> 0.40.3", only: :dev, runtime: false},
-      {:rustler, ">= 0.0.0", optional: true, only: [:dev, :test]}
+      {:rustler, ">= 0.0.0", optional: true}
     ]
   end
 end

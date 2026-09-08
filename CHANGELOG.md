@@ -41,7 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - LastPass rejects NUL-containing values before writing instead of silently
   truncating them; use a manifest encoding such as base64 to store these values.
   Typed Rust loads record conversion and prompting failures as failed reads in
-  the audit log (0.21+).
+  the audit log, and `secretspec set --from-file` records a failed read of its
+  input as a failed set (0.21+).
 
 - pass, gopass, and LastPass preserve whitespace and multiline secrets across
   generation and subsequent reads. pass entries are stored newline terminated

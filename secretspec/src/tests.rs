@@ -8522,6 +8522,37 @@ fn set_input_is_read_after_the_destination_is_reported() {
 }
 
 #[test]
+fn set_input_failure_is_audited_as_a_failed_set() {
+    // `--from-file` reads its input after the destination is reported. When
+    // that read fails, the attempt still closes with a set event, like every
+    // other failure on this path, instead of leaving a dangling preview.
+    let _env = scrub_resolution_env();
+    let temp_dir = TempDir::new().unwrap();
+    let mut spec = dotenv_spec("", required_secret_profile("REQUIRED"), &temp_dir);
+    let (logger, lines) = crate::audit::test_support::collecting_logger();
+    spec.set_audit_for_test(logger);
+
+    let error = spec
+        .set_with_input("REQUIRED", |_| {
+            Err(
+                std::io::Error::new(std::io::ErrorKind::NotFound, "Failed to read keystore.p12")
+                    .into(),
+            )
+        })
+        .unwrap_err();
+
+    assert!(error.to_string().contains("keystore.p12"), "{error}");
+    assert_eq!(audit_actions(&lines), vec!["set"]);
+    let event = &audit_events(&lines)[0];
+    assert_eq!(event["outcome"], "error");
+    assert_eq!(event["key"], "REQUIRED");
+    assert_eq!(
+        fs::read_to_string(temp_dir.path().join(".env")).unwrap_or_default(),
+        ""
+    );
+}
+
+#[test]
 fn write_target_reporting_is_opt_in_and_uses_resolved_provider_metadata() {
     let temp_dir = TempDir::new().unwrap();
     let mut spec = dotenv_spec("", required_secret_profile("REQUIRED"), &temp_dir);

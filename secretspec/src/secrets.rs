@@ -4478,7 +4478,23 @@ impl Secrets {
             return Err(err);
         }
 
-        let value = input(&profile_name)?;
+        // Reading the value (a file, stdin, or a prompt) can fail after the
+        // destination was already previewed; the audit trail must close that
+        // attempt like every other failure here does.
+        let value = match input(&profile_name) {
+            Ok(value) => value,
+            Err(err) => {
+                self.record_key_error(
+                    AuditAction::Set,
+                    &profile_name,
+                    name,
+                    Some(backend.uri()),
+                    None,
+                    &err,
+                );
+                return Err(err);
+            }
+        };
 
         if value.expose_secret().is_empty() {
             let err = SecretSpecError::ProviderOperationFailed(

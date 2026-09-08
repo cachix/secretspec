@@ -783,6 +783,27 @@ fn test_sops_failed_decrypt_does_not_modify_the_original_file() {
 }
 
 #[test]
+fn test_sops_refuses_non_utf8_before_running_sops() {
+    // A value sops can never store is refused before any subprocess runs:
+    // encrypting the initial file would contact the key service (and here,
+    // create the target) for a write that is going to be rejected anyway.
+    let temp = TempDir::new().unwrap();
+    let file_path = temp.path().join("secrets.enc.yaml");
+    let provider = build_sops_provider(&file_path.to_string_lossy(), None);
+
+    let error = provider
+        .set(
+            Address::convention("myapp", "production", "blob"),
+            &SecretBytes::from_slice(b"\xff\xfe"),
+        )
+        .unwrap_err();
+
+    assert!(error.to_string().contains("requires UTF-8"), "{error}");
+    assert!(!file_path.exists(), "no sops encrypt may have run");
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+}
+
+#[test]
 fn test_sops_set_directory_multiple_profiles() {
     let temp = TempDir::new().unwrap();
 

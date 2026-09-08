@@ -70,7 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   text SDK responses and exports continue to validate UTF-8 (0.21+). Environment
   reads, keyring, Google Secret Manager, Kubernetes Secrets, and Scaleway now
   preserve binary values. SOPS credentials preserve non-UTF-8 bytes in Unix
-  subprocess environments, and command generators retain exact stdout bytes,
+  subprocess environments, SOPS refuses a non-UTF-8 secret value before
+  running any `sops` command, and command generators retain exact stdout bytes,
   including whitespace and final newlines, while still rejecting output that
   is empty or only whitespace.
 

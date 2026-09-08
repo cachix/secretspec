@@ -537,6 +537,13 @@ impl SopsProvider {
         parts: &AddressParts<'_>,
         value: &SecretBytes,
     ) -> Result<()> {
+        // Refuse before any sops subprocess runs: decrypting or encrypting
+        // contacts the key service and may prompt, and none of that is owed to
+        // a value this provider can never store.
+        let value = super::require_utf8("sops", value)?;
+        let encoded_value = serde_json::to_string(value).map_err(|error| {
+            Self::provider_error(format!("Failed to encode the secret value: {error}"))
+        })?;
         let mut temporary = Self::temporary_file_for(path)?;
 
         if path.is_file() {
@@ -563,10 +570,6 @@ impl SopsProvider {
             self.encrypt_plaintext_file(temporary.path(), path)?;
         }
 
-        let value = super::require_utf8("sops", value)?;
-        let encoded_value = serde_json::to_string(value).map_err(|error| {
-            Self::provider_error(format!("Failed to encode the secret value: {error}"))
-        })?;
         let args = self.set_command_args(temporary.path(), parts)?;
         self.execute_sops_command_with_stdin(args, Some(encoded_value.as_bytes()))?;
         temporary.as_file().sync_all().map_err(|error| {

@@ -36,9 +36,10 @@ REQUEST_ID = { description = "Request ID prefix", type = "uuid", generate = true
 
 <VersionCompatibility version="0.21" kind="changed">
 Command output is preserved byte-for-byte, including non-UTF-8 data, NULs,
-whitespace, and final newlines. Only zero-byte output is rejected. Use
-`printf` or trim inside your command if you need a value without a final
-newline. Binary output needs a byte-capable provider or manifest `encoding`.
+whitespace, and final newlines. Output that is empty or contains only
+whitespace is rejected. Use `printf` or trim inside your command if you need a
+value without a final newline. Binary output needs a byte-capable provider or
+manifest `encoding`.
 </VersionCompatibility>
 
 The `command` type runs a shell command and uses its stdout as the generated value:

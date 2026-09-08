@@ -70,7 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads, keyring, Google Secret Manager, Kubernetes Secrets, and Scaleway now
   preserve binary values. SOPS credentials preserve non-UTF-8 bytes in Unix
   subprocess environments, and command generators retain exact stdout bytes,
-  including whitespace and final newlines.
+  including whitespace and final newlines, while still rejecting output that
+  is empty or only whitespace.
 
 - `secretspec set --from-file` validates and displays the write destination
   before reading input. Piped input without `--from-file` is still read as

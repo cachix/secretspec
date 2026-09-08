@@ -413,7 +413,10 @@ fn generate_from_command(config: &GenerateConfig) -> crate::Result<SecretBytes> 
         )));
     }
 
-    if output.stdout.is_empty() {
+    // Output is kept byte for byte, but a command that printed nothing except
+    // whitespace has not produced a secret. Storing its newline would persist
+    // a mistake that no later run repairs.
+    if output.stdout.iter().all(u8::is_ascii_whitespace) {
         return Err(SecretSpecError::GenerationFailed(format!(
             "command '{}' produced empty output",
             command
@@ -579,7 +582,7 @@ mod tests {
                 "printf '\\000\\377\\200\\r\\n'",
                 b"\0\xff\x80\r\n".as_slice(),
             ),
-            ("printf ' \\t\\n'", b" \t\n".as_slice()),
+            ("printf ' x\\t\\n'", b" x\t\n".as_slice()),
         ] {
             let config = GenerateConfig::Options(GenerateOptions {
                 command: Some(command.to_string()),
@@ -612,14 +615,17 @@ mod tests {
     fn test_generate_command_empty_output() {
         // `echo -n ''` is not POSIX-portable: macOS /bin/sh prints "-n"
         // literally instead of suppressing the newline. Use `printf ''`
-        // which produces zero bytes on every platform.
-        let config = GenerateConfig::Options(GenerateOptions {
-            command: Some("printf ''".to_string()),
-            ..Default::default()
-        });
-        let result = generate("command", &config);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("empty output"));
+        // which produces zero bytes on every platform. Whitespace-only output
+        // is just as empty: a bare newline must not be persisted as a secret.
+        for command in ["printf ''", "printf '\\n'", "printf ' \\t\\r\\n'"] {
+            let config = GenerateConfig::Options(GenerateOptions {
+                command: Some(command.to_string()),
+                ..Default::default()
+            });
+            let result = generate("command", &config);
+            assert!(result.is_err(), "{command}");
+            assert!(result.unwrap_err().to_string().contains("empty output"));
+        }
     }
 
     #[test]

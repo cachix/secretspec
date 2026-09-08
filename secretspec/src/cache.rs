@@ -16,11 +16,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// truncated write leaves something only SecretSpec could have put there, which
 /// is safe to replace; a value with no marker belongs to someone else and must
 /// never be touched.
+///
+/// The v4 envelope carries the value as base64 and is written only for values
+/// that are not UTF-8. Text keeps the v3 envelope so a cache store shared with
+/// a 0.18 to 0.20 SecretSpec stays readable and writable for both.
 pub(crate) const CACHE_ENVELOPE_MARKER: &str = "secretspec-cache-v4:";
 
-/// The 0.18/0.19 envelope stored plaintext as a JSON string. Read it as UTF-8
-/// bytes during migration, but never write it again.
-const V3_CACHE_ENVELOPE_MARKER: &str = "secretspec-cache-v3:";
+/// The 0.18 to 0.20 envelope stores plaintext as a JSON string. It remains the
+/// envelope for every UTF-8 value.
+pub(crate) const TEXT_CACHE_ENVELOPE_MARKER: &str = "secretspec-cache-v3:";
 
 /// The 0.17 envelope recorded when an entry was written rather than when it
 /// expires. Keep recognizing it so an upgrade can replace its own entries
@@ -43,7 +47,7 @@ struct CacheEnvelope {
     value_base64: Zeroizing<String>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct V3CacheEnvelope {
     project: String,
     profile: String,
@@ -148,7 +152,7 @@ fn decode(stored: &SecretBytes) -> Option<Result<DecodedEnvelope, String>> {
                 .map_err(|error| error.to_string())
         }));
     }
-    if let Some(payload) = stored.strip_prefix(V3_CACHE_ENVELOPE_MARKER.as_bytes()) {
+    if let Some(payload) = stored.strip_prefix(TEXT_CACHE_ENVELOPE_MARKER.as_bytes()) {
         return Some(text(payload).and_then(|payload| {
             serde_json::from_str(payload)
                 .map(DecodedEnvelope::V3)
@@ -376,18 +380,39 @@ fn encode_entry_at(
     let expires_at = now
         .checked_add(max_age_secs)
         .ok_or(CacheEncodeError::ExpirationOverflow)?;
-    let envelope = CacheEnvelope {
-        project: project.to_string(),
-        profile: profile.to_string(),
-        expires_at,
-        max_age_secs,
-        route_fingerprint,
-        value_base64: Zeroizing::new(BASE64.encode(value.expose_secret())),
-    };
     // Both plaintext renderings of the envelope are held in buffers that
     // zeroize on drop.
-    let json = Zeroizing::new(serde_json::to_string(&envelope)?);
-    let serialized = Zeroizing::new(format!("{CACHE_ENVELOPE_MARKER}{}", json.as_str()));
+    let (marker, json) = match std::str::from_utf8(value.expose_secret()) {
+        Ok(text) => {
+            let envelope = V3CacheEnvelope {
+                project: project.to_string(),
+                profile: profile.to_string(),
+                expires_at,
+                max_age_secs,
+                route_fingerprint,
+                value: Zeroizing::new(text.to_string()),
+            };
+            (
+                TEXT_CACHE_ENVELOPE_MARKER,
+                Zeroizing::new(serde_json::to_string(&envelope)?),
+            )
+        }
+        Err(_) => {
+            let envelope = CacheEnvelope {
+                project: project.to_string(),
+                profile: profile.to_string(),
+                expires_at,
+                max_age_secs,
+                route_fingerprint,
+                value_base64: Zeroizing::new(BASE64.encode(value.expose_secret())),
+            };
+            (
+                CACHE_ENVELOPE_MARKER,
+                Zeroizing::new(serde_json::to_string(&envelope)?),
+            )
+        }
+    };
+    let serialized = Zeroizing::new(format!("{marker}{}", json.as_str()));
     Ok(SecretBytes::from_utf8(serialized.as_str()))
 }
 
@@ -419,8 +444,8 @@ mod tests {
         let decoded = decode(&entry())
             .expect("marker present")
             .expect("valid envelope");
-        let DecodedEnvelope::Current(envelope) = decoded else {
-            panic!("new entries use the current envelope");
+        let DecodedEnvelope::V3(envelope) = decoded else {
+            panic!("text entries keep the v3 envelope");
         };
         let status = inspect_entry_at(
             &entry(),
@@ -436,6 +461,26 @@ mod tests {
         assert_eq!(envelope.expires_at, EXPIRES_AT);
         assert_eq!(envelope.max_age_secs, MAX_AGE);
         assert_eq!(value.expose_secret(), b"sensitive");
+    }
+
+    #[test]
+    fn text_values_keep_the_v3_envelope_older_releases_read() {
+        // A 0.18 to 0.20 SecretSpec sharing the cache store recognizes only v2
+        // and v3, so text must not move to v4 or that release refuses to touch
+        // the entry.
+        let entry = entry();
+        let payload = entry
+            .expose_secret()
+            .strip_prefix(TEXT_CACHE_ENVELOPE_MARKER.as_bytes())
+            .expect("text entries carry the v3 marker");
+        let envelope: serde_json::Value = serde_json::from_slice(payload).unwrap();
+        assert_eq!(envelope["value"], "sensitive");
+        assert!(envelope.get("value_base64").is_none());
+        assert!(
+            !entry
+                .expose_secret()
+                .starts_with(CACHE_ENVELOPE_MARKER.as_bytes())
+        );
     }
 
     #[test]
@@ -474,7 +519,7 @@ mod tests {
     #[test]
     fn v3_text_entries_remain_readable_as_utf8_bytes() {
         let entry = SecretBytes::from_utf8(format!(
-            "{V3_CACHE_ENVELOPE_MARKER}{}",
+            "{TEXT_CACHE_ENVELOPE_MARKER}{}",
             serde_json::json!({
                 "project": PROJECT,
                 "profile": PROFILE,
@@ -540,7 +585,7 @@ mod tests {
         let entry = entry();
         let payload = entry
             .expose_secret()
-            .strip_prefix(CACHE_ENVELOPE_MARKER.as_bytes())
+            .strip_prefix(TEXT_CACHE_ENVELOPE_MARKER.as_bytes())
             .expect("marker present");
         let envelope: serde_json::Value = serde_json::from_slice(payload).unwrap();
         assert_eq!(envelope["expires_at"], EXPIRES_AT);

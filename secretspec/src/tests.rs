@@ -11311,11 +11311,11 @@ fn cache_write_failure_does_not_hide_authoritative_value() {
 
 /// Rewrite a dotenv-backed cache entry's expiration, so it reads as expired.
 fn expire_cache_entry(cache: &Path, project: &str, name: &str) {
-    let marker = crate::cache::CACHE_ENVELOPE_MARKER;
+    let marker = crate::cache::TEXT_CACHE_ENVELOPE_MARKER;
     let stored = dotenv_values(cache).remove("API_KEY").unwrap();
     let payload = stored
         .strip_prefix(marker)
-        .expect("a cache entry carries the ownership marker");
+        .expect("a text cache entry carries the v3 ownership marker");
     let mut envelope: serde_json::Value = serde_json::from_str(payload).unwrap();
     envelope["expires_at"] = serde_json::json!(0);
     write_cache_entry(
@@ -11328,23 +11328,18 @@ fn expire_cache_entry(cache: &Path, project: &str, name: &str) {
 
 /// Rewrite the current dotenv-backed entry in the released v2 envelope format.
 fn rewrite_cache_entry_as_v2(cache: &Path, project: &str, name: &str) {
-    let marker = crate::cache::CACHE_ENVELOPE_MARKER;
+    let marker = crate::cache::TEXT_CACHE_ENVELOPE_MARKER;
     let stored = dotenv_values(cache).remove("API_KEY").unwrap();
     let payload = stored
         .strip_prefix(marker)
-        .expect("a cache entry carries the current ownership marker");
+        .expect("a text cache entry carries the v3 ownership marker");
     let mut envelope: serde_json::Value = serde_json::from_str(payload).unwrap();
     let expires_at = envelope["expires_at"].as_u64().unwrap();
     let max_age_secs = envelope["max_age_secs"].as_u64().unwrap();
-    let value = data_encoding::BASE64
-        .decode(envelope["value_base64"].as_str().unwrap().as_bytes())
-        .unwrap();
-    envelope["value"] = serde_json::Value::String(String::from_utf8(value).unwrap());
     envelope["cached_at"] = serde_json::json!(expires_at - max_age_secs);
     let object = envelope.as_object_mut().unwrap();
     object.remove("expires_at");
     object.remove("max_age_secs");
-    object.remove("value_base64");
     write_cache_entry(
         cache,
         project,

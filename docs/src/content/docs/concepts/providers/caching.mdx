@@ -114,8 +114,10 @@ entry.
 
 <VersionCompatibility version="0.21" kind="changed">
 
-Cache envelope v4 stores provider bytes as strict padded Base64. Existing v2
-and v3 text entries remain readable during migration.
+Values that are not UTF-8 are cached in a new v4 envelope that stores the
+bytes as strict padded Base64. Text values keep the v3 envelope that 0.18 to
+0.20 wrote, so a cache store shared with an earlier release stays usable, and
+existing v2 and v3 entries remain readable.
 
 </VersionCompatibility>
 
@@ -126,11 +128,12 @@ Entries use SecretSpec's logical `{project}/{profile}/{secret}` address, even
 when the authoritative secret has a provider-native `ref`. Each entry contains
 the value, absolute expiration time, originating `max_age`, format version, and
 a fingerprint of the fallback route and secret reference. Changing the route,
-reference, or `max_age` invalidates it. In SecretSpec 0.21+, `value_base64` is
-the cache envelope's byte serialization; it is separate from a declaration's
-manifest `encoding` and preserves the cached provider representation exactly.
-SecretSpec always writes v4 and continues reading v2/v3 text values as UTF-8
-bytes.
+reference, or `max_age` invalidates it. A UTF-8 value is written as a v3
+entry whose `value` field holds the text. In SecretSpec 0.21+, any other value
+is written as a v4 entry whose `value_base64` field is the cache envelope's
+byte serialization; it is separate from a declaration's manifest `encoding`
+and preserves the cached provider representation exactly. SecretSpec reads
+v2, v3, and v4 entries.
 
 The cache must use a distinct store from every authoritative provider;
 otherwise, a refresh could overwrite the authoritative secret. SecretSpec

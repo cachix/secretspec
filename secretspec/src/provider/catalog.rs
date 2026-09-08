@@ -196,6 +196,19 @@ metadata! {
 }
 
 metadata! {
+    SETEC,
+    name: "setec",
+    description: "Tailscale Setec secrets service (0.21+)",
+    schemes: ["setec"],
+    examples: [
+        "setec://secrets.example.ts.net",
+        "setec://secrets.example.ts.net?prefix=team",
+        "setec://127.0.0.1:8080?tls=false",
+    ],
+    deletes: true,
+}
+
+metadata! {
     SOPS,
     name: "sops",
     description: "SOPS encrypted files (0.17+)",

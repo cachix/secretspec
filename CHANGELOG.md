@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Tailscale Setec can store, retrieve, discover, and delete secrets through a
+  tailnet-authenticated Setec server, including reads pinned to a Setec version
+  (0.21+).
+
 - Claude Code can retrieve Anthropic API and LLM gateway credentials from any
   SecretSpec provider through its native `apiKeyHelper`. `secretspec claude
   configure` and `unconfigure` safely manage repository or user settings,

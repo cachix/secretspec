@@ -110,6 +110,15 @@ selects a different credential name
 
 ## Gopass Provider
 
+<VersionCompatibility version="0.21" kind="changed">
+
+Newly written entries preserve whitespace and multiline values. Writes use `gopass cat` and
+its lossless binary-entry format; use `gopass cat` to read these entries outside
+SecretSpec. Existing text entries retain password-only reads with surrounding
+whitespace removed.
+
+</VersionCompatibility>
+
 Available starting with SecretSpec 0.15.
 
 **URI**: `gopass://[host][path]` - Uses `gopass`, a multi-user and multi-store abstraction layer over `pass`, with GPG encryption
@@ -123,7 +132,7 @@ gopass://secretspec/shared/{profile}/{key}   # Custom folder prefix with placeho
 **Prerequisites**: `gopass` CLI, initialized password store
 **Storage**: Path `secretspec/{project}/{profile}/{key}` by default; the URI host and path override the folder prefix and support `{project}`, `{profile}`, and `{key}` placeholders
 
-Gopass entries store a single line; multiline secrets are truncated to their first line when read.
+Text entries written by SecretSpec 0.20 or earlier, or with `gopass insert`, are read as a single line: only the first line is returned, with surrounding whitespace removed. Writing the secret again with `secretspec set` migrates it to the lossless format.
 
 ## Keyring Provider
 
@@ -254,6 +263,15 @@ with `KSM_CONFIG` and `KSM_TOKEN` fallbacks; alternatively a bound `config_file`
 optional standard/custom `field`.
 
 ## Pass Provider
+
+<VersionCompatibility version="0.21" kind="changed">
+
+Values keep their leading and trailing whitespace and multiline content.
+Entries are stored newline terminated, as the `pass` CLI writes them, and
+exactly one final newline is removed on read, so entries created with
+`pass insert` or `pass generate` resolve to their password.
+
+</VersionCompatibility>
 
 **URI**: `pass://` - Uses Unix password manager with GPG encryption
 

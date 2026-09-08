@@ -119,6 +119,12 @@ pub(crate) fn require_utf8<'a>(
     })
 }
 
+/// Removes the single newline a password-store CLI appends to a stored entry
+/// or its display output, leaving every other byte untouched.
+pub(crate) fn strip_one_trailing_newline(text: &str) -> &str {
+    text.strip_suffix('\n').unwrap_or(text)
+}
+
 // Shared implementation support used by provider backends and orchestration.
 pub(crate) use address::{OwnedAddress, flat_item};
 #[cfg(any(

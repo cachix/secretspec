@@ -215,15 +215,16 @@ impl Provider for PassProvider {
             )));
         }
 
-        let content = String::from_utf8(output.stdout)
-            .map_err(|e| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to parse pass output as UTF-8: {}",
-                    e
-                ))
-            })?
-            .trim()
-            .to_string();
+        let content = String::from_utf8(output.stdout).map_err(|e| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "Failed to parse pass output as UTF-8: {}",
+                e
+            ))
+        })?;
+        // `pass insert`, `generate`, and `edit` store newline-terminated
+        // entries, and `set` follows that convention, so exactly one final
+        // newline belongs to the entry format rather than the value.
+        let content = super::strip_one_trailing_newline(&content);
 
         Ok(Some(SecretBytes::from_utf8(content)))
     }
@@ -266,12 +267,17 @@ impl Provider for PassProvider {
         })?;
 
         use std::io::Write;
-        stdin.write_all(value.as_bytes()).map_err(|e| {
-            SecretSpecError::ProviderOperationFailed(format!(
-                "Failed to write to pass stdin: {}",
-                e
-            ))
-        })?;
+        // Terminate the entry with one newline like the pass CLI does, so
+        // `get` removes exactly one and reproduces the value byte for byte.
+        stdin
+            .write_all(value.as_bytes())
+            .and_then(|()| stdin.write_all(b"\n"))
+            .map_err(|e| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to write to pass stdin: {}",
+                    e
+                ))
+            })?;
 
         // Drop stdin to close the pipe so pass process receives EOF
         drop(stdin);

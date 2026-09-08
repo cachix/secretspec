@@ -90,6 +90,15 @@ DATABASE_URL = { description = "Database URL", providers = ["team"] }
 
 ## Storage model
 
+<VersionCompatibility version="0.21" kind="changed">
+
+SecretSpec writes lossless entries using `gopass cat` so whitespace and line
+endings survive unchanged. Read these entries with `gopass cat`, which decodes
+gopass's binary-entry format. Existing text entries retain password-only reads
+with surrounding whitespace removed.
+
+</VersionCompatibility>
+
 Each secret is stored under `secretspec/{project}/{profile}/{key}`. Gopass
 encrypts the entry with GPG and can synchronize the password store through git.
 
@@ -129,6 +138,8 @@ Both projects will resolve `ARTIFACTORY_USER` from `secretspec/shared/default/AR
 
 ## Troubleshooting and limitations
 
-Only the first line of an entry is read back — if an entry was written outside
-of `secretspec` and contains multiple lines, everything after the first line is
-discarded on `get`.
+Entries written by SecretSpec 0.20 or earlier, or created with `gopass insert`,
+are text entries. SecretSpec reads only their first line and removes surrounding
+whitespace, so a multiline value stored that way comes back truncated with no
+error. Writing the secret again with `secretspec set` migrates the entry to the
+lossless format, which preserves every byte.

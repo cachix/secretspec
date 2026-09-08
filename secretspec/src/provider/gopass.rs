@@ -130,14 +130,9 @@ impl Provider for GoPassProvider {
     fn get(&self, addr: Address<'_>) -> crate::Result<Option<SecretBytes>> {
         let entry_name = super::flat_item(self, addr)?;
 
-        let output = self
+        let mut output = self
             .command()
-            .arg("show")
-            // auto-confirm any yes/no prompt, in case the entry doesn't exist
-            .arg("-y")
-            // only show the password
-            // ponytail: first line only — multiline secrets truncate; switch to -n/--noparsing if that bites
-            .arg("-o")
+            .args(["show", "-y", "-o"])
             .arg(&*entry_name)
             .output()
             .map_err(|e| {
@@ -147,17 +142,40 @@ impl Provider for GoPassProvider {
                 ))
             })?;
 
-        if output.status.success() {
-            let content = String::from_utf8(output.stdout)
+        // Keep the established password-only semantics for existing text
+        // entries. Native binary entries written by `cat` have no password
+        // line, so gopass directs us to their body instead.
+        let lossless = output.status.code() == Some(11)
+            && String::from_utf8_lossy(&output.stderr).contains("no password to display");
+        if lossless {
+            output = self
+                .command()
+                .arg("cat")
+                .arg(&*entry_name)
+                // `cat` writes when stdin is a pipe; select its read mode.
+                .stdin(std::process::Stdio::null())
+                .output()
                 .map_err(|e| {
                     SecretSpecError::ProviderOperationFailed(format!(
-                        "Failed to parse gopass output as UTF-8: {}",
+                        "Failed to execute 'gopass cat' command: {}",
                         e
                     ))
-                })?
-                .trim()
-                .to_string();
+                })?;
+        }
 
+        if output.status.success() {
+            let content = String::from_utf8(output.stdout).map_err(|e| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to parse gopass output as UTF-8: {}",
+                    e
+                ))
+            })?;
+
+            let content = if lossless {
+                content
+            } else {
+                content.trim().to_owned()
+            };
             Ok(Some(SecretBytes::from_utf8(content)))
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -194,7 +212,9 @@ impl Provider for GoPassProvider {
 
         let mut child = self
             .command()
-            .args(["insert", "-m", "-f", &entry_name])
+            // Text `insert` normalizes line endings. `cat` stores its stdin
+            // losslessly using gopass's native binary-entry format.
+            .args(["cat", &entry_name])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -232,6 +252,16 @@ impl Provider for GoPassProvider {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            // Unlike `insert`, `cat` reports unchanged content as an error.
+            // Confirm the value before treating that specific error as a no-op.
+            if output.status.code() == Some(1)
+                && stderr.trim_end().ends_with(": meaningless write")
+                && self
+                    .get(addr)?
+                    .is_some_and(|stored| stored.expose_secret() == value.as_bytes())
+            {
+                return Ok(());
+            }
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "gopass command failed: {}",
                 stderr

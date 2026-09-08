@@ -87,6 +87,12 @@ DATABASE_URL = { description = "Database URL", providers = ["local"] }
 
 ## Storage model
 
+> **Changed in version 0.21:** Values keep their leading and trailing
+> whitespace and multiline content. Entries are stored newline terminated, as
+> the `pass` CLI writes them, and exactly one final newline is removed on read,
+> so entries created with `pass insert` or `pass generate` resolve to their
+> password.
+
 Secrets are stored with a hierarchical path structure:
 `secretspec/{project}/{profile}/{key}`
 

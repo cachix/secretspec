@@ -8,21 +8,24 @@ use std::process::Command;
 
 const CHILD_PROVIDER: &str = "SECRETSPEC_WHITESPACE_TEST_PROVIDER";
 const FAILURE: &str = "SECRETSPEC_WHITESPACE_TEST_FAILURE";
+// Generated values keep their whitespace, but output that is nothing except
+// whitespace is refused by the generator, so every value here has content.
 const VALUES: &[&[u8]] = &[
     b"value",
     b"value\n",
     b"value\n\n",
     b" \tvalue \t",
     b"\nfirst\nsecond\n\n",
-    b"\t \n\n",
+    b"\t \nx\n",
     b"first\r\nsecond\r\n",
-    b"\n",
+    b"\nx",
     "\u{2003}value\u{00a0}\n".as_bytes(),
 ];
 
-// Model pass's raw output, gopass cat's stdin-dependent read/write modes,
+// Model pass's raw output, gopass insert's text entries (a final newline is
+// added and CRLF becomes LF), gopass cat's stdin-dependent read/write modes,
 // and lpass's removal/addition of one input/output newline. Unexpected command
-// shapes fail so a text-only gopass operation cannot pass the lossless tests.
+// shapes fail so a value the text path would alter cannot pass through it.
 const SHIM: &str = r#"#!/bin/sh
 set -eu
 provider=${0##*/}
@@ -49,6 +52,7 @@ case "$provider:$operation" in
     gopass:show)
         [ "$1" = '-y' ]; [ "$2" = '-o' ]; entry=$3
         ;;
+    gopass:insert) [ "$1" = '-m' ]; [ "$2" = '-f' ]; entry=$3; write=true ;;
     gopass:cat)
         [ "$#" -eq 1 ]; entry=$1
         if [ ! -c /dev/stdin ]; then write=true; fi
@@ -75,12 +79,21 @@ if [ "$write" = true ]; then
         printf '%s' "$value" > "$file"
     else
         cat > "$file.pending"
+        if [ "$provider:$operation" = gopass:insert ]; then
+            # A text entry: CRLF becomes LF and a final newline is added.
+            tr -d '\r' < "$file.pending" > "$file.text"
+            if [ "$(tail -c1 "$file.text"; printf x)" != "$(printf '\nx')" ]; then
+                printf '\n' >> "$file.text"
+            fi
+            mv "$file.text" "$file.pending"
+            rm -f "$file.binary"
+        fi
         if [ "$provider" = gopass ] && [ -f "$file.binary" ] && cmp -s "$file" "$file.pending"; then
             printf 'Error: Failed to write secret from STDIN: failed to write secret: meaningless write\n' >&2
             exit 1
         fi
         mv "$file.pending" "$file"
-        if [ "$provider" = gopass ]; then touch "$file.binary"; fi
+        if [ "$provider:$operation" = gopass:cat ]; then touch "$file.binary"; fi
     fi
 elif [ -f "$file" ]; then
     if [ "$provider:$operation" = gopass:show ]; then

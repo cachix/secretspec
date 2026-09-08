@@ -309,7 +309,7 @@ impl AwssmProvider {
 
         match json_key {
             None => Ok(Some(value)),
-            Some(json_key) => Self::extract_json_key(name, value.try_as_utf8()?, json_key),
+            Some(json_key) => Self::extract_json_key(name, value.try_as_utf8_for(name)?, json_key),
         }
     }
 
@@ -382,9 +382,11 @@ impl AwssmProvider {
             };
             let secret = match coords.field.as_deref() {
                 None => Some(value.clone()),
-                Some(json_key) => {
-                    Self::extract_json_key(&coords.item, value.try_as_utf8()?, json_key)?
-                }
+                Some(json_key) => Self::extract_json_key(
+                    &coords.item,
+                    value.try_as_utf8_for(&coords.item)?,
+                    json_key,
+                )?,
             };
             if let Some(secret) = secret {
                 results.insert((*name).to_string(), secret);

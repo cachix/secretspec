@@ -311,7 +311,7 @@ impl ScalewayProvider {
                 match field {
                     None => Ok(Some(decoded)),
                     Some(json_key) => {
-                        Self::extract_json_key(item, decoded.try_as_utf8()?, json_key)
+                        Self::extract_json_key(item, decoded.try_as_utf8_for(item)?, json_key)
                     }
                 }
             }

@@ -11249,10 +11249,11 @@ fn a_damaged_entry_of_our_own_is_replaced() {
     fs::write(&source, "API_KEY=remote-2\n").unwrap();
 
     assert_eq!(resolved_value(&secrets, "API_KEY"), "remote-2");
+    // The replacement is a text value, so it carries the v3 text marker.
     let refreshed = stored_cache_entry(&cache).expect("a replacement entry");
     assert!(
         refreshed
-            .strip_prefix(marker)
+            .strip_prefix(crate::cache::TEXT_CACHE_ENVELOPE_MARKER)
             .is_some_and(|payload| { serde_json::from_str::<serde_json::Value>(payload).is_ok() }),
         "{refreshed}"
     );

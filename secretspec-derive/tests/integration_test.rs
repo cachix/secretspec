@@ -49,6 +49,10 @@ mod prompt_missing {
             .env(CHILD_CASE_VAR, "1")
             .env("HOME", project.path())
             .env("XDG_CONFIG_HOME", project.path())
+            .env("XDG_STATE_HOME", project.path().join("state"))
+            .env("APPDATA", project.path())
+            .env("LOCALAPPDATA", project.path().join("state"))
+            .env("SECRETSPEC_REASON", "integration test")
             .env_remove("SECRETSPEC_PROFILE")
             .env_remove("SECRETSPEC_PROVIDER")
             .status()
@@ -83,16 +87,44 @@ mod prompt_missing {
             b"do-not-leak\xff"
         );
 
-        let result = SecretSpec::builder()
-            .with_provider("file:store")
-            .with_reason("integration test")
-            .load();
-        let error = match result {
-            Err(error) => error.to_string(),
-            Ok(_) => panic!("typed String fields must reject binary values"),
-        };
-        assert!(error.contains("UTF-8"));
-        assert!(!error.contains("do-not-leak"));
+        for result in [
+            SecretSpec::load(Some("file:store"), None).map(|_| ()),
+            SecretSpec::builder()
+                .with_provider("file:store")
+                .load()
+                .map(|_| ()),
+            SecretSpec::builder()
+                .with_provider("file:store")
+                .load_profile()
+                .map(|_| ()),
+        ] {
+            let error = result.expect_err("typed String fields must reject binary values");
+            let message = error.to_string();
+            assert_eq!(error.kind(), "secret_not_text", "{message}");
+            assert!(message.contains("'API_KEY'"), "{message}");
+            assert!(message.contains("UTF-8"), "{message}");
+            assert!(!message.contains("do-not-leak"), "{message}");
+        }
+        #[cfg(unix)]
+        {
+            let events = audit_events();
+            assert_eq!(events.len(), 4);
+            assert_eq!(events[0]["outcome"], "found");
+            for event in &events[1..] {
+                assert_eq!(event["action"], "check");
+                assert_eq!(event["outcome"], "error");
+                assert_eq!(event["error_kind"], "secret_not_text");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn audit_events() -> Vec<serde_json::Value> {
+        let log = fs::read_to_string("state/secretspec/audit.log").unwrap();
+        assert!(!log.contains("do-not-leak"));
+        log.lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
     }
 
     #[test]
@@ -165,6 +197,14 @@ mod prompt_missing {
             result,
             Err(secretspec::SecretSpecError::RequiredSecretMissing(_))
         ));
+        #[cfg(unix)]
+        {
+            let events = audit_events();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0]["action"], "check");
+            assert_eq!(events[0]["outcome"], "error");
+            assert_eq!(events[0]["error_kind"], "required_secret_missing");
+        }
     }
 }
 

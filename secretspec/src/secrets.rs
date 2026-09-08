@@ -207,6 +207,14 @@ fn credential_missing_error(name: &str, alias_spec: &str, location: &str) -> Sec
     ))
 }
 
+fn credential_empty_error(name: &str, alias_spec: &str, location: &str) -> SecretSpecError {
+    SecretSpecError::ProviderOperationFailed(format!(
+        "credential '{name}' for provider '{alias_spec}' resolved to an empty value from \
+         {location}; store a non-empty value with `secretspec config provider login \
+         {alias_spec}` or remove the credential to use the provider's environment fallback"
+    ))
+}
+
 /// An alias's credential entries sorted by semantic name. The one
 /// ordering rule, so fetch order, validation-error order, and the login prompt
 /// order all agree.
@@ -2520,7 +2528,18 @@ impl Secrets {
                     entry.insert(self.build_source_provider(&source.provider)?)
                 }
             };
-            let fetched = source_provider.get(source.address(&project, name));
+            // An empty credential cannot authenticate and, if kept, would
+            // shadow the provider's environment fallback, so reject it here
+            // where every provider's credentials are assembled.
+            let fetched =
+                source_provider
+                    .get(source.address(&project, name))
+                    .and_then(|value| match value {
+                        Some(value) if value.expose_secret().is_empty() => Err(
+                            credential_empty_error(name, spec, &source.location(&project, name)),
+                        ),
+                        value => Ok(value),
+                    });
             // Audit the source read (design: every secret access is recorded).
             // The key is the semantic credential name and the event carries a
             // `credential` marker plus the source provider's credential-free
@@ -4611,7 +4630,7 @@ impl Secrets {
         // A printer over the library API, so the CLI's single-secret read makes
         // exactly the resolution decisions `resolve_named` makes (and audits
         // them once, there) rather than maintaining a second single-secret path.
-        match self.resolve_named_within(name, Surface::WholeProfile, Ok)? {
+        match self.resolve_named_within(name, Surface::WholeProfile, |_, value| Ok(value))? {
             NamedResolution::Resolved(secret) => {
                 // `as_path` secrets are materialized and their temp file
                 // persisted during resolution, so a printed path is still valid
@@ -5516,11 +5535,32 @@ impl Secrets {
     /// }
     /// ```
     ///
-    /// This is the public read/resolution entry point — used directly by the SDK
-    /// and by `secretspec-derive`-generated code — so it records exactly one
-    /// `Check` audit event per call.
+    /// This public read/resolution entry point records exactly one `Check`
+    /// audit event per call.
     pub fn validate(&self) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
         self.validate_audited(true, Materialize::Values)
+    }
+
+    /// Load a generated Rust type, including prompting and conversion in the
+    /// read audit outcome (0.21+). Temporary files transfer only on success.
+    #[doc(hidden)]
+    pub fn load_typed<T>(
+        &self,
+        prompt_missing: bool,
+        convert: impl FnOnce(&HashMap<String, SecretBytes>) -> Result<T>,
+    ) -> Result<Resolved<T>> {
+        self.validate_audited_outcome_with(true, Materialize::Values, |outcome| {
+            let validated = match outcome {
+                Ok(validated) => validated,
+                Err(errors) if prompt_missing && !errors.missing_required.is_empty() => {
+                    self.ensure_secrets(None, None, true)?
+                }
+                Err(errors) => return Ok(Err(errors)),
+            };
+            let data = convert(&validated.resolved.secrets)?;
+            Ok(Ok(validated.into_resolved(data)))
+        })?
+        .map_err(validation_failure)
     }
 
     /// Resolve every declared secret into a value-carrying [`ResolveResponse`],
@@ -5537,7 +5577,9 @@ impl Secrets {
     /// lifetime thereafter.
     /// Inline values must be UTF-8; use [`Self::resolve_bytes`] for arbitrary bytes.
     pub fn resolve(&self) -> Result<ResolveResponse> {
-        self.resolve_impl(true, |value| Ok(value.try_as_utf8()?.to_owned()))
+        self.resolve_impl(true, |name, value| {
+            Ok(value.try_as_utf8_for(name)?.to_owned())
+        })
     }
 
     /// Resolve inline values as arbitrary bytes (0.21+).
@@ -5545,7 +5587,7 @@ impl Secrets {
     /// Like [`Self::resolve`], but without converting inline values to text.
     /// `as_path` values still return paths to persisted temporary files.
     pub fn resolve_bytes(&self) -> Result<ResolveResponse<SecretBytes>> {
-        self.resolve_impl(true, Ok)
+        self.resolve_impl(true, |_, value| Ok(value))
     }
 
     /// Like [`Self::resolve`], but value-free and side-effect-free: every
@@ -5561,7 +5603,9 @@ impl Secrets {
     /// [`Self::resolve`]. For a value-free view that tolerates missing required
     /// secrets, use [`Self::report`].
     pub fn resolve_without_values(&self) -> Result<ResolveResponse> {
-        self.resolve_impl(false, |value| Ok(value.try_as_utf8()?.to_owned()))
+        self.resolve_impl(false, |name, value| {
+            Ok(value.try_as_utf8_for(name)?.to_owned())
+        })
     }
 
     /// Resolve one declared secret by name.
@@ -5606,8 +5650,8 @@ impl Secrets {
     /// }
     /// ```
     pub fn resolve_named(&self, name: &str) -> Result<NamedResolution> {
-        self.resolve_named_within(name, Surface::Scoped, |value| {
-            Ok(value.try_as_utf8()?.to_owned())
+        self.resolve_named_within(name, Surface::Scoped, |name, value| {
+            Ok(value.try_as_utf8_for(name)?.to_owned())
         })
     }
 
@@ -5616,7 +5660,7 @@ impl Secrets {
     /// Uses the same scope, missing-value rules, and temporary-file lifetime
     /// as [`Self::resolve_named`], without requiring inline UTF-8.
     pub fn resolve_named_bytes(&self, name: &str) -> Result<NamedResolution<SecretBytes>> {
-        self.resolve_named_within(name, Surface::Scoped, Ok)
+        self.resolve_named_within(name, Surface::Scoped, |_, value| Ok(value))
     }
 
     /// Shared core of [`Self::resolve_named`] and [`Self::get`].
@@ -5629,7 +5673,7 @@ impl Secrets {
         &self,
         name: &str,
         surface: Surface,
-        convert: impl FnOnce(SecretBytes) -> Result<T>,
+        convert: impl FnOnce(&str, SecretBytes) -> Result<T>,
     ) -> Result<NamedResolution<T>> {
         self.ensure_reason_for(AuditAction::Get, Some(name))?;
         let profile_name = self.resolve_profile_name(None);
@@ -5719,22 +5763,24 @@ impl Secrets {
                     .secrets
                     .remove(name)
                     .expect("a Resolved entry always has a value");
-                let (value, path) = if entry.as_path {
-                    (None, Some(raw.try_as_utf8()?.to_owned()))
+                let converted = if entry.as_path {
+                    raw.try_as_utf8_for(name)
+                        .map(|path| (None, Some(path.to_owned())))
                 } else {
-                    match convert(raw) {
-                        Ok(value) => (Some(value), None),
-                        Err(err) => {
-                            self.record_key_error(
-                                AuditAction::Get,
-                                &profile_name,
-                                name,
-                                None,
-                                reference,
-                                &err,
-                            );
-                            return Err(err);
-                        }
+                    convert(name, raw).map(|value| (Some(value), None))
+                };
+                let (value, path) = match converted {
+                    Ok(converted) => converted,
+                    Err(err) => {
+                        self.record_key_error(
+                            AuditAction::Get,
+                            &profile_name,
+                            name,
+                            None,
+                            reference,
+                            &err,
+                        );
+                        return Err(err);
                     }
                 };
                 // Conversion must succeed before temporary files are persisted.
@@ -5809,7 +5855,7 @@ impl Secrets {
     fn resolve_impl<T>(
         &self,
         include_values: bool,
-        convert: impl Fn(SecretBytes) -> Result<T>,
+        convert: impl Fn(&str, SecretBytes) -> Result<T>,
     ) -> Result<ResolveResponse<T>> {
         let materialize = if include_values {
             Materialize::Values
@@ -5834,9 +5880,9 @@ impl Secrets {
                         .remove(&entry.name)
                         .expect("a Resolved entry always has a value");
                     if entry.as_path {
-                        (None, Some(raw.try_as_utf8()?.to_owned()))
+                        (None, Some(raw.try_as_utf8_for(&entry.name)?.to_owned()))
                     } else {
-                        (Some(convert(raw)?), None)
+                        (Some(convert(&entry.name, raw)?), None)
                     }
                 };
                 secrets.insert(
@@ -5948,6 +5994,20 @@ impl Secrets {
         materialize: Materialize,
         finish: impl FnOnce(ValidatedSecrets) -> Result<T>,
     ) -> Result<std::result::Result<T, ValidationErrors>> {
+        self.validate_audited_outcome_with(emit_check, materialize, |outcome| match outcome {
+            Ok(validated) => finish(validated).map(Ok),
+            Err(errors) => Ok(Err(errors)),
+        })
+    }
+
+    fn validate_audited_outcome_with<T>(
+        &self,
+        emit_check: bool,
+        materialize: Materialize,
+        finish: impl FnOnce(
+            std::result::Result<ValidatedSecrets, ValidationErrors>,
+        ) -> Result<std::result::Result<T, ValidationErrors>>,
+    ) -> Result<std::result::Result<T, ValidationErrors>> {
         // Enforce the reason policy. For the top-level read (`emit_check`) a denial
         // is itself audited; internal re-validations (emit_check=false) re-check the
         // gate silently, since the reason is already present by the time they run.
@@ -6005,10 +6065,7 @@ impl Secrets {
         let result: Result<std::result::Result<T, ValidationErrors>> = visible_result
             .and_then(|_| self.build_plan_from_names(profile_name.clone(), worklist))
             .and_then(|plan| self.execute_plan(&plan, materialize, output_filter.as_ref(), None))
-            .and_then(|outcome| match outcome {
-                Ok(validated) => finish(validated).map(Ok),
-                Err(errors) => Ok(Err(errors)),
-            });
+            .and_then(finish);
 
         // Record exactly one `Check` event for the whole batch when this is a
         // top-level read, regardless of how the resolution exited — so a failed
@@ -6295,7 +6352,7 @@ impl Secrets {
                     .iter()
                     .map(|(key, secret)| {
                         secret
-                            .try_as_env_value()
+                            .try_as_env_value_for(key)
                             .map(|value| (key.clone(), value.to_owned()))
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -6426,8 +6483,8 @@ impl Secrets {
         if let Err(err) = validated
             .resolved
             .secrets
-            .values()
-            .try_for_each(|value| value.try_as_utf8().map(|_| ()))
+            .iter()
+            .try_for_each(|(key, value)| value.try_as_utf8_for(key).map(|_| ()))
         {
             self.record(
                 AuditAction::Export,

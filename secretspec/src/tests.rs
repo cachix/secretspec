@@ -6084,10 +6084,59 @@ BINARY = {{ description = "binary"{encoding} }}
                 marker.to_str().unwrap().into(),
             ])
             .unwrap_err();
-        assert!(error.to_string().contains("NUL"));
-        assert!(!error.to_string().contains("do-not-leak"));
+        let message = error.to_string();
+        assert_eq!(error.kind(), "secret_not_text", "{message}");
+        assert!(message.contains("'BINARY'"), "{message}");
+        assert!(message.contains("NUL"), "{message}");
+        assert!(!message.contains("do-not-leak"), "{message}");
         assert!(!marker.exists());
     }
+}
+
+#[test]
+fn text_conversion_errors_name_the_secret() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let config: Config = toml::from_str(
+        r#"[project]
+name = "binary-text"
+revision = "1.0"
+
+[profiles.default]
+TEXT = { description = "text" }
+BINARY = { description = "binary" }
+"#,
+    )
+    .unwrap();
+    let spec = Secrets::new(
+        config,
+        None,
+        Some(format!("file:{}", temp.path().join("store").display())),
+        None,
+    );
+    spec.set("TEXT", crate::SecretBytes::from_utf8("plain"))
+        .unwrap();
+    spec.set("BINARY", crate::SecretBytes::from_slice(b"do-not-leak\xff"))
+        .unwrap();
+
+    let mut sink = Vec::new();
+    let errors = [
+        ("resolve", spec.resolve().unwrap_err()),
+        ("resolve_named", spec.resolve_named("BINARY").unwrap_err()),
+        (
+            "export",
+            spec.export(crate::ExportFormat::Shell, &mut sink)
+                .unwrap_err(),
+        ),
+    ];
+    for (operation, error) in errors {
+        let message = error.to_string();
+        assert_eq!(error.kind(), "secret_not_text", "{operation}: {message}");
+        assert!(message.contains("'BINARY'"), "{operation}: {message}");
+        assert!(message.contains("UTF-8"), "{operation}: {message}");
+        assert!(!message.contains("do-not-leak"), "{operation}: {message}");
+    }
+    assert!(sink.is_empty(), "export must not emit anything on failure");
 }
 
 #[cfg(unix)]
@@ -9220,6 +9269,36 @@ fn missing_provider_credential_is_an_actionable_error() {
     assert!(
         message.contains("access_token") && message.contains("not found"),
         "error should name the credential and say it was not found: {message}"
+    );
+}
+
+#[test]
+fn empty_provider_credential_is_an_actionable_error() {
+    let _guard = scrub_resolution_env();
+    let _var = EnvVarGuard::set("BWS_ACCESS_TOKEN", "from-env");
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    std::fs::write(&source, "access_token=\n").unwrap();
+
+    let secrets = secrets_with_credential_alias(
+        "bws://00000000-0000-0000-0000-000000000000",
+        HashMap::from([(
+            "access_token".to_string(),
+            CredentialSource::from(format!("dotenv://{}", source.display())),
+        )]),
+    );
+
+    // The configured credential is authoritative: an empty value is an error
+    // rather than a fall through to BWS_ACCESS_TOKEN.
+    let error = secrets
+        .resolve_provider_credentials("target", "default")
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("access_token")
+            && message.contains("'target'")
+            && message.contains("empty"),
+        "error should name the credential and alias and say it was empty: {message}"
     );
 }
 

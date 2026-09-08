@@ -156,10 +156,13 @@ consume_keystore(bytes.expose_secret());
 
 Use `as_path = true` when an application expects a filename. The existing
 `resolve()` and `resolve_named()` methods, generated `String` fields, JSON
-responses, composition, extraction, and text exports validate UTF-8 at their
-text boundaries. For a text value, use `SecretBytes::try_as_utf8()`; for a
-process environment, `try_as_env_value()` (0.21+) preserves non-UTF-8 bytes on
-Unix and rejects NUL bytes on every platform.
+responses, and text exports validate UTF-8 at their text boundaries and fail
+with `SecretSpecError::SecretNotText`, which names the secret without exposing
+its bytes (0.21+). Composition and extraction also validate UTF-8, returning
+`CompositionFailed` and `DecodeFailed`, respectively. For a text value, use
+`SecretBytes::try_as_utf8()` or `try_as_utf8_for(name)`; for a process
+environment, `try_as_env_value()` or `try_as_env_value_for(name)` (0.21+)
+preserves non-UTF-8 bytes on Unix and rejects NUL bytes on every platform.
 
 ## Profile-specific types
 

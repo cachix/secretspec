@@ -21,7 +21,9 @@ pub(crate) fn credential_or_env(
 
 /// Resolves a semantic provider credential, falling back through the provider's
 /// conventional environment variables in order. Explicit values are preserved
-/// as bytes, including empty values; only absence permits an environment fallback.
+/// as bytes; only absence permits an environment fallback. Credential
+/// resolution rejects empty configured values before they reach a provider,
+/// so an explicit value here is never empty.
 pub(crate) fn credential_or_envs(
     credentials: &ProviderCredentials,
     name: &str,

@@ -14,10 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accept exact byte input, `as_path` preserves it byte-for-byte, the file and
   systemd credential providers read binary values natively, and AWS Secrets
   Manager supports `SecretBinary`; text-only consumers now return explicit
-  UTF-8 errors (0.21+). Provider credentials also retain their bytes through
-  resolution, Unix CLI environments, and HTTP headers. SDK and JSON interfaces
-  validate text only when required, and unusable explicit credentials never
-  silently select an environment fallback with another identity.
+  UTF-8 errors that name the affected secret (0.21+). Provider credentials
+  also retain their bytes through resolution, Unix CLI environments, and HTTP
+  headers. SDK and JSON interfaces
+  validate text only when required, and unusable explicit credentials,
+  including empty values, never silently select an environment fallback with
+  another identity.
 
 - Claude Code can retrieve Anthropic API and LLM gateway credentials from any
   SecretSpec provider through its native `apiKeyHelper`. `secretspec claude
@@ -36,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - LastPass rejects NUL-containing values before writing instead of silently
   truncating them; use a manifest encoding such as base64 to store these values.
+  Typed Rust loads record conversion and prompting failures as failed reads in
+  the audit log (0.21+).
 
 - pass, gopass, and LastPass preserve whitespace and multiline secrets across
   generation and subsequent reads. pass entries are stored newline terminated

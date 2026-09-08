@@ -38,6 +38,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configurable RSA available for compatibility. OpenSSH generation likewise
   defaults to Ed25519 and supports configurable RSA keys and comments.
 
+- **Doppler provider** (`doppler://PROJECT[/CONFIG]`, 0.21+): read, write, and
+  delete secrets over Doppler's REST API, authenticated with `DOPPLER_TOKEN` or
+  the `token` provider credential. Secret names are stored verbatim in the
+  Doppler config named by the SecretSpec profile, or in a config pinned in the
+  URI, so they stay readable through `doppler run` and the Doppler dashboard.
+  Batch reads fetch only the declared names, `init --from` discovers names
+  without reading values, and values assembled from `${...}` references arrive
+  resolved. Doppler's reserved names, and names or values Doppler cannot store
+  unchanged, are refused rather than rewritten. Projects and configs must
+  already exist.
+
 ### Fixed
 
 - Command generation rejects Unicode-whitespace-only output while preserving

@@ -1369,6 +1369,33 @@ mod integration_tests {
                     .expect("Should create aac provider");
                 (provider, None)
             }
+            #[cfg(feature = "doppler")]
+            // Bare "doppler" names no project, so route it through a real one
+            // instead of failing to parse in the generic `_` branch below. Set
+            // DOPPLER_TEST_PROJECT to a throwaway Doppler project and
+            // authenticate with DOPPLER_TOKEN.
+            //
+            // The project is required rather than defaulted, and that is the
+            // safety property: these tests *write* (`TEST_PASSWORD`, and
+            // `API_KEY` under three profiles), so there must be no path by
+            // which they reach a project nobody named for them.
+            //
+            // No config is pinned, so the profile names it — which is what
+            // exercises profile isolation. Doppler cannot create a config, so
+            // the project needs one per profile the harness writes under:
+            // `default` (basic workflow) and `dev`/`staging`/`prod`
+            // (isolation). Use a service account token (dp.sa.): a service
+            // token (dp.st.) is pinned to a single config and cannot reach all
+            // four.
+            "doppler" => {
+                let project = std::env::var("DOPPLER_TEST_PROJECT").expect(
+                    "Testing the doppler provider requires a throwaway project: set DOPPLER_TEST_PROJECT to its name (and authenticate via DOPPLER_TOKEN). These tests write, so they never guess a project.",
+                );
+                let provider_spec = format!("doppler://{project}");
+                let provider = Box::<dyn Provider>::try_from(provider_spec.as_str())
+                    .expect("Should create doppler provider");
+                (provider, None)
+            }
             _ => {
                 let provider = Box::<dyn Provider>::try_from(provider_name)
                     .unwrap_or_else(|_| panic!("{} provider should exist", provider_name));
@@ -2016,6 +2043,242 @@ mod integration_tests {
         assert_eq!(result["BATCH_TEST_2"].expose_secret(), b"value2");
         assert_eq!(result["BATCH_TEST_3"].expose_secret(), b"value3");
         assert!(!result.contains_key("NONEXISTENT"));
+    }
+
+    /// Builds a Doppler provider for one project and config, authenticated with
+    /// `token` rather than the ambient `DOPPLER_TOKEN`.
+    ///
+    /// The pinned-token tests need a *specific* token per case, so they cannot
+    /// go through `create_provider_with_temp_path`.
+    #[cfg(feature = "doppler")]
+    fn doppler_provider_with_token(
+        project: &str,
+        config: Option<&str>,
+        token: &str,
+    ) -> crate::provider::doppler::DopplerProvider {
+        use crate::provider::doppler::{DopplerConfig, DopplerProvider};
+
+        let mut provider = DopplerProvider::new(DopplerConfig {
+            project: project.to_string(),
+            config: config.map(str::to_string),
+        });
+        let mut credentials = crate::provider::ProviderCredentials::new();
+        // "token" is the provider's declared credential name.
+        credentials.insert("token".to_string(), SecretBytes::from_utf8(token));
+        provider.with_credentials(credentials);
+        provider
+    }
+
+    /// The throwaway project these live tests write to, or `None` to skip.
+    #[cfg(feature = "doppler")]
+    fn doppler_test_project() -> Option<String> {
+        if !get_test_providers().contains(&"doppler".to_string()) {
+            return None;
+        }
+        Some(std::env::var("DOPPLER_TEST_PROJECT").expect(
+            "Testing the doppler provider requires DOPPLER_TEST_PROJECT to name a throwaway project.",
+        ))
+    }
+
+    /// A batch read answers every declared secret in one request, and a name the
+    /// config does not hold is simply absent from the result rather than failing
+    /// the batch.
+    ///
+    /// `get_many` is the whole reason this provider overrides the default, and
+    /// this is the shape the other Doppler tests do not reach: Doppler's
+    /// `secrets=` filter naming a secret that is not there. Every ordinary
+    /// `secretspec check` sends one -- an optional secret nobody has set yet --
+    /// so a filter that refused an absent name would fail the command outright.
+    /// `test_awssm_batch_get` and `test_awsps_batch_get` are the model.
+    #[cfg(feature = "doppler")]
+    #[test]
+    fn test_doppler_batch_get() {
+        if doppler_test_project().is_none() {
+            return;
+        }
+        let provider = create_provider_with_temp_path("doppler").0;
+
+        let profile = "dev";
+        let stored = [
+            ("SECRETSPEC_BATCH_1", "value1"),
+            ("SECRETSPEC_BATCH_2", "value2"),
+            ("SECRETSPEC_BATCH_3", "value3"),
+        ];
+        for (key, value) in stored {
+            provider
+                .set(
+                    Address::convention("unused", profile, key),
+                    &SecretBytes::from_utf8(value),
+                )
+                .expect("write a batch secret");
+        }
+
+        let keys = [
+            "SECRETSPEC_BATCH_1",
+            "SECRETSPEC_BATCH_2",
+            "SECRETSPEC_BATCH_3",
+            "SECRETSPEC_BATCH_NONEXISTENT",
+        ];
+        let requests: Vec<(&str, Address<'_>)> = keys
+            .iter()
+            .map(|key| (*key, Address::convention("unused", profile, key)))
+            .collect();
+        let result = provider.get_many(&requests).expect("batch read");
+
+        for (key, value) in stored {
+            assert_eq!(result[key].expose_secret(), value.as_bytes());
+        }
+        assert!(
+            !result.contains_key("SECRETSPEC_BATCH_NONEXISTENT"),
+            "a name the config does not hold must be absent, not an error"
+        );
+        assert_eq!(result.len(), stored.len());
+
+        for (key, _) in stored {
+            provider
+                .delete(Address::convention("unused", profile, key))
+                .expect("clean up");
+        }
+    }
+
+    /// Doppler injects three names of its own into every config, and they must
+    /// never surface as secrets nobody declared.
+    ///
+    /// Proven against the live API rather than only a recorded fixture, so a
+    /// change in which names Doppler injects shows up here.
+    #[cfg(feature = "doppler")]
+    #[test]
+    fn test_doppler_filters_reserved_names() {
+        let Some(project) = doppler_test_project() else {
+            return;
+        };
+
+        let provider = create_provider_with_temp_path("doppler").0;
+        // The provider's own list, not a copy: a fourth name added there has to
+        // be exercised here, which is the drift this live test exists to catch.
+        let reserved = crate::provider::doppler::RESERVED_NAMES;
+
+        let requests: Vec<(&str, Address<'_>)> = reserved
+            .iter()
+            .map(|name| (*name, Address::convention("unused", "dev", name)))
+            .collect();
+        let batch = provider.get_many(&requests).expect("batch read");
+        assert!(
+            batch.is_empty(),
+            "Doppler's own injected names must not be served as secrets: {:?}",
+            batch.keys().collect::<Vec<_>>()
+        );
+
+        for name in reserved {
+            assert!(
+                provider
+                    .get(Address::convention("unused", "dev", name))
+                    .expect("single read")
+                    .is_none(),
+                "{name} must read as missing, exactly as it does in a batch"
+            );
+        }
+
+        // Discovery must not offer them either.
+        let token = std::env::var("DOPPLER_TOKEN").expect("DOPPLER_TOKEN");
+        let pinned = doppler_provider_with_token(&project, Some("dev"), &token);
+        let reflected = pinned
+            .reflect(crate::provider::DiscoveryContext::new("unused", "dev"))
+            .expect("reflect the config");
+        for name in reserved {
+            assert!(
+                !reflected.contains_key(name),
+                "{name} must not be offered for discovery"
+            );
+        }
+    }
+
+    /// A service token (`dp.st.`) is pinned by Doppler to one project and
+    /// config, and this provider always names its coordinates explicitly so a
+    /// mismatch is Doppler's own loud refusal rather than a silent read of
+    /// whatever the token points at.
+    ///
+    /// That is the dangerous case: a params-free request *is* answered from the
+    /// token's own pinning, so a token swapped from `dev` to `prd` would change
+    /// which secrets an application receives with no error, no diff, and nothing
+    /// in the URI to contradict it.
+    ///
+    /// Read-only throughout, so it needs no sandbox write guard; the deliberate
+    /// project mismatch names a project that does not exist.
+    #[cfg(feature = "doppler")]
+    #[test]
+    fn test_doppler_pinned_service_tokens_refuse_other_coordinates() {
+        let Some(project) = doppler_test_project() else {
+            return;
+        };
+
+        let pinned_tokens = [
+            ("dev", "DOPPLER_ST_DEV_TOKEN"),
+            ("staging", "DOPPLER_ST_STAGING_TOKEN"),
+            ("prod", "DOPPLER_ST_PROD_TOKEN"),
+        ];
+
+        let mut exercised = 0;
+        for (config, var) in pinned_tokens {
+            let Ok(token) = std::env::var(var) else {
+                eprintln!("skipping {var}: not set");
+                continue;
+            };
+            exercised += 1;
+
+            // Its own config resolves.
+            let matching = doppler_provider_with_token(&project, Some(config), &token);
+            matching
+                .get(Address::convention("unused", "ignored", "NO_SUCH_SECRET"))
+                .unwrap_or_else(|e| {
+                    panic!("[{var}] a token must reach the config it is pinned to: {e}")
+                });
+
+            // Another config in the same project is refused by Doppler, naming
+            // the config it would not serve.
+            let other_config = if config == "dev" { "prod" } else { "dev" };
+            let mismatched = doppler_provider_with_token(&project, Some(other_config), &token);
+            let err = mismatched
+                .get(Address::convention("unused", "ignored", "NO_SUCH_SECRET"))
+                .expect_err("a pinned token must not serve another config")
+                .to_string();
+            assert!(
+                err.contains("does not have access to requested config"),
+                "[{var}] expected Doppler's config refusal, got: {err}"
+            );
+            assert!(
+                err.contains(other_config),
+                "[{var}] the refusal must name the config refused: {err}"
+            );
+
+            // Another project is refused too.
+            let elsewhere = doppler_provider_with_token(
+                "secretspec-provider-ci-does-not-exist",
+                Some(config),
+                &token,
+            );
+            let err = elsewhere
+                .get(Address::convention("unused", "ignored", "NO_SUCH_SECRET"))
+                .expect_err("a pinned token must not serve another project")
+                .to_string();
+            assert!(
+                err.contains("does not have access to requested project"),
+                "[{var}] expected Doppler's project refusal, got: {err}"
+            );
+        }
+
+        // Skipped rather than failed when no pinned token is supplied: the
+        // documented setup for this provider is one service account token
+        // (dp.sa.), so an operator who followed it has none of these and has
+        // done nothing wrong. Every other opt-in live test in this file skips
+        // the same way.
+        if exercised == 0 {
+            eprintln!(
+                "skipping the pinned-token paths: set DOPPLER_ST_DEV_TOKEN, \
+                 DOPPLER_ST_STAGING_TOKEN or DOPPLER_ST_PROD_TOKEN to a dp.st. token \
+                 pinned to that config to exercise them"
+            );
+        }
     }
 
     #[cfg(feature = "awssm")]

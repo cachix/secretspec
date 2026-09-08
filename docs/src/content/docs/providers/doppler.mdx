@@ -1,0 +1,381 @@
+---
+title: Doppler Provider
+description: Doppler integration over the Doppler REST API, with verbatim secret names
+---
+
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
+<VersionCompatibility version="0.21" />
+
+The Doppler provider reads and writes secrets in a
+[Doppler](https://docs.doppler.com/docs/start) project over Doppler's REST API.
+No `doppler` CLI is required.
+
+Doppler stores secrets as a flat set of names inside a *config*, and configs are
+Doppler's environment axis. SecretSpec maps its profile onto that axis, so
+secrets keep the names your application actually reads.
+
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `doppler` (0.21+) |
+| URI | `doppler://PROJECT[/CONFIG]` |
+| Access | Read, write, and delete |
+| Best for | Teams already centralizing secrets in Doppler |
+| Authentication | `DOPPLER_TOKEN`, or the `token` provider credential |
+| Availability | SecretSpec 0.21+; included in official and default builds (`doppler` feature for custom minimal builds) |
+| Default storage | Secret `{key}`, verbatim, in the config named by the profile |
+
+## Quick start
+
+```bash
+# Authenticate
+$ export DOPPLER_TOKEN="dp.sa.xxxxxxxx"
+
+# Store a secret in the `prd` config of project `myapp`
+$ secretspec set DATABASE_URL --provider "doppler://myapp/prd"
+
+# Read it back
+$ secretspec get DATABASE_URL --provider "doppler://myapp/prd"
+
+# Resolve the profile and run a command
+$ secretspec run --provider "doppler://myapp/prd" -- npm start
+```
+
+## Setup
+
+### Prerequisites
+
+- SecretSpec 0.21 or newer
+- A Doppler project
+- A config in that project for each profile you read, unless the URI pins one
+
+The official SecretSpec CLI includes this provider. Custom minimal Rust builds
+enable it with `--features doppler`.
+
+Doppler projects and configs must already exist. A write cannot create them, so
+create them in Doppler (or with `doppler setup`) first.
+
+### Authentication
+
+Set `DOPPLER_TOKEN`, the same variable Doppler's own CLI uses:
+
+```bash
+$ export DOPPLER_TOKEN="dp.sa.xxxxxxxx"
+$ secretspec check --provider "doppler://myapp/prd"
+```
+
+Two token types work, and they differ in what they can address:
+
+| Token | Prefix | Scope |
+| --- | --- | --- |
+| Service account | `dp.sa.` | Workplace-wide, limited by its grants |
+| Service token | `dp.st.` | Exactly one project and one config |
+
+A service token is pinned by Doppler to one config, and a request for any other
+is refused (see [Security considerations](#security-considerations)). Use a
+service account token when one SecretSpec configuration spans several configs —
+for example when the profile names the config.
+
+The provider also declares `token` as a
+[provider credential](/reference/provider-credentials/), so the token can be
+loaded from another provider instead of the environment:
+
+```toml title="secretspec.toml"
+[providers]
+bootstrap = "keyring://"
+
+[providers.doppler_prod]
+uri = "doppler://myapp/prd"
+credentials = { token = "bootstrap" }
+
+[profiles.production]
+DATABASE_URL = { description = "Database URL", providers = ["doppler_prod"] }
+```
+
+## Provider credentials
+
+<ProviderCredentials provider="doppler" />
+
+## Configuration
+
+### URI format
+
+```text
+doppler://PROJECT[/CONFIG]
+```
+
+- `PROJECT` is required. It is the Doppler project holding the secrets.
+- `CONFIG` is optional. When omitted, the SecretSpec profile names the config.
+
+The URI carries nothing else. Query parameters, fragments, user information and
+ports are rejected rather than ignored, so neither `doppler://myapp?config=prd`
+nor `doppler://myapp#prd` (a typo of `/` as `#`) can silently leave the profile
+naming the config and read a different Doppler environment.
+
+The project is deliberately required rather than taken from the token; see
+[Security considerations](#security-considerations).
+
+### URI examples
+
+```text
+doppler://myapp          # the profile names the config
+doppler://myapp/prd      # every profile reads the prd config
+```
+
+### Project configuration
+
+[Profile names are yours to choose](/concepts/profiles/), so the simplest
+configuration is to name them after the Doppler configs they read. Then one
+alias covers every profile and there is no mapping to maintain:
+
+```toml title="secretspec.toml"
+[providers]
+doppler_app = "doppler://myapp"
+
+[defaults]
+providers = ["doppler_app"]
+
+[profiles.dev]
+DATABASE_URL = { description = "Database URL" }
+
+[profiles.prd]
+DATABASE_URL = { description = "Database URL" }
+```
+
+Every secret inherits the [project default](/reference/configuration/#defaults-section-021),
+so `secretspec run --profile prd` reads the `prd` config, and `--profile dev`
+reads `dev`. A profile can name a config whenever Doppler can spell it as one —
+lowercase letters, numbers, underscores and hyphens (see
+[Secret names Doppler cannot store](#secret-names-doppler-cannot-store)).
+
+### When profile names cannot match the configs
+
+An existing manifest may already use profiles such as `production`, against a
+Doppler config named `prd`; a profile may also be spelled in a way Doppler
+cannot use as a config name, such as `Production`. Neither needs a new provider
+option: declare one alias per Doppler config and point each profile at the one it
+reads.
+
+```toml title="secretspec.toml"
+[providers]
+doppler_dev = "doppler://myapp/dev"
+doppler_prod = "doppler://myapp/prd"
+
+[profiles.development.defaults]
+providers = ["doppler_dev"]
+
+[profiles.production.defaults]
+providers = ["doppler_prod"]
+
+[profiles.development]
+DATABASE_URL = { description = "Database URL" }
+
+[profiles.production]
+DATABASE_URL = { description = "Database URL" }
+```
+
+Every secret in a profile inherits that profile's
+[`defaults.providers`](/reference/configuration/#profile-defaults), so the
+mapping costs one entry per profile rather than one per secret. Each profile
+keeps its own Doppler config, and secret names stay verbatim in all of them.
+
+A single secret can still name its own provider, which overrides the profile
+default — useful when one value lives in a config shared across environments:
+
+```toml title="secretspec.toml"
+[providers]
+doppler_prod = "doppler://myapp/prd"
+doppler_shared = "doppler://myapp/shared"
+
+[profiles.production.defaults]
+providers = ["doppler_prod"]
+
+[profiles.production]
+# Read from the prd config, via the profile default.
+DATABASE_URL = { description = "Database URL" }
+# Read from the shared config instead.
+SHARED_CA = { description = "CA bundle", providers = ["doppler_shared"] }
+```
+
+## Storage model
+
+A secret is stored under its own key, verbatim, in the config named by the
+profile:
+
+```text
+project "myapp", profile "production", key "DATABASE_URL"
+  -> Doppler project myapp        (from the URI)
+     Doppler config  production   (the profile, or the pinned CONFIG)
+     secret name     DATABASE_URL (verbatim)
+```
+
+Verbatim names are the point. Your application reads `DATABASE_URL` from its
+environment, and the same secret is readable through `doppler run`, the Doppler
+dashboard, and any existing Doppler integration. Because Doppler has a native
+environment axis, mapping the profile onto a config gives real profile isolation
+*and* verbatim names.
+
+The config comes from the **active** profile, which is not always the profile a
+secret is declared in. A secret declared only in `[profiles.default]` and read
+while the `production` profile is active is looked up in Doppler's `production`
+config, not in `default`: profile inheritance fills in a secret's *declaration*,
+it does not change where the value is stored. Give each config its own copy of
+such a value, or point each profile at the config it should read using
+`defaults.providers` as shown above.
+
+A batch read asks Doppler only for the secrets your manifest declares, so a
+config holding many more of them is not pulled into the process wholesale, and
+[discovery](#discover-secret-names) reads only secret *names*, never values.
+
+SecretSpec's own project name is **unused**: the Doppler project in the URI
+provides the namespace. Two SecretSpec projects pointing at one
+`doppler://project/config` therefore share a namespace — give them different
+Doppler projects or configs to keep them apart.
+
+### Secret names Doppler cannot store
+
+Doppler spells secret names as `^[A-Z_][A-Z0-9_]*$`: uppercase letters, digits
+and underscores, and never a leading digit. A leading underscore is allowed.
+
+A name outside that alphabet is **refused**, not rewritten to fit. Rewriting
+could land two distinct keys on one name, and the collision would be invisible.
+Rename the secret in `secretspec.toml` instead.
+
+Config names are `^[a-z0-9_-]+$`, so a capitalized profile such as `Production`
+cannot name a config. Rename the profile, or pin a config in the URI.
+
+Project names follow the same `^[a-z0-9_-]+$` rule. An uppercase project is
+refused rather than accepted, because Doppler silently lowercases it: without the
+refusal, `doppler://MyApp` and `doppler://myapp` would name one store under two
+different URIs, and SecretSpec treats that URI as the store's identity for cache
+routing and audit records.
+
+### Values Doppler cannot store unchanged
+
+Because Doppler resolves `${...}` references (see below), a value *containing*
+`${` cannot survive being written and read back: Doppler refuses a reference it
+cannot resolve, and rewrites one it can. SecretSpec therefore refuses such a
+value on write rather than storing something that reads back differently.
+
+This matters most when Doppler is used as a
+[cache](/concepts/providers/caching/) for another store: a cached
+value that happened to contain `${...}` would otherwise come back as a different
+secret while still looking fresh.
+
+### Doppler's reserved names
+
+Doppler injects `DOPPLER_PROJECT`, `DOPPLER_CONFIG` and `DOPPLER_ENVIRONMENT`
+into every config's secret listing. SecretSpec filters all three from reads and
+from discovery, because Doppler also refuses to *write* them — a value
+under one of those names can never be a secret SecretSpec stored.
+
+Declaring one of those names is therefore refused before `secretspec set`
+prompts for a value, rather than after Doppler rejects the write.
+
+### Values Doppler withholds
+
+Doppler can report a secret that exists with a visibility but *no* value. That
+is distinguishable from an unset secret, which reports no visibility either, so
+SecretSpec reports it as a refusal naming the secret rather than as a secret
+that is not set. Reporting it as unset would let `secretspec check` offer to
+set — and overwrite — a value it was never allowed to read.
+
+A `masked` secret is not withheld: masking affects how Doppler's dashboard
+displays a value, not whether the API returns it.
+
+### Secret references
+
+Doppler resolves `${OTHER_SECRET}` references between secrets in a config.
+SecretSpec serves the resolved value, which is what `doppler run` injects too:
+
+```text
+DATABASE_URL = postgres://${DB_HOST}/app
+DB_HOST      = db.internal
+
+secretspec get DATABASE_URL  ->  postgres://db.internal/app
+```
+
+One consequence is deliberate: a value containing a literal `${...}` cannot
+survive a write followed by a read, because Doppler resolves it on the way out.
+
+If the secret a reference points at is **deleted**, Doppler serves the
+unresolved template instead — `postgres://${DB_HOST}/app`, verbatim — and
+SecretSpec passes that through, because it is exactly what `doppler run` injects
+in the same situation. Deleting a secret other secrets reference therefore
+changes their values into templates rather than raising an error, so remove the
+references first.
+
+## Use existing secrets
+
+A secret's [`ref`](/reference/configuration/#secret-references) selects a secret
+by config and name, as `config/NAME`:
+
+```toml title="secretspec.toml"
+[providers]
+doppler_app = "doppler://myapp"
+
+[profiles.production]
+SHARED_CA = { description = "CA bundle kept in a shared config", providers = ["doppler_app"], ref = { item = "shared/SHARED_CA" } }
+```
+
+When the URI pins a config, a bare name is read from it; when it does not,
+the active profile names the config, exactly as for any other secret:
+
+```toml title="secretspec.toml"
+[providers]
+doppler_prod = "doppler://myapp/prd"
+
+[profiles.production]
+SHARED_CA = { description = "CA bundle", providers = ["doppler_prod"], ref = { item = "SHARED_CA" } }
+```
+
+Doppler secrets are single values with no sub-components, so `field`, `section`,
+`vault` and `version` are rejected rather than ignored.
+
+## Discover secret names
+
+Doppler lists a config's secret names without their values, so SecretSpec can
+discover declarations from an existing config:
+
+```bash
+$ secretspec init --from doppler://myapp/prd \
+    --project my-app --profile production
+```
+
+The generated manifest contains required declarations for the listed names,
+not defaults or secret values. Doppler's own `DOPPLER_PROJECT`, `DOPPLER_CONFIG`
+and `DOPPLER_ENVIRONMENT` are left out.
+
+## CI/CD
+
+Store a Doppler token as one protected CI secret:
+
+```bash
+$ export DOPPLER_TOKEN="$CI_DOPPLER_TOKEN"
+$ secretspec run --provider "doppler://myapp/prd" -- ./deploy
+```
+
+Prefer a service token (`dp.st.`) scoped to the single config the job needs,
+and grant write access only when the job must run `set` or refresh a
+Doppler-backed cache.
+
+## Security considerations
+
+SecretSpec talks to `https://api.doppler.com` over TLS and sends the token in an
+`Authorization: Bearer` header, never in a URL or a child-process argument. The
+token is not part of the provider URI, so the URI recorded in audit logs and
+fallback-chain warnings carries no credential.
+
+Every request names its project and config explicitly. This matters for service
+tokens: a request that omits them is answered from the token's own pinning, so
+omitting them would let a token swapped from one config to another silently
+change which secrets a process receives. Naming them turns that into an explicit
+Doppler refusal.
+
+Secret values are read from Doppler's `computed` field, so a value assembled
+from references is resolved before it reaches your process rather than arriving
+as a literal `${...}` template that fails later, far from its cause.

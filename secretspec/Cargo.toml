@@ -88,7 +88,7 @@ signal-hook.workspace = true
 windows-sys = { workspace = true, optional = true }
 
 [features]
-default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "bw", "age", "ejson", "scaleway", "sops", "kubernetes", "cloudflare"]
+default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "doppler", "bw", "age", "ejson", "scaleway", "sops", "kubernetes", "cloudflare"]
 cli = ["dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable", "dep:dunce"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
@@ -106,6 +106,7 @@ openbao = ["dep:reqwest", "tokio/sync"]
 # exchange. It is already on transitively via reqwest, but a provider should
 # name the features it uses rather than inherit them from a sibling.
 infisical = ["dep:reqwest", "tokio/sync"]
+doppler = ["dep:reqwest"]
 bws = []
 bw = ["dep:base64"]
 akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secrets"]

@@ -262,6 +262,34 @@ with `KSM_CONFIG` and `KSM_TOKEN` fallbacks; alternatively a bound `config_file`
 `password`. A `ref` selects an existing record by UID or exact title and an
 optional standard/custom `field`.
 
+## Doppler Provider
+
+<VersionCompatibility version="0.21" />
+
+**Availability**: Added in SecretSpec 0.21 and included in default builds; use
+the `doppler` feature for a custom minimal build.
+
+**URI**: `doppler://PROJECT[/CONFIG]` - Stores secrets in a Doppler project's
+config over Doppler's REST API
+
+```bash
+doppler://myapp               # the SecretSpec profile names the config
+doppler://myapp/prd           # every profile reads the prd config
+```
+
+**Features**: Read/write/delete, verbatim secret names, profile-aware configs,
+batched retrieval of the declared names (one request per config), `${...}`
+reference resolution, name-only discovery through `init --from`
+**Prerequisites**: An existing Doppler project and config (SecretSpec does not
+create them)
+**Authentication**: `token` provider credential or `DOPPLER_TOKEN`. Both a
+service account token (`dp.sa.`) and a service token (`dp.st.`) work; a service
+token is pinned by Doppler to one project and config.
+**Storage**: Secret named `{key}`, verbatim, in the config named by the profile
+or by the pinned `CONFIG`. SecretSpec's own project name is unused — the Doppler
+project provides the namespace. A `ref` selects a secret as `config/NAME`, or as
+a bare `NAME` when the URI pins a config.
+
 ## Pass Provider
 
 <VersionCompatibility version="0.21" kind="changed">
@@ -829,6 +857,7 @@ $ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | Dashlane (0.18+) | ✅ End-to-end | Cloud (Dashlane), synced locally | Yes — `dcli` auto-syncs hourly |
 | 1Password | ✅ End-to-end | Cloud (1Password) | ✅ Yes |
 | Keeper (0.18+) | ✅ End-to-end | Cloud (Keeper) | ✅ Yes |
+| Doppler (0.21+) | ✅ Doppler-managed | Cloud (Doppler) | ✅ Yes |
 | GCSM | ✅ Google-managed | Cloud (GCP) | ✅ Yes |
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |
 | AWS Parameter Store (0.18+) | ✅ AWS KMS (`SecureString`) | Cloud (AWS) | ✅ Yes |

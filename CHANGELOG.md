@@ -14,9 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accept exact byte input, `as_path` preserves it byte-for-byte, the file and
   systemd credential providers read binary values natively, and AWS Secrets
   Manager supports `SecretBinary`; text-only consumers now return explicit
-  UTF-8 errors that name the affected secret (0.21+). Cached binary values
-  use a new envelope, while cached text keeps the envelope earlier releases
-  read, so a cache store shared with 0.20 stays usable. Provider credentials
+  UTF-8 errors that name the affected secret (0.21+). Provider credentials
   also retain their bytes through resolution, Unix CLI environments, and HTTP
   headers. SDK and JSON interfaces
   validate text only when required, and unusable explicit credentials,

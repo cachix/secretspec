@@ -63,7 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Imports preserve binary values with or without `as_path`, including encoded
   values whose decoded bytes are not UTF-8. Invalid stored encodings still fail
   before destination writes or source cleanup. Inline validation retains bytes,
-  `get` writes exact values without adding a newline, and `run` passes non-UTF-8
+  `get` writes exact values without adding a newline when stdout is a pipe or
+  file (a terminal still gets one), and `run` passes non-UTF-8
   values on Unix while rejecting NULs before starting the child. Rust callers
   can use `resolve_bytes()` and `resolve_named_bytes()` for binary values;
   text SDK responses and exports continue to validate UTF-8 (0.21+). Environment

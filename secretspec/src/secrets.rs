@@ -4623,10 +4623,20 @@ impl Secrets {
     /// active profile and scope, or is declared but produced no value. Provider
     /// and configuration failures surface as their own errors.
     pub fn get(&self, name: &str) -> Result<()> {
-        self.get_to(name, &mut io::stdout().lock())
+        let stdout = io::stdout();
+        let interactive = stdout.is_terminal();
+        self.get_to(name, &mut stdout.lock(), interactive)
     }
 
-    pub(crate) fn get_to(&self, name: &str, out: &mut dyn io::Write) -> Result<()> {
+    /// Prints the value exactly when `interactive` is false, so a pipe or
+    /// redirect receives the stored bytes and nothing else. On a terminal a
+    /// newline follows the value, keeping the shell prompt off the secret.
+    pub(crate) fn get_to(
+        &self,
+        name: &str,
+        out: &mut dyn io::Write,
+        interactive: bool,
+    ) -> Result<()> {
         // A printer over the library API, so the CLI's single-secret read makes
         // exactly the resolution decisions `resolve_named` makes (and audits
         // them once, there) rather than maintaining a second single-secret path.
@@ -4637,6 +4647,9 @@ impl Secrets {
                 // after this process exits.
                 if let Some(value) = secret.value {
                     out.write_all(value.expose_secret())?;
+                    if interactive {
+                        out.write_all(b"\n")?;
+                    }
                 } else {
                     writeln!(out, "{}", secret.path.expect("a resolved file has a path"))?;
                 }

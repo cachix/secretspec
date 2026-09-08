@@ -5534,7 +5534,7 @@ BINARY = {{ description = "binary", providers = ["target"], as_path = {as_path}{
                     };
                     assert_eq!(resolved.value.unwrap().expose_secret(), logical);
                     let mut output = Vec::new();
-                    spec.get_to("BINARY", &mut output).unwrap();
+                    spec.get_to("BINARY", &mut output, false).unwrap();
                     assert_eq!(output, logical);
                     let (logger, lines) = crate::audit::test_support::collecting_logger();
                     spec.set_audit_for_test(logger);
@@ -6026,8 +6026,13 @@ BINARY = { description = "binary value", encoding = "base64" }
         &[0xff]
     );
     let mut output = Vec::new();
-    spec.get_to("BINARY", &mut output).unwrap();
+    spec.get_to("BINARY", &mut output, false).unwrap();
     assert_eq!(output, [0xff]);
+    // A terminal gets a newline after the value so the prompt stays off the
+    // secret; a pipe or redirect gets the bytes and nothing else.
+    let mut output = Vec::new();
+    spec.get_to("BINARY", &mut output, true).unwrap();
+    assert_eq!(output, [0xff, b'\n']);
 }
 
 #[cfg(unix)]

@@ -561,9 +561,11 @@ $ secretspec check --profile production --json
 ### get
 
 <VersionCompatibility version="0.21" kind="changed">
-Inline values are written as exact bytes, including non-UTF-8 data and NULs,
-without adding a newline. An `as_path` value still prints its materialized
-filename followed by a newline.
+When stdout is a pipe or a file, inline values are written as exact bytes,
+including non-UTF-8 data and NULs, without adding a newline. When stdout is a
+terminal, a newline follows the value so the shell prompt stays on its own
+line. An `as_path` value always prints its materialized filename followed by
+a newline.
 </VersionCompatibility>
 
 Get a secret value.

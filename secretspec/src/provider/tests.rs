@@ -1552,6 +1552,47 @@ mod integration_tests {
         assert!(deleted.unwrap());
     }
 
+    /// gopass keeps password-line values as text entries that `gopass show -o`
+    /// and earlier SecretSpec releases read, and stores everything the text
+    /// path would alter as a binary entry that round-trips byte for byte.
+    #[test]
+    fn gopass_keeps_text_entries_and_round_trips_binary_values() {
+        if !get_test_providers().iter().any(|name| name == "gopass") {
+            return;
+        }
+        let (provider, _temp_dir) = create_provider_with_temp_path("gopass");
+        let project = generate_test_project_name();
+
+        let text = Address::convention(&project, "default", "TEXT");
+        provider
+            .set(text, &SecretBytes::from_utf8("hunter2"))
+            .unwrap();
+        let shown = std::process::Command::new("gopass")
+            .args(["show", "-y", "-o"])
+            .arg(format!("secretspec/{project}/default/TEXT"))
+            .output()
+            .unwrap();
+        let text_read = provider.get(text);
+        assert!(provider.delete(text).unwrap());
+        assert!(shown.status.success(), "{shown:?}");
+        assert_eq!(shown.stdout, b"hunter2");
+        assert_eq!(text_read.unwrap(), Some(SecretBytes::from_utf8("hunter2")));
+
+        let cases: [&[u8]; 4] = [b"line1\nline2\n", b" padded ", b"a\r\nb", b"\0\xff\x80\r\n"];
+        for (index, expected) in cases.into_iter().enumerate() {
+            let key = format!("BINARY_{index}");
+            let addr = Address::convention(&project, "default", &key);
+            let expected = SecretBytes::from_slice(expected);
+            provider.set(addr, &expected).unwrap();
+            let actual = provider.get(addr);
+            let rewritten = provider.set(addr, &expected);
+            let deleted = provider.delete(addr);
+            assert_eq!(actual.unwrap(), Some(expected), "{key}");
+            rewritten.unwrap();
+            assert!(deleted.unwrap());
+        }
+    }
+
     /// A value Infisical withholds surfaces as a refusal, never as a secret.
     ///
     /// An identity permitted to see that a secret exists, but not to read it,

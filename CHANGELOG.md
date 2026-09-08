@@ -44,11 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - pass, gopass, and LastPass preserve whitespace and multiline secrets across
   generation and subsequent reads. pass entries are stored newline terminated
   like the `pass` CLI writes them, and exactly one final newline is removed on
-  read, so entries created with `pass insert` resolve to their password. Newly
-  written gopass entries use its lossless binary-entry format, while existing
-  text entries still return only their trimmed first line until they are
-  written again. LastPass's CLI newline handling no longer changes stored
-  values.
+  read, so entries created with `pass insert` resolve to their password.
+  gopass keeps storing single-line values as plain text entries that `gopass
+  show` and earlier releases read, and stores multiline, whitespace-padded, or
+  non-UTF-8 values in its lossless binary-entry format; existing text entries
+  still return only their trimmed first line until they are written again.
+  LastPass's CLI newline handling no longer changes stored values.
 
 - Windows keyring passwords written by earlier releases remain readable.
   Text retains its native password format, while binary values use a distinct

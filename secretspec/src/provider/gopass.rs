@@ -60,6 +60,19 @@ fn is_missing_entry(stderr: &str) -> bool {
     stderr.contains("is not in the password store") || stderr.contains("does not exist")
 }
 
+/// Whether `gopass insert` followed by `gopass show -o` returns `value`
+/// unchanged, so it can live on the password line of a plain text entry.
+///
+/// `insert` terminates the entry with a newline and normalizes CRLF, `show -o`
+/// prints only the first line, and text reads here remove surrounding
+/// whitespace for entries other tools created. A value any of those would
+/// alter is stored as a binary entry instead.
+fn stores_as_password_line(value: &[u8]) -> bool {
+    std::str::from_utf8(value).is_ok_and(|text| {
+        !text.is_empty() && !text.contains(['\n', '\r', '\0']) && text.trim().len() == text.len()
+    })
+}
+
 crate::register_provider! {
     struct: GoPassProvider,
     config: GoPassConfig,
@@ -164,19 +177,18 @@ impl Provider for GoPassProvider {
         }
 
         if output.status.success() {
+            if lossless {
+                // `cat` decodes the entry's body and writes the stored bytes
+                // exactly, so nothing here may interpret them.
+                return Ok(Some(SecretBytes::from_vec(output.stdout)));
+            }
             let content = String::from_utf8(output.stdout).map_err(|e| {
                 SecretSpecError::ProviderOperationFailed(format!(
                     "Failed to parse gopass output as UTF-8: {}",
                     e
                 ))
             })?;
-
-            let content = if lossless {
-                content
-            } else {
-                content.trim().to_owned()
-            };
-            Ok(Some(SecretBytes::from_utf8(content)))
+            Ok(Some(SecretBytes::from_utf8(content.trim())))
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -207,14 +219,21 @@ impl Provider for GoPassProvider {
     /// * `Ok(())` - If the value was successfully written
     /// * `Err(SecretSpecError)` - If writing the gopass entry fails
     fn set(&self, addr: Address<'_>, value: &SecretBytes) -> crate::Result<()> {
-        let value = super::require_utf8("gopass", value)?;
         let entry_name = super::flat_item(self, addr)?;
 
+        // A password-line value stays a plain text entry, which every gopass
+        // reader and earlier SecretSpec releases understand. Anything the text
+        // path would alter is stored with `cat` instead, in gopass's native
+        // binary-entry format, so it comes back byte for byte.
+        let subcommand: &[&str] = if stores_as_password_line(value.expose_secret()) {
+            &["insert", "-m", "-f"]
+        } else {
+            &["cat"]
+        };
         let mut child = self
             .command()
-            // Text `insert` normalizes line endings. `cat` stores its stdin
-            // losslessly using gopass's native binary-entry format.
-            .args(["cat", &entry_name])
+            .args(subcommand)
+            .arg(&*entry_name)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -233,7 +252,7 @@ impl Provider for GoPassProvider {
         })?;
 
         use std::io::Write;
-        stdin.write_all(value.as_bytes()).map_err(|e| {
+        stdin.write_all(value.expose_secret()).map_err(|e| {
             SecretSpecError::ProviderOperationFailed(format!(
                 "Failed to write to gopass stdin: {}",
                 e
@@ -252,13 +271,11 @@ impl Provider for GoPassProvider {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // Unlike `insert`, `cat` reports unchanged content as an error.
-            // Confirm the value before treating that specific error as a no-op.
+            // Some gopass releases have `cat` report unchanged content as an
+            // error. Confirm the value before treating that as a no-op.
             if output.status.code() == Some(1)
                 && stderr.trim_end().ends_with(": meaningless write")
-                && self
-                    .get(addr)?
-                    .is_some_and(|stored| stored.expose_secret() == value.as_bytes())
+                && self.get(addr)?.is_some_and(|stored| stored == *value)
             {
                 return Ok(());
             }
@@ -373,6 +390,26 @@ mod tests {
     fn try_from_bare_url_leaves_prefix_unset() {
         let config = GoPassConfig::try_from(&provider_url("gopass://")).unwrap();
         assert_eq!(config.folder_prefix, None);
+    }
+
+    #[test]
+    fn password_line_values_stay_text_entries() {
+        for value in ["hunter2", "with spaces inside", "🔐 émojis", "a\tb"] {
+            assert!(stores_as_password_line(value.as_bytes()), "{value:?}");
+        }
+        for value in [
+            "line1\nline2",
+            "trailing\n",
+            "a\r\nb",
+            "cr\ronly",
+            " padded ",
+            "\ttab",
+            "nul\0byte",
+            "",
+        ] {
+            assert!(!stores_as_password_line(value.as_bytes()), "{value:?}");
+        }
+        assert!(!stores_as_password_line(b"\xff\xfe"));
     }
 
     #[test]

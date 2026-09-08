@@ -5,6 +5,12 @@ description: Google Cloud Secret Manager integration
 
 import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
 
+<VersionCompatibility version="0.21" kind="changed">
+Secret versions preserve arbitrary bytes on reads and writes, including NULs,
+non-UTF-8 data, whitespace, and line endings. No manifest encoding is needed
+for binary storage.
+</VersionCompatibility>
+
 The [Google Cloud Secret Manager](https://cloud.google.com/security/products/secret-manager)
 provider integrates with GCP for centralized secret management.
 

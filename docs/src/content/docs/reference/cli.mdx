@@ -559,6 +559,13 @@ $ secretspec check --profile production --json
 ```
 
 ### get
+
+<VersionCompatibility version="0.21" kind="changed">
+Inline values are written as exact bytes, including non-UTF-8 data and NULs,
+without adding a newline. An `as_path` value still prints its materialized
+filename followed by a newline.
+</VersionCompatibility>
+
 Get a secret value.
 
 ```bash
@@ -650,17 +657,31 @@ from `default` or an extended manifest.
 ### set
 Set a secret value.
 
+<VersionCompatibility version="0.21" kind="changed">
+
+`set` can read exact bytes from a file or stdin with `--from-file`.
+
+</VersionCompatibility>
+
 ```bash
 $ secretspec set [OPTIONS] <NAME> [VALUE]
+$ secretspec set <NAME> --from-file <FILE|-> # 0.21+
 ```
 
 **Options:**
+
 - `-p, --provider <PROVIDER>` - Provider backend to use
 - `-P, --profile <PROFILE>` - Profile to use
+- `--from-file <FILE>` - Read the exact value bytes from `FILE`; use `-` for
+  stdin (0.21+). This conflicts with the positional `VALUE`.
 
 **Example:**
 ```bash
 $ secretspec set API_KEY sk-1234567890 --profile production --provider sops://secrets.enc.yaml
+
+$ secretspec set TLS_KEYSTORE --from-file client.p12 # 0.21+
+
+$ generate-key | secretspec set TLS_KEYSTORE --from-file - # 0.21+
 # SecretSpec 0.19+:
 Writing secret 'API_KEY' to sops://secrets.enc.yaml?format=yaml (profile: production)
   target: /work/my-app/secrets.enc.yaml ["my-app"]["production"]["API_KEY"]
@@ -671,6 +692,14 @@ In SecretSpec 0.19+, `set` shows the resolved provider, profile, and native
 write target before reading a piped value or opening the password prompt. For
 SOPS this includes the exact encrypted file and `sops set` selector, making a
 missing `--profile` visible before the write.
+
+`--from-file` preserves every byte, including NULs, whitespace, and a final
+newline. Empty input is rejected. Positional values and interactive prompts
+remain text. Piped input without `--from-file` is also read as text, with
+surrounding whitespace trimmed as in earlier versions, so
+`echo value | secretspec set NAME` stores `value`; use `--from-file -` to keep
+every byte. A binary declaration normally uses `as_path = true`; add a
+manifest `encoding` when its provider accepts only text.
 
 `set` rejects composed secrets because their values are derived and read-only.
 Available since SecretSpec 0.16.
@@ -726,6 +755,14 @@ backends would have to destroy a whole externally managed path or record
 rather than only the referenced field.
 
 ### run
+
+<VersionCompatibility version="0.21" kind="changed">
+On Unix, inline secrets are passed as exact environment bytes, including
+non-UTF-8 values. NUL bytes are rejected before starting the command. Other
+platforms require UTF-8 values. Use `as_path` for binary data that an application
+reads from a file.
+</VersionCompatibility>
+
 Run a command with secrets injected as environment variables.
 
 ```bash

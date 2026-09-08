@@ -525,20 +525,20 @@ fn ir_field_type(field: &IrField) -> proc_macro2::TokenStream {
 /// ```ignore
 /// field_name: source.get("SECRET_NAME")
 ///     .ok_or_else(|| SecretSpecError::RequiredSecretMissing("SECRET_NAME".to_string()))?
-///     .expose_secret().to_string()
+///     .try_as_utf8()?.to_string()
 /// ```
 ///
 /// For required PathBuf fields:
 /// ```ignore
 /// field_name: std::path::PathBuf::from(source.get("SECRET_NAME")
 ///     .ok_or_else(|| SecretSpecError::RequiredSecretMissing("SECRET_NAME".to_string()))?
-///     .expose_secret())
+///     .try_as_utf8()?)
 /// ```
 ///
 /// For optional fields:
 /// ```ignore
-/// field_name: source.get("SECRET_NAME").map(|s| s.expose_secret().to_string())
-/// field_name: source.get("SECRET_NAME").map(|s| std::path::PathBuf::from(s.expose_secret()))
+/// field_name: source.get("SECRET_NAME").map(|s| s.try_as_utf8().map(str::to_owned)).transpose()?
+/// field_name: source.get("SECRET_NAME").map(|s| s.try_as_utf8().map(std::path::PathBuf::from)).transpose()?
 /// ```
 fn generate_secret_assignment(
     field_name: &proc_macro2::Ident,
@@ -551,13 +551,17 @@ fn generate_secret_assignment(
         (true, true) => {
             // Optional PathBuf
             quote! {
-                #field_name: #source.get(#secret_name).map(|s| std::path::PathBuf::from(s.expose_secret()))
+                #field_name: #source.get(#secret_name)
+                    .map(|s| s.try_as_utf8().map(std::path::PathBuf::from))
+                    .transpose()?
             }
         }
         (true, false) => {
             // Optional String
             quote! {
-                #field_name: #source.get(#secret_name).map(|s| s.expose_secret().to_string())
+                #field_name: #source.get(#secret_name)
+                    .map(|s| s.try_as_utf8().map(str::to_owned))
+                    .transpose()?
             }
         }
         (false, true) => {
@@ -566,7 +570,7 @@ fn generate_secret_assignment(
                 #field_name: std::path::PathBuf::from(
                     #source.get(#secret_name)
                         .ok_or_else(|| secretspec::SecretSpecError::RequiredSecretMissing(#secret_name.to_string()))?
-                        .expose_secret()
+                        .try_as_utf8()?
                 )
             }
         }
@@ -575,7 +579,7 @@ fn generate_secret_assignment(
             quote! {
                 #field_name: #source.get(#secret_name)
                     .ok_or_else(|| secretspec::SecretSpecError::RequiredSecretMissing(#secret_name.to_string()))?
-                    .expose_secret()
+                    .try_as_utf8()?
                     .to_string()
             }
         }
@@ -1469,8 +1473,6 @@ fn generate_secret_spec_code(ir: CodegenIr) -> proc_macro2::TokenStream {
 
     // Combine all components
     quote! {
-        use ::secretspec::__private::secrecy::ExposeSecret;
-
         #secret_spec_struct
         #secret_spec_profile_enum
         #profile_code

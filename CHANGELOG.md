@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Secret values can flow through providers, fallback chains, imports, and the
+  cache as arbitrary bytes. `Secrets::set` and `secretspec set --from-file`
+  accept exact byte input, `as_path` preserves it byte-for-byte, the file and
+  systemd credential providers read binary values natively, and AWS Secrets
+  Manager supports `SecretBinary`; text-only consumers now return explicit
+  UTF-8 errors (0.21+). Provider credentials also retain their bytes through
+  resolution, Unix CLI environments, and HTTP headers. SDK and JSON interfaces
+  validate text only when required, and unusable explicit credentials never
+  silently select an environment fallback with another identity.
+
 - Claude Code can retrieve Anthropic API and LLM gateway credentials from any
   SecretSpec provider through its native `apiKeyHelper`. `secretspec claude
   configure` and `unconfigure` safely manage repository or user settings,
@@ -21,6 +31,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   combined capability profiles; Ed25519/Curve25519 is the default, with
   configurable RSA available for compatibility. OpenSSH generation likewise
   defaults to Ed25519 and supports configurable RSA keys and comments.
+
+### Fixed
+
+- Windows keyring passwords written by earlier releases remain readable.
+  Text retains its native password format, while binary values use a distinct
+  storage format so they cannot be confused with legacy passwords.
+
+- Scoped composition errors hide out-of-scope dependency names when their
+  values contain non-UTF-8 bytes.
+
+- Imports preserve binary values with or without `as_path`, including encoded
+  values whose decoded bytes are not UTF-8. Invalid stored encodings still fail
+  before destination writes or source cleanup. Inline validation retains bytes,
+  `get` writes exact values without adding a newline, and `run` passes non-UTF-8
+  values on Unix while rejecting NULs before starting the child. Rust callers
+  can use `resolve_bytes()` and `resolve_named_bytes()` for binary values;
+  text SDK responses and exports continue to validate UTF-8 (0.21+). Environment
+  reads, keyring, Google Secret Manager, Kubernetes Secrets, and Scaleway now
+  preserve binary values. SOPS credentials preserve non-UTF-8 bytes in Unix
+  subprocess environments, and command generators retain exact stdout bytes,
+  including whitespace and final newlines.
+
+- `secretspec set --from-file` validates and displays the write destination
+  before reading input. Piped input without `--from-file` is still read as
+  trimmed text, and non-UTF-8 piped input is rejected with a message pointing
+  to `--from-file -`.
 
 ## [0.20.0] - 2026-08-31
 

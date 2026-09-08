@@ -9,6 +9,13 @@ import ProviderCredentials from '../../../components/ProviderCredentials.astro';
 
 <VersionCompatibility version="0.17" />
 
+<VersionCompatibility version="0.21" kind="changed">
+Whole secret values preserve arbitrary bytes on reads and writes. SecretSpec
+handles the API's base64 representation automatically; manifest `encoding`
+is not needed for binary storage. Selecting a JSON `field` still requires a
+UTF-8 document.
+</VersionCompatibility>
+
 The [Scaleway Secret Manager](https://www.scaleway.com/en/secret-manager/)
 provider stores secrets in Scaleway Secret Manager through its `v1beta1` REST
 API.

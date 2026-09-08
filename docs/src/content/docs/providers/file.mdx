@@ -8,7 +8,7 @@ import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro
 <VersionCompatibility version="0.19" />
 
 The [file](https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap04.html)
-provider reads and writes one plaintext UTF-8 file per secret.
+provider reads and writes one plaintext file per secret.
 
 
 ## At a glance
@@ -101,6 +101,12 @@ contents.
 
 ## Storage model
 
+<VersionCompatibility version="0.21" kind="changed">
+
+File values are arbitrary bytes. Reads and writes preserve every byte exactly.
+
+</VersionCompatibility>
+
 Convention addresses use this path beneath `ROOT`:
 
 ```text
@@ -111,11 +117,12 @@ Project and profile are therefore isolated even when one user-global file
 provider serves several projects. Each component must be one safe filename;
 slashes, backslashes, `.` and `..` are rejected in convention components.
 
-Values are read and written exactly as UTF-8 text. Leading and trailing
-whitespace, newlines, CRLF line endings, and multiline content are preserved.
-Binary files are rejected by the provider's text interface; use a SecretSpec
-0.19+ `encoding` when the stored file should contain a textual encoding of
-binary data.
+In SecretSpec 0.21+, values are read and written as arbitrary bytes. NULs,
+non-UTF-8 bytes, leading and trailing whitespace, and line endings are all
+preserved. In 0.21+, `get` and the Rust byte resolution APIs return binary
+values inline, and `run` preserves non-UTF-8 bytes on Unix (except NULs).
+Declare `as_path = true` to materialize binary data for an application.
+Text SDK responses, exports, composition, and extraction require valid UTF-8.
 
 Writes use a temporary file in the destination directory and atomically
 replace the entry after flushing it. On Unix, SecretSpec creates new
@@ -196,7 +203,7 @@ DATABASE_PASSWORD = {
 }
 ```
 
-The file provider returns the complete UTF-8 document; SecretSpec then applies
+The file provider returns the complete document; SecretSpec requires UTF-8 and then applies
 the pointer as a provider-independent stored-value transform. Extracted
 declarations are read-only so `set`, `delete`, generation, prompting,
 and import cannot overwrite or remove the containing file. See

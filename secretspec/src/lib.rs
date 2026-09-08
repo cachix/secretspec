@@ -57,6 +57,7 @@ mod native;
 mod plan;
 mod report;
 mod resolve;
+mod secret_value;
 mod secrets;
 mod spec;
 mod spec_edit;
@@ -75,6 +76,7 @@ pub mod integration;
 // Re-export only the types needed by users and generated code
 pub use caller::CallerContext;
 pub use config::Resolved;
+pub use secret_value::SecretBytes;
 
 /// Implementation details shared with `secretspec-derive`.
 ///

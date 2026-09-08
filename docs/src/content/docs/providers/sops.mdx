@@ -90,6 +90,12 @@ creation_rules:
 
 ## Provider credentials
 
+<VersionCompatibility version="0.21" kind="changed">
+Explicit provider credentials preserve non-UTF-8 bytes in the SOPS subprocess
+environment on Unix. NUL bytes are rejected before SOPS starts; other
+platforms require UTF-8 credentials.
+</VersionCompatibility>
+
 Secret values used to authenticate SOPS belong in a provider alias's
 `credentials` map, not in the SOPS URI.
 

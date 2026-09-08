@@ -27,12 +27,19 @@ REQUEST_ID = { description = "Request ID prefix", type = "uuid", generate = true
 | `hex` | 64 hex chars (32 bytes) | `bytes` (int) |
 | `base64` | 44 chars (32 bytes) | `bytes` (int) |
 | `uuid` | UUID v4 (36 chars) | none |
-| `command` | stdout of command | `command` (string, required) |
+| `command` | stdout of command; exact bytes in 0.21+ | `command` (string, required) |
 | `rsa_private_key` | 2048-bit RSA private key (PKCS1 PEM) | `bits` (int) |
 | `openpgp_private_key` (0.21+) | ASCII-armored OpenPGP transferable secret key | `user_id` (required), `algorithm` (`"ed25519"` or `"rsa"`), `bits` (RSA only), `capabilities` (`["sign"]`, `["encrypt"]`, or both) |
 | `ssh_private_key` (0.21+) | Unencrypted OpenSSH Ed25519 private key | `algorithm` (`"ed25519"` or `"rsa"`), `bits` (RSA only), `comment` (string) |
 
 ### Command type
+
+<VersionCompatibility version="0.21" kind="changed">
+Command output is preserved byte-for-byte, including non-UTF-8 data, NULs,
+whitespace, and final newlines. Only zero-byte output is rejected. Use
+`printf` or trim inside your command if you need a value without a final
+newline. Binary output needs a byte-capable provider or manifest `encoding`.
+</VersionCompatibility>
 
 The `command` type runs a shell command and uses its stdout as the generated value:
 

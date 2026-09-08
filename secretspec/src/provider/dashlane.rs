@@ -5,9 +5,9 @@
 //! authored in a Dashlane app and read from here, so this provider implements
 //! [`Provider::get`] and refuses every write.
 
+use crate::SecretBytes;
 use crate::provider::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
-use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -246,7 +246,7 @@ impl VaultItem {
 /// titled the same as the one wanted, in a type searched earlier, must not
 /// abort the search before the type that actually holds the field.
 enum Found {
-    Value(SecretString),
+    Value(SecretBytes),
     /// Nothing to read here: no item of this content type is named that, or
     /// the one that is holds nothing in its default field.
     NoItem,
@@ -259,10 +259,13 @@ enum Found {
 /// Named after a hash of the keys, never the keys themselves: a directory name
 /// is visible to anyone who can list the cache or read the process's
 /// environment.
-fn scoped_state_dir(keys: &str) -> Result<PathBuf> {
-    use std::hash::{Hash, Hasher};
+fn scoped_state_dir(keys: &[u8]) -> Result<PathBuf> {
+    use std::hash::Hasher;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    keys.hash(&mut hasher);
+    // Preserve the previous str hash for existing state directories without
+    // decoding credentials. Rust's str hash terminates its bytes with 0xff.
+    hasher.write(keys);
+    hasher.write_u8(0xff);
     let cache = crate::config::cache_dir()
         .ok_or_else(|| SecretSpecError::ProviderOperationFailed(NO_CACHE_DIR_HELP.to_string()))?;
     Ok(cache
@@ -377,12 +380,15 @@ impl DashlaneProvider {
             // Failing to prepare that directory has to abort the read: running
             // anyway would hand the keys to a `dcli` pointed at the inherited
             // HOME, which is the very state this isolates against.
-            let dir = scoped_state_dir(&keys)?;
+            let dir = scoped_state_dir(keys.expose_secret())?;
             create_private_dir(&dir)?;
             // `dcli` derives its state path from APPDATA, else HOME.
             cmd.env("HOME", &dir);
             cmd.env("APPDATA", &dir);
-            cmd.env(DEVICE_KEYS_ENV, keys);
+            cmd.env(
+                DEVICE_KEYS_ENV,
+                crate::provider::credential_env_value(&keys)?,
+            );
         }
         cmd.args(args);
         // An unauthenticated `dcli` starts device registration and prompts for
@@ -496,7 +502,7 @@ impl DashlaneProvider {
 
     /// Non-interactive device credentials, from an injected credential or the
     /// environment.
-    fn device_keys(&self) -> Option<String> {
+    fn device_keys(&self) -> Option<SecretBytes> {
         crate::provider::credential_or_env(&self.credentials, SERVICE_DEVICE_KEYS, DEVICE_KEYS_ENV)
     }
 
@@ -550,7 +556,7 @@ impl DashlaneProvider {
             return Ok(Found::NoItem);
         };
         match item.field(field.unwrap_or_else(|| item_type.default_field())) {
-            Some(value) => Ok(Found::Value(SecretString::new(value.into()))),
+            Some(value) => Ok(Found::Value(SecretBytes::from_utf8(value))),
             // An empty default field just means the item holds nothing. A `ref`
             // naming a field is different: no other item can satisfy it, so the
             // caller reports it once every content type has been searched.
@@ -605,7 +611,10 @@ impl Provider for DashlaneProvider {
     fn auth_scope_key(&self) -> Option<String> {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.device_keys().hash(&mut hasher);
+        self.device_keys()
+            .as_ref()
+            .map(SecretBytes::expose_secret)
+            .hash(&mut hasher);
         Some(format!("{:x}", hasher.finish()))
     }
 
@@ -616,7 +625,7 @@ impl Provider for DashlaneProvider {
         }
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let coords = self.resolve_coords(addr)?;
         let mut lacked_field = false;
         for &item_type in self.types_to_search() {
@@ -637,7 +646,7 @@ impl Provider for DashlaneProvider {
     ///
     /// The default shells out once per secret, and each call decrypts the whole
     /// local vault; a `secretspec run` over twenty secrets pays that once.
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         let mut resolved = Vec::with_capacity(requests.len());
         for (name, addr) in requests {
             resolved.push((*name, self.resolve_coords(*addr)?));
@@ -674,7 +683,7 @@ impl Provider for DashlaneProvider {
         Ok(found)
     }
 
-    fn set(&self, addr: Address<'_>, _value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, _value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)
     }
 
@@ -948,8 +957,7 @@ mod tests {
             .unwrap();
         match found {
             Found::Value(value) => {
-                use secrecy::ExposeSecret;
-                assert_eq!(value.expose_secret(), "app_user");
+                assert_eq!(value.expose_secret(), b"app_user");
             }
             _ => panic!("the login carries the field and must resolve"),
         }
@@ -997,14 +1005,21 @@ mod tests {
     /// name is readable by anyone who can list the cache.
     #[test]
     fn the_scoped_state_dir_never_contains_the_keys() {
+        use std::hash::{Hash, Hasher};
         let keys = "dls_ACCESS_SECRETPAYLOAD";
-        let dir = scoped_state_dir(keys).expect("a cache dir should resolve");
+        let dir = scoped_state_dir(keys.as_bytes()).expect("a cache dir should resolve");
         let shown = dir.display().to_string();
         assert!(!shown.contains("SECRETPAYLOAD"), "{shown}");
         assert!(shown.contains("dashlane"), "{shown}");
         // Stable across calls, so a synced vault is reused rather than refetched.
-        assert_eq!(dir, scoped_state_dir(keys).unwrap());
-        assert_ne!(dir, scoped_state_dir("dls_OTHER_IDENTITY").unwrap());
+        assert_eq!(dir, scoped_state_dir(keys.as_bytes()).unwrap());
+        assert_ne!(dir, scoped_state_dir(b"dls_OTHER_IDENTITY").unwrap());
+        let mut previous_hasher = std::collections::hash_map::DefaultHasher::new();
+        keys.hash(&mut previous_hasher);
+        assert_eq!(
+            dir.file_name().unwrap(),
+            format!("{:016x}", previous_hasher.finish()).as_str()
+        );
     }
 
     /// The state directory holds a device row and a decrypted-on-demand vault,
@@ -1069,7 +1084,7 @@ mod tests {
         let addr = Address::convention("p", "default", "K");
         let err = provider.check_writable(addr).unwrap_err();
         assert!(err.to_string().contains("read-only"), "{err}");
-        assert!(provider.set(addr, &SecretString::new("v".into())).is_err());
+        assert!(provider.set(addr, &SecretBytes::from_utf8("v")).is_err());
     }
 }
 
@@ -1210,7 +1225,6 @@ mod live {
                 )
             });
 
-        use secrecy::ExposeSecret;
         let len = value.expose_secret().len();
         assert!(len > 0, "the named item resolved to an empty value");
         println!(
@@ -1220,7 +1234,7 @@ mod live {
 
         // The value must not survive into a Debug rendering of the wrapper.
         assert!(
-            !format!("{value:?}").contains(value.expose_secret()),
+            !format!("{value:?}").contains(value.try_as_utf8().unwrap()),
             "the secret leaked through Debug"
         );
     }

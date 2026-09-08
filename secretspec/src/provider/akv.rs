@@ -63,6 +63,7 @@
 //! ```
 
 use super::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
+use crate::SecretBytes;
 use crate::{Result, SecretSpecError};
 use azure_core::credentials::{Secret, TokenCredential};
 use azure_core::http::StatusCode;
@@ -75,7 +76,6 @@ use azure_security_keyvault_secrets::{
     models::{SecretClientGetSecretOptions, SetSecretParameters},
 };
 use data_encoding::BASE32_NOPAD;
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::sync::{
     Arc, Mutex, OnceLock,
@@ -310,7 +310,7 @@ pub(crate) fn resolve_azure_credential(
             ))
         })? as Arc<dyn TokenCredential>),
         AuthMethod::Env => {
-            let (tenant_id, client_id, client_secret) = service_principal_inputs(credentials);
+            let (tenant_id, client_id, client_secret) = service_principal_inputs(credentials)?;
 
             match classify_env_credentials(tenant_id, client_id, client_secret)? {
                 Some((tenant_id, client_id, client_secret)) => Ok(ClientSecretCredential::new(
@@ -342,12 +342,17 @@ pub(crate) fn resolve_azure_credential(
 
 fn service_principal_inputs(
     credentials: &ProviderCredentials,
-) -> (Option<String>, Option<String>, Option<String>) {
-    (
-        credential_or_env(credentials, TENANT_ID, AZURE_TENANT_ID_ENV),
-        credential_or_env(credentials, CLIENT_ID, AZURE_CLIENT_ID_ENV),
-        credential_or_env(credentials, CLIENT_SECRET, AZURE_CLIENT_SECRET_ENV),
-    )
+) -> Result<(Option<String>, Option<String>, Option<String>)> {
+    let text = |name, env| {
+        credential_or_env(credentials, name, env)
+            .map(|value| value.try_as_utf8().map(str::to_owned))
+            .transpose()
+    };
+    Ok((
+        text(TENANT_ID, AZURE_TENANT_ID_ENV)?,
+        text(CLIENT_ID, AZURE_CLIENT_ID_ENV)?,
+        text(CLIENT_SECRET, AZURE_CLIENT_SECRET_ENV)?,
+    ))
 }
 
 fn classify_env_credentials(
@@ -571,7 +576,7 @@ impl AkvProvider {
         &self,
         name: &str,
         version: Option<&str>,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Option<SecretBytes>> {
         let client = self.client()?;
         let options = version.map(|version| SecretClientGetSecretOptions {
             secret_version: Some(version.to_string()),
@@ -586,7 +591,7 @@ impl AkvProvider {
                         crate::error::display_error_chain(&e)
                     ))
                 })?;
-                Ok(secret.value.map(|v| SecretString::new(v.into())))
+                Ok(secret.value.map(SecretBytes::from_utf8))
             }
             Err(e) => {
                 if Self::is_not_found_error(&e) {
@@ -605,10 +610,11 @@ impl AkvProvider {
     /// Sets a secret's value by name. Azure Key Vault's SET operation always
     /// creates a new version if the secret already exists, so create and
     /// update share this one call.
-    async fn set_secret_async(&self, name: &str, value: &SecretString) -> Result<()> {
+    async fn set_secret_async(&self, name: &str, value: &SecretBytes) -> Result<()> {
+        let value = super::require_utf8("akv", value)?;
         let client = self.client()?;
         let params = SetSecretParameters {
-            value: Some(value.expose_secret().to_string()),
+            value: Some(value.to_string()),
             ..Default::default()
         };
         client
@@ -683,13 +689,13 @@ impl Provider for AkvProvider {
         &["version"]
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let coords = self.resolve_address(addr)?;
         self.initial_request
             .run(|| super::block_on(self.get_secret_async(&coords.item, coords.version.as_deref())))
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)?;
         let coords = self.resolve_address(addr)?;
         self.initial_request
@@ -737,7 +743,7 @@ mod tests {
             .map(|(name, value)| {
                 (
                     (*name).to_string(),
-                    SecretString::new((*value).to_string().into()),
+                    SecretBytes::from_utf8((*value).to_string()),
                 )
             })
             .collect()
@@ -916,13 +922,30 @@ mod tests {
         ]));
 
         assert_eq!(
-            service_principal_inputs(&provider.credentials),
+            service_principal_inputs(&provider.credentials).unwrap(),
             (
                 Some("tenant-from-provider".to_string()),
                 Some("client-from-env".to_string()),
                 Some("secret-from-provider".to_string()),
             )
         );
+    }
+
+    #[test]
+    fn non_utf8_service_principal_credential_fails_without_environment_fallback() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _tenant = EnvVarGuard::set(AZURE_TENANT_ID_ENV, "tenant-from-env");
+        let _client = EnvVarGuard::set(AZURE_CLIENT_ID_ENV, "client-from-env");
+        let _secret = EnvVarGuard::set(AZURE_CLIENT_SECRET_ENV, "secret-from-env");
+        for name in [TENANT_ID, CLIENT_ID, CLIENT_SECRET] {
+            let credentials = ProviderCredentials::from([(
+                name.into(),
+                SecretBytes::from_slice(b"private-credential\xff"),
+            )]);
+            let error = service_principal_inputs(&credentials).unwrap_err();
+            assert!(error.to_string().contains("UTF-8"));
+            assert!(!format!("{error:?}: {error}").contains("private-credential"));
+        }
     }
 
     #[test]
@@ -1122,14 +1145,14 @@ mod tests {
             ..Default::default()
         };
         let value = provider.get(Address::Native(&pinned)).unwrap().unwrap();
-        assert_eq!(value.expose_secret(), "secret-value");
+        assert_eq!(value.expose_secret(), b"secret-value");
 
         let latest = crate::config::NativeAddress {
             version: None,
             ..pinned
         };
         let value = provider.get(Address::Native(&latest)).unwrap().unwrap();
-        assert_eq!(value.expose_secret(), "secret-value");
+        assert_eq!(value.expose_secret(), b"secret-value");
 
         assert_eq!(
             *transport.paths.lock().unwrap(),
@@ -1178,10 +1201,7 @@ mod tests {
         let refusal = p.check_writable(Address::Native(&addr)).unwrap_err();
         assert!(refusal.to_string().contains("read-only"), "{refusal}");
         let err = p
-            .set(
-                Address::Native(&addr),
-                &secrecy::SecretString::new("v".into()),
-            )
+            .set(Address::Native(&addr), &crate::SecretBytes::from_utf8("v"))
             .unwrap_err();
         assert_eq!(err.to_string(), refusal.to_string());
     }

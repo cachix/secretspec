@@ -57,6 +57,45 @@ mod prompt_missing {
     }
 
     #[test]
+    fn typed_string_rejects_binary_after_byte_resolution_succeeds() {
+        if std::env::var_os(CHILD_CASE_VAR).is_none() {
+            assert!(run_in_isolated_project(
+                "typed_string_rejects_binary_after_byte_resolution_succeeds",
+                None,
+            ));
+            return;
+        }
+
+        fs::create_dir_all("store/test-project/default").unwrap();
+        fs::write("store/test-project/default/API_KEY", b"do-not-leak\xff").unwrap();
+        fs::write("store/test-project/default/DATABASE_URL", b"postgres://db").unwrap();
+        let mut spec = secretspec::Secrets::load()
+            .unwrap()
+            .with_reason("integration test");
+        spec.set_provider("file:store");
+        let resolved = spec.resolve_bytes().unwrap();
+        assert_eq!(
+            resolved.secrets["API_KEY"]
+                .value
+                .as_ref()
+                .unwrap()
+                .expose_secret(),
+            b"do-not-leak\xff"
+        );
+
+        let result = SecretSpec::builder()
+            .with_provider("file:store")
+            .with_reason("integration test")
+            .load();
+        let error = match result {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("typed String fields must reject binary values"),
+        };
+        assert!(error.contains("UTF-8"));
+        assert!(!error.contains("do-not-leak"));
+    }
+
+    #[test]
     fn prompt_missing_load_succeeds_when_nothing_is_missing() {
         if std::env::var_os(CHILD_CASE_VAR).is_none() {
             assert!(run_in_isolated_project(

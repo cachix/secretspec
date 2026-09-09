@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configurable RSA available for compatibility. OpenSSH generation likewise
   defaults to Ed25519 and supports configurable RSA keys and comments.
 
+- **Elixir SDK (0.21+)** (`secretspec-ex`) resolves SecretSpec declarations from
+  Elixir through a Rustler binding, with precompiled NIF archives for supported
+  Linux, macOS, and Windows targets.
+
 ## [0.20.0] - 2026-08-31
 
 ### Changed

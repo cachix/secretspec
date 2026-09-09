@@ -6,7 +6,7 @@ description: How the language SDKs are built, packaged, and released, and which 
 import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
 
 SecretSpec ships SDKs for Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell,
-PHP, C#, Swift (0.18+), and JVM languages (0.20+). This page is for
+PHP, C#, Swift (0.18+), JVM languages (0.20+), and Elixir (0.21+). This page is for
 contributors: how the SDKs are put together, how each one is packaged and
 released, which platforms each artifact covers, and what to update when adding
 a platform or a new SDK. For the user-facing architecture and API, see the
@@ -58,6 +58,12 @@ platform and publishes on a version tag:
 | Swift (0.18+) | SwiftPM source package + XCFramework release asset | `swift-package.yml` |
 | PHP | Composer package (source) + prebuilt extension binaries and `libsecretspec` release assets | `php-ext.yml`, `ffi-build.yml` |
 | Haskell | `secretspec` on Hackage (source) | `haskell-build.yml` |
+| Elixir (0.21+) | `secretspec` on Hex.pm + Rustler NIF release assets | `elixir-package.yml` |
+
+<VersionCompatibility version="0.21" />
+
+The Elixir SDK is scheduled for SecretSpec 0.21. Its package and workflow are
+available for integration testing while that release is prepared.
 
 ## Platform support
 
@@ -76,6 +82,7 @@ the Ruby gem, and the PHP extension binaries is added in SecretSpec 0.17.
 | PHP | ✓ | ✓ | — | ✓ | ✓ (0.17+) | — |
 | Haskell (source) | ✓ (CI-covered) | — | — | — | ✓ (CI-covered, 0.17+) | — |
 | JVM (0.20+) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Elixir (0.21+) | ✓ | ✓ | — | ✓ | ✓ | — |
 
 Notes:
 

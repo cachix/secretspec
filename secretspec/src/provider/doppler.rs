@@ -523,6 +523,44 @@ fn validate_secret_value(name: &str, value: &str) -> Result<()> {
     )))
 }
 
+/// The greatest length of one `secrets=` filter, in bytes before percent
+/// encoding.
+///
+/// Doppler documents no limit on the filter itself but allows 1,200 secrets in
+/// a config, so the filter's length is bounded only by the manifest. It travels
+/// in the URI, where the bound is the API edge's request-line limit rather than
+/// anything Doppler promises, and exceeding it fails a whole profile's read at
+/// once. 4 KiB leaves ample room for the rest of the URI inside the smallest
+/// limit an HTTP front end in common use imposes.
+const MAX_FILTER_BYTES: usize = 4 * 1024;
+
+/// Splits `wanted` into comma-joined `secrets=` filters that each fit
+/// [`MAX_FILTER_BYTES`].
+///
+/// Chunking is sound because Doppler resolves `${...}` references against the
+/// config rather than against the response, so a reference whose target lands
+/// in another chunk still resolves. An empty `wanted` yields one empty filter,
+/// which reads the whole config: see [`Call::List`].
+///
+/// A single name longer than the budget still gets its own request rather than
+/// being dropped -- Doppler's own limit is 200 characters per name, so the
+/// budget cannot actually be exceeded by one.
+fn filter_chunks(wanted: &[String]) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut chunk = String::new();
+    for name in wanted {
+        if !chunk.is_empty() && chunk.len() + 1 + name.len() > MAX_FILTER_BYTES {
+            chunks.push(std::mem::take(&mut chunk));
+        }
+        if !chunk.is_empty() {
+            chunk.push(',');
+        }
+        chunk.push_str(name);
+    }
+    chunks.push(chunk);
+    chunks
+}
+
 /// What one of Doppler's secret objects holds, classified before any policy
 /// applies.
 ///
@@ -1192,8 +1230,9 @@ impl DopplerProvider {
     /// Lists the named secrets in one config, indexed by name.
     ///
     /// One request answers for all of them: Doppler's listing carries no
-    /// pagination, so this is the batch read that makes [`get_many`] a single
-    /// round trip.
+    /// pagination, so this is the batch read that makes [`get_many`] one round
+    /// trip per config -- or, for a manifest too large to name in one URI, per
+    /// [`filter_chunks`] batch of names.
     ///
     /// `wanted` narrows the response to the secrets actually declared, via
     /// Doppler's `secrets=` filter. Asking for the whole config instead would
@@ -1202,7 +1241,8 @@ impl DopplerProvider {
     /// log, from exporting the config. Server-side `${...}` resolution is
     /// unaffected by the filter: a reference whose target is *not* in `wanted`
     /// still resolves (measured), because Doppler resolves against the config
-    /// rather than against the response.
+    /// rather than against the response -- which is also what makes chunking
+    /// safe.
     ///
     /// [`get_many`]: Provider::get_many
     async fn list_async(
@@ -1210,22 +1250,23 @@ impl DopplerProvider {
         config: &str,
         wanted: &[String],
     ) -> Result<HashMap<String, SecretBytes>> {
-        // Doppler injects its reserved names into every listing whether or not
-        // they are asked for, so the filter never has to name them.
-        let names = wanted.join(",");
-        let call = Call::List {
-            project: &self.config.project,
-            config,
-            names: &names,
-        };
-        let (status, body) = self.execute(&call).await?;
-        interpret_listing(
-            &self.config.project,
-            config,
-            status,
-            &body,
-            parse_config_secrets,
-        )
+        let mut listed = HashMap::with_capacity(wanted.len());
+        for names in filter_chunks(wanted) {
+            let call = Call::List {
+                project: &self.config.project,
+                config,
+                names: &names,
+            };
+            let (status, body) = self.execute(&call).await?;
+            listed.extend(interpret_listing(
+                &self.config.project,
+                config,
+                status,
+                &body,
+                parse_config_secrets,
+            )?);
+        }
+        Ok(listed)
     }
 
     /// The names of every secret in one config, without reading any values.
@@ -3168,5 +3209,27 @@ mod tests {
                 "the value must not leak: {err}"
             );
         }
+    }
+
+    /// A filter too long for one URI is split, and every chunk's names are
+    /// asked for exactly once.
+    #[test]
+    fn a_large_filter_is_split_across_requests() {
+        let names: Vec<String> = (0..500)
+            .map(|n| format!("SECRETSPEC_NAME_{n:04}"))
+            .collect();
+        let chunks = filter_chunks(&names);
+        assert!(chunks.len() > 1, "500 names exceed one filter's budget");
+        for chunk in &chunks {
+            assert!(chunk.len() <= MAX_FILTER_BYTES, "{} bytes", chunk.len());
+        }
+        let rejoined: Vec<&str> = chunks.iter().flat_map(|c| c.split(',')).collect();
+        assert_eq!(
+            rejoined,
+            names.iter().map(String::as_str).collect::<Vec<_>>()
+        );
+
+        // An empty filter stays one request, which reads the whole config.
+        assert_eq!(filter_chunks(&[]), [""]);
     }
 }

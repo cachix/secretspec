@@ -46,8 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Batch reads fetch only the declared names, `init --from` discovers names
   without reading values, and values assembled from `${...}` references arrive
   resolved. Doppler's reserved names, and names or values Doppler cannot store
-  unchanged, are refused rather than rewritten. Projects and configs must
-  already exist.
+  unchanged, are refused rather than rewritten. Configs are read concurrently.
+  Projects and configs must already exist.
 
 ### Fixed
 

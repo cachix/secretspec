@@ -1371,7 +1371,10 @@ impl Provider for DopplerProvider {
     ///
     /// This override is the point of the provider: Doppler answers for every
     /// requested secret in one response, so a 23-secret resolution costs one HTTP
-    /// call per config. Falling back to the default would cost 23.
+    /// call per config. Falling back to the default would cost 23. Several
+    /// configs go out concurrently, in the same capped waves the default uses
+    /// for independent addresses, so the cost is one round trip rather than one
+    /// per config.
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         if requests.is_empty() {
             return Ok(HashMap::new());
@@ -1390,23 +1393,31 @@ impl Provider for DopplerProvider {
                 .push((name, loc.name));
         }
 
-        super::block_on(async {
-            let mut resolved = HashMap::new();
-            for (config, wanted) in by_config {
-                // Only the declared names are requested, so this reads no secret
-                // the manifest did not ask for: see `list_async`.
-                let mut names: Vec<String> = wanted.iter().map(|(_, key)| key.clone()).collect();
-                names.sort_unstable();
-                names.dedup();
-                let listed = self.list_async(&config, &names).await?;
-                for (name, key) in wanted {
-                    if let Some(value) = listed.get(&key) {
-                        resolved.insert(name.to_string(), value.clone());
-                    }
+        // Configs are independent listings, so they go out together rather than
+        // one after another, in the same capped waves the default `get_many`
+        // uses for independent addresses. A manifest whose `ref`s span several
+        // Doppler configs otherwise pays one serialized round trip each.
+        let groups: Vec<(String, Vec<(&str, String)>)> = by_config.into_iter().collect();
+        let listings = super::map_concurrently(&groups, super::get_each_concurrency(), |group| {
+            let (config, wanted) = group;
+            // Only the declared names are requested, so this reads no secret
+            // the manifest did not ask for: see `list_async`.
+            let mut names: Vec<String> = wanted.iter().map(|(_, key)| key.clone()).collect();
+            names.sort_unstable();
+            names.dedup();
+            super::block_on(self.list_async(config, &names))
+        });
+
+        let mut resolved = HashMap::new();
+        for ((_, wanted), listed) in groups.iter().zip(listings) {
+            let listed = listed?;
+            for (name, key) in wanted {
+                if let Some(value) = listed.get(key) {
+                    resolved.insert((*name).to_string(), value.clone());
                 }
             }
-            Ok(resolved)
-        })
+        }
+        Ok(resolved)
     }
 
     /// Refuses, before a caller prompts for a value, every write this provider
@@ -2946,5 +2957,53 @@ mod tests {
         );
         assert!(err.contains("writing 'API_KEY'"), "{err}");
         server.join().unwrap();
+    }
+
+    /// A batch read maps each listed value back onto the request name that
+    /// asked for it, shares one value between requests naming the same
+    /// address, and omits a name the config does not hold.
+    ///
+    /// The mapping loop is what the whole `get_many` override exists for, and
+    /// nothing else exercises it: a transposed `(name, key)` pair would ship
+    /// green.
+    #[test]
+    fn a_batch_read_maps_values_back_onto_their_request_names() {
+        let listing = serde_json::json!({
+            "secrets": {
+                "API_KEY": { "raw": "k", "computed": "k" },
+                "DB_URL": { "raw": "u", "computed": "u" },
+            },
+            "success": true,
+        })
+        .to_string();
+        let (endpoint, server) = response_server(vec![("200 OK", listing.to_string(), None)]);
+        let p = fixture_provider("doppler://myapp/prd", endpoint);
+
+        let shared = NativeAddress {
+            item: "prd/API_KEY".into(),
+            ..Default::default()
+        };
+        let requests = [
+            ("API_KEY", Address::convention("unused", "prd", "API_KEY")),
+            ("DB_URL", Address::convention("unused", "prd", "DB_URL")),
+            ("ABSENT", Address::convention("unused", "prd", "ABSENT")),
+            // The same entry under a second declared name, as a `ref` sharing
+            // one address: the dedup contract says both are served from one
+            // fetch.
+            ("ALIAS", Address::Native(&shared)),
+        ];
+        let read = p.get_many(&requests).unwrap();
+
+        assert_eq!(read["API_KEY"].expose_secret(), b"k");
+        assert_eq!(read["DB_URL"].expose_secret(), b"u");
+        assert_eq!(read["ALIAS"].expose_secret(), b"k");
+        assert!(!read.contains_key("ABSENT"), "an absent name is omitted");
+        assert_eq!(read.len(), 3);
+
+        // One request for the config, naming each wanted secret once.
+        let recorded = server.join().unwrap();
+        assert_eq!(recorded.len(), 1);
+        let line = &recorded[0].line;
+        assert_eq!(line.matches("API_KEY").count(), 1, "{line}");
     }
 }

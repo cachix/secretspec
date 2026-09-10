@@ -1101,11 +1101,17 @@ impl DopplerProvider {
 
     /// The profile resolution announced through
     /// [`set_profile`](Provider::set_profile), if any.
+    ///
+    /// A poisoned lock is read through rather than treated as empty. The lock
+    /// guards a plain `Option<String>` that is assigned in one step, so a
+    /// panic elsewhere while holding it leaves nothing half-written; dropping
+    /// the profile instead would make every bare `ref` fail with "No Doppler
+    /// config" for a reason unrelated to Doppler.
     fn session_profile(&self) -> Option<String> {
         self.profile
             .lock()
-            .ok()
-            .and_then(|held| held.clone())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
             .filter(|profile| !profile.is_empty())
     }
 
@@ -1527,10 +1533,13 @@ impl Provider for DopplerProvider {
 
     /// Remembers the active profile so a bare `ref` under an unpinned URI can
     /// take its config from it, as every convention address already does.
+    /// Recorded even through a poisoned lock: see
+    /// [`session_profile`](Self::session_profile).
     fn set_profile(&self, profile: &str) {
-        if let Ok(mut held) = self.profile.lock() {
-            *held = Some(profile.to_string());
-        }
+        *self
+            .profile
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(profile.to_string());
     }
 
     fn name(&self) -> &'static str {
@@ -3443,6 +3452,34 @@ mod tests {
         let recorded = server.join().unwrap();
         assert_eq!(recorded.len(), 2, "one retry");
         assert_eq!(recorded[0].line, recorded[1].line, "the same request again");
+    }
+
+    /// A panic elsewhere while the profile lock is held must not cost the
+    /// profile: the guarded value is assigned in one step, so a poisoned lock
+    /// holds exactly what an unpoisoned one would, and losing it would fail
+    /// every bare `ref` with "No Doppler config".
+    #[test]
+    fn a_poisoned_profile_lock_keeps_the_profile() {
+        let p = provider("doppler://myapp");
+        p.set_profile("prd");
+        let poisoning = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let _held = p.profile.lock().unwrap();
+                    panic!("poison the profile lock");
+                })
+                .join()
+        });
+        assert!(poisoning.is_err(), "the lock was poisoned");
+        assert!(p.profile.lock().is_err(), "the lock is poisoned");
+
+        assert_eq!(p.session_profile().as_deref(), Some("prd"));
+        p.set_profile("stg");
+        assert_eq!(
+            p.session_profile().as_deref(),
+            Some("stg"),
+            "a poisoned lock still records a new profile"
+        );
     }
 
     /// A server error that outlasts the attempts is reported in Doppler's own

@@ -1195,10 +1195,9 @@ impl DopplerProvider {
     /// The config an address that names none reads from: the one pinned in the
     /// URI, else the one the profile names, else nothing.
     ///
-    /// The single owner of that rule. Every path that has to agree on it goes
-    /// through here -- [`locate`](Self::locate) for an operation,
-    /// [`convention_address`](Provider::convention_address) for a declared
-    /// secret, [`reflect_config`](Self::reflect_config) for discovery -- so
+    /// [`locate`](Self::locate) resolves an operation through here;
+    /// [`config_for_profile`](Self::config_for_profile) spells the same rule
+    /// for the paths that always hold a profile. The two must keep agreeing, so
     /// `secretspec init --from doppler://myapp` cannot come to discover
     /// declarations in one config while resolving them reads another. The
     /// returned [`ConfigSource`] is what lets a refusal name the place the user
@@ -1218,21 +1217,18 @@ impl DopplerProvider {
     /// because a `ref` that names its own config never consults the fallback
     /// and must not be refused for a profile it does not use. Here there is no
     /// `ref`: the config the profile names *is* the answer, so an unspellable
-    /// one is refused before anything is built from it.
+    /// one is refused before anything is built from it. A config pinned in the
+    /// URI was already validated when the URI was parsed.
     ///
     /// # Errors
     ///
     /// Returns an error when the profile cannot name a Doppler config.
     fn config_for_profile(&self, profile: &str) -> Result<String> {
-        // `Some(profile)` always implies a config; the fallback repeats what
-        // `implied_config` would have returned rather than asserting.
-        let (config, source) = self
-            .implied_config(Some(profile))
-            .unwrap_or((profile, ConfigSource::Profile));
-        if source == ConfigSource::Profile {
-            validate_config_name(config, source)?;
+        if let Some(config) = &self.config.config {
+            return Ok(config.clone());
         }
-        Ok(config.to_string())
+        validate_config_name(profile, ConfigSource::Profile)?;
+        Ok(profile.to_string())
     }
 
     /// The write policy, applied to an already-resolved [`Location`].

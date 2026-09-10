@@ -286,6 +286,10 @@ SecretSpec reports it as a refusal naming the secret rather than as a secret
 that is not set. Reporting it as unset would let `secretspec check` offer to
 set — and overwrite — a value it was never allowed to read.
 
+Deleting such a secret still works. Doppler accepts the write even when it will
+not serve the value, so SecretSpec does not let an unreadable secret block its
+own deletion.
+
 A `masked` secret is not withheld: masking affects how Doppler's dashboard
 displays a value, not whether the API returns it.
 

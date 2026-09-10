@@ -1460,18 +1460,27 @@ impl Provider for DopplerProvider {
     /// invalidation runs over addresses that may never have been written, so a
     /// config that was never created must answer `Ok(false)` rather than fail.
     ///
+    /// The read is an *optimization of the return value*, never a precondition:
+    /// a read that fails for any other reason falls through to the deletion.
+    /// Doppler withholds the value of a `restricted` secret from a token tied
+    /// to a user identity while still accepting a write of it, so failing the
+    /// deletion on the read would refuse deletions Doppler would have honored
+    /// -- and [`check_deletable`](Provider::check_deletable) cannot foresee
+    /// that without a round trip, so preflight would pass and the deletion
+    /// abort partway through, which is the failure that pair exists to
+    /// prevent.
+    ///
     /// A reserved name is refused here rather than at Doppler, so `delete` and
-    /// [`check_deletable`](Provider::check_deletable) refuse for the same
-    /// reason. Resolved once and then checked, as in [`set`](Provider::set).
+    /// `check_deletable` refuse for the same reason. Resolved once and then
+    /// checked, as in [`set`](Provider::set).
     fn delete(&self, addr: Address<'_>) -> Result<bool> {
         let loc = self.locate(addr)?;
         self.check_location(&loc)?;
         super::block_on(async {
-            if self
-                .get_async(&loc, AbsentConfig::HoldsNothing)
-                .await?
-                .is_none()
-            {
+            if matches!(
+                self.get_async(&loc, AbsentConfig::HoldsNothing).await,
+                Ok(None)
+            ) {
                 return Ok(false);
             }
             self.write_async(&loc, None).await?;
@@ -3005,5 +3014,67 @@ mod tests {
         assert_eq!(recorded.len(), 1);
         let line = &recorded[0].line;
         assert_eq!(line.matches("API_KEY").count(), 1, "{line}");
+    }
+
+    /// Deleting reads first so the `bool` tells a real invalidation from a
+    /// no-op: an absent secret is one request and `false`, a stored one is a
+    /// read followed by the null write and `true`.
+    #[test]
+    fn a_delete_probes_before_it_writes() {
+        let absent = serde_json::json!({
+            "name": "API_KEY",
+            "value": { "raw": null, "computed": null,
+                       "rawVisibility": null, "computedVisibility": null },
+            "success": true,
+        })
+        .to_string();
+        let (endpoint, server) = response_server(vec![("200 OK", absent.to_string(), None)]);
+        let p = fixture_provider("doppler://myapp/prd", endpoint);
+        assert!(
+            !p.delete(Address::convention("unused", "prd", "API_KEY"))
+                .unwrap(),
+            "nothing was there to delete"
+        );
+        let recorded = server.join().unwrap();
+        assert_eq!(recorded.len(), 1, "an absent secret is not written to");
+        assert!(recorded[0].line.starts_with("GET /configs/config/secret?"));
+
+        let (endpoint, server) = response_server(vec![
+            ("200 OK", single_read("k", "k").to_string(), None),
+            ("200 OK", r#"{"success":true}"#.to_string(), None),
+        ]);
+        let p = fixture_provider("doppler://myapp/prd", endpoint);
+        assert!(
+            p.delete(Address::convention("unused", "prd", "API_KEY"))
+                .unwrap(),
+            "a stored secret was invalidated"
+        );
+        let recorded = server.join().unwrap();
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(recorded[1].line, "POST /configs/config/secrets HTTP/1.1");
+        let body: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
+        assert_eq!(body["secrets"]["API_KEY"], serde_json::Value::Null);
+    }
+
+    /// A probe that fails for any reason but an absent config does not block
+    /// the deletion.
+    ///
+    /// Doppler withholds a `restricted` value from a token tied to a user
+    /// identity while still accepting a write of it, and
+    /// [`Provider::check_deletable`] cannot foresee that without a round trip.
+    /// Failing here would make preflight pass and the deletion abort partway
+    /// through a multi-secret import.
+    #[test]
+    fn a_delete_survives_a_probe_it_cannot_read() {
+        let (endpoint, server) = response_server(vec![
+            ("200 OK", restricted_read().to_string(), None),
+            ("200 OK", r#"{"success":true}"#.to_string(), None),
+        ]);
+        let p = fixture_provider("doppler://myapp/prd", endpoint);
+        assert!(
+            p.delete(Address::convention("unused", "prd", "MONGO_CONNECTION"))
+                .expect("an unreadable secret is still deletable"),
+        );
+        assert_eq!(server.join().unwrap().len(), 2);
     }
 }

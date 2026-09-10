@@ -1122,17 +1122,56 @@ impl DopplerProvider {
     fn locate(&self, addr: Address<'_>) -> Result<Location> {
         let item = flat_item(self, addr)?;
         let session = self.session_profile();
-        let fallback = match (&self.config.config, &session) {
-            (Some(config), _) => Some((config.as_str(), ConfigSource::Uri)),
-            (None, Some(profile)) => Some((profile.as_str(), ConfigSource::Profile)),
-            (None, None) => None,
-        };
+        let fallback = self.implied_config(session.as_deref());
         let (config, name) = parse_item(&item, fallback)?;
         Ok(Location {
             project: self.config.project.clone(),
             config: config.to_string(),
             name: name.to_string(),
         })
+    }
+
+    /// The config an address that names none reads from: the one pinned in the
+    /// URI, else the one the profile names, else nothing.
+    ///
+    /// The single owner of that rule. Every path that has to agree on it goes
+    /// through here -- [`locate`](Self::locate) for an operation,
+    /// [`convention_address`](Provider::convention_address) for a declared
+    /// secret, [`reflect_config`](Self::reflect_config) for discovery -- so
+    /// `secretspec init --from doppler://myapp` cannot come to discover
+    /// declarations in one config while resolving them reads another. The
+    /// returned [`ConfigSource`] is what lets a refusal name the place the user
+    /// has to edit.
+    fn implied_config<'a>(&'a self, profile: Option<&'a str>) -> Option<(&'a str, ConfigSource)> {
+        match (&self.config.config, profile) {
+            (Some(config), _) => Some((config.as_str(), ConfigSource::Uri)),
+            (None, Some(profile)) => Some((profile, ConfigSource::Profile)),
+            (None, None) => None,
+        }
+    }
+
+    /// [`implied_config`](Self::implied_config) where a profile is always known,
+    /// validated up front.
+    ///
+    /// [`locate`](Self::locate) leaves the check to [`parse_item`] instead,
+    /// because a `ref` that names its own config never consults the fallback
+    /// and must not be refused for a profile it does not use. Here there is no
+    /// `ref`: the config the profile names *is* the answer, so an unspellable
+    /// one is refused before anything is built from it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the profile cannot name a Doppler config.
+    fn config_for_profile(&self, profile: &str) -> Result<String> {
+        // `Some(profile)` always implies a config; the fallback repeats what
+        // `implied_config` would have returned rather than asserting.
+        let (config, source) = self
+            .implied_config(Some(profile))
+            .unwrap_or((profile, ConfigSource::Profile));
+        if source == ConfigSource::Profile {
+            validate_config_name(config, source)?;
+        }
+        Ok(config.to_string())
     }
 
     /// The write policy, applied to an already-resolved [`Location`].
@@ -1173,13 +1212,7 @@ impl DopplerProvider {
     ///
     /// Returns an error when the profile cannot name a Doppler config.
     fn reflect_config(&self, context: super::DiscoveryContext<'_>) -> Result<String> {
-        match &self.config.config {
-            Some(config) => Ok(config.clone()),
-            None => {
-                validate_config_name(context.profile, ConfigSource::Profile)?;
-                Ok(context.profile.to_string())
-            }
-        }
+        self.config_for_profile(context.profile)
     }
 
     /// Sends one [`Call`] to Doppler.
@@ -1353,13 +1386,7 @@ impl Provider for DopplerProvider {
         key: &str,
     ) -> Result<NativeAddress> {
         validate_secret_name(key)?;
-        let config = match &self.config.config {
-            Some(config) => config.clone(),
-            None => {
-                validate_config_name(profile, ConfigSource::Profile)?;
-                profile.to_string()
-            }
-        };
+        let config = self.config_for_profile(profile)?;
         Ok(NativeAddress {
             item: format!("{config}/{key}"),
             ..Default::default()

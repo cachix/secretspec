@@ -330,8 +330,30 @@ fn envelope_messages(body: &str) -> Option<String> {
 /// a secret's plaintext, and this error text is printed and audited, so the
 /// 200-shape refusals use [`envelope_messages`] and say nothing about a body
 /// they did not recognize.
+///
+/// A body that is not Doppler's envelope is truncated to
+/// [`MAX_ERROR_BODY_BYTES`]. It reached this process from something other than
+/// Doppler -- a TLS-terminating proxy, a WAF, a gateway error page -- so its
+/// size is not bounded by anything Doppler promises, and it lands verbatim in
+/// a message that is printed and persisted to the audit log.
 fn error_message(body: &str) -> String {
-    envelope_messages(body).unwrap_or_else(|| body.to_string())
+    envelope_messages(body).unwrap_or_else(|| truncate_chars(body, MAX_ERROR_BODY_BYTES))
+}
+
+/// The body text an error may quote from a response that is not Doppler's.
+const MAX_ERROR_BODY_BYTES: usize = 2 * 1024;
+
+/// `text` if it fits in `limit` bytes, else its longest character-aligned
+/// prefix that does, marked as cut.
+fn truncate_chars(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_string();
+    }
+    let end = (0..=limit)
+        .rev()
+        .find(|&n| text.is_char_boundary(n))
+        .unwrap_or(0);
+    format!("{}... (truncated)", &text[..end])
 }
 
 /// Appends Doppler's own words to a refusal, when the body carried any.
@@ -3076,5 +3098,25 @@ mod tests {
                 .expect("an unreadable secret is still deletable"),
         );
         assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    /// A failure body that is not Doppler's envelope is quoted, but bounded: it
+    /// came from something other than Doppler and lands in a message that is
+    /// printed and persisted to the audit log.
+    #[test]
+    fn an_unrecognized_failure_body_is_bounded() {
+        let page = format!("<html>{}</html>", "x".repeat(64 * 1024));
+        let message = error_message(&page);
+        assert!(
+            message.len() < MAX_ERROR_BODY_BYTES + 64,
+            "{} bytes",
+            message.len()
+        );
+        assert!(message.starts_with("<html>xxx"), "{message}");
+        assert!(message.ends_with("... (truncated)"), "{message}");
+
+        // A body that fits is quoted whole, and Doppler's own envelope is
+        // never truncated into.
+        assert_eq!(error_message("upstream timeout"), "upstream timeout");
     }
 }

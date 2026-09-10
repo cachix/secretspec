@@ -560,6 +560,21 @@ enum SecretState {
     Present(SecretBytes),
     /// No such secret: every field is null, the visibilities included.
     Unset,
+    /// A secret object that is not any answer Doppler gives.
+    ///
+    /// Doppler reports an absent secret by nulling *every* field -- its own
+    /// API clients test exactly that, all six fields at once -- so a `raw`
+    /// that carries a string while `computed` carries nothing is not an
+    /// absent secret. It is a body whose shape this provider does not
+    /// recognize: a renamed or dropped field, or an intercepting proxy's
+    /// envelope.
+    ///
+    /// That has to be reported for the same reason the outer `value` guard in
+    /// [`parse_secret_value`] exists: resolving it to [`Unset`](Self::Unset)
+    /// makes a fallback chain treat it as an ordinary miss and serve the next
+    /// provider's value with no warning, and makes `secretspec check` offer
+    /// to set -- and overwrite -- a secret that exists.
+    Unrecognized,
     /// The secret exists, but Doppler served a visibility in place of its
     /// value.
     ///
@@ -603,6 +618,10 @@ fn classify(value: &serde_json::Value) -> SecretState {
             Some(visibility) => SecretState::Withheld {
                 visibility: visibility.to_string(),
             },
+            // An absent secret nulls every field, `raw` included. A stored
+            // `raw` with nothing under `computed` is therefore not Doppler's
+            // answer for one: see `SecretState::Unrecognized`.
+            None if value["raw"].is_string() => SecretState::Unrecognized,
             None => SecretState::Unset,
         },
         other => SecretState::NotAString {
@@ -623,6 +642,11 @@ fn report(state: SecretState, name: &str) -> Result<Option<SecretBytes>> {
     match state {
         SecretState::Present(value) => Ok(Some(value)),
         SecretState::Unset => Ok(None),
+        SecretState::Unrecognized => Err(operation_error(format!(
+            "Doppler's answer for '{name}' carries a raw value but no computed one, which is \
+                 not a shape this provider recognizes -- an absent secret nulls every field. \
+                 SecretSpec refuses it rather than reading it as a secret that is not set."
+        ))),
         SecretState::Withheld { visibility } => Err(operation_error(format!(
             "Doppler withheld the value of '{name}': the secret exists with visibility \
                  '{visibility}' but Doppler returned no value for it, so this token may see that \
@@ -3118,5 +3142,31 @@ mod tests {
         // A body that fits is quoted whole, and Doppler's own envelope is
         // never truncated into.
         assert_eq!(error_message("upstream timeout"), "upstream timeout");
+    }
+
+    /// A raw value with nothing under `computed` is not Doppler's answer for
+    /// an absent secret -- that one nulls every field -- so it is reported
+    /// rather than read as a secret nobody set.
+    ///
+    /// Resolving it to "unset" would have a fallback chain serve the next
+    /// provider's value with no warning, and `secretspec check` offer to
+    /// overwrite a secret that exists.
+    #[test]
+    fn a_secret_object_missing_its_computed_value_is_an_error() {
+        for value in [
+            serde_json::json!({ "raw": "s3cret_DO_NOT_ECHO", "computed": null }),
+            // The same shape with the field renamed away entirely.
+            serde_json::json!({ "raw": "s3cret_DO_NOT_ECHO", "secretValue": "s3cret" }),
+        ] {
+            let body = serde_json::json!({ "value": value, "success": true }).to_string();
+            let err = parse_secret_value(&body, "MONGO_CONNECTION")
+                .expect_err("an unrecognized secret object must be reported")
+                .to_string();
+            assert!(err.contains("MONGO_CONNECTION"), "{err}");
+            assert!(
+                !err.contains("DO_NOT_ECHO"),
+                "the value must not leak: {err}"
+            );
+        }
     }
 }

@@ -93,6 +93,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 /// Doppler's API root. Doppler is SaaS-only with a single address, so this is a
 /// constant rather than a knob: there is no self-hosted deployment to point
@@ -359,6 +360,46 @@ fn truncate_chars(text: &str, limit: usize) -> String {
         .find(|&n| text.is_char_boundary(n))
         .unwrap_or(0);
     format!("{}... (truncated)", &text[..end])
+}
+
+/// How many times one [`Call`] is sent before its answer is taken as final,
+/// the first attempt included.
+const RETRY_ATTEMPTS: u32 = 3;
+
+/// The longest `retry-after` this provider waits out. Doppler's rate-limit
+/// buckets reset per minute, so a suggested wait can approach that; stalling a
+/// `secretspec run` for most of a minute is worse than reporting the limit, and
+/// a wait past this is reported instead.
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(10);
+
+/// The wait before an attempt is repeated, or `None` when its answer stands.
+///
+/// Doppler answers a rate limit with 429 and a `retry-after` header holding a
+/// suggested wait in seconds; that wait is honored up to [`MAX_RETRY_DELAY`].
+/// A 5xx is transient by definition and is retried after a short backoff, as
+/// is a 429 without a usable header. Nothing else is retried: a 4xx is
+/// Doppler's final word on the request, and a redirect is refused outright by
+/// the client (see [`DopplerProvider::http`]). Writes are safe to repeat --
+/// setting a value or nulling it is idempotent -- so reads and writes share
+/// one policy.
+///
+/// This matters more here than for a per-secret provider: a profile is one
+/// listing request, so without a retry a single 429 fails every secret in it.
+fn retry_delay(status: StatusCode, retry_after: Option<&str>, attempt: u32) -> Option<Duration> {
+    if attempt >= RETRY_ATTEMPTS {
+        return None;
+    }
+    if status != StatusCode::TOO_MANY_REQUESTS && !status.is_server_error() {
+        return None;
+    }
+    let suggested = retry_after
+        .and_then(|seconds| seconds.trim().parse::<u64>().ok())
+        .map(Duration::from_secs);
+    match suggested {
+        Some(wait) if wait > MAX_RETRY_DELAY => None,
+        Some(wait) => Some(wait),
+        None => Some(Duration::from_millis(250) * 2u32.pow(attempt - 1)),
+    }
 }
 
 /// Appends Doppler's own words to a refusal, when the body carried any.
@@ -1258,11 +1299,37 @@ impl DopplerProvider {
 
     /// Sends one [`Call`] and hands back what a pure interpreter takes: the
     /// status and the body.
+    ///
+    /// A rate limit or a server error is retried per [`retry_delay`]; the
+    /// answer handed back is the last attempt's, so an exhausted retry still
+    /// reports Doppler's own words.
+    ///
+    /// The wait is a blocking sleep, as in the Vault provider: every `execute`
+    /// runs under its own [`block_on`](super::block_on) with nothing else to
+    /// drive meanwhile, and `tokio`'s timers are not built into this crate.
+    ///
+    /// Every request, writes included, goes through here: [`write_async`]
+    /// (Self::write_async) must not reach [`dispatch`](Self::dispatch) on its
+    /// own, or a write would be the one request a rate limit fails outright.
     async fn execute(&self, call: &Call<'_>) -> Result<(StatusCode, String)> {
-        let response = self.dispatch(call).await?;
-        let status = response.status();
-        let body = Self::response_body(response).await?;
-        Ok((status, body))
+        let mut attempt = 1;
+        loop {
+            let response = self.dispatch(call).await?;
+            let status = response.status();
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            let body = Self::response_body(response).await?;
+            match retry_delay(status, retry_after.as_deref(), attempt) {
+                Some(wait) => {
+                    std::thread::sleep(wait);
+                    attempt += 1;
+                }
+                None => return Ok((status, body)),
+            }
+        }
     }
 
     /// Reads a response body without hiding a transport failure behind an empty
@@ -1364,12 +1431,10 @@ impl DopplerProvider {
     /// a connection dropped mid-body cannot report a failure for a write the
     /// status line already said committed.
     async fn write_async(&self, loc: &Location, value: Option<&str>) -> Result<()> {
-        let response = self.dispatch(&Call::Write(loc, value)).await?;
-        let status = response.status();
+        let (status, body) = self.execute(&Call::Write(loc, value)).await?;
         if status.is_success() {
             return Ok(());
         }
-        let body = Self::response_body(response).await?;
         let action = match value {
             Some(_) => format!("writing '{}'", loc.name),
             None => format!("deleting '{}'", loc.name),
@@ -2946,15 +3011,15 @@ mod tests {
     }
 
     /// Answers `responses` in order, one connection each, recording what
-    /// arrived. `location`, when given, is sent as a `Location` header.
+    /// arrived. `header`, when given, is sent as one extra response header.
     fn response_server(
-        responses: Vec<(&'static str, String, Option<String>)>,
+        responses: Vec<(&'static str, String, Option<(&'static str, String)>)>,
     ) -> (SocketAddr, std::thread::JoinHandle<Vec<RecordedRequest>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
             let mut recorded = Vec::new();
-            for (status, body, location) in responses {
+            for (status, body, header) in responses {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut reader = BufReader::new(&mut stream);
                 let mut line = String::new();
@@ -2981,12 +3046,12 @@ mod tests {
                     headers,
                     body: String::from_utf8(request_body).unwrap(),
                 });
-                let location = location
-                    .map(|target| format!("Location: {target}\r\n"))
+                let header = header
+                    .map(|(name, value)| format!("{name}: {value}\r\n"))
                     .unwrap_or_default();
                 write!(
                     stream,
-                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{location}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{header}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 )
                 .unwrap();
@@ -3081,7 +3146,7 @@ mod tests {
         let (endpoint, server) = response_server(vec![(
             "307 Temporary Redirect",
             String::new(),
-            Some(target),
+            Some(("Location", target)),
         )]);
         let p = fixture_provider("doppler://myapp/prd", endpoint);
 
@@ -3304,5 +3369,109 @@ mod tests {
 
         // An empty filter stays one request, which reads the whole config.
         assert_eq!(filter_chunks(&[]), [""]);
+    }
+
+    /// Only a rate limit or a server error is retried, a suggested wait is
+    /// honored up to the cap and refused beyond it, and attempts run out.
+    #[test]
+    fn retry_policy_follows_dopplers_rate_limit_contract() {
+        let limited = StatusCode::TOO_MANY_REQUESTS;
+        assert_eq!(
+            retry_delay(limited, Some("2"), 1),
+            Some(Duration::from_secs(2))
+        );
+        assert_eq!(
+            retry_delay(limited, None, 1),
+            Some(Duration::from_millis(250)),
+            "no usable header falls back to a backoff"
+        );
+        assert_eq!(
+            retry_delay(limited, Some("soon"), 2),
+            Some(Duration::from_millis(500)),
+            "an unparseable header is a missing one, and the backoff grows"
+        );
+        assert_eq!(
+            retry_delay(limited, Some("60"), 1),
+            None,
+            "a wait past the cap is reported rather than sat out"
+        );
+        assert_eq!(
+            retry_delay(limited, Some("0"), RETRY_ATTEMPTS),
+            None,
+            "attempts run out"
+        );
+        assert_eq!(
+            retry_delay(StatusCode::SERVICE_UNAVAILABLE, None, 1),
+            Some(Duration::from_millis(250))
+        );
+        for final_word in [
+            StatusCode::BAD_REQUEST,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::NOT_FOUND,
+            StatusCode::TEMPORARY_REDIRECT,
+        ] {
+            assert_eq!(retry_delay(final_word, Some("1"), 1), None, "{final_word}");
+        }
+    }
+
+    /// A rate-limited read waits out Doppler's suggested `retry-after` and
+    /// then asks again, so a single 429 does not fail a profile.
+    #[test]
+    fn a_rate_limited_read_is_retried_after_the_suggested_wait() {
+        let (endpoint, server) = response_server(vec![
+            (
+                "429 Too Many Requests",
+                r#"{"messages":["Too many requests"],"success":false}"#.to_string(),
+                Some(("Retry-After", "1".to_string())),
+            ),
+            ("200 OK", single_read("k", "k").to_string(), None),
+        ]);
+        let p = fixture_provider("doppler://myapp/prd", endpoint);
+
+        let started = std::time::Instant::now();
+        let value = p
+            .get(Address::convention("unused", "prd", "API_KEY"))
+            .unwrap()
+            .expect("the retry read the value");
+        assert_eq!(value.expose_secret(), b"k");
+        assert!(
+            started.elapsed() >= Duration::from_secs(1),
+            "the suggested wait was honored: {:?}",
+            started.elapsed()
+        );
+
+        let recorded = server.join().unwrap();
+        assert_eq!(recorded.len(), 2, "one retry");
+        assert_eq!(recorded[0].line, recorded[1].line, "the same request again");
+    }
+
+    /// A server error that outlasts the attempts is reported in Doppler's own
+    /// words, from the last answer.
+    #[test]
+    fn a_persistent_server_error_is_reported_after_the_last_attempt() {
+        let outage = || {
+            (
+                "503 Service Unavailable",
+                r#"{"messages":["Doppler is briefly unavailable"],"success":false}"#.to_string(),
+                None,
+            )
+        };
+        let (endpoint, server) = response_server(vec![outage(), outage(), outage()]);
+        let p = fixture_provider("doppler://myapp/prd", endpoint);
+
+        let err = p
+            .set(
+                Address::convention("unused", "prd", "API_KEY"),
+                &SecretBytes::from_utf8("v1"),
+            )
+            .expect_err("three outages exhaust the attempts")
+            .to_string();
+        assert!(err.contains("HTTP 503"), "{err}");
+        assert!(err.contains("Doppler is briefly unavailable"), "{err}");
+        assert_eq!(
+            server.join().unwrap().len(),
+            RETRY_ATTEMPTS as usize,
+            "every attempt was made"
+        );
     }
 }

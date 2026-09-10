@@ -47,7 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without reading values, and values assembled from `${...}` references arrive
   resolved. Doppler's reserved names, and names or values Doppler cannot store
   unchanged, are refused rather than rewritten. Configs are read concurrently,
-  and a manifest too large to name in one request URI is split across several.
+  a manifest too large to name in one request URI is split across several, and
+  a rate-limited or failed request is retried after Doppler's suggested wait.
   A `restricted` secret Doppler will not serve to a personal or CLI token is
   reported as the refusal it is, and can still be deleted. Projects and configs
   must already exist.

@@ -239,7 +239,9 @@ config holding many more of them is not pulled into the process wholesale, and
 [discovery](#discover-secret-names) reads only secret *names*, never values. One
 request covers a config; secrets spread across several configs are read
 concurrently, and a manifest too large to name in one request URI is split
-across several.
+across several. A request Doppler rate-limits or fails with a server error is
+retried after the wait Doppler suggests, up to three attempts, so one `429`
+does not fail a whole profile.
 
 SecretSpec's own project name is **unused**: the Doppler project in the URI
 provides the namespace. Two SecretSpec projects pointing at one

@@ -414,7 +414,7 @@ item title, or when a specific field is required:
 DATABASE_URL = { description = "Application database", ref = { item = "MyApp Database", field = "password" }, providers = ["bw"] }
 ```
 
-`ref.item` accepts either an exact Bitwarden item UUID or a complete,
+`ref.item` accepts either an exact Bitwarden item UUID (0.21+) or a complete,
 case-insensitive item title.
 
 ### Migrating bare item names {/* #migrating-bare-item-names-020 */}

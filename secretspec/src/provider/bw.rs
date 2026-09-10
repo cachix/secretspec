@@ -2656,6 +2656,13 @@ impl Provider for BitwardenProvider {
         addr: Address<'a>,
     ) -> Result<std::borrow::Cow<'a, crate::config::NativeAddress>> {
         let mut coords = self.resolve_coords(addr)?.into_owned();
+        // A title and an ID can address the same existing item, even when the
+        // selected field is absent. Use the write path's scoped, unfiltered
+        // lookup so import preflight detects that collision before any writes.
+        let items = self.list_items(None)?;
+        if let Some(item) = find_addressed_item(&items, &coords.item, self.resolved_item_type()?)? {
+            coords.item = item.id.clone();
+        }
         if coords.field.is_none() {
             coords.field = Some(
                 match std::env::var("BITWARDEN_DEFAULT_FIELD")
@@ -6134,17 +6141,21 @@ mod tests {
         assert_eq!(resolved.item, "Existing Login");
     }
 
+    #[cfg(unix)]
     #[test]
     fn different_folder_prefixes_are_different_convention_entries() {
         with_clean_env(|| {
-            let left = BitwardenProvider::new(BitwardenConfig {
+            let fake = FakeBw::new();
+            let mut left = BitwardenProvider::new(BitwardenConfig {
                 folder_prefix: Some("left/{project}/{profile}".to_string()),
                 ..Default::default()
             });
-            let right = BitwardenProvider::new(BitwardenConfig {
+            left.cli_binary_path = fake.dir.join("bw");
+            let mut right = BitwardenProvider::new(BitwardenConfig {
                 folder_prefix: Some("right/{project}/{profile}".to_string()),
                 ..Default::default()
             });
+            right.cli_binary_path = fake.dir.join("bw");
 
             assert!(
                 !left
@@ -6164,13 +6175,52 @@ mod tests {
         assert_eq!(provider.supported_coords(), &["field"]);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn same_entries_resolves_item_titles_and_ids_but_preserves_distinct_fields() {
+        with_clean_env(|| {
+            let id = "22222222-2222-2222-2222-222222222222";
+            let fake = FakeBw::new().with_items(json!([
+                { "id": id, "name": "Shared Login", "type": 1 }
+            ]));
+            let mut provider = BitwardenProvider::default();
+            provider.cli_binary_path = fake.dir.join("bw");
+            let title = crate::config::NativeAddress {
+                item: "shared login".into(),
+                field: Some("api_key".into()),
+                ..Default::default()
+            };
+            for (item, field, expected) in [
+                (id, "api_key", true),
+                (id, "other_key", false),
+                ("Another Login", "api_key", false),
+            ] {
+                let other = crate::config::NativeAddress {
+                    item: item.into(),
+                    field: Some(field.into()),
+                    ..Default::default()
+                };
+                assert_eq!(
+                    provider
+                        .same_entries(Address::Native(&title), &provider, Address::Native(&other))
+                        .unwrap(),
+                    expected,
+                    "{item}/{field}"
+                );
+            }
+        });
+    }
+
+    #[cfg(unix)]
     #[test]
     fn same_entries_treats_an_implicit_login_field_as_password() {
         with_clean_env(|| {
-            let provider = BitwardenProvider::new(BitwardenConfig {
+            let fake = FakeBw::new();
+            let mut provider = BitwardenProvider::new(BitwardenConfig {
                 default_item_type: Some(BitwardenItemType::Login),
                 ..Default::default()
             });
+            provider.cli_binary_path = fake.dir.join("bw");
             let implicit = crate::config::NativeAddress {
                 item: "shared".into(),
                 ..Default::default()
@@ -6193,17 +6243,21 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn same_entries_uses_explicit_fields_instead_of_provider_defaults() {
         with_clean_env(|| {
-            let left = BitwardenProvider::new(BitwardenConfig {
+            let fake = FakeBw::new();
+            let mut left = BitwardenProvider::new(BitwardenConfig {
                 default_field: Some("left".into()),
                 ..Default::default()
             });
-            let right = BitwardenProvider::new(BitwardenConfig {
+            left.cli_binary_path = fake.dir.join("bw");
+            let mut right = BitwardenProvider::new(BitwardenConfig {
                 default_field: Some("right".into()),
                 ..Default::default()
             });
+            right.cli_binary_path = fake.dir.join("bw");
             let address = crate::config::NativeAddress {
                 item: "shared".into(),
                 field: Some("password".into()),

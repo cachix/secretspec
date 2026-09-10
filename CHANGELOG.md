@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configurable RSA available for compatibility. OpenSSH generation likewise
   defaults to Ed25519 and supports configurable RSA keys and comments.
 
+### Fixed
+
+- Bitwarden imports reject secrets targeting the same item field through a
+  title and a UUID before writing, preventing imported values from overwriting
+  each other.
+
 ## [0.20.0] - 2026-08-31
 
 ### Changed

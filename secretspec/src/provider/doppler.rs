@@ -386,11 +386,6 @@ fn parse_secret_value(body: &str, name: &str) -> Result<Option<SecretBytes>> {
             "Failed to parse Doppler's response for '{name}': {e}"
         ))
     })?;
-    // A reserved name is never SecretSpec's to serve, even though Doppler
-    // answers for it: see RESERVED_NAMES.
-    if is_reserved(name) {
-        return Ok(None);
-    }
     // The `value` object is required rather than indexed straight through:
     // indexing a body of any other shape yields null, which `secret_value`
     // cannot tell from a secret that is simply unset. An HTTP 200 that is not
@@ -1236,11 +1231,18 @@ impl DopplerProvider {
     }
 
     /// Reads one secret.
+    ///
+    /// A reserved name is answered without asking: Doppler serves its own
+    /// injected value for one, which is never SecretSpec's to serve, so the
+    /// round trip can only ever produce `None`. See [`RESERVED_NAMES`].
     async fn get_async(
         &self,
         loc: &Location,
         absent_config: AbsentConfig,
     ) -> Result<Option<SecretBytes>> {
+        if is_reserved(&loc.name) {
+            return Ok(None);
+        }
         let (status, body) = self.execute(&Call::Read(loc)).await?;
         interpret_read(loc, status, &body, absent_config)
     }
@@ -2550,20 +2552,21 @@ mod tests {
     /// A single read of a reserved name is filtered too, so a batch read and a
     /// single read agree. Doppler refuses to *write* these names, so a value
     /// under one can never be SecretSpec's.
+    ///
+    /// Answered without asking: the provider holds no token and points at no
+    /// endpoint, so a read that reached the network would fail rather than
+    /// return `None`.
     #[test]
     fn a_reserved_name_reads_as_missing() {
-        let body = serde_json::json!({
-            "name": "DOPPLER_CONFIG",
-            "value": { "raw": "", "computed": "dev" },
-            "success": true,
-        })
-        .to_string();
-        assert!(
-            parse_secret_value(&body, "DOPPLER_CONFIG")
-                .unwrap()
-                .is_none(),
-            "Doppler's own injected value must never be served as a secret"
-        );
+        let p = provider("doppler://myapp/dev");
+        for name in RESERVED_NAMES {
+            assert!(
+                p.get(Address::convention("unused", "dev", name))
+                    .expect("a reserved name is answered locally")
+                    .is_none(),
+                "Doppler's own injected value must never be served as a secret: {name}"
+            );
+        }
     }
 
     /// A listing reads `computed`, so a reference resolves the same way in a

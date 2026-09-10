@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   helpers. `login` and `logout` manage credentials isolated by settings scope
   and API resource; custom manifests remain available through `--file` (0.21+).
 
+- Bitwarden Password Manager references accept an exact item UUID in 0.21+ for
+  reads and writes, so one of several same-named items can be addressed without
+  renaming it.
+
 - OpenPGP and OpenSSH private keys can be generated entirely in Rust (0.21+).
   OpenPGP generation uses an explicit User ID and signing, encryption, or
   combined capability profiles; Ed25519/Curve25519 is the default, with

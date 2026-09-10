@@ -513,21 +513,30 @@ the collection's actual organization. Naming it is optional when the collection
 name is unambiguous. Addresses that resolve to nothing fail with the
 organizations or collections that do exist.
 
-Item names match the same way — **in full and case-insensitively** (0.18+), so
-`API_KEY` never resolves `API_KEY_OLD`. Names are not unique in Bitwarden, and a
-name matching several items is refused with their ids rather than resolved to an
-arbitrary one; address a single item by using its id as the `item`. `?type=`
-narrows both reads and writes to that item type, keeping a Card and a same-named
-Login separately addressable. An unsupported `?type=`, or an unknown query
-parameter, is rejected when the address is parsed rather than ignored.
+<VersionCompatibility version="0.21" kind="changed">
+
+`ref.item` also accepts an exact Bitwarden item UUID.
+
+</VersionCompatibility>
+
+An exact item UUID selects that item directly. Otherwise, item names match the
+same way — **in full and case-insensitively** (0.18+), so `API_KEY` never
+resolves `API_KEY_OLD`. Names are not unique in Bitwarden, and a name matching
+several items is refused with their ids rather than resolved to an arbitrary
+one; address a single item by using its id as the `item`. `?type=` narrows name
+matches on both reads and writes, keeping a Card and a same-named Login
+separately addressable. An exact item UUID takes precedence because it already
+identifies one item. An unsupported `?type=`, or an unknown query parameter, is
+rejected when the address is parsed rather than ignored.
 
 SecretSpec 0.20+ convention items use the title
 `secretspec/{project}/{profile}/{key}`. `?folder=` replaces the prefix before
 the key; it is an item-title namespace, not a Bitwarden folder. Explicit
-`ref.item` values remain complete, unprefixed item titles. Releases through
-0.19 wrote bare convention titles, which must be renamed to the 0.20 layout or
-kept with an explicit `ref = { item = "OLD_TITLE" }`; there is no automatic
-bare-name fallback because a bare item carries no project/profile ownership.
+`ref.item` values remain complete, unprefixed item titles or, in 0.21+, exact
+item UUIDs. Releases through 0.19 wrote bare convention titles, which must be
+renamed to the 0.20 layout or kept with an explicit
+`ref = { item = "OLD_TITLE" }`; there is no automatic bare-name fallback
+because a bare item carries no project/profile ownership.
 
 `?server=` does not configure the CLI. The `bw` CLI takes its server only from
 `bw config server`, which must be run while logged out, so self-hosted users

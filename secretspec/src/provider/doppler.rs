@@ -2768,7 +2768,7 @@ mod tests {
     /// Answers `responses` in order, one connection each, recording what
     /// arrived. `location`, when given, is sent as a `Location` header.
     fn response_server(
-        responses: Vec<(&'static str, &'static str, Option<String>)>,
+        responses: Vec<(&'static str, String, Option<String>)>,
     ) -> (SocketAddr, std::thread::JoinHandle<Vec<RecordedRequest>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = listener.local_addr().unwrap();
@@ -2831,8 +2831,11 @@ mod tests {
     /// the declared names, and carries the token as a bearer header.
     #[test]
     fn a_list_names_its_coordinates_on_the_wire() {
-        let (endpoint, server) =
-            response_server(vec![("200 OK", r#"{"secrets":{},"success":true}"#, None)]);
+        let (endpoint, server) = response_server(vec![(
+            "200 OK",
+            r#"{"secrets":{},"success":true}"#.to_string(),
+            None,
+        )]);
         let p = fixture_provider("doppler://myapp/prd", endpoint);
 
         let requests = [
@@ -2865,7 +2868,8 @@ mod tests {
     /// nothing in the query.
     #[test]
     fn a_write_puts_the_value_in_the_body() {
-        let (endpoint, server) = response_server(vec![("200 OK", r#"{"success":true}"#, None)]);
+        let (endpoint, server) =
+            response_server(vec![("200 OK", r#"{"success":true}"#.to_string(), None)]);
         let p = fixture_provider("doppler://myapp/prd", endpoint);
 
         p.set(
@@ -2894,8 +2898,11 @@ mod tests {
             "http://{}/configs/config/secrets",
             elsewhere.local_addr().unwrap()
         );
-        let (endpoint, server) =
-            response_server(vec![("307 Temporary Redirect", "", Some(target))]);
+        let (endpoint, server) = response_server(vec![(
+            "307 Temporary Redirect",
+            String::new(),
+            Some(target),
+        )]);
         let p = fixture_provider("doppler://myapp/prd", endpoint);
 
         let err = p
@@ -2920,7 +2927,7 @@ mod tests {
     fn a_failed_write_reports_dopplers_message() {
         let (endpoint, server) = response_server(vec![(
             "400 Bad Request",
-            r#"{"messages":["This token does not have access to requested config 'prd'"],"success":false}"#,
+            r#"{"messages":["This token does not have access to requested config 'prd'"],"success":false}"#.to_string(),
             None,
         )]);
         let p = fixture_provider("doppler://myapp/prd", endpoint);

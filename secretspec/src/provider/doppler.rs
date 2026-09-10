@@ -408,10 +408,12 @@ fn parse_secret_value(body: &str, name: &str) -> Result<Option<SecretBytes>> {
 
 /// Reads every secret in a config out of a list response, indexed by name.
 ///
-/// Reserved names are filtered here: Doppler injects three of its own into every
-/// listing, and passing them on would report secrets nobody declared -- which is
+/// Reserved names are filtered here as well as excluded at the source (see
+/// [`Call::query`]): passing one on would report a secret nobody declared --
 /// exactly what a parity checker over a Doppler config has to special-case if
-/// its source does not.
+/// its source does not. Keeping the local filter is what makes a batch read
+/// agree with a single read, which answers a reserved name without asking at
+/// all.
 ///
 /// # Errors
 ///
@@ -939,6 +941,14 @@ impl Call<'_> {
 
     /// The query naming which project and config the request addresses.
     ///
+    /// Both listings also ask Doppler to leave its own injected names out:
+    /// `include_managed_secrets` defaults to *true*, so every listing carries
+    /// [`RESERVED_NAMES`] whether or not they were asked for. Excluding them at
+    /// the source is what keeps a name Doppler starts injecting *later* out of
+    /// discovery, which a fixed local list cannot; the local filter stays as
+    /// the belt to this braces, because it is what makes a single read and a
+    /// batch read agree.
+    ///
     /// Every read names both, and this is load-bearing rather than tidiness.
     /// A service token (`dp.st.`) is pinned to one project and config, and a
     /// request that names neither is answered from wherever the token points:
@@ -960,14 +970,22 @@ impl Call<'_> {
                 config,
                 names,
             } => {
-                let mut query = vec![("project", *project), ("config", *config)];
+                let mut query = vec![
+                    ("project", *project),
+                    ("config", *config),
+                    ("include_managed_secrets", "false"),
+                ];
                 if !names.is_empty() {
                     query.push(("secrets", *names));
                 }
                 query
             }
             Call::Names { project, config } => {
-                vec![("project", *project), ("config", *config)]
+                vec![
+                    ("project", *project),
+                    ("config", *config),
+                    ("include_managed_secrets", "false"),
+                ]
             }
             Call::Write(..) => Vec::new(),
         }
@@ -2782,6 +2800,7 @@ mod tests {
             [
                 ("project", "myapp"),
                 ("config", "prd"),
+                ("include_managed_secrets", "false"),
                 ("secrets", "API_KEY,DATABASE_URL"),
             ]
         );
@@ -2794,15 +2813,25 @@ mod tests {
                 names: "",
             }
             .query(),
-            [("project", "myapp"), ("config", "prd")]
+            [
+                ("project", "myapp"),
+                ("config", "prd"),
+                ("include_managed_secrets", "false"),
+            ]
         );
+        // Both listings ask Doppler to leave its own injected names out: the
+        // parameter defaults to true, so a listing carries them otherwise.
         assert_eq!(
             Call::Names {
                 project: "myapp",
                 config: "prd",
             }
             .query(),
-            [("project", "myapp"), ("config", "prd")]
+            [
+                ("project", "myapp"),
+                ("config", "prd"),
+                ("include_managed_secrets", "false"),
+            ]
         );
 
         let write = Call::Write(&loc, Some("v"));

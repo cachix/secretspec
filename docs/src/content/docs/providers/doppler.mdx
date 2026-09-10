@@ -272,9 +272,11 @@ secret while still looking fresh.
 ### Doppler's reserved names
 
 Doppler injects `DOPPLER_PROJECT`, `DOPPLER_CONFIG` and `DOPPLER_ENVIRONMENT`
-into every config's secret listing. SecretSpec filters all three from reads and
-from discovery, because Doppler also refuses to *write* them — a value
-under one of those names can never be a secret SecretSpec stored.
+into every config's secret listing. SecretSpec asks Doppler to leave them out of
+every listing it requests, and filters them from reads and from discovery as
+well, because Doppler also refuses to *write* them — a value under one of those
+names can never be a secret SecretSpec stored. Asking Doppler to exclude them is
+what keeps a name it starts injecting later out of discovery too.
 
 Declaring one of those names is therefore refused before `secretspec set`
 prompts for a value, rather than after Doppler rejects the write.

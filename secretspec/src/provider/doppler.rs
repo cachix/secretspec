@@ -6,13 +6,18 @@
 //! # Authentication
 //!
 //! A Doppler token supplied as the `token` provider credential, or via the
-//! `DOPPLER_TOKEN` environment variable that Doppler's own CLI uses. Both token
-//! types work:
+//! `DOPPLER_TOKEN` environment variable that Doppler's own CLI uses. Any
+//! Doppler token authenticates; two are worth naming:
 //!
 //! - a **service account** token (`dp.sa.`), scoped to a workplace by grants,
 //!   which can reach every project and config it was granted;
 //! - a **service token** (`dp.st.`), pinned by Doppler to exactly one project
 //!   and config.
+//!
+//! A personal (`dp.pt.`) or CLI (`dp.ct.`) token also authenticates, but
+//! Doppler withholds a `restricted` secret's value from a token tied to a user
+//! identity, so such a read is refused rather than answered. See
+//! [`SecretState::Withheld`].
 //!
 //! Every request names its project and config explicitly, so a pinned token
 //! asked for coordinates it does not cover is refused by Doppler rather than
@@ -619,15 +624,21 @@ enum SecretState {
     /// reporting it as unset would have `secretspec check` offer to set -- and
     /// overwrite -- a secret that exists.
     ///
-    /// **This state was never produced against the live API**, and the
-    /// variant is deliberately kept as the fail-safe for it. Every read that
-    /// *was* measured lands elsewhere: a value present (any visibility,
-    /// `masked` included) is [`Present`](Self::Present), an absent secret is
+    /// Doppler documents exactly when this happens: a `restricted` secret's
+    /// value "is not returned if the authentication method is tied to a user
+    /// identity (like a personal token or CLI token)". So a `DOPPLER_TOKEN`
+    /// holding a `dp.pt.` or `dp.ct.` token -- what `doppler login` leaves
+    /// behind on a developer machine -- reads a `restricted` secret into this
+    /// state, while a service or service account token reads its value
+    /// normally. That matches every read measured against the live API: a
+    /// value present (any visibility, `masked` included) is
+    /// [`Present`](Self::Present), an absent secret is
     /// [`Unset`](Self::Unset), and a `restricted` secret read with a service
-    /// account token returned its value normally. So neither the withholding
-    /// itself nor which identities it applies to is asserted here -- the
-    /// refusal in [`report`] describes the state observed and hedges the
-    /// cause.
+    /// account token returned its value.
+    ///
+    /// The refusal in [`report`] still describes the state rather than
+    /// asserting the cause, because the visibility Doppler reports is the only
+    /// thing in the response that explains it.
     Withheld { visibility: String },
     /// `computed` is a JSON type this provider has not measured, named by type
     /// so an error can never echo the value.
@@ -685,7 +696,9 @@ fn report(state: SecretState, name: &str) -> Result<Option<SecretBytes>> {
         SecretState::Withheld { visibility } => Err(operation_error(format!(
             "Doppler withheld the value of '{name}': the secret exists with visibility \
                  '{visibility}' but Doppler returned no value for it, so this token may see that \
-                 it exists but not read it. Grant this token access to the secret's value, or \
+                 it exists but not read it. Doppler does not serve a 'restricted' value to a \
+                 token tied to a user identity, so use a service token (dp.st.) or a service \
+                 account token (dp.sa.) rather than a personal (dp.pt.) or CLI (dp.ct.) one, or \
                  lower the secret's visibility in Doppler."
         ))),
         SecretState::NotAString { json_type } => Err(operation_error(format!(
@@ -1101,8 +1114,9 @@ impl DopplerProvider {
             .ok_or_else(|| {
                 operation_error(format!(
                     "No Doppler token found. Configure the {TOKEN} provider credential, or set \
-                     {DOPPLER_TOKEN_ENV}. Both a service account token (dp.sa.) and a service \
-                     token (dp.st.) work."
+                     {DOPPLER_TOKEN_ENV}. Any Doppler token works; prefer a service account \
+                     token (dp.sa.) or a service token (dp.st.), because Doppler does not serve \
+                     a 'restricted' secret's value to a personal (dp.pt.) or CLI (dp.ct.) token."
                 ))
             })
     }

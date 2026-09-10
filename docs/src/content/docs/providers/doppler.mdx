@@ -68,12 +68,19 @@ $ export DOPPLER_TOKEN="dp.sa.xxxxxxxx"
 $ secretspec check --provider "doppler://myapp/prd"
 ```
 
-Two token types work, and they differ in what they can address:
+Any Doppler token authenticates. Two are worth naming, and they differ in what
+they can address:
 
 | Token | Prefix | Scope |
 | --- | --- | --- |
 | Service account | `dp.sa.` | Workplace-wide, limited by its grants |
 | Service token | `dp.st.` | Exactly one project and one config |
+
+A personal (`dp.pt.`) or CLI (`dp.ct.`) token — what `doppler login` leaves on a
+developer machine — also authenticates, but Doppler does not serve a
+`restricted` secret's value to a token tied to a user identity. Such a read is
+[refused rather than answered](#values-doppler-withholds), so prefer a service
+or service account token wherever `restricted` secrets are in play.
 
 A service token is pinned by Doppler to one config, and a request for any other
 is refused (see [Security considerations](#security-considerations)). Use a
@@ -288,6 +295,10 @@ is distinguishable from an unset secret, which reports no visibility either, so
 SecretSpec reports it as a refusal naming the secret rather than as a secret
 that is not set. Reporting it as unset would let `secretspec check` offer to
 set — and overwrite — a value it was never allowed to read.
+
+This is what a `restricted` secret read with a personal or CLI token looks like:
+Doppler withholds the value from any token tied to a user identity. Use a
+service or service account token, or lower the secret's visibility.
 
 Deleting such a secret still works. Doppler accepts the write even when it will
 not serve the value, so SecretSpec does not let an unreadable secret block its

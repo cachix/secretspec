@@ -1299,39 +1299,42 @@ impl DopplerProvider {
         })
     }
 
-    /// Sends one [`Call`] and hands back what a pure interpreter takes: the
-    /// status and the body.
+    /// Sends one [`Call`], retrying a rate limit or a server error per
+    /// [`retry_delay`], and hands back the last attempt's response unread.
     ///
-    /// A rate limit or a server error is retried per [`retry_delay`]; the
-    /// answer handed back is the last attempt's, so an exhausted retry still
-    /// reports Doppler's own words.
+    /// Every request, writes included, goes through here rather than
+    /// [`dispatch`](Self::dispatch), or a write would be the one request a
+    /// rate limit fails outright. The answer is the last attempt's, so an
+    /// exhausted retry still reports Doppler's own words.
     ///
-    /// The wait is a blocking sleep, as in the Vault provider: every `execute`
+    /// The wait is a blocking sleep, as in the Vault provider: every request
     /// runs under its own [`block_on`](super::block_on) with nothing else to
     /// drive meanwhile, and `tokio`'s timers are not built into this crate.
-    ///
-    /// Every request, writes included, goes through here: [`write_async`]
-    /// (Self::write_async) must not reach [`dispatch`](Self::dispatch) on its
-    /// own, or a write would be the one request a rate limit fails outright.
-    async fn execute(&self, call: &Call<'_>) -> Result<(StatusCode, String)> {
+    async fn send(&self, call: &Call<'_>) -> Result<reqwest::Response> {
         let mut attempt = 1;
         loop {
             let response = self.dispatch(call).await?;
-            let status = response.status();
             let retry_after = response
                 .headers()
                 .get(reqwest::header::RETRY_AFTER)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_owned);
-            let body = Self::response_body(response).await?;
-            match retry_delay(status, retry_after.as_deref(), attempt) {
+                .and_then(|value| value.to_str().ok());
+            match retry_delay(response.status(), retry_after, attempt) {
                 Some(wait) => {
                     std::thread::sleep(wait);
                     attempt += 1;
                 }
-                None => return Ok((status, body)),
+                None => return Ok(response),
             }
         }
+    }
+
+    /// Sends one [`Call`] and hands back what a pure interpreter takes: the
+    /// status and the body.
+    async fn execute(&self, call: &Call<'_>) -> Result<(StatusCode, String)> {
+        let response = self.send(call).await?;
+        let status = response.status();
+        let body = Self::response_body(response).await?;
+        Ok((status, body))
     }
 
     /// Reads a response body without hiding a transport failure behind an empty
@@ -1431,12 +1434,17 @@ impl DopplerProvider {
     /// The one operation that does not go through
     /// [`execute`](DopplerProvider::execute): a success body is never read, so
     /// a connection dropped mid-body cannot report a failure for a write the
-    /// status line already said committed.
+    /// status line already said committed. It still goes through
+    /// [`send`](DopplerProvider::send), so a rate limit is retried rather than
+    /// failing the write outright; repeating a write is safe, since setting a
+    /// value or nulling it is idempotent.
     async fn write_async(&self, loc: &Location, value: Option<&str>) -> Result<()> {
-        let (status, body) = self.execute(&Call::Write(loc, value)).await?;
+        let response = self.send(&Call::Write(loc, value)).await?;
+        let status = response.status();
         if status.is_success() {
             return Ok(());
         }
+        let body = Self::response_body(response).await?;
         let action = match value {
             Some(_) => format!("writing '{}'", loc.name),
             None => format!("deleting '{}'", loc.name),

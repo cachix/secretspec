@@ -1696,15 +1696,18 @@ impl Provider for DopplerProvider {
     /// invalidation runs over addresses that may never have been written, so a
     /// config that was never created must answer `Ok(false)` rather than fail.
     ///
-    /// The read is an *optimization of the return value*, never a precondition:
-    /// a read that fails for any other reason falls through to the deletion.
-    /// Doppler withholds the value of a `restricted` secret from a token tied
-    /// to a user identity while still accepting a write of it, so failing the
-    /// deletion on the read would refuse deletions Doppler would have honored
-    /// -- and [`check_deletable`](Provider::check_deletable) cannot foresee
-    /// that without a round trip, so preflight would pass and the deletion
-    /// abort partway through, which is the failure that pair exists to
-    /// prevent.
+    /// A read Doppler answers with a refusal -- a `restricted` value withheld
+    /// from this token, or a body that is not Doppler's shape -- refuses the
+    /// deletion too. Such an answer is positive evidence that the secret
+    /// exists and is not this token's to read, and nulling it would destroy a
+    /// value nobody could verify. That matters most for the cache: the
+    /// ownership check before `cache clear` treats a read error as "ours", so
+    /// this refusal is what keeps a `restricted` secret sitting at a cache
+    /// address in a Doppler config from being nulled. The cost is accepted
+    /// deliberately: [`check_deletable`](Provider::check_deletable) cannot
+    /// foresee the refusal without a round trip, so an `import
+    /// --delete-source` over such a secret aborts at the deletion rather than
+    /// in preflight. Destroying a value outranks preflight parity.
     ///
     /// A reserved name is refused here rather than at Doppler, so `delete` and
     /// `check_deletable` refuse for the same reason. Resolved once and then
@@ -1713,10 +1716,11 @@ impl Provider for DopplerProvider {
         let loc = self.locate(addr)?;
         self.check_location(&loc)?;
         super::block_on(async {
-            if matches!(
-                self.get_async(&loc, AbsentConfig::HoldsNothing).await,
-                Ok(None)
-            ) {
+            if self
+                .get_async(&loc, AbsentConfig::HoldsNothing)
+                .await?
+                .is_none()
+            {
                 return Ok(false);
             }
             self.write_async(&loc, None).await?;

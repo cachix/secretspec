@@ -50,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a manifest too large to name in one request URI is split across several, and
   a rate-limited or failed request is retried after Doppler's suggested wait.
   A `restricted` secret Doppler will not serve to a personal or CLI token is
-  reported as the refusal it is, and can still be deleted. Projects and configs
+  reported as the refusal it is, and is not deleted either. Projects and configs
   must already exist.
 
 - Cache planning refuses a cached provider alias whose cache entry and

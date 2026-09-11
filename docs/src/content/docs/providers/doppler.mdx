@@ -302,9 +302,12 @@ This is what a `restricted` secret read with a personal or CLI token looks like:
 Doppler withholds the value from any token tied to a user identity. Use a
 service or service account token, or lower the secret's visibility.
 
-Deleting such a secret still works. Doppler accepts the write even when it will
-not serve the value, so SecretSpec does not let an unreadable secret block its
-own deletion.
+Deleting such a secret is refused as well. Doppler would accept the write, but
+the withheld read is proof that a value exists which this token cannot see, and
+SecretSpec does not null a value nobody could verify. This is also what keeps
+`secretspec cache clear` from deleting a `restricted` secret that happens to sit
+at a cache address in a Doppler config. Use a service or service account token
+to delete it.
 
 A `masked` secret is not withheld: masking affects how Doppler's dashboard
 displays a value, not whether the API returns it.

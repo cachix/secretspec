@@ -43,6 +43,9 @@ pub(crate) struct ResolvedPrimary {
 /// The leaf store and freshness policy for a cached provider route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedCache {
+    /// The cached alias this route expands, so a refusal can name the entry
+    /// the user has to edit.
+    pub alias: String,
     /// Raw provider spec, retained so alias credentials remain available.
     pub spec: String,
     /// Credential-free resolved URI, used for diagnostics and provenance.
@@ -372,7 +375,7 @@ impl Secrets {
                 .secrets
                 .get(&name)
                 .expect("planned names come from the compiled profile");
-            secrets.push(self.plan_one_secret(name, secret, &override_spec)?);
+            secrets.push(self.plan_one_secret(name, &profile_name, secret, &override_spec)?);
         }
 
         let override_uri = override_spec
@@ -439,6 +442,7 @@ impl Secrets {
         };
         Ok(Some(self.plan_one_secret(
             name.to_string(),
+            profile_name,
             secret,
             override_spec,
         )?))
@@ -452,6 +456,7 @@ impl Secrets {
     fn plan_one_secret(
         &self,
         name: String,
+        profile: &str,
         secret: &CompiledSecret,
         override_spec: &Option<String>,
     ) -> Result<PlannedSecret> {
@@ -463,11 +468,104 @@ impl Secrets {
         } else {
             Some(self.route_for(&secret.config, override_spec)?)
         };
-        Ok(PlannedSecret {
+        let planned = PlannedSecret {
             name,
             secret: secret.clone(),
             route,
-        })
+        };
+        self.refuse_cache_overlapping_source(&planned, profile)?;
+        Ok(planned)
+    }
+
+    /// Refuses a cached route whose cache entry and authoritative entry are one
+    /// physical secret under `profile`.
+    ///
+    /// [`cached_route`](Self::cached_route) compares storage identities, which
+    /// is all a URI alone can say. Some providers let the profile fill in part
+    /// of the address -- an unpinned `doppler://myapp` reads config `prd` under
+    /// profile `prd`, the very secret `doppler://myapp/prd` names -- so two
+    /// identities that differ can still resolve to one entry. The ownership
+    /// check before a cache write or clear cannot close that gap: it refuses
+    /// only on positive evidence, and a secret the token may not read gives
+    /// none, so a refresh would overwrite the authoritative value with the
+    /// envelope and `cache clear` would null it. This is the one place the
+    /// profile and the address are both known before any store is touched, so
+    /// the comparison is the provider's own
+    /// [`same_entries`](crate::provider::Provider::same_entries), over the
+    /// addresses the cache and the source will actually use.
+    ///
+    /// Like the identity guard, this refuses only on a positive match. A
+    /// provider that cannot be built without credentials, or cannot compare,
+    /// is no evidence and lets planning continue.
+    fn refuse_cache_overlapping_source(
+        &self,
+        planned: &PlannedSecret,
+        profile: &str,
+    ) -> Result<()> {
+        let Some(cache) = planned.route.as_ref().and_then(Route::cache) else {
+            return Ok(());
+        };
+        let Some(cache_provider) = self.probe_provider(&cache.uri, profile) else {
+            return Ok(());
+        };
+        let route = planned.route.as_ref().expect("a cache implies a route");
+        let project = self.project_name();
+        // The address `cache_address` writes and clears.
+        let cache_addr = OwnedAddress::convention(project, profile, &planned.name);
+        // The primary is already resolved; only the lazily carried fallback
+        // specs still need resolving. The primary's spec is not re-resolved,
+        // because for the inline `uri = ..., cache = {...}` form it is the
+        // cached alias's own name, which no leaf resolution accepts -- the
+        // spec is kept only so `address_for_spec` can honor the alias's refs.
+        let primary = route
+            .primary
+            .iter()
+            .map(|primary| (primary.spec.as_str(), primary.uri.clone()));
+        let fallback = route
+            .fallback
+            .iter()
+            .filter_map(|spec| Some((spec.as_str(), self.resolve_one_provider(spec).ok()?)));
+        for (spec, uri) in primary.chain(fallback) {
+            let Some(source) = self.probe_provider(&uri, profile) else {
+                continue;
+            };
+            let source_addr = self.address_for_spec(planned, Some(spec), project, profile)?;
+            let overlaps = source
+                .same_entries(
+                    source_addr.as_address(),
+                    cache_provider.as_ref(),
+                    cache_addr.as_address(),
+                )
+                .unwrap_or(false);
+            if overlaps {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "cached provider alias '{alias}' caches '{name}' at the same entry its \
+                     authoritative source '{source}' resolves to under profile '{profile}', so \
+                     refreshing or clearing the cache would overwrite or delete the secret. Give \
+                     the cache a store, or a config, of its own.",
+                    alias = cache.alias,
+                    name = planned.name,
+                    source = crate::audit::redact_uri_strict(&uri),
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// A credential-free provider for `uri`, positioned under `profile`, for
+    /// comparing entries without touching the store. `None` when one cannot be
+    /// built from the URI alone.
+    fn probe_provider(
+        &self,
+        uri: &str,
+        profile: &str,
+    ) -> Option<Box<dyn crate::provider::Provider>> {
+        let mut provider =
+            crate::provider::provider_from_spec(uri, crate::provider::ProviderCredentials::new())
+                .ok()?;
+        provider.with_base_dir(&self.config_dir);
+        provider.set_profile(profile);
+        Some(provider)
     }
 
     /// Resolve a secret's [`Route`] from its config and the active override.
@@ -691,6 +789,7 @@ impl Secrets {
             }),
             fallback: specs.collect(),
             cache: Some(ResolvedCache {
+                alias: name.to_string(),
                 spec: cache.provider().to_string(),
                 uri: cache_uri,
                 max_age_secs: cache.max_age_secs(),
@@ -1368,6 +1467,113 @@ mod tests {
         let message = spec.build_plan(None).unwrap_err().to_string();
         assert!(message.contains("distinct store"), "{message}");
         assert!(message.contains("dotenv:.env"), "{message}");
+    }
+
+    /// A cached-alias spec declaring `API_KEY` in profiles `prd` and `dev` as
+    /// well as `default`: a Doppler overlap only shows under a profile, since
+    /// an unpinned URI takes its config from the active one.
+    #[cfg(feature = "doppler")]
+    fn doppler_cached_spec(sources: &[&str], cache: &str) -> Secrets {
+        doppler_cached_spec_with(cached_alias(sources, cache, "8h"))
+    }
+
+    /// [`doppler_cached_spec`] over an arbitrary cached alias, for the inline
+    /// `uri = ..., cache = {...}` spelling.
+    #[cfg(feature = "doppler")]
+    fn doppler_cached_spec_with(myprovider: ProviderAlias) -> Secrets {
+        let declare = || HashMap::from([("API_KEY".to_string(), secret(Some(vec!["myprovider"])))]);
+        let mut config = crate::tests::resolve_test_config(declare());
+        for profile in ["prd", "dev"] {
+            config.profiles.insert(
+                profile.to_string(),
+                crate::config::Profile {
+                    defaults: None,
+                    secrets: declare(),
+                },
+            );
+        }
+        let mut providers = cached_aliases();
+        providers.insert("myprovider".to_string(), myprovider);
+        config.providers = Some(providers);
+        Secrets::new(config, None, None, None)
+    }
+
+    /// Under profile `prd`, `doppler://myapp/prd` and `doppler://myapp` resolve
+    /// `API_KEY` to one Doppler secret, `prd/API_KEY`, while rendering distinct
+    /// storage identities. A cache at that pairing would overwrite the
+    /// authoritative secret with its envelope on refresh and null it on
+    /// `cache clear` -- the ownership check cannot see the overlap when the
+    /// secret is `restricted` and the token cannot read it. Planning has to
+    /// refuse the pairing, in either direction, under the profile where the
+    /// two locations coincide.
+    #[cfg(feature = "doppler")]
+    #[test]
+    fn a_doppler_cache_may_not_resolve_to_its_sources_entry_under_the_active_profile() {
+        let _env = scrub_resolution_env();
+        for (source, cache) in [
+            ("doppler://myapp/prd", "doppler://myapp"),
+            ("doppler://myapp", "doppler://myapp/prd"),
+        ] {
+            let spec = doppler_cached_spec(&[source], cache);
+            let error = spec
+                .build_plan(Some("prd"))
+                .expect_err(&format!("{source} cached into {cache} under prd"))
+                .to_string();
+            assert!(error.contains("same entry"), "{source} -> {cache}: {error}");
+            assert!(error.contains("'prd'"), "{source} -> {cache}: {error}");
+            assert!(error.contains("myprovider"), "{source} -> {cache}: {error}");
+        }
+    }
+
+    /// The inline spelling, `uri = "doppler://myapp/prd"` with a `cache`
+    /// table, names the same pairing as the `fallback` list and must be
+    /// refused the same way. Its route carries the alias's own name as the
+    /// primary spec, so a guard that re-resolves specs instead of reading the
+    /// resolved URI beside it never compares anything.
+    #[cfg(feature = "doppler")]
+    #[test]
+    fn a_doppler_inline_cached_alias_is_judged_like_the_fallback_form() {
+        let _env = scrub_resolution_env();
+        for (source, cache) in [
+            ("doppler://myapp/prd", "doppler://myapp"),
+            ("doppler://myapp", "doppler://myapp/prd"),
+        ] {
+            let inline = ProviderAlias::from(source)
+                .with_cache(ProviderCache::new(cache, "8h").expect("valid cache policy"));
+            let spec = doppler_cached_spec_with(inline);
+            let error = spec
+                .build_plan(Some("prd"))
+                .expect_err(&format!("inline {source} cached into {cache} under prd"))
+                .to_string();
+            assert!(error.contains("same entry"), "{source} -> {cache}: {error}");
+        }
+    }
+
+    /// The same pairing under profile `dev` addresses `dev/API_KEY` and
+    /// `prd/API_KEY`, two secrets, so it is a legitimate cache. The refusal is
+    /// per profile, not a stricter identity comparison.
+    #[cfg(feature = "doppler")]
+    #[test]
+    fn a_doppler_cache_pairing_is_judged_under_the_profile_that_resolves_it() {
+        let _env = scrub_resolution_env();
+        let spec = doppler_cached_spec(&["doppler://myapp/prd"], "doppler://myapp");
+        let plan = spec
+            .build_plan(Some("dev"))
+            .expect("prd source and dev-resolved cache are distinct entries");
+        assert!(route(find(&plan, "API_KEY")).cache().is_some());
+    }
+
+    /// Two pinned configs in one project stay distinct stores, so one Doppler
+    /// config can cache another.
+    #[cfg(feature = "doppler")]
+    #[test]
+    fn a_doppler_config_can_cache_a_sibling_config() {
+        let _env = scrub_resolution_env();
+        let spec = doppler_cached_spec(&["doppler://myapp/prd"], "doppler://myapp/cache");
+        let plan = spec
+            .build_plan(Some("prd"))
+            .expect("pinned siblings are distinct entries");
+        assert!(route(find(&plan, "API_KEY")).cache().is_some());
     }
 
     #[test]

@@ -38,6 +38,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configurable RSA available for compatibility. OpenSSH generation likewise
   defaults to Ed25519 and supports configurable RSA keys and comments.
 
+- **Doppler provider** (`doppler://PROJECT[/CONFIG]`, 0.21+): read, write, and
+  delete secrets over Doppler's REST API, authenticated with `DOPPLER_TOKEN` or
+  the `token` provider credential. Secret names are stored verbatim in the
+  Doppler config named by the SecretSpec profile, or in a config pinned in the
+  URI, so they stay readable through `doppler run` and the Doppler dashboard.
+  Batch reads fetch only the declared names, `init --from` discovers names
+  without reading values, and values assembled from `${...}` references arrive
+  resolved. Doppler's reserved names, and names or values Doppler cannot store
+  unchanged, are refused rather than rewritten. Configs are read concurrently,
+  a manifest too large to name in one request URI is split across several, and
+  a rate-limited or failed request is retried after Doppler's suggested wait.
+  A `restricted` secret Doppler will not serve to a personal or CLI token is
+  reported as the refusal it is, and is not deleted either. Projects and configs
+  must already exist.
+
+- Cache planning refuses a cached provider alias whose cache entry and
+  authoritative entry are one physical secret under the active profile, which
+  comparing store identities alone cannot see: an unpinned `doppler://myapp`
+  under profile `prd` names the same secret as `doppler://myapp/prd`, and a
+  cache at that pairing would overwrite or delete the secret it caches (0.21+).
+
 ### Fixed
 
 - Command generation rejects Unicode-whitespace-only output while preserving

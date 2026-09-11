@@ -114,6 +114,16 @@ metadata! {
 }
 
 metadata! {
+    DOPPLER,
+    name: "doppler",
+    description: "Doppler secret management (0.21+)",
+    schemes: ["doppler"],
+    examples: ["doppler://myapp", "doppler://myapp/prd"],
+    credential_names: ["token"],
+    deletes: true,
+}
+
+metadata! {
     EJSON,
     name: "ejson",
     description: "EJSON encrypted files (0.20+)",

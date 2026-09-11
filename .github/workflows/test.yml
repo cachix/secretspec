@@ -90,14 +90,10 @@ jobs:
     - name: Build documentation
       run: npm --prefix docs run build
     - name: Check documentation links
-      uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+      uses: cachix/site-kit/check-links@59a4fbfbe8e105aeb7f6e32c90055342f10d2b8a
       with:
-        lycheeVersion: v0.21.0
-        workingDirectory: docs
-        args: >-
-          --root-dir "${{ github.workspace }}/docs/dist"
-          --remap "^https://secretspec\\.dev file://${{ github.workspace }}/docs/dist"
-          "dist/**/*.html"
+        working-directory: docs
+        site: https://secretspec.dev
 
   tests:
     needs: changes

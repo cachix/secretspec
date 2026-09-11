@@ -1,53 +1,19 @@
-import type {PluginOption} from "vite";
 import { readFileSync } from "node:fs";
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import starlightLlmsTxt from "starlight-llms-txt";
 import starlightBlog from "starlight-blog";
+import { siteKitAstro } from "@cachix/site-kit/astro";
+import { siteKitStarlight } from "@cachix/site-kit/starlight";
+import { siteBlogOptions } from "@cachix/site-kit/starlight/blog";
+import { siteLlmsOptions } from "@cachix/site-kit/starlight/llms";
 import { preserveHeadingIdPlugin } from "./src/lib/preserve-heading-id.mjs";
-import { terminalCopyPlugin } from "./src/lib/terminal-copy.mjs";
 
 const rustSdkBasicExample = readFileSync(
   new URL("../secretspec-derive/examples/basic.rs", import.meta.url),
   "utf8",
 ).trim();
 
-// Dev-only: `astro dev` (what `devenv up` runs) does not execute worker.js, so
-// /api/github would 404 and the release/star pills would stay hidden locally.
-// Mirror the worker's GitHub proxy here so both populate during development.
-// Production is unaffected — it is served by worker.js.
-const devGitHubApi: PluginOption = {
-  name: "dev-github-api",
-  apply: "serve",
-  enforce: "pre",
-  configureServer(server) {
-    server.middlewares.use("/api/github", async (_req, res) => {
-      let stars = null;
-      let release = null;
-      try {
-        const headers = { "User-Agent": "secretspec-docs" };
-        const [repoResponse, releaseResponse] = await Promise.all([
-          fetch("https://api.github.com/repos/cachix/secretspec", { headers }),
-          fetch("https://api.github.com/repos/cachix/secretspec/releases/latest", { headers }),
-        ]);
-        if (repoResponse.ok) {
-          const data = await repoResponse.json();
-          if (typeof data.stargazers_count === "number") stars = data.stargazers_count;
-        }
-        if (releaseResponse.ok) {
-          const data = await releaseResponse.json();
-          if (typeof data.tag_name === "string") release = data.tag_name;
-        }
-      } catch {
-        // Degrade to null values — the corresponding pills stay hidden.
-      }
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ stars, release }));
-    });
-  },
-};
-
-// https://astro.build/config
 export default defineConfig({
   site: "https://secretspec.dev/",
   markdown: {
@@ -57,26 +23,13 @@ export default defineConfig({
     "/reference/adding-providers": "/development/adding-providers",
     "/ci": "/ci/github-actions",
   },
-  vite: {
-    plugins: [devGitHubApi],
-  },
   integrations: [
+    siteKitAstro({ github: { repository: "cachix/secretspec" } }),
     starlight({
-      expressiveCode: {
-        plugins: [terminalCopyPlugin()],
-      },
       plugins: [
-        starlightBlog({
-          title: "Blog",
-          authors: {
-            domen: {
-              name: "Domen Kožar",
-              url: "https://github.com/domenkozar",
-            },
-          },
-        }),
-        starlightLlmsTxt({
-          description: `SecretSpec is a declarative secrets manager for development workflows. It separates secret **declaration** from secret **storage**: commit a \`secretspec.toml\` that declares what secrets your application needs, while the actual values live in a secure provider (system keyring, 1Password, Vault, etc.).
+        siteKitStarlight(),
+        starlightBlog(siteBlogOptions()),
+        starlightLlmsTxt(siteLlmsOptions(`SecretSpec is a declarative secrets manager for development workflows. It separates secret **declaration** from secret **storage**: commit a \`secretspec.toml\` that declares what secrets your application needs, while the actual values live in a secure provider (system keyring, 1Password, Vault, etc.).
 
 SecretSpec answers three questions for every project:
 
@@ -132,7 +85,7 @@ $ secretspec import dotenv://.env.production
 ## Providers
 
 Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv files, plaintext file directories (0.19+), EJSON files (0.20+, read-only), environment variables, systemd service credentials (0.17+), 1Password, Gopass (0.15+), LastPass, Dashlane (0.18+, read-only), Pass, Proton Pass, Passbolt (0.19+), Keeper Secrets Manager (0.18+), Google Cloud Secret Manager, AWS Secrets Manager, AWS Systems Manager Parameter Store (0.18+), Scaleway Secret Manager (0.17+), HashiCorp Vault, OpenBao (0.17+), Bitwarden Password Manager (0.18+), Bitwarden Secrets Manager, Azure Key Vault, Azure App Configuration (0.20+), Infisical (0.16+), age (0.17+), SOPS (0.17+), or Kubernetes (0.20+). Fly.io application secrets and Cloudflare Secrets Store entries can be published through the write-only fly and cloudflare providers (0.20+). The null provider (0.19+) uses manifest defaults, ephemeral generation, or ephemeral run prompts without storage.`,
-        }),
+        )),
       ],
       title: "SecretSpec",
       head: [
@@ -177,10 +130,6 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
           },
         },
       ],
-      components: {
-        Hero: "./src/overrides/Hero.astro",
-        SocialIcons: "./src/overrides/SocialIcons.astro",
-      },
       logo: {
         light: "./src/assets/logo.svg",
         dark: "./src/assets/logo-dark.svg",

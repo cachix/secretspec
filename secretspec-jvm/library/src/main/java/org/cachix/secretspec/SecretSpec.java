@@ -61,6 +61,12 @@ public class SecretSpec {
             return this;
         }
 
+        /**
+         * Limits resolution to a named manifest scope (SecretSpec 0.21+).
+         * @param inlineSpec the strict inline-spec v1 declarations (JSON content)
+         * @param baseDir the directory used to resolve relative provider paths
+         * @return the fluent builder
+         */
         public Builder withInlineSpec(String inlineSpec, String baseDir) {
             try {
                 var document = SecretSpecJsonContext.MAPPER.readTree(inlineSpec);

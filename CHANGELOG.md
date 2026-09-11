@@ -53,6 +53,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported as the refusal it is, and can still be deleted. Projects and configs
   must already exist.
 
+- Cache planning refuses a cached provider alias whose cache entry and
+  authoritative entry are one physical secret under the active profile, which
+  comparing store identities alone cannot see: an unpinned `doppler://myapp`
+  under profile `prd` names the same secret as `doppler://myapp/prd`, and a
+  cache at that pairing would overwrite or delete the secret it caches (0.21+).
+
 ### Fixed
 
 - Command generation rejects Unicode-whitespace-only output while preserving

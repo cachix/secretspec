@@ -3114,6 +3114,12 @@ impl Secrets {
         Ok(())
     }
 
+    /// The manifest's project name, the first coordinate of every convention
+    /// address.
+    pub(crate) fn project_name(&self) -> &str {
+        &self.config.project.name
+    }
+
     /// Get a reference to the project configuration. Used by `secretspec
     /// codegen` (which needs the manifest, not a provider) and by tests.
     #[cfg(any(feature = "cli", test))]

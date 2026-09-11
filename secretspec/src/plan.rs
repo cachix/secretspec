@@ -43,6 +43,9 @@ pub(crate) struct ResolvedPrimary {
 /// The leaf store and freshness policy for a cached provider route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedCache {
+    /// The cached alias this route expands, so a refusal can name the entry
+    /// the user has to edit.
+    pub alias: String,
     /// Raw provider spec, retained so alias credentials remain available.
     pub spec: String,
     /// Credential-free resolved URI, used for diagnostics and provenance.
@@ -372,7 +375,7 @@ impl Secrets {
                 .secrets
                 .get(&name)
                 .expect("planned names come from the compiled profile");
-            secrets.push(self.plan_one_secret(name, secret, &override_spec)?);
+            secrets.push(self.plan_one_secret(name, &profile_name, secret, &override_spec)?);
         }
 
         let override_uri = override_spec
@@ -439,6 +442,7 @@ impl Secrets {
         };
         Ok(Some(self.plan_one_secret(
             name.to_string(),
+            profile_name,
             secret,
             override_spec,
         )?))
@@ -452,6 +456,7 @@ impl Secrets {
     fn plan_one_secret(
         &self,
         name: String,
+        profile: &str,
         secret: &CompiledSecret,
         override_spec: &Option<String>,
     ) -> Result<PlannedSecret> {
@@ -463,11 +468,99 @@ impl Secrets {
         } else {
             Some(self.route_for(&secret.config, override_spec)?)
         };
-        Ok(PlannedSecret {
+        let planned = PlannedSecret {
             name,
             secret: secret.clone(),
             route,
-        })
+        };
+        self.refuse_cache_overlapping_source(&planned, profile)?;
+        Ok(planned)
+    }
+
+    /// Refuses a cached route whose cache entry and authoritative entry are one
+    /// physical secret under `profile`.
+    ///
+    /// [`cached_route`](Self::cached_route) compares storage identities, which
+    /// is all a URI alone can say. Some providers let the profile fill in part
+    /// of the address -- an unpinned `doppler://myapp` reads config `prd` under
+    /// profile `prd`, the very secret `doppler://myapp/prd` names -- so two
+    /// identities that differ can still resolve to one entry. The ownership
+    /// check before a cache write or clear cannot close that gap: it refuses
+    /// only on positive evidence, and a secret the token may not read gives
+    /// none, so a refresh would overwrite the authoritative value with the
+    /// envelope and `cache clear` would null it. This is the one place the
+    /// profile and the address are both known before any store is touched, so
+    /// the comparison is the provider's own
+    /// [`same_entries`](crate::provider::Provider::same_entries), over the
+    /// addresses the cache and the source will actually use.
+    ///
+    /// Like the identity guard, this refuses only on a positive match. A
+    /// provider that cannot be built without credentials, or cannot compare,
+    /// is no evidence and lets planning continue.
+    fn refuse_cache_overlapping_source(
+        &self,
+        planned: &PlannedSecret,
+        profile: &str,
+    ) -> Result<()> {
+        let Some(cache) = planned.route.as_ref().and_then(Route::cache) else {
+            return Ok(());
+        };
+        let Some(cache_provider) = self.probe_provider(&cache.uri, profile) else {
+            return Ok(());
+        };
+        let route = planned.route.as_ref().expect("a cache implies a route");
+        let project = self.project_name();
+        // The address `cache_address` writes and clears.
+        let cache_addr = OwnedAddress::convention(project, profile, &planned.name);
+        let sources = route
+            .primary
+            .iter()
+            .map(|primary| primary.spec.as_str())
+            .chain(route.fallback.iter().map(String::as_str));
+        for spec in sources {
+            let Ok(uri) = self.resolve_one_provider(spec) else {
+                continue;
+            };
+            let Some(source) = self.probe_provider(&uri, profile) else {
+                continue;
+            };
+            let source_addr = self.address_for_spec(planned, Some(spec), project, profile)?;
+            let overlaps = source
+                .same_entries(
+                    source_addr.as_address(),
+                    cache_provider.as_ref(),
+                    cache_addr.as_address(),
+                )
+                .unwrap_or(false);
+            if overlaps {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "cached provider alias '{alias}' caches '{name}' at the same entry its \
+                     authoritative source '{source}' resolves to under profile '{profile}', so \
+                     refreshing or clearing the cache would overwrite or delete the secret. Give \
+                     the cache a store, or a config, of its own.",
+                    alias = cache.alias,
+                    name = planned.name,
+                    source = crate::audit::redact_uri_strict(&uri),
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// A credential-free provider for `uri`, positioned under `profile`, for
+    /// comparing entries without touching the store. `None` when one cannot be
+    /// built from the URI alone.
+    fn probe_provider(
+        &self,
+        uri: &str,
+        profile: &str,
+    ) -> Option<Box<dyn crate::provider::Provider>> {
+        let mut provider =
+            crate::provider::provider_from_spec(uri, crate::provider::ProviderCredentials::new())
+                .ok()?;
+        provider.with_base_dir(&self.config_dir);
+        provider.set_profile(profile);
+        Some(provider)
     }
 
     /// Resolve a secret's [`Route`] from its config and the active override.
@@ -691,6 +784,7 @@ impl Secrets {
             }),
             fallback: specs.collect(),
             cache: Some(ResolvedCache {
+                alias: name.to_string(),
                 spec: cache.provider().to_string(),
                 uri: cache_uri,
                 max_age_secs: cache.max_age_secs(),

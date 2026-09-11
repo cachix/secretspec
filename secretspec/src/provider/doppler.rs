@@ -3348,26 +3348,26 @@ mod tests {
         assert_eq!(body["secrets"]["API_KEY"], serde_json::Value::Null);
     }
 
-    /// A probe that fails for any reason but an absent config does not block
-    /// the deletion.
+    /// A probe Doppler answers with a refusal blocks the deletion: the secret
+    /// exists and this token may not read it, so nulling it would destroy a
+    /// value nobody could verify. Only the read's refusal is reported, and no
+    /// write follows it.
     ///
-    /// Doppler withholds a `restricted` value from a token tied to a user
-    /// identity while still accepting a write of it, and
-    /// [`Provider::check_deletable`] cannot foresee that without a round trip.
-    /// Failing here would make preflight pass and the deletion abort partway
-    /// through a multi-secret import.
+    /// The cache-ownership check treats a read error as "ours", so without
+    /// this refusal `cache clear` over a Doppler config holding a `restricted`
+    /// secret at a cache address would null that secret.
     #[test]
-    fn a_delete_survives_a_probe_it_cannot_read() {
-        let (endpoint, server) = response_server(vec![
-            ("200 OK", restricted_read().to_string(), None),
-            ("200 OK", r#"{"success":true}"#.to_string(), None),
-        ]);
+    fn a_delete_refuses_a_secret_it_cannot_read() {
+        let (endpoint, server) =
+            response_server(vec![("200 OK", restricted_read().to_string(), None)]);
         let p = fixture_provider("doppler://myapp/prd", endpoint);
-        assert!(
-            p.delete(Address::convention("unused", "prd", "MONGO_CONNECTION"))
-                .expect("an unreadable secret is still deletable"),
-        );
-        assert_eq!(server.join().unwrap().len(), 2);
+        let err = p
+            .delete(Address::convention("unused", "prd", "MONGO_CONNECTION"))
+            .expect_err("an unreadable secret is not deleted")
+            .to_string();
+        assert!(err.contains("withheld"), "{err}");
+        assert!(err.contains("MONGO_CONNECTION"), "{err}");
+        assert_eq!(server.join().unwrap().len(), 1, "the probe, and no write");
     }
 
     /// A failure body that is not Doppler's envelope is quoted, but bounded: it

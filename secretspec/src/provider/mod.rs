@@ -107,6 +107,24 @@ pub use registry::ProviderInfo;
 pub use registry::providers;
 pub use traits::{DiscoveryContext, ProducedValuePersistence, Provider};
 
+/// Validates a value at a provider boundary that only accepts text.
+pub(crate) fn require_utf8<'a>(
+    provider: &str,
+    value: &'a crate::SecretBytes,
+) -> crate::Result<&'a str> {
+    std::str::from_utf8(value.expose_secret()).map_err(|_| {
+        crate::SecretSpecError::ProviderOperationFailed(format!(
+            "provider '{provider}' requires UTF-8 secret values"
+        ))
+    })
+}
+
+/// Removes the single newline a password-store CLI appends to a stored entry
+/// or its display output, leaving every other byte untouched.
+pub(crate) fn strip_one_trailing_newline(text: &str) -> &str {
+    text.strip_suffix('\n').unwrap_or(text)
+}
+
 // Shared implementation support used by provider backends and orchestration.
 pub(crate) use address::{OwnedAddress, flat_item};
 #[cfg(any(
@@ -116,7 +134,9 @@ pub(crate) use address::{OwnedAddress, flat_item};
     feature = "vault"
 ))]
 pub(crate) use credentials::preferred_env;
-pub(crate) use credentials::{ProviderCredentials, credential_or_env, credential_or_envs};
+pub(crate) use credentials::{
+    ProviderCredentials, credential_env_value, credential_or_env, credential_or_envs,
+};
 pub(crate) use factory::provider_from_spec;
 #[cfg(test)]
 pub(crate) use factory::provider_from_url;

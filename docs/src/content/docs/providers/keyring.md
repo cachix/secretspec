@@ -3,6 +3,14 @@ title: Keyring Provider
 description: Secure system credential store integration
 ---
 
+> **Changed in version 0.21:** Secret values use the keyring's binary API,
+> preserving non-UTF-8 bytes, NULs, whitespace, and line endings. Existing text
+> passwords remain readable.
+
+On Windows, text values retain the native UTF-16LE password format used by
+earlier releases. Binary values use a SecretSpec-specific marker in the same
+credential blob and require SecretSpec 0.21+ to read.
+
 The [Keyring](https://github.com/open-source-cooperative/keyring-rs) provider
 stores secrets in your system's native credential store. Recommended for local
 development.

@@ -3,6 +3,9 @@ title: Environment Variable Provider
 description: Read-only access to environment variables
 ---
 
+> **Changed in version 0.21:** On Unix, environment values preserve non-UTF-8
+> bytes instead of being reported as missing. Empty values remain present.
+
 The [Environment Variable](https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap08.html)
 provider reads secrets directly from process environment variables. This is a
 **read-only** provider designed for CI/CD compatibility and containerized

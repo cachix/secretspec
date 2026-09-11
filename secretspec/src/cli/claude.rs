@@ -415,7 +415,7 @@ fn login(
     let value = read_credential()?;
     validate_credential_value(&value)?;
     secrets
-        .set(&secret, Some(value))
+        .set_text(&secret, &value)
         .into_diagnostic()
         .wrap_err("Failed to store Claude Code API credential")?;
     println!("Stored Claude Code API credential.");

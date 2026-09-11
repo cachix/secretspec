@@ -45,11 +45,13 @@ pub enum ResolvedSource {
 
 /// One resolved secret. Exactly one of `value` or `path` is set: `path` when
 /// the secret is materialized to a temp file (`as_path`), `value` otherwise.
+/// The default inline type is `String` for text/JSON APIs. Byte resolution
+/// APIs use [`crate::SecretBytes`] starting with 0.21.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResolvedSecret {
+pub struct ResolvedSecret<T = String> {
     /// The secret value, when exposed inline.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
+    pub value: Option<T>,
     /// Path to the temp file holding the value, when `as_path` is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -64,8 +66,10 @@ pub struct ResolvedSecret {
 }
 
 /// A complete value-carrying resolution result for one profile.
+/// The default `String` payload is the JSON wire format; Rust byte resolution
+/// uses `ResolveResponse<SecretBytes>` (0.21+) without a Serde representation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResolveResponse {
+pub struct ResolveResponse<T = String> {
     /// Wire-format version; see [`RESOLVE_SCHEMA_VERSION`].
     pub schema_version: u32,
     /// Credential-free URI of the provider the resolution reported against.
@@ -82,7 +86,7 @@ pub struct ResolveResponse {
     pub scope: Option<String>,
     /// Resolved secrets by name. Empty when a required secret is missing.
     /// `BTreeMap` keeps the JSON object key order deterministic.
-    pub secrets: BTreeMap<String, ResolvedSecret>,
+    pub secrets: BTreeMap<String, ResolvedSecret<T>>,
     /// Required secrets that were not found anywhere. Non-empty means the
     /// resolution failed; `secrets` is then empty.
     pub missing_required: Vec<String>,
@@ -90,7 +94,7 @@ pub struct ResolveResponse {
     pub missing_optional: Vec<String>,
 }
 
-impl ResolveResponse {
+impl<T> ResolveResponse<T> {
     /// True when no required secret is missing (the resolution succeeded).
     pub fn is_ok(&self) -> bool {
         self.missing_required.is_empty()
@@ -116,8 +120,9 @@ impl ResolveResponse {
 /// failure is never one of these variants; it surfaces as `Err` from the call.
 ///
 /// Available since SecretSpec 0.19.
+/// Byte resolution uses `NamedResolution<SecretBytes>` starting with 0.21.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NamedResolution {
+pub enum NamedResolution<T = String> {
     /// The name is not declared on the active resolution surface: either absent
     /// from the merged profile, or declared but hidden by the active scope. The
     /// caller asked about a secret this configuration does not offer, which is
@@ -132,7 +137,7 @@ pub enum NamedResolution {
         required: bool,
     },
     /// The secret produced a value.
-    Resolved(ResolvedSecret),
+    Resolved(ResolvedSecret<T>),
 }
 
 /// Which resolution shape a request asks for.

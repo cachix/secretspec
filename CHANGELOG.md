@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Secret values can flow through providers, fallback chains, imports, and the
+  cache as arbitrary bytes. `Secrets::set` and `secretspec set --from-file`
+  accept exact byte input, `as_path` preserves it byte-for-byte, the file and
+  systemd credential providers read binary values natively, and AWS Secrets
+  Manager supports `SecretBinary`; text-only consumers now return explicit
+  UTF-8 errors that name the affected secret (0.21+). Provider credentials
+  also retain their bytes through resolution, Unix CLI environments, and HTTP
+  headers. SDK and JSON interfaces
+  validate text only when required, and unusable explicit credentials,
+  including empty values, never silently select an environment fallback with
+  another identity.
+
 - Claude Code can retrieve Anthropic API and LLM gateway credentials from any
   SecretSpec provider through its native `apiKeyHelper`. `secretspec claude
   configure` and `unconfigure` safely manage repository or user settings,
@@ -27,6 +39,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defaults to Ed25519 and supports configurable RSA keys and comments.
 
 ### Fixed
+
+- Command generation rejects Unicode-whitespace-only output while preserving
+  accepted secrets byte-for-byte, including binary output and surrounding whitespace.
+
+- LastPass rejects NUL-containing values before writing instead of silently
+  truncating them; use a manifest encoding such as base64 to store these values.
+  Typed Rust loads record conversion and prompting failures as failed reads in
+  the audit log, and `secretspec set --from-file` records a failed read of its
+  input as a failed set (0.21+).
+
+- pass, gopass, and LastPass preserve whitespace and multiline secrets across
+  generation and subsequent reads. pass entries are stored newline terminated
+  like the `pass` CLI writes them, and exactly one final newline is removed on
+  read, so entries created with `pass insert` resolve to their password.
+  gopass keeps storing single-line values as plain text entries that `gopass
+  show` and earlier releases read, and stores multiline, whitespace-padded, or
+  non-UTF-8 values in its lossless binary-entry format; existing text entries
+  still return only their trimmed first line until they are written again.
+  LastPass's CLI newline handling no longer changes stored values.
+
+- Windows keyring passwords written by earlier releases remain readable.
+  Text retains its native password format, while binary values use a distinct
+  storage format so they cannot be confused with legacy passwords.
+
+- Scoped composition errors hide out-of-scope dependency names when their
+  values contain non-UTF-8 bytes.
+
+- Imports preserve binary values with or without `as_path`, including encoded
+  values whose decoded bytes are not UTF-8. Invalid stored encodings still fail
+  before destination writes or source cleanup. Inline validation retains bytes,
+  `get` writes exact values without adding a newline when stdout is a pipe or
+  file (a terminal still gets one), and `run` passes non-UTF-8
+  values on Unix while rejecting NULs before starting the child. Rust callers
+  can use `resolve_bytes()` and `resolve_named_bytes()` for binary values;
+  text SDK responses and exports continue to validate UTF-8 (0.21+). Environment
+  reads, keyring, Google Secret Manager, Kubernetes Secrets, and Scaleway now
+  preserve binary values. SOPS credentials preserve non-UTF-8 bytes in Unix
+  subprocess environments, SOPS refuses a non-UTF-8 secret value before
+  running any `sops` command, and command generators retain exact stdout bytes,
+  including whitespace and final newlines, while still rejecting output that
+  is empty or only whitespace.
+
+- `secretspec set --from-file` validates and displays the write destination
+  before reading input. Piped input without `--from-file` is still read as
+  trimmed text, and non-UTF-8 piped input is rejected with a message pointing
+  to `--from-file -`.
 
 - Bitwarden imports reject secrets targeting the same item field through a
   title and a UUID before writing, preventing imported values from overwriting

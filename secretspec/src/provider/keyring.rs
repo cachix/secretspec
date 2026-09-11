@@ -1,8 +1,49 @@
 use super::{Address, Provider, ProviderUrl};
+use crate::SecretBytes;
 use crate::{Result, SecretSpecError};
 use keyring::Entry;
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+
+// An unpaired UTF-16 low surrogate cannot begin a legacy Windows password.
+// Keep the discriminator in the same blob so overwrites are atomic.
+#[cfg(any(windows, test))]
+const WINDOWS_BINARY_PREFIX: &[u8] = b"\x00\xdcSecretSpec\x00bytes\x01";
+
+#[cfg(any(windows, test))]
+fn encode_windows_secret(value: &SecretBytes) -> SecretBytes {
+    let bytes = match std::str::from_utf8(value.expose_secret()) {
+        Ok(text) => text.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+        Err(_) => [WINDOWS_BINARY_PREFIX, value.expose_secret()].concat(),
+    };
+    SecretBytes::from_vec(bytes)
+}
+
+#[cfg(any(windows, test))]
+fn decode_windows_secret(value: SecretBytes) -> Result<SecretBytes> {
+    use secrecy::zeroize::Zeroizing;
+
+    let bytes = value.expose_secret();
+    if let Some(binary) = bytes.strip_prefix(WINDOWS_BINARY_PREFIX) {
+        return Ok(SecretBytes::from_slice(binary));
+    }
+    let invalid_password = || {
+        SecretSpecError::ProviderOperationFailed(
+            "keyring password is not valid UTF-16LE".to_string(),
+        )
+    };
+    if !bytes.len().is_multiple_of(2) {
+        return Err(invalid_password());
+    }
+    let words = Zeroizing::new(
+        bytes
+            .chunks_exact(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect::<Vec<_>>(),
+    );
+    String::from_utf16(&words)
+        .map(SecretBytes::from_utf8)
+        .map_err(|_| invalid_password())
+}
 
 /// Configuration for the keyring provider.
 ///
@@ -177,11 +218,16 @@ impl Provider for KeyringProvider {
     /// by the folder_prefix format string (defaults to `secretspec/{project}/{profile}/{key}`).
     ///
     /// The current system username is used as the account identifier.
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let (service, username) = self.entry_target(addr)?;
         let entry = Entry::new(&service, &username)?;
-        match entry.get_password() {
-            Ok(password) => Ok(Some(SecretString::new(password.into()))),
+        match entry.get_secret() {
+            Ok(secret) => {
+                let secret = SecretBytes::from_vec(secret);
+                #[cfg(windows)]
+                let secret = decode_windows_secret(secret)?;
+                Ok(Some(secret))
+            }
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -194,10 +240,12 @@ impl Provider for KeyringProvider {
     ///
     /// The current system username is used as the account identifier.
     /// If a secret already exists with the same key, it will be overwritten.
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         let (service, username) = self.entry_target(addr)?;
         let entry = Entry::new(&service, &username)?;
-        entry.set_password(value.expose_secret())?;
+        #[cfg(windows)]
+        let value = &encode_windows_secret(value);
+        entry.set_secret(value.expose_secret())?;
         Ok(())
     }
 
@@ -219,7 +267,66 @@ impl Provider for KeyringProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use url::Url;
+
+    proptest! {
+        #[test]
+        fn windows_arbitrary_bytes_round_trip(bytes in prop::collection::vec(any::<u8>(), 0..2048)) {
+            let value = SecretBytes::from_vec(bytes);
+            let decoded = decode_windows_secret(encode_windows_secret(&value)).unwrap();
+            prop_assert_eq!(decoded.expose_secret(), value.expose_secret());
+        }
+
+        #[test]
+        fn windows_legacy_unicode_never_matches_binary_marker(text in any::<String>()) {
+            let legacy = SecretBytes::from_vec(
+                text.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+            );
+            prop_assert!(!legacy.expose_secret().starts_with(WINDOWS_BINARY_PREFIX));
+            let decoded = decode_windows_secret(legacy).unwrap();
+            prop_assert_eq!(decoded.expose_secret(), text.as_bytes());
+        }
+    }
+
+    #[test]
+    fn windows_legacy_passwords_remain_readable() {
+        for text in ["", "password", "héllo 🔑", "a\0b", "YWJjZA==", "line\r\n"] {
+            let legacy =
+                SecretBytes::from_vec(text.encode_utf16().flat_map(u16::to_le_bytes).collect());
+            assert_eq!(
+                decode_windows_secret(legacy).unwrap().expose_secret(),
+                text.as_bytes()
+            );
+            let value = SecretBytes::from_utf8(text);
+            assert_eq!(
+                encode_windows_secret(&value).expose_secret(),
+                text.encode_utf16()
+                    .flat_map(u16::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    #[test]
+    fn windows_binary_values_round_trip_without_legacy_ambiguity() {
+        for bytes in [b"\xff\0\xfe".as_slice(), WINDOWS_BINARY_PREFIX, b"\x00\xdc"] {
+            let value = SecretBytes::from_slice(bytes);
+            let stored = encode_windows_secret(&value);
+            assert!(stored.expose_secret().starts_with(WINDOWS_BINARY_PREFIX));
+            assert_eq!(
+                decode_windows_secret(stored).unwrap().expose_secret(),
+                bytes
+            );
+        }
+    }
+
+    #[test]
+    fn windows_invalid_legacy_passwords_are_rejected() {
+        for bytes in [b"\xff".as_slice(), b"\x00\xdc", b"\x00\xd8"] {
+            assert!(decode_windows_secret(SecretBytes::from_slice(bytes)).is_err());
+        }
+    }
 
     fn provider_url(s: &str) -> ProviderUrl {
         ProviderUrl::new(Url::parse(s).unwrap())

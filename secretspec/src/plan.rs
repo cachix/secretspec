@@ -512,15 +512,20 @@ impl Secrets {
         let project = self.project_name();
         // The address `cache_address` writes and clears.
         let cache_addr = OwnedAddress::convention(project, profile, &planned.name);
-        let sources = route
+        // The primary is already resolved; only the lazily carried fallback
+        // specs still need resolving. The primary's spec is not re-resolved,
+        // because for the inline `uri = ..., cache = {...}` form it is the
+        // cached alias's own name, which no leaf resolution accepts -- the
+        // spec is kept only so `address_for_spec` can honor the alias's refs.
+        let primary = route
             .primary
             .iter()
-            .map(|primary| primary.spec.as_str())
-            .chain(route.fallback.iter().map(String::as_str));
-        for spec in sources {
-            let Ok(uri) = self.resolve_one_provider(spec) else {
-                continue;
-            };
+            .map(|primary| (primary.spec.as_str(), primary.uri.clone()));
+        let fallback = route
+            .fallback
+            .iter()
+            .filter_map(|spec| Some((spec.as_str(), self.resolve_one_provider(spec).ok()?)));
+        for (spec, uri) in primary.chain(fallback) {
             let Some(source) = self.probe_provider(&uri, profile) else {
                 continue;
             };

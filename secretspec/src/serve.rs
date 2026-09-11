@@ -1,9 +1,9 @@
+use crate::SecretBytes;
 use crate::resolve::ResolvedSource;
 use crate::secrets::{IpcAuditPurpose, OwnedNamedResolution};
 use crate::{SecretSpecError, Secrets};
 use async_trait::async_trait;
-use rand::RngCore;
-use secrecy::SecretString;
+use rand::Rng;
 use secretspec_ipc::RequestId;
 use secretspec_ipc::error::{ErrorKind, RpcError};
 use secretspec_ipc::protocol::callback::{self, PromptParams};
@@ -661,7 +661,7 @@ fn prompt_over_ipc(
     name: &str,
     profile: &str,
     target_provider: Option<&str>,
-) -> Result<SecretString, SecretSpecError> {
+) -> Result<SecretBytes, SecretSpecError> {
     let sender = PROMPT_CHANNEL.with(|slot| slot.borrow().clone());
     let Some(sender) = sender else {
         return Err(SecretSpecError::PromptUnavailable(name.to_string()));
@@ -677,7 +677,7 @@ fn prompt_over_ipc(
         return Err(SecretSpecError::PromptUnavailable(name.to_string()));
     }
     match answer_rx.blocking_recv() {
-        Ok(Some(value)) => Ok(SecretString::new(value.into())),
+        Ok(Some(value)) => Ok(SecretBytes::from_utf8(value)),
         Ok(None) | Err(_) => Err(SecretSpecError::PromptUnavailable(name.to_string())),
     }
 }

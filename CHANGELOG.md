@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- IPC resolution preserves binary secret values through caches and file leases,
+  while text protocol fields report explicit UTF-8 errors (0.21+).
+
 - IPC v1 now defines and enforces directional callback limits during
   initialization, ties callbacks to their parent request's deadline and
   lifetime in both Rust and C clients, and consistently ignores unknown but
@@ -118,15 +121,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stderr. Those lines name which secrets a session provisioned, and a resolver's
   stderr belongs to whatever launched it.
 
-- The Secret Resolution Protocol gained `resolver.reject`, so a consumer that
-  was refused with a resolved value can say so and have the cached copy
-  discarded. Expiry only retires a value the clock invalidated; a token revoked
-  at its issuer stays fresh by the clock, and until now the cache served it
-  until the entry aged out. Rejection drops only SecretSpec's derived copy, never
-  the authoritative value, so every endpoint answers it, including one started
-  with `--read-only`. It is idempotent, and reports whether anything was
-  discarded.
-
 - Provider reads can now report when the secret itself expires. Resolver
   results keep that bound in `expires_at_unix_ms` and expose SecretSpec cache
   freshness separately as `refresh_at_unix_ms`, preserving the earliest known
@@ -141,7 +135,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   apart from one that refused a particular write, and `secretspec serve
   --read-only` advertises resolution only.
 
-- SecretSpec 0.20+ adds versioned local IPC: a private stdio resolver,
+- SecretSpec 0.21+ adds versioned local IPC: a private stdio resolver,
   trusted out-of-tree provider endpoints, independent Rust and pure-C clients,
   exact-name resolution with resolver-owned file leases, and shared
   schema/OpenRPC/conformance contracts, including executable common-case
@@ -157,7 +151,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `libsecretspec.pc` as its public artifacts; runtime SDK loaders continue to
   recognize the pre-0.20 `secretspec-ffi` filenames.
 
-- SecretSpec 0.20+ IPC enforces Windows ACL isolation for provider discovery
+- SecretSpec 0.21+ IPC enforces Windows ACL isolation for provider discovery
   and resolver lease files, bounds cancellation and child-process cleanup by
   request deadlines, and validates the same protocol constraints in its Rust
   and C clients. Request deadlines are clamped to 300 seconds in the future by
@@ -174,7 +168,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no cliff at the current instant. Nothing is written and the session stays
   usable, exactly as when a deadline elapses in flight.
 
-- SecretSpec 0.20+ IPC now preserves terminal responses that race a callback
+- SecretSpec 0.21+ IPC now preserves terminal responses that race a callback
   deadline or child-process exit, and always gives a killed startup process a
   fresh reaping budget. Windows provider discovery validates every executable
   ancestor, the C launcher emits the sorted environment block required by
@@ -377,7 +371,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   [#383]: https://github.com/cachix/secretspec/issues/383
 
-- `extract` supports INI documents in SecretSpec 0.20+, selecting an
+- `extract` supports INI documents in SecretSpec 0.21+, selecting an
   unsectioned key with `/key` or a named-section key with `/section/key`.
 
 - Rust SDK (0.20+): **`SecretSpecBuilder::prompt_missing`** lets the typed loader

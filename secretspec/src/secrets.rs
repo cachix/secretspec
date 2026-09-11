@@ -1,6 +1,5 @@
 //! Core secrets management functionality
 
-use crate::CallerContext;
 use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome, AuditPurpose};
 use crate::cache::{self, CacheEntryStatus, CacheOwnership};
 use crate::compiled_spec::{CompiledSpec, MissingPolicy};
@@ -376,8 +375,6 @@ impl CredentialSource {
 
 type ProviderCredentialsKey = (String, String);
 type ProviderKey = (String, String);
-type ProviderSlot = Arc<Mutex<Option<Arc<dyn ProviderTrait>>>>;
-
 struct BrokerCredentialSource {
     source: CredentialSource,
     provider: Arc<dyn ProviderTrait>,
@@ -396,7 +393,7 @@ struct SecretsProviderCredentialBroker {
     profile: String,
     configured: HashMap<String, BrokerCredentialSource>,
     fallback: crate::provider::external::KeyringCredentialBroker,
-    cache: Mutex<HashMap<(String, String), Option<SecretString>>>,
+    cache: Mutex<HashMap<(String, String), Option<SecretBytes>>>,
     audit: Option<Arc<AuditLogger>>,
     reason: Option<String>,
     caller: Option<CallerContext>,
@@ -450,7 +447,7 @@ impl crate::provider::external::ProviderCredentialBroker for SecretsProviderCred
         &self,
         scheme: &str,
         request: &secretspec_ipc::protocol::callback::CredentialParams,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Option<SecretBytes>> {
         // The responder supplies the discovered endpoint's scheme, but retain
         // this check at the authority boundary so a future caller cannot reuse
         // a broker across provider principals.
@@ -675,13 +672,7 @@ impl<'a> ImportPlan<'a> {
             },
         );
 
-        if self.delete_source
-            && !crate::provider::spec_provider_deletes(
-                &self
-                    .secrets
-                    .resolve_provider_spec(self.from_provider.to_string()),
-            )
-        {
+        if self.delete_source && !self.secrets.provider_supports_delete(self.from_provider)? {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "provider '{}' does not support deleting secrets and cannot be used with import --delete-source",
                 source.name()
@@ -1212,7 +1203,9 @@ struct ResolutionExecution<'secrets, 'plan, 'filter, 'addresses> {
     temp_files: Vec<tempfile::NamedTempFile>,
     resolution: Vec<SecretResolution>,
     group_uris: HashMap<Option<&'plan str>, String>,
-    fetched_values: HashMap<String, SecretBytes>,
+    fetched_values: HashMap<String, ProviderValue>,
+    secret_expiries: HashMap<String, u64>,
+    refreshes: HashMap<String, u64>,
     failed_primary_uris: HashMap<Option<&'plan str>, SecretSpecError>,
     cached_uris: HashMap<String, String>,
     fallback_results: HashMap<String, FallbackReadResult>,
@@ -1242,6 +1235,8 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             resolution: Vec::new(),
             group_uris: HashMap::new(),
             fetched_values: HashMap::new(),
+            secret_expiries: HashMap::new(),
+            refreshes: HashMap::new(),
             failed_primary_uris: HashMap::new(),
             cached_uris: HashMap::new(),
             fallback_results: HashMap::new(),
@@ -1256,6 +1251,8 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 with_defaults: Vec::new(),
                 resolution: Vec::new(),
                 temp_files: Vec::new(),
+                secret_expiries: HashMap::new(),
+                refreshes: HashMap::new(),
             }));
         }
 
@@ -1268,10 +1265,13 @@ impl<'secrets, 'plan, 'filter, 'addresses>
     }
 
     fn read_cached_values(&mut self) {
-        for (name, (value, uri)) in self
+        for (name, (value, uri, refresh)) in self
             .manager
             .read_cached_group(self.plan, &self.plan.profile)
         {
+            if let Some(refresh) = refresh {
+                self.refreshes.insert(name.clone(), refresh);
+            }
             self.cached_uris.insert(name.clone(), uri);
             self.fetched_values.insert(name, value);
         }
@@ -1324,7 +1324,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             (provider_uri, group, provider): GroupFetch<'a>,
             project: &str,
             profile: &str,
-        ) -> (Option<&'a str>, Result<HashMap<String, SecretBytes>>) {
+        ) -> (Option<&'a str>, Result<HashMap<String, ProviderValue>>) {
             let result = manager.fetch_group(&*provider, provider_uri, &group, project, profile);
             (provider_uri, result)
         }
@@ -1433,6 +1433,9 @@ impl<'secrets, 'plan, 'filter, 'addresses>
 
             match self.fetched_values.remove(name.as_str()) {
                 Some(value) => {
+                    if let Some(expiry) = value.expires_at_unix_ms {
+                        self.secret_expiries.insert(name.clone(), expiry);
+                    }
                     let was_cached = self.cached_uris.contains_key(name);
                     source_provider = self
                         .cached_uris
@@ -1447,7 +1450,13 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                         addresses.insert(name.clone(), native.clone());
                     }
                     if !was_cached && materialize.values() {
-                        manager.write_cached_secret(planned, route, profile, &value);
+                        manager.write_cached_secret(
+                            planned,
+                            route,
+                            profile,
+                            &value.value,
+                            value.expires_at_unix_ms,
+                        );
                     }
                     if materialize.values() {
                         manager.insert_resolved(
@@ -1455,7 +1464,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                             &mut self.temp_files,
                             planned,
                             diagnostic_name,
-                            value,
+                            value.value,
                             ResolvedRepresentation::Stored,
                         )?;
                     }
@@ -1508,15 +1517,24 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                         addresses.insert(name.clone(), reference);
                     }
                     if let Some(value) = fallback_value {
+                        if let Some(expiry) = value.expires_at_unix_ms {
+                            self.secret_expiries.insert(name.clone(), expiry);
+                        }
                         source_provider = fallback_uri;
                         if materialize.values() {
-                            manager.write_cached_secret(planned, route, profile, &value);
+                            manager.write_cached_secret(
+                                planned,
+                                route,
+                                profile,
+                                &value.value,
+                                value.expires_at_unix_ms,
+                            );
                             manager.insert_resolved(
                                 &mut self.values,
                                 &mut self.temp_files,
                                 planned,
                                 diagnostic_name,
-                                value,
+                                value.value,
                                 ResolvedRepresentation::Stored,
                             )?;
                         }
@@ -1675,6 +1693,24 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 .iter()
                 .all(|dependency| statuses.get(dependency) == Some(&ResolutionStatus::Resolved));
             let status = if dependencies_resolved {
+                if let Some(expiry) = template
+                    .dependencies()
+                    .iter()
+                    .filter_map(|name| self.secret_expiries.get(name))
+                    .copied()
+                    .min()
+                {
+                    self.secret_expiries.insert(planned.name.clone(), expiry);
+                }
+                if let Some(refresh) = template
+                    .dependencies()
+                    .iter()
+                    .filter_map(|name| self.refreshes.get(name))
+                    .copied()
+                    .min()
+                {
+                    self.refreshes.insert(planned.name.clone(), refresh);
+                }
                 if self.materialize.values() {
                     let inputs = template
                         .dependencies()
@@ -1744,6 +1780,8 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             return;
         };
         self.values.retain(|name, _| filter.contains(name));
+        self.secret_expiries.retain(|name, _| filter.contains(name));
+        self.refreshes.retain(|name, _| filter.contains(name));
         self.resolution.retain(|entry| filter.contains(&entry.name));
         self.missing_required.retain(|name| filter.contains(name));
         self.missing_optional.retain(|name| filter.contains(name));
@@ -1856,6 +1894,8 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 with_defaults: self.with_defaults,
                 resolution: self.resolution,
                 temp_files: self.temp_files,
+                secret_expiries: self.secret_expiries,
+                refreshes: self.refreshes,
             }))
         }
     }
@@ -1875,13 +1915,13 @@ enum PreparedSecret {
 /// Named resolution with temporary-file ownership retained by the caller.
 /// The resolver converts these owners into session leases; the embedded API
 /// persists them to preserve its existing one-shot path behavior.
-pub(crate) enum OwnedNamedResolution {
+pub(crate) enum OwnedNamedResolution<T = String> {
     Undeclared,
     Missing {
         required: bool,
     },
     Value {
-        value: String,
+        value: T,
         source: ResolvedSource,
         source_provider: Option<String>,
         #[cfg_attr(not(feature = "cli"), allow(dead_code))]
@@ -1902,8 +1942,8 @@ pub(crate) enum OwnedNamedResolution {
     },
 }
 
-impl OwnedNamedResolution {
-    fn into_embedded(self) -> Result<NamedResolution> {
+impl<T> OwnedNamedResolution<T> {
+    fn into_embedded(self) -> Result<NamedResolution<T>> {
         match self {
             Self::Undeclared => Ok(NamedResolution::Undeclared),
             Self::Missing { required } => Ok(NamedResolution::Missing { required }),
@@ -2505,7 +2545,7 @@ impl Secrets {
     }
 
     /// Refuses every resolution that would produce a value and store it in a
-    /// provider (0.20+).
+    /// provider (0.21+).
     ///
     /// Resolving is not always read-only: a generatable secret with no stored
     /// value is minted *and written back*, and a prompted one is written back
@@ -2528,7 +2568,7 @@ impl Secrets {
     }
 
     /// Suppresses the progress lines that generation and prompting write to
-    /// stderr (0.20+).
+    /// stderr (0.21+).
     ///
     /// A CLI run wants them. A resolver does not: its stderr is captured by
     /// whatever launched it, which the wire protocol requires the host to treat
@@ -2659,7 +2699,7 @@ impl Secrets {
     }
 
     /// Requests a default authorization lifetime from providers that expose an
-    /// approval surface. Available starting with SecretSpec 0.20.
+    /// approval surface. Available starting with SecretSpec 0.21.
     ///
     /// The provider or approving user may choose a different lifetime. A zero
     /// duration clears the request.
@@ -3197,14 +3237,14 @@ impl Secrets {
 
     /// Stores one dynamically requested external-provider credential in the
     /// provider-private keyring namespace and records the write like an
-    /// explicitly mapped credential source (0.20+).
+    /// explicitly mapped credential source (0.21+).
     #[cfg(any(feature = "cli", test))]
     pub(crate) fn store_external_provider_credential(
         &self,
         scheme: &str,
         scope: &str,
         name: &str,
-        value: &SecretString,
+        value: &SecretBytes,
     ) -> Result<String> {
         self.ensure_reason_for(AuditAction::Set, Some(name))?;
         let result =
@@ -5013,6 +5053,22 @@ impl Secrets {
         name: &str,
         input: impl FnOnce(&str) -> Result<SecretBytes>,
     ) -> Result<()> {
+        let stored = self.store_secret_with_input(name, input)?;
+        eprintln!(
+            "{} Secret '{}' saved to {} (profile: {})",
+            "✓".green(),
+            name,
+            stored.provider_name,
+            stored.profile
+        );
+        Ok(())
+    }
+
+    fn store_secret_with_input(
+        &self,
+        name: &str,
+        input: impl FnOnce(&str) -> Result<SecretBytes>,
+    ) -> Result<StoredSecret> {
         self.ensure_reason_for(AuditAction::Set, Some(name))?;
         // Check if the secret exists in the spec
         let profile_name = self.resolve_profile_name(None);
@@ -6349,11 +6405,16 @@ impl Secrets {
     /// resolver sees it but without its caller attribution or prompting.
     #[cfg(test)]
     pub(crate) fn resolve_named_owned(&self, name: &str) -> Result<OwnedNamedResolution> {
-        self.resolve_named_owned_within(name, Surface::Scoped, Materialize::Values)
+        self.resolve_named_owned_within(
+            name,
+            Surface::Scoped,
+            Materialize::Values,
+            |name, value| Ok(value.try_as_utf8_for(name)?.to_owned()),
+        )
     }
 
     /// Resolver-mode resolution with structured caller attribution scoped to the
-    /// blocking worker that performs the read (0.20+).
+    /// blocking worker that performs the read (0.21+).
     ///
     /// `interactive` decides whether a `prompt = true` declaration with no
     /// stored value may ask for one. It is true only when the session's client
@@ -6373,11 +6434,13 @@ impl Secrets {
             Materialize::Values
         };
         with_ipc_audit_purpose(purpose, || {
-            self.resolve_named_owned_within(name, Surface::Scoped, materialize)
+            self.resolve_named_owned_within(name, Surface::Scoped, materialize, |name, value| {
+                Ok(value.try_as_utf8_for(name)?.to_owned())
+            })
         })
     }
 
-    /// Resolver-mode write of one declared name (0.20+).
+    /// Resolver-mode write of one declared name (0.21+).
     ///
     /// The value goes where a resolver read of the same name would look for it,
     /// so a consumer that stores and then resolves never has to model routing.
@@ -6393,11 +6456,11 @@ impl Secrets {
     ) -> Result<StoredSecret> {
         with_ipc_audit_purpose(purpose, || {
             self.require_ipc_surface(AuditAction::Set, name)?;
-            self.store_secret(name, Some(value))
+            self.store_secret_with_input(name, |_| Ok(SecretBytes::from_utf8(value)))
         })
     }
 
-    /// Resolver-mode removal of one declared name's stored value (0.20+), under
+    /// Resolver-mode removal of one declared name's stored value (0.21+), under
     /// the same scope rule as [`Self::store_named_for_ipc`].
     #[cfg(feature = "cli")]
     pub(crate) fn delete_named_for_ipc(
@@ -6437,17 +6500,23 @@ impl Secrets {
     /// resolves what the session exposes (a scope narrows it), while the CLI's
     /// `get` names one secret and has no `--scope`, so an ambient or configured
     /// scope must not hide a secret from it.
-    fn resolve_named_within(&self, name: &str, surface: Surface) -> Result<NamedResolution> {
-        self.resolve_named_owned_within(name, surface, Materialize::Values)?
+    fn resolve_named_within<T>(
+        &self,
+        name: &str,
+        surface: Surface,
+        convert: impl FnOnce(&str, SecretBytes) -> Result<T>,
+    ) -> Result<NamedResolution<T>> {
+        self.resolve_named_owned_within(name, surface, Materialize::Values, convert)?
             .into_embedded()
     }
 
-    fn resolve_named_owned_within(
+    fn resolve_named_owned_within<T>(
         &self,
         name: &str,
         surface: Surface,
         materialize: Materialize,
-    ) -> Result<OwnedNamedResolution> {
+        convert: impl FnOnce(&str, SecretBytes) -> Result<T>,
+    ) -> Result<OwnedNamedResolution<T>> {
         self.ensure_reason_for(AuditAction::Get, Some(name))?;
         let profile_name = self.resolve_profile_name(None);
 
@@ -6548,8 +6617,6 @@ impl Secrets {
                         return Err(err);
                     }
                 };
-                // Conversion must succeed before temporary files are persisted.
-                validated.keep_temp_files()?;
 
                 self.record(
                     AuditAction::Get,
@@ -6579,7 +6646,9 @@ impl Secrets {
                     // blocking worker, where every other failure is recoverable.
                     let target = supporting_files
                         .iter()
-                        .position(|file| file.path().to_string_lossy() == raw)
+                        .position(|file| {
+                            Some(file.path().to_string_lossy().as_ref()) == path.as_deref()
+                        })
                         .ok_or_else(|| {
                             SecretSpecError::ProviderOperationFailed(format!(
                                 "secret '{name}' is declared `as_path` but its resolved value has \
@@ -6597,7 +6666,7 @@ impl Secrets {
                     })
                 } else {
                     Ok(OwnedNamedResolution::Value {
-                        value: raw,
+                        value: value.expect("inline value was converted"),
                         source,
                         source_provider,
                         expires_at_unix_ms,
@@ -7985,16 +8054,16 @@ mod external_provider_credential_broker_tests {
             })
         }
 
-        fn get(&self, address: Address<'_>) -> Result<Option<SecretString>> {
+        fn get(&self, address: Address<'_>) -> Result<Option<SecretBytes>> {
             let item = match address {
                 Address::Native(address) => address.item.clone(),
                 Address::Convention { key, .. } => key.to_string(),
             };
             self.reads.lock().unwrap().push(item.clone());
-            Ok(Some(SecretString::new(format!("value-for-{item}").into())))
+            Ok(Some(SecretBytes::from_utf8(format!("value-for-{item}"))))
         }
 
-        fn set(&self, _address: Address<'_>, _value: &SecretString) -> Result<()> {
+        fn set(&self, _address: Address<'_>, _value: &SecretBytes) -> Result<()> {
             Ok(())
         }
 
@@ -8054,8 +8123,8 @@ mod external_provider_credential_broker_tests {
         let first = broker.get("example", &request).unwrap().unwrap();
         let second = broker.get("example", &request).unwrap().unwrap();
 
-        assert_eq!(first.expose_secret(), "value-for-token-a");
-        assert_eq!(second.expose_secret(), "value-for-token-a");
+        assert_eq!(first.expose_secret(), b"value-for-token-a");
+        assert_eq!(second.expose_secret(), b"value-for-token-a");
         assert_eq!(reads.lock().unwrap().as_slice(), ["token-a"]);
     }
 }
@@ -8558,7 +8627,7 @@ mod run_prompt_tests {
     fn run_injects_the_prompted_value_into_the_child() {
         let _env = crate::tests::scrub_resolution_env();
         let mut spec = prompted_spec();
-        spec.set_prompt_reader(|_, _, _| Ok(SecretBytes::new("entered-once".into())));
+        spec.set_prompt_reader(|_, _, _| Ok(SecretBytes::from_utf8("entered-once")));
 
         let exit = spec
             .run_command(vec![

@@ -136,7 +136,9 @@ pub(crate) use address::{OwnedAddress, flat_item};
     feature = "vault"
 ))]
 pub(crate) use credentials::preferred_env;
-pub(crate) use credentials::{ProviderCredentials, credential_env_value, credential_or_env, credential_or_envs};
+pub(crate) use credentials::{
+    ProviderCredentials, credential_env_value, credential_or_env, credential_or_envs,
+};
 pub(crate) use factory::{
     external_provider_from_spec, provider_from_spec, provider_url_from_spec, reject_uri_credential,
 };
@@ -151,15 +153,6 @@ pub(crate) use registry::{
     credential_names_for_spec, deleting_provider_names, provider_display_name_for_spec,
     spec_names_known_provider, spec_uses_dynamic_credentials, static_delete_capability,
 };
-#[cfg(any(
-    feature = "akv",
-    feature = "awsps",
-    feature = "awssm",
-    feature = "cloudflare",
-    feature = "gcsm",
-    feature = "infisical",
-    feature = "scaleway"
-))]
 pub(crate) use runtime::block_on;
 #[cfg(test)]
 pub(crate) use traits::GET_EACH_CONCURRENCY_ENV;

@@ -2,7 +2,7 @@
 
 This directory contains the language-neutral cases for
 `secretspec.resolver/1`, `secretspec.provider/1`, and the shared wire protocol.
-It is available with SecretSpec 0.20+.
+It is available with SecretSpec 0.21+.
 
 Validate the checked-in case documents and the presence and JSON shape of the
 schema/OpenRPC assets with:
@@ -40,7 +40,7 @@ compared by CI and by third-party provider endpoints. The checked-in
 `ipc-client-conformance-driver` has independent `c` and `rust` modes and runs
 the common wire cases plus `client.lifecycle` through each public client.
 
-Rust server coverage includes `rpc.discover` (0.20+): it works before and after
+Rust server coverage includes `rpc.discover` (0.21+): it works before and after
 initialization, returns a self-contained OpenRPC document, preserves increasing
 request IDs into initialization, and never initializes application state or
 issues a callback merely to describe the endpoint.
@@ -67,7 +67,7 @@ cargo test -p secretspec-ipc-conformance --test provider_cases
 ```
 
 Third-party endpoints can run the same target with a transport-only endpoint
-profile (0.20+). The executable still comes from `--endpoint`; the profile
+profile (0.21+). The executable still comes from `--endpoint`; the profile
 supplies its arguments, replacement environment, provider scheme/URI, expected
 identity, and advertised method set:
 

@@ -3,6 +3,10 @@ title: Secret Provider Protocol
 description: Version 1 IPC contract for out-of-tree SecretSpec provider endpoints
 ---
 
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.21" />
+
 The Secret Provider Protocol is the southbound IPC boundary between
 SecretSpec's resolver and an out-of-tree provider endpoint. The endpoint
 implements provider naming and storage operations while its database,
@@ -11,12 +15,11 @@ encryption, agents, hardware keys, grants, and remote APIs remain private.
 It uses the [shared IPC wire protocol](/reference/ipc-wire) with application
 protocol name `secretspec.provider` and version `1`.
 
-:::caution[Version compatibility]
 External provider discovery and Secret Provider Protocol version 1 are
-available starting with SecretSpec 0.20. This specification replaces the
+available starting with SecretSpec 0.21. This specification replaces the
 direction explored by the closed, unmerged
 [provider protocol PR #98](https://github.com/cachix/secretspec/pull/98).
-:::
+
 
 ## Provider model
 
@@ -104,7 +107,7 @@ registration file or changing PATH does not replace a running endpoint.
 
 The host launches one child with private stdin/stdout pipes and normally sends
 `rpc.initialize` immediately. Inspection tooling may first call the
-side-effect-free `rpc.discover` method (0.20+) without initializing the provider.
+side-effect-free `rpc.discover` method (0.21+) without initializing the provider.
 The full initialization request follows the
 [wire protocol](/reference/ipc-wire#initialization-and-capabilities).
 Its `application` member is:
@@ -128,7 +131,7 @@ Rules:
 - `scheme` is the validated URI scheme used for discovery.
 - `uri` is the original configured provider URI. It is sensitive input and is
   never logged or echoed because it may contain credentials.
-- `context` (0.20+) carries the resolver-declared project, active profile, absolute
+- `context` (0.21+) carries the resolver-declared project, active profile, absolute
   base directory, access reason, and optional requested authorization duration.
   The original four members are nullable. Project and
   profile are context for approval, policy, and audit surfaces, including for
@@ -170,7 +173,7 @@ endpoint MUST return `interaction_required`. It MUST NOT include backend error
 text or provider-supplied remediation instructions in the error response.
 
 An `interaction_required` error may carry an opaque structured interaction
-reference (0.20+). Its `id` correlates the failed operation with a
+reference (0.21+). Its `id` correlates the failed operation with a
 provider-owned CLI, agent, or notification, and is not authorization material.
 Version 1 defines the `authorization` interaction kind. The optional expiry
 bounds how long the provider will retain that pending interaction. The
@@ -227,7 +230,7 @@ Metadata rules:
 The endpoint is ready when this response has been validated. Authentication or
 unlock that requires I/O may stay lazy until the first operation.
 
-### Credential brokerage (0.20+)
+### Credential brokerage (0.21+)
 
 Credential requirements are negotiated by the endpoint; they are not part of
 the public provider claim or the initialization application. An endpoint knows
@@ -466,7 +469,7 @@ A hit and a miss are successful, distinct results:
 An unavailable, unauthorized, malformed, or otherwise failed lookup is an
 error, never `missing`.
 
-`expires_at_unix_ms` (0.20+) is required on a found result and may be null. A
+`expires_at_unix_ms` (0.21+) is required on a found result and may be null. A
 timestamp is the provider's authoritative absolute bound on the validity of the
 secret itself, not a cache freshness time or a promise that no earlier
 revocation can happen. The endpoint MUST NOT knowingly return a value at or

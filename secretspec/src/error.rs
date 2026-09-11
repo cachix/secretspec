@@ -183,7 +183,7 @@ impl SecretSpecError {
     }
 
     /// Opaque pending interaction associated with a provider failure, when
-    /// the provider supplied one (SecretSpec 0.20+).
+    /// the provider supplied one (SecretSpec 0.21+).
     pub fn interaction(&self) -> Option<&secretspec_ipc::InteractionReference> {
         match self {
             Self::ProviderProtocol { interaction, .. } => interaction.as_ref(),

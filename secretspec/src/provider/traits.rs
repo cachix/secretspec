@@ -46,12 +46,12 @@ pub enum ProducedValuePersistence {
 /// separate metadata and must never be placed here.
 #[derive(Clone)]
 pub struct ProviderValue {
-    pub value: SecretString,
+    pub value: SecretBytes,
     pub expires_at_unix_ms: Option<u64>,
 }
 
 impl ProviderValue {
-    pub fn new(value: SecretString, expires_at_unix_ms: Option<u64>) -> Self {
+    pub fn new(value: SecretBytes, expires_at_unix_ms: Option<u64>) -> Self {
         Self {
             value,
             expires_at_unix_ms,
@@ -114,7 +114,7 @@ pub trait Provider: Send + Sync {
     }
 
     /// Returns whether this provider understands an optional native-address
-    /// coordinate. Available since SecretSpec 0.20.
+    /// coordinate. Available since SecretSpec 0.21.
     ///
     /// Static providers inherit the existing slice-based behavior. External
     /// providers override this hook because their coordinate list is selected
@@ -186,7 +186,7 @@ pub trait Provider: Send + Sync {
 
     /// Retrieves a value together with its provider-reported validity bound.
     ///
-    /// Available starting with SecretSpec 0.20. Existing providers inherit a
+    /// Available starting with SecretSpec 0.21. Existing providers inherit a
     /// compatibility implementation with unknown expiry. Providers issuing or
     /// reading time-bounded credentials override this method; callers use it in
     /// preference to [`get`](Provider::get) when they can preserve metadata.
@@ -198,7 +198,7 @@ pub trait Provider: Send + Sync {
     /// Whether this provider can return plaintext values through
     /// [`get`](Provider::get) or [`get_many`](Provider::get_many).
     ///
-    /// Available starting with SecretSpec 0.20. Write-only stores override this
+    /// Available starting with SecretSpec 0.21. Write-only stores override this
     /// to return `false`; callers that only need presence can then use
     /// [`exists`](Provider::exists) without accidentally attempting a value
     /// read. This capability check never returns a secret value.
@@ -208,7 +208,7 @@ pub trait Provider: Send + Sync {
 
     /// Tests whether one addressed secret exists without requiring its value.
     ///
-    /// Available starting with SecretSpec 0.20. Readable providers inherit the
+    /// Available starting with SecretSpec 0.21. Readable providers inherit the
     /// compatibility implementation. Write-only providers must override it with
     /// a value-free backend operation.
     fn exists(&self, addr: Address<'_>) -> Result<bool> {
@@ -502,7 +502,7 @@ pub trait Provider: Send + Sync {
     fn set_reason(&self, _reason: Option<String>) {}
 
     /// Records the app-requested authorization lifetime for approval surfaces.
-    /// Available starting with SecretSpec 0.20.
+    /// Available starting with SecretSpec 0.21.
     ///
     /// This is an untrusted default: the provider and user decide the actual
     /// grant lifetime. The default implementation ignores it.
@@ -522,7 +522,7 @@ pub trait Provider: Send + Sync {
     fn set_caller(&self, _caller: Option<crate::CallerContext>) {}
 
     /// Records the declared project for this provider session. Available
-    /// starting with SecretSpec 0.20.
+    /// starting with SecretSpec 0.21.
     ///
     /// This is resolver-declared context for provider policy, audit, and
     /// approval surfaces. It is not an authenticated application identity and
@@ -653,7 +653,7 @@ pub trait Provider: Send + Sync {
     /// Tests a batch of addressed secrets for presence, returning the request
     /// names that exist.
     ///
-    /// Available starting with SecretSpec 0.20. Readable providers reuse their
+    /// Available starting with SecretSpec 0.21. Readable providers reuse their
     /// batch read surface. Write-only providers use bounded concurrent
     /// [`exists`](Provider::exists) calls unless they override this with a native
     /// listing operation.

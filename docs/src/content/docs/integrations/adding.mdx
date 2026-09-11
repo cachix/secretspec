@@ -3,6 +3,8 @@ title: Adding an Integration
 description: Choose a mechanism for making an external tool read secrets from SecretSpec, then build it
 ---
 
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
 An integration lets a tool that is not SecretSpec read its secrets from a
 SecretSpec provider, instead of keeping a second copy in that tool's own store.
 [Git credentials](/integrations/git/) is the first one SecretSpec ships.
@@ -18,8 +20,8 @@ read the matching section.
 | --- | --- | --- | --- |
 | [Environment injection](#environment-injection) | The tool reads environment variables or a file path | Nothing | Available today |
 | [An SDK](#link-an-sdk) | You control the tool's source and can link a library | Calls into the SDK | Available today |
-| [IPC](#resolve-over-ipc) | A separate program needs on-demand resolution, prompting, or write-back, and must not link SecretSpec | A protocol client | 0.20+ |
-| [An in-tree integration](#ship-an-integration-inside-secretspec) | The tool speaks its own credential or helper protocol, and the integration should ship with SecretSpec | A module and a shim binary | 0.20+ |
+| [IPC](#resolve-over-ipc) | A separate program needs on-demand resolution, prompting, or write-back, and must not link SecretSpec | A protocol client | 0.21+ |
+| [An in-tree integration](#ship-an-integration-inside-secretspec) | The tool speaks its own credential or helper protocol, and the integration should ship with SecretSpec | A module and a shim binary | 0.21+ |
 
 Work down the list. Environment injection costs nothing and covers most tools,
 so reach past it only when something concrete rules it out: the tool needs a
@@ -63,10 +65,11 @@ on SecretSpec's dependency closure.
 
 ## Resolve over IPC
 
-:::caution[Version compatibility]
+<VersionCompatibility version="0.21" />
+
 `secretspec serve`, the IPC libraries, and protocol version 1 are available
-starting with SecretSpec 0.20.
-:::
+starting with SecretSpec 0.21.
+
 
 IPC covers the case the other two cannot: a separate, long-lived program that
 resolves names while it runs, without linking SecretSpec or any provider SDK.
@@ -114,10 +117,11 @@ is direction: a provider answers SecretSpec, an integration asks it.
 
 ## Ship an integration inside SecretSpec
 
-:::caution[Version compatibility]
+<VersionCompatibility version="0.21" />
+
 The integration module layout described here is available starting with
-SecretSpec 0.20.
-:::
+SecretSpec 0.21.
+
 
 Some tools already define how they ask for a credential. Git invokes a helper
 binary and exchanges attributes with it on stdin and stdout; other tools have

@@ -9,7 +9,7 @@ pub const PROTOCOL_VERSION: u32 = 1;
 
 pub mod rpc {
     /// Return this endpoint's OpenRPC description without initializing
-    /// application state (0.20+).
+    /// application state (0.21+).
     pub const DISCOVER: &str = "rpc.discover";
     pub const INITIALIZE: &str = "rpc.initialize";
     pub const CANCEL: &str = "rpc.cancel";
@@ -77,7 +77,7 @@ pub struct InitializeParams<A> {
     pub client: Product,
     pub limits: Limits,
     /// Methods this client can answer when the server calls back on the same
-    /// session (0.20+). Empty, and omitted on the wire, for a client that
+    /// session (0.21+). Empty, and omitted on the wire, for a client that
     /// answers none, which is every client before this field existed.
     ///
     /// The server's `methods` say what a client may ask for. These say
@@ -159,7 +159,7 @@ pub struct CancelParams {
 #[serde(deny_unknown_fields)]
 pub struct EmptyParams {}
 
-/// Methods a server calls back on the client over the same session (0.20+).
+/// Methods a server calls back on the client over the same session (0.21+).
 ///
 /// This is the only direction reversal in version 1, and it exists because the
 /// endpoint that knows a value is missing is never the process that can ask a
@@ -172,9 +172,9 @@ pub struct EmptyParams {}
 /// [`InitializeParams::client_methods`].
 pub mod callback {
     pub mod method {
-        /// Ask the client to obtain one secret value from a person (0.20+).
+        /// Ask the client to obtain one secret value from a person (0.21+).
         pub const PROMPT: &str = "client.prompt";
-        /// Ask the client for one provider authentication credential (0.20+).
+        /// Ask the client for one provider authentication credential (0.21+).
         pub const CREDENTIAL: &str = "client.credential";
 
         pub const RESOLVER: &[&str] = &[PROMPT];
@@ -239,7 +239,7 @@ pub mod callback {
     }
 
     /// One semantic provider credential requested while an endpoint is
-    /// initializing or refreshing its authentication (0.20+).
+    /// initializing or refreshing its authentication (0.21+).
     ///
     /// `scope` is a stable, credential-free account or store identity chosen
     /// by the provider from its configured URI. The client binds it to the
@@ -352,9 +352,9 @@ pub mod resolver {
     pub mod method {
         pub const GET: &str = "resolver.get";
         pub const RELEASE: &str = "resolver.release";
-        /// Store one declared name (0.20+).
+        /// Store one declared name (0.21+).
         pub const SET: &str = "resolver.set";
-        /// Remove one declared name's stored value (0.20+).
+        /// Remove one declared name's stored value (0.21+).
         pub const DELETE: &str = "resolver.delete";
 
         /// Every method version 1 defines. What an endpoint advertises is a
@@ -369,7 +369,7 @@ pub mod resolver {
     ///
     pub const CAPABILITIES: &[&str] = &[method::GET, method::RELEASE];
 
-    /// Methods that write to the store (0.20+).
+    /// Methods that write to the store (0.21+).
     ///
     /// These are optional and separately advertised: resolution is the reason
     /// the protocol exists, while storage is authority a consumer usually does
@@ -924,7 +924,7 @@ pub mod provider {
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     /// Resolver-declared provider session context. Available starting with
-    /// SecretSpec 0.20.
+    /// SecretSpec 0.21.
     pub struct ApplicationContext {
         #[serde(deserialize_with = "deserialize_required_nullable")]
         pub project: Option<String>,

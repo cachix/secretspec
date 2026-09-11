@@ -87,7 +87,7 @@ libc.workspace = true
 signal-hook.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = [
+windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
@@ -122,7 +122,7 @@ akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secr
 # implementation, avoiding a second cryptography dependency.
 aac = ["akv", "dep:reqwest", "azure_core/hmac_rust"]
 age = ["dep:age"]
-ejson = ["dep:wait-timeout", "dep:windows-sys"]
+ejson = ["dep:wait-timeout"]
 sops = []
 kubernetes = ["dep:kube", "dep:k8s-openapi", "dep:base64", "dep:json-patch"]
 

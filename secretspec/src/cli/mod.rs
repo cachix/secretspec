@@ -29,7 +29,7 @@ struct LoginCredentialBroker {
     alias: String,
     configured: HashMap<String, crate::config::CredentialSource>,
     request_lock: Mutex<()>,
-    values: Mutex<HashMap<(String, String, String), secrecy::SecretString>>,
+    values: Mutex<HashMap<(String, String, String), crate::SecretBytes>>,
     stored: Mutex<Vec<(String, String)>>,
 }
 
@@ -55,7 +55,7 @@ impl crate::provider::external::ProviderCredentialBroker for LoginCredentialBrok
         &self,
         scheme: &str,
         request: &secretspec_ipc::protocol::callback::CredentialParams,
-    ) -> crate::Result<Option<secrecy::SecretString>> {
+    ) -> crate::Result<Option<crate::SecretBytes>> {
         let _request = self
             .request_lock
             .lock()
@@ -102,7 +102,7 @@ impl crate::provider::external::ProviderCredentialBroker for LoginCredentialBrok
         if entered.is_empty() {
             return Ok(None);
         }
-        let value = secrecy::SecretString::new(entered.into());
+        let value = crate::SecretBytes::from_utf8(entered);
         let location = match source {
             Some(source) => self
                 .app
@@ -404,7 +404,7 @@ enum Commands {
         #[command(subcommand)]
         action: CacheAction,
     },
-    /// Serve one `secretspec.resolver/1` session over stdin and stdout (0.20+)
+    /// Serve one `secretspec.resolver/1` session over stdin and stdout (0.21+)
     ///
     /// The session is a private child of whoever launched it: it exchanges
     /// framed IPC on the standard streams, never prompts on them, and exits
@@ -413,7 +413,7 @@ enum Commands {
     /// this one does not.
     Serve {
         /// Advertise resolution only, refusing `resolver.set` and
-        /// `resolver.delete` (0.20+)
+        /// `resolver.delete` (0.21+)
         #[arg(long)]
         read_only: bool,
     },

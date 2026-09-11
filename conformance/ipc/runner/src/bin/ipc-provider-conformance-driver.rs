@@ -1,4 +1,4 @@
-use secrecy::{ExposeSecret, SecretString};
+use secretspec::SecretBytes;
 use secretspec::{
     Address as CoreAddress, DiscoveryContext, ExternalProvider, Provider, ProviderCredentialBroker,
     ProviderCredentialRequest, ProviderEndpoint, SecretSpecError,
@@ -749,7 +749,7 @@ fn run_adapter_operations(endpoint: &Path) -> Result<Vec<Value>, String> {
             &self,
             scheme: &str,
             request: &ProviderCredentialRequest,
-        ) -> secretspec::Result<Option<SecretString>> {
+        ) -> secretspec::Result<Option<SecretBytes>> {
             if scheme != "memory"
                 || request.name != "conformance_token"
                 || request.scope != "memory://conformance"
@@ -759,7 +759,7 @@ fn run_adapter_operations(endpoint: &Path) -> Result<Vec<Value>, String> {
                 ));
             }
             self.0.store(true, Ordering::Release);
-            Ok(Some(SecretString::from(
+            Ok(Some(SecretBytes::from_utf8(
                 "conformance-credential".to_string(),
             )))
         }
@@ -796,7 +796,7 @@ fn run_adapter_operations(endpoint: &Path) -> Result<Vec<Value>, String> {
     if description.is_empty() || description.contains(CANARY) {
         return Err("external adapter returned an unsafe write description".into());
     }
-    let secret = SecretString::from(CANARY.to_string());
+    let secret = SecretBytes::from_utf8(CANARY.to_string());
     provider
         .set(core_address("TOKEN"), &secret)
         .map_err(|error| error.to_string())?;
@@ -804,7 +804,7 @@ fn run_adapter_operations(endpoint: &Path) -> Result<Vec<Value>, String> {
         .get(core_address("TOKEN"))
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "external adapter missed a stored value".to_string())?;
-    if found.expose_secret() != CANARY {
+    if found.expose_secret() != CANARY.as_bytes() {
         return Err("external adapter returned the wrong stored value".into());
     }
     let batch = provider
@@ -1056,7 +1056,7 @@ fn run_adapter_errors(endpoint: &Path) -> Result<Vec<Value>, String> {
     let error = provider
         .set(
             core_address("__CONFLICT__"),
-            &SecretString::from(CANARY.to_string()),
+            &SecretBytes::from_utf8(CANARY.to_string()),
         )
         .expect_err("one-shot provider conflict was automatically replayed");
     if provider_protocol_kind(error) != Some(ErrorKind::Conflict) {
@@ -1084,7 +1084,7 @@ fn run_adapter_session_isolation(endpoint: &Path) -> Result<Vec<Value>, String> 
     first
         .set(
             core_address("SHARED"),
-            &SecretString::from(CANARY.to_string()),
+            &SecretBytes::from_utf8(CANARY.to_string()),
         )
         .map_err(|error| error.to_string())?;
     drop(first);
@@ -1101,7 +1101,7 @@ fn run_adapter_session_isolation(endpoint: &Path) -> Result<Vec<Value>, String> 
     second
         .set(
             core_address("SHARED"),
-            &SecretString::from(CANARY.to_string()),
+            &SecretBytes::from_utf8(CANARY.to_string()),
         )
         .map_err(|error| error.to_string())?;
     second.set_reason(Some("session-b-reason-2".into()));

@@ -48,7 +48,7 @@ impl<'de> Deserialize<'de> for InteractionKind {
 }
 
 /// Opaque, non-secret correlation data for provider-owned interaction.
-/// Available starting with SecretSpec 0.20.
+/// Available starting with SecretSpec 0.21.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InteractionReference {

@@ -1,14 +1,14 @@
 //! External provider discovery and the `secretspec.provider/1` adapter.
 //!
-//! Available since SecretSpec 0.20.
+//! Available since SecretSpec 0.21.
 
 use super::{
     Address, DiscoveryContext, ProducedValuePersistence, Provider, ProviderCredentials,
     ProviderUrl, ProviderValue, exists_each, get_each_with,
 };
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, Secret, SecretSpecError};
-use secrecy::{ExposeSecret, SecretString};
 use secretspec_ipc::deadline_unix_ms_after;
 use secretspec_ipc::error::{ErrorKind as RpcErrorKind, RpcError};
 use secretspec_ipc::lifecycle::{CredentialResponder, Environment, LaunchOptions, ProviderSession};
@@ -32,7 +32,7 @@ const REGISTRATION_MAX_BYTES: u64 = 64 * 1024;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Semantic credential request made by an external endpoint (0.20+).
+/// Semantic credential request made by an external endpoint (0.21+).
 pub use secretspec_ipc::protocol::callback::CredentialParams as ProviderCredentialRequest;
 
 /// A resolved provider endpoint and its fixed executable identity.
@@ -188,7 +188,7 @@ static ACTIVE_DISCOVERY: LazyLock<RwLock<ProviderDiscovery>> =
 
 /// Replaces the process-wide discovery inputs used by ordinary provider URI
 /// construction. Embedders can use this to supply trusted direct endpoints or
-/// to opt into PATH discovery. Available since SecretSpec 0.20.
+/// to opt into PATH discovery. Available since SecretSpec 0.21.
 pub fn set_provider_discovery(discovery: ProviderDiscovery) {
     *ACTIVE_DISCOVERY
         .write()
@@ -578,11 +578,8 @@ fn discovery_error(message: &str) -> SecretSpecError {
 /// request and MUST be part of the backing-store namespace. Implementations
 /// return `None` for an ordinary miss and must never place a value in an error.
 pub trait ProviderCredentialBroker: Send + Sync + 'static {
-    fn get(
-        &self,
-        scheme: &str,
-        request: &ProviderCredentialRequest,
-    ) -> Result<Option<SecretString>>;
+    fn get(&self, scheme: &str, request: &ProviderCredentialRequest)
+    -> Result<Option<SecretBytes>>;
 }
 
 #[derive(Default)]
@@ -593,7 +590,7 @@ impl ProviderCredentialBroker for KeyringCredentialBroker {
         &self,
         scheme: &str,
         request: &ProviderCredentialRequest,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Option<SecretBytes>> {
         #[cfg(feature = "keyring")]
         {
             use crate::provider::keyring::{KeyringConfig, KeyringProvider};
@@ -638,7 +635,7 @@ pub(crate) fn store_brokered_credential(
     scheme: &str,
     scope: &str,
     name: &str,
-    value: &SecretString,
+    value: &SecretBytes,
 ) -> Result<String> {
     #[cfg(feature = "keyring")]
     {
@@ -708,7 +705,10 @@ impl CredentialResponder for ExternalCredentialResponder {
         };
         Ok(match value {
             Some(value) if !value.expose_secret().is_empty() => CredentialResult::Found {
-                value: value.expose_secret().to_string(),
+                value: value
+                    .try_as_utf8()
+                    .map_err(|_| RpcError::new(RpcErrorKind::OperationFailed))?
+                    .to_owned(),
             },
             _ => CredentialResult::Missing,
         })
@@ -800,7 +800,7 @@ impl ExternalProvider {
     }
 
     /// Replaces the default system-keyring broker before the endpoint starts.
-    /// Embedders can use this to enforce their own credential policy (0.20+).
+    /// Embedders can use this to enforce their own credential policy (0.21+).
     pub fn with_credential_broker(&mut self, broker: Arc<dyn ProviderCredentialBroker>) {
         let session = {
             let mut state = self.state();
@@ -1075,7 +1075,7 @@ impl Provider for ExternalProvider {
         self.resolve_remote(addr).map(std::borrow::Cow::Owned)
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         self.get_with_metadata(addr)
             .map(|value| value.map(|value| value.value))
     }
@@ -1089,14 +1089,14 @@ impl Provider for ExternalProvider {
                 value,
                 expires_at_unix_ms,
             } => Some(ProviderValue::new(
-                SecretString::from(value),
+                SecretBytes::from_utf8(value),
                 expires_at_unix_ms,
             )),
             GetResult::Missing => None,
         })
     }
 
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         self.get_many_with_metadata(requests).map(|values| {
             values
                 .into_iter()
@@ -1142,7 +1142,7 @@ impl Provider for ExternalProvider {
                     expires_at_unix_ms,
                 } => Some((
                     item.name,
-                    ProviderValue::new(SecretString::from(value), expires_at_unix_ms),
+                    ProviderValue::new(SecretBytes::from_utf8(value), expires_at_unix_ms),
                 )),
                 GetResult::Missing => None,
             })
@@ -1157,11 +1157,16 @@ impl Provider for ExternalProvider {
             .map(|values| values.into_keys().collect())
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)?;
         let result = self.call::<wire::method::Set>(&SetParams {
             address: to_wire_address(addr),
-            value: value.expose_secret().to_string(),
+            value: value
+                .try_as_utf8_for(match addr {
+                    Address::Convention { key, .. } => key,
+                    Address::Native(native) => &native.item,
+                })?
+                .to_owned(),
         })?;
         if result.stored {
             Ok(())
@@ -1173,7 +1178,7 @@ impl Provider for ExternalProvider {
     fn set_expiring(
         &self,
         addr: Address<'_>,
-        value: &SecretString,
+        value: &SecretBytes,
         max_age: Duration,
     ) -> Result<()> {
         if !self.ensure_session()?.supports(wire::method::SET_EXPIRING) {
@@ -1186,7 +1191,12 @@ impl Provider for ExternalProvider {
         }
         let result = self.call::<wire::method::SetExpiring>(&SetExpiringParams {
             address: to_wire_address(addr),
-            value: value.expose_secret().to_string(),
+            value: value
+                .try_as_utf8_for(match addr {
+                    Address::Convention { key, .. } => key,
+                    Address::Native(native) => &native.item,
+                })?
+                .to_owned(),
             ttl_ms,
         })?;
         if result.stored {
@@ -1768,10 +1778,10 @@ mod tests {
                     ..NativeAddress::default()
                 })
             }
-            fn get(&self, _: Address<'_>) -> Result<Option<SecretString>> {
+            fn get(&self, _: Address<'_>) -> Result<Option<SecretBytes>> {
                 Ok(None)
             }
-            fn set(&self, _: Address<'_>, _: &SecretString) -> Result<()> {
+            fn set(&self, _: Address<'_>, _: &SecretBytes) -> Result<()> {
                 Ok(())
             }
             fn name(&self) -> &str {

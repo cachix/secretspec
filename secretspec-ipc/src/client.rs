@@ -32,7 +32,7 @@ enum WriterCommand {
     Close,
 }
 
-/// Answers the server's callbacks on this session (0.20+).
+/// Answers the server's callbacks on this session (0.21+).
 ///
 /// A client installs one only for the methods it advertised in
 /// `client_methods`; a server never sends anything else. The returned
@@ -102,7 +102,7 @@ impl Client {
     }
 
     /// As [`Self::connect`], installing a handler for the callbacks this
-    /// client advertised in `client_methods` (0.20+).
+    /// client advertised in `client_methods` (0.21+).
     ///
     /// Passing `None` while advertising a callback would leave the server
     /// waiting out its deadline on a request nothing answers, so the two are

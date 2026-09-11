@@ -1158,13 +1158,13 @@ impl DopplerProvider {
     /// The config an address that names none reads from: the one pinned in the
     /// URI, else the one the profile names, else nothing.
     ///
-    /// [`locate`](Self::locate) resolves an operation through here;
-    /// [`config_for_profile`](Self::config_for_profile) spells the same rule
-    /// for the paths that always hold a profile. The two must keep agreeing, so
-    /// `secretspec init --from doppler://myapp` cannot come to discover
-    /// declarations in one config while resolving them reads another. The
-    /// returned [`ConfigSource`] is what lets a refusal name the place the user
-    /// has to edit.
+    /// The single owner of that rule. [`locate`](Self::locate) resolves an
+    /// operation through it, and [`config_for_profile`](Self::config_for_profile)
+    /// is it for the paths that always hold a profile, so `secretspec init
+    /// --from doppler://myapp` cannot come to discover declarations in one
+    /// config while resolving them reads another. The returned
+    /// [`ConfigSource`] is what lets a refusal name the place the user has to
+    /// edit.
     fn implied_config<'a>(&'a self, profile: Option<&'a str>) -> Option<(&'a str, ConfigSource)> {
         match (&self.config.config, profile) {
             (Some(config), _) => Some((config.as_str(), ConfigSource::Uri)),
@@ -1176,22 +1176,29 @@ impl DopplerProvider {
     /// [`implied_config`](Self::implied_config) where a profile is always known,
     /// validated up front.
     ///
-    /// [`locate`](Self::locate) leaves the check to [`parse_item`] instead,
-    /// because a `ref` that names its own config never consults the fallback
-    /// and must not be refused for a profile it does not use. Here there is no
-    /// `ref`: the config the profile names *is* the answer, so an unspellable
-    /// one is refused before anything is built from it. A config pinned in the
-    /// URI was already validated when the URI was parsed.
+    /// This is what [`convention_address`](Provider::convention_address) builds
+    /// a declared secret's address from and what `reflect` lists, so discovery
+    /// and resolution name one config. [`locate`](Self::locate) leaves the
+    /// check to [`parse_item`] instead, because a `ref` that names its own
+    /// config never consults the fallback and must not be refused for a
+    /// profile it does not use. Here there is no `ref`: the config the profile
+    /// names *is* the answer, so an unspellable one is refused before anything
+    /// is built from it. A config pinned in the URI was validated when the URI
+    /// was parsed.
     ///
     /// # Errors
     ///
     /// Returns an error when the profile cannot name a Doppler config.
     fn config_for_profile(&self, profile: &str) -> Result<String> {
-        if let Some(config) = &self.config.config {
-            return Ok(config.clone());
+        // With a profile in hand the rule always answers; the fallback only
+        // restates the arm it would take, so this stays total without a panic.
+        let (config, source) = self
+            .implied_config(Some(profile))
+            .unwrap_or((profile, ConfigSource::Profile));
+        if source == ConfigSource::Profile {
+            validate_config_name(config, source)?;
         }
-        validate_config_name(profile, ConfigSource::Profile)?;
-        Ok(profile.to_string())
+        Ok(config.to_string())
     }
 
     /// Resolves an address and applies the write policy to it.
@@ -1222,20 +1229,6 @@ impl DopplerProvider {
             )));
         }
         Ok(loc)
-    }
-
-    /// The config `reflect` lists: the pinned one, else the profile discovery
-    /// is running for.
-    ///
-    /// This is the same rule [`convention_address`](Provider::convention_address)
-    /// applies, so `secretspec init --from doppler://myapp` discovers the
-    /// declarations in exactly the config that resolving them would later read.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the profile cannot name a Doppler config.
-    fn reflect_config(&self, context: super::DiscoveryContext<'_>) -> Result<String> {
-        self.config_for_profile(context.profile)
     }
 
     /// Sends one [`Call`] to Doppler.
@@ -1715,7 +1708,7 @@ impl Provider for DopplerProvider {
         &self,
         context: super::DiscoveryContext<'_>,
     ) -> Result<HashMap<String, crate::Secret>> {
-        let config = self.reflect_config(context)?;
+        let config = self.config_for_profile(context.profile)?;
         let names = super::block_on(self.names_async(&config))?;
         Ok(names
             .into_iter()
@@ -2854,14 +2847,12 @@ mod tests {
     /// Importing needs a config to read, and says so rather than guessing.
     #[test]
     fn reflect_reads_the_config_resolution_would() {
-        use crate::provider::DiscoveryContext;
-
         // With no config pinned, discovery follows the profile -- the same rule
         // `convention_address` applies, so `init --from` finds the declarations
         // that resolving them would later read.
         assert_eq!(
             provider("doppler://myapp")
-                .reflect_config(DiscoveryContext::new("payments", "production"))
+                .config_for_profile("production")
                 .unwrap(),
             "production"
         );
@@ -2869,14 +2860,14 @@ mod tests {
         // A pinned config wins, exactly as it does for a convention address.
         assert_eq!(
             provider("doppler://myapp/prd")
-                .reflect_config(DiscoveryContext::new("payments", "production"))
+                .config_for_profile("production")
                 .unwrap(),
             "prd"
         );
 
         // A profile Doppler cannot spell as a config is refused, not guessed at.
         let err = provider("doppler://myapp")
-            .reflect_config(DiscoveryContext::new("payments", "Production"))
+            .config_for_profile("Production")
             .unwrap_err();
         assert!(err.to_string().contains("lowercase letters"), "{err}");
     }

@@ -1370,6 +1370,82 @@ mod tests {
         assert!(message.contains("dotenv:.env"), "{message}");
     }
 
+    /// A cached-alias spec declaring `API_KEY` in profiles `prd` and `dev` as
+    /// well as `default`: a Doppler overlap only shows under a profile, since
+    /// an unpinned URI takes its config from the active one.
+    #[cfg(feature = "doppler")]
+    fn doppler_cached_spec(sources: &[&str], cache: &str) -> Secrets {
+        let declare = || HashMap::from([("API_KEY".to_string(), secret(Some(vec!["myprovider"])))]);
+        let mut config = crate::tests::resolve_test_config(declare());
+        for profile in ["prd", "dev"] {
+            config.profiles.insert(
+                profile.to_string(),
+                crate::config::Profile {
+                    defaults: None,
+                    secrets: declare(),
+                },
+            );
+        }
+        let mut providers = cached_aliases();
+        providers.insert("myprovider".to_string(), cached_alias(sources, cache, "8h"));
+        config.providers = Some(providers);
+        Secrets::new(config, None, None, None)
+    }
+
+    /// Under profile `prd`, `doppler://myapp/prd` and `doppler://myapp` resolve
+    /// `API_KEY` to one Doppler secret, `prd/API_KEY`, while rendering distinct
+    /// storage identities. A cache at that pairing would overwrite the
+    /// authoritative secret with its envelope on refresh and null it on
+    /// `cache clear` -- the ownership check cannot see the overlap when the
+    /// secret is `restricted` and the token cannot read it. Planning has to
+    /// refuse the pairing, in either direction, under the profile where the
+    /// two locations coincide.
+    #[cfg(feature = "doppler")]
+    #[test]
+    fn a_doppler_cache_may_not_resolve_to_its_sources_entry_under_the_active_profile() {
+        let _env = scrub_resolution_env();
+        for (source, cache) in [
+            ("doppler://myapp/prd", "doppler://myapp"),
+            ("doppler://myapp", "doppler://myapp/prd"),
+        ] {
+            let spec = doppler_cached_spec(&[source], cache);
+            let error = spec
+                .build_plan(Some("prd"))
+                .expect_err(&format!("{source} cached into {cache} under prd"))
+                .to_string();
+            assert!(error.contains("same entry"), "{source} -> {cache}: {error}");
+            assert!(error.contains("'prd'"), "{source} -> {cache}: {error}");
+            assert!(error.contains("myprovider"), "{source} -> {cache}: {error}");
+        }
+    }
+
+    /// The same pairing under profile `dev` addresses `dev/API_KEY` and
+    /// `prd/API_KEY`, two secrets, so it is a legitimate cache. The refusal is
+    /// per profile, not a stricter identity comparison.
+    #[cfg(feature = "doppler")]
+    #[test]
+    fn a_doppler_cache_pairing_is_judged_under_the_profile_that_resolves_it() {
+        let _env = scrub_resolution_env();
+        let spec = doppler_cached_spec(&["doppler://myapp/prd"], "doppler://myapp");
+        let plan = spec
+            .build_plan(Some("dev"))
+            .expect("prd source and dev-resolved cache are distinct entries");
+        assert!(route(find(&plan, "API_KEY")).cache().is_some());
+    }
+
+    /// Two pinned configs in one project stay distinct stores, so one Doppler
+    /// config can cache another.
+    #[cfg(feature = "doppler")]
+    #[test]
+    fn a_doppler_config_can_cache_a_sibling_config() {
+        let _env = scrub_resolution_env();
+        let spec = doppler_cached_spec(&["doppler://myapp/prd"], "doppler://myapp/cache");
+        let plan = spec
+            .build_plan(Some("prd"))
+            .expect("pinned siblings are distinct entries");
+        assert!(route(find(&plan, "API_KEY")).cache().is_some());
+    }
+
     #[test]
     fn vault_compatible_spelling_and_auth_cannot_bypass_cache_separation() {
         let _env = scrub_resolution_env();

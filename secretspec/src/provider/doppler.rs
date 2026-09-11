@@ -21,7 +21,7 @@
 //!
 //! Every request names its project and config explicitly, so a pinned token
 //! asked for coordinates it does not cover is refused by Doppler rather than
-//! quietly answered from wherever it happens to point. See [`Call::query`].
+//! quietly answered from wherever it happens to point. See [`Call::request`].
 //!
 //! # URI Format
 //!
@@ -450,7 +450,7 @@ fn parse_secret_value(body: &str, name: &str) -> Result<Option<SecretBytes>> {
 /// Reads every secret in a config out of a list response, indexed by name.
 ///
 /// Reserved names are filtered here as well as excluded at the source (see
-/// [`Call::query`]): passing one on would report a secret nobody declared --
+/// [`Call::request`]): passing one on would report a secret nobody declared --
 /// exactly what a parity checker over a Doppler config has to special-case if
 /// its source does not. Keeping the local filter is what makes a batch read
 /// agree with a single read, which answers a reserved name without asking at
@@ -930,23 +930,27 @@ enum Call<'a> {
     Write(&'a Location, Option<&'a str>),
 }
 
+/// What one [`Call`] puts on the wire.
+struct Request<'a> {
+    method: reqwest::Method,
+    path: &'static str,
+    query: Vec<(&'static str, &'a str)>,
+    body: Option<serde_json::Value>,
+}
+
 impl Call<'_> {
-    fn method(&self) -> reqwest::Method {
-        match self {
-            Call::Read(_) | Call::List { .. } | Call::Names { .. } => reqwest::Method::GET,
-            Call::Write(..) => reqwest::Method::POST,
-        }
-    }
-
-    fn path(&self) -> &'static str {
-        match self {
-            Call::Read(_) => "/configs/config/secret",
-            Call::List { .. } | Call::Write(..) => "/configs/config/secrets",
-            Call::Names { .. } => "/configs/config/secrets/names",
-        }
-    }
-
-    /// The query naming which project and config the request addresses.
+    /// The request this call makes, decided in one exhaustive match so a new
+    /// call cannot describe its method in one place and forget its body in
+    /// another.
+    ///
+    /// Every read names its project and config in the query, and this is
+    /// load-bearing rather than tidiness. A service token (`dp.st.`) is pinned
+    /// to one project and config, and a request that names neither is answered
+    /// from wherever the token points: a token swapped from `dev` to `prd`
+    /// would silently change which secrets the application receives, with no
+    /// error and nothing in the URI to contradict it. Naming the coordinates
+    /// converts that into Doppler's own explicit refusal ("This token does not
+    /// have access to requested config 'prd'").
     ///
     /// Both listings also ask Doppler to leave its own injected names out:
     /// `include_managed_secrets` defaults to *true*, so every listing carries
@@ -956,22 +960,22 @@ impl Call<'_> {
     /// the belt to this braces, because it is what makes a single read and a
     /// batch read agree.
     ///
-    /// Every read names both, and this is load-bearing rather than tidiness.
-    /// A service token (`dp.st.`) is pinned to one project and config, and a
-    /// request that names neither is answered from wherever the token points:
-    /// a token swapped from `dev` to `prd` would silently change which
-    /// secrets the application receives, with no error and nothing in the URI
-    /// to contradict it. Naming the coordinates converts that into Doppler's
-    /// own explicit refusal ("This token does not have access to requested
-    /// config 'prd'"). A write names them too, in its body: see
-    /// [`Call::body`].
-    fn query(&self) -> Vec<(&'static str, &str)> {
+    /// A write names its coordinates in its body instead. Doppler's write
+    /// endpoint takes a map of names to values and *merges* it into the
+    /// config, so writing one secret leaves its siblings untouched; a null
+    /// value deletes.
+    fn request(&self) -> Request<'_> {
         match self {
-            Call::Read(loc) => vec![
-                ("project", loc.project.as_str()),
-                ("config", loc.config.as_str()),
-                ("name", loc.name.as_str()),
-            ],
+            Call::Read(loc) => Request {
+                method: reqwest::Method::GET,
+                path: "/configs/config/secret",
+                query: vec![
+                    ("project", loc.project.as_str()),
+                    ("config", loc.config.as_str()),
+                    ("name", loc.name.as_str()),
+                ],
+                body: None,
+            },
             Call::List {
                 project,
                 config,
@@ -985,34 +989,35 @@ impl Call<'_> {
                 if !names.is_empty() {
                     query.push(("secrets", *names));
                 }
-                query
+                Request {
+                    method: reqwest::Method::GET,
+                    path: "/configs/config/secrets",
+                    query,
+                    body: None,
+                }
             }
-            Call::Names { project, config } => {
-                vec![
+            Call::Names { project, config } => Request {
+                method: reqwest::Method::GET,
+                path: "/configs/config/secrets/names",
+                query: vec![
                     ("project", *project),
                     ("config", *config),
                     ("include_managed_secrets", "false"),
-                ]
-            }
-            Call::Write(..) => Vec::new(),
-        }
-    }
-
-    /// A write's body. Doppler's write endpoint takes a map of names to
-    /// values and *merges* it into the config, so writing one secret leaves
-    /// its siblings untouched; a null value deletes. The project and config
-    /// ride in the body, which is what [`Call::query`] demands of every other
-    /// request in its query.
-    fn body(&self) -> Option<serde_json::Value> {
-        match self {
-            Call::Write(loc, value) => Some(serde_json::json!({
-                "project": loc.project,
-                "config": loc.config,
-                "secrets": {
-                    &loc.name: value,
-                },
-            })),
-            _ => None,
+                ],
+                body: None,
+            },
+            Call::Write(loc, value) => Request {
+                method: reqwest::Method::POST,
+                path: "/configs/config/secrets",
+                query: Vec::new(),
+                body: Some(serde_json::json!({
+                    "project": loc.project,
+                    "config": loc.config,
+                    "secrets": {
+                        &loc.name: value,
+                    },
+                })),
+            },
         }
     }
 }
@@ -1237,15 +1242,21 @@ impl DopplerProvider {
     /// one, so what remains here is only transport.
     async fn dispatch(&self, call: &Call<'_>) -> Result<reqwest::Response> {
         let token = self.token()?;
+        let Request {
+            method,
+            path,
+            query,
+            body,
+        } = call.request();
         let mut request = self
             .http()?
-            .request(call.method(), format!("{}{}", self.api_base, call.path()))
+            .request(method, format!("{}{}", self.api_base, path))
             .header(
                 reqwest::header::AUTHORIZATION,
                 super::credentials::credential_bearer_header(token.expose_secret())?,
             )
-            .query(&call.query());
-        if let Some(body) = call.body() {
+            .query(&query);
+        if let Some(body) = body {
             request = request.json(&body);
         }
         request.send().await.map_err(|e| {
@@ -1387,7 +1398,7 @@ impl DopplerProvider {
     }
 
     /// Writes one secret, or deletes it when `value` is `None`. See
-    /// [`Call::body`] for the merge semantics.
+    /// [`Call::request`] for the merge semantics.
     ///
     /// The one operation that does not go through
     /// [`execute`](DopplerProvider::execute): a success body is never read, so
@@ -2881,7 +2892,7 @@ mod tests {
         let loc = location("myapp", "prd", "API_KEY");
 
         assert_eq!(
-            Call::Read(&loc).query(),
+            Call::Read(&loc).request().query,
             [("project", "myapp"), ("config", "prd"), ("name", "API_KEY")]
         );
         assert_eq!(
@@ -2890,7 +2901,8 @@ mod tests {
                 config: "prd",
                 names: "API_KEY,DATABASE_URL",
             }
-            .query(),
+            .request()
+            .query,
             [
                 ("project", "myapp"),
                 ("config", "prd"),
@@ -2906,7 +2918,8 @@ mod tests {
                 config: "prd",
                 names: "",
             }
-            .query(),
+            .request()
+            .query,
             [
                 ("project", "myapp"),
                 ("config", "prd"),
@@ -2920,7 +2933,8 @@ mod tests {
                 project: "myapp",
                 config: "prd",
             }
-            .query(),
+            .request()
+            .query,
             [
                 ("project", "myapp"),
                 ("config", "prd"),
@@ -2930,17 +2944,20 @@ mod tests {
 
         let write = Call::Write(&loc, Some("v"));
         assert!(
-            write.query().is_empty(),
+            write.request().query.is_empty(),
             "a write's coordinates ride in its body"
         );
-        let body = write.body().expect("a write has a body");
+        let body = write.request().body.expect("a write has a body");
         assert_eq!(body["project"], "myapp");
         assert_eq!(body["config"], "prd");
         assert_eq!(body["secrets"]["API_KEY"], "v");
 
         // ... and a delete is a write of null, which is what Doppler's merge
         // endpoint deletes on.
-        let body = Call::Write(&loc, None).body().expect("a delete has a body");
+        let body = Call::Write(&loc, None)
+            .request()
+            .body
+            .expect("a delete has a body");
         assert_eq!(body["secrets"]["API_KEY"], serde_json::Value::Null);
     }
 
@@ -2979,8 +2996,9 @@ mod tests {
             ),
         ];
         for (call, method, path) in &cases {
-            assert_eq!(call.method(), *method, "{path}");
-            assert_eq!(call.path(), *path);
+            let request = call.request();
+            assert_eq!(request.method, *method, "{path}");
+            assert_eq!(request.path, *path);
         }
     }
 

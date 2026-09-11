@@ -17,7 +17,7 @@
 //! A personal (`dp.pt.`) or CLI (`dp.ct.`) token also authenticates, but
 //! Doppler withholds a `restricted` secret's value from a token tied to a user
 //! identity, so such a read is refused rather than answered. See
-//! [`SecretState::Withheld`].
+//! [`secret_value`].
 //!
 //! Every request names its project and config explicitly, so a pinned token
 //! asked for coordinates it does not cover is refused by Doppler rather than
@@ -71,7 +71,7 @@
 //! reporting a visibility (`restricted`) in place of the value. SecretSpec
 //! reports that as the refusal it is rather than as an absent secret, because
 //! reading it as absent would have `secretspec check` offer to set -- and
-//! overwrite -- a secret it was never allowed to read. See [`SecretState`].
+//! overwrite -- a secret it was never allowed to read. See [`secret_value`].
 //!
 //! # Storage Model
 //!
@@ -420,7 +420,7 @@ fn quoted_messages(body: &str) -> String {
 ///
 /// `computed` is the value read, never `raw`: Doppler interpolates `${...}`
 /// references between secrets, and `raw` carries the unresolved template. See
-/// [`SecretState`].
+/// [`secret_value`].
 ///
 /// # Errors
 ///
@@ -444,7 +444,7 @@ fn parse_secret_value(body: &str, name: &str) -> Result<Option<SecretBytes>> {
             quoted_messages(body)
         )));
     }
-    report(classify(&parsed["value"]), name)
+    secret_value(&parsed["value"], name)
 }
 
 /// Reads every secret in a config out of a list response, indexed by name.
@@ -480,7 +480,7 @@ fn parse_config_secrets(body: &str, config: &str) -> Result<HashMap<String, Secr
         }
         // Required to be an object for the same reason `parse_secret_value`
         // requires one around the whole body: indexing any other shape yields
-        // null, which `classify` cannot tell from a secret that is simply
+        // null, which `secret_value` cannot tell from a secret that is simply
         // unset -- and a batch read must not resolve to "unset" what a single
         // read reports. Named by JSON type only: a 200 body can hold
         // plaintext.
@@ -493,7 +493,7 @@ fn parse_config_secrets(body: &str, config: &str) -> Result<HashMap<String, Secr
         }
         // A withheld value is refused here rather than dropped: omitting it
         // would read as a secret that is simply unset.
-        if let Some(value) = report(classify(value), name)? {
+        if let Some(value) = secret_value(value, name)? {
             listed.insert(name.clone(), value);
         }
     }
@@ -604,148 +604,106 @@ fn filter_chunks(wanted: &[String]) -> Vec<String> {
     chunks
 }
 
-/// What one of Doppler's secret objects holds, classified before any policy
-/// applies.
+/// SecretSpec's reading of one of Doppler's secret objects: the value, `None`
+/// for an unset secret, or a refusal.
 ///
-/// [`classify`] is total -- every JSON shape lands in exactly one variant --
-/// and [`report`] decides what SecretSpec does about each, so the measured
-/// facts (which shape means what) and the policy (what to say about it) are
-/// testable separately. The variant docs record the measurements that pin
-/// them.
-enum SecretState {
-    /// A stored value: `computed` is a string.
-    ///
-    /// `computed`, never `raw`. Doppler resolves `${OTHER_SECRET}` references
-    /// between secrets, and the two fields differ exactly when a secret uses
-    /// one:
-    ///
-    /// ```text
-    /// raw      = "postgres://${PLAIN_HOST}/app"
-    /// computed = "postgres://db.internal/app"    <- what `doppler run` injects
-    /// ```
-    ///
-    /// Serving `raw` would hand the application a plausible-looking connection
-    /// string containing a literal `${PLAIN_HOST}`, which fails at connect
-    /// time far from its cause, or connects somewhere unintended.
-    ///
-    /// That guarantee is Doppler's, and it is conditional: when a reference's
-    /// *target is deleted*, `computed` was measured to degrade to the
-    /// unresolved template -- `computed == raw ==
-    /// "pg://${PROBE_TARGET}/app"`, a string, with `masked` visibility and
-    /// HTTP 200. So a dangling reference is served through as that literal,
-    /// which is what `doppler run` injects for it too. SecretSpec stays
-    /// faithful to Doppler rather than second-guessing which `${...}` in a
-    /// value is a mistake; reading `raw` would produce the same literal for
-    /// *every* reference, resolvable or not, which is the case this field
-    /// choice exists to prevent.
-    Present(SecretBytes),
-    /// No such secret: every field is null, the visibilities included.
-    Unset,
-    /// A secret object that is not any answer Doppler gives.
-    ///
-    /// Doppler reports an absent secret by nulling *every* field -- its own
-    /// API clients test exactly that, all six fields at once -- so a `raw`
-    /// that carries a string while `computed` carries nothing is not an
-    /// absent secret. It is a body whose shape this provider does not
-    /// recognize: a renamed or dropped field, or an intercepting proxy's
-    /// envelope.
-    ///
-    /// That has to be reported for the same reason the outer `value` guard in
-    /// [`parse_secret_value`] exists: resolving it to [`Unset`](Self::Unset)
-    /// makes a fallback chain treat it as an ordinary miss and serve the next
-    /// provider's value with no warning, and makes `secretspec check` offer
-    /// to set -- and overwrite -- a secret that exists.
-    Unrecognized,
-    /// The secret exists, but Doppler served a visibility in place of its
-    /// value.
-    ///
-    /// The distinction from [`Unset`](Self::Unset) rests on a measured fact:
-    /// an unset secret answers with every field null, `computedVisibility`
-    /// included. So a visibility without a value cannot mean "unset", and
-    /// reporting it as unset would have `secretspec check` offer to set -- and
-    /// overwrite -- a secret that exists.
-    ///
-    /// Doppler documents exactly when this happens: a `restricted` secret's
-    /// value "is not returned if the authentication method is tied to a user
-    /// identity (like a personal token or CLI token)". So a `DOPPLER_TOKEN`
-    /// holding a `dp.pt.` or `dp.ct.` token -- what `doppler login` leaves
-    /// behind on a developer machine -- reads a `restricted` secret into this
-    /// state, while a service or service account token reads its value
-    /// normally. That matches every read measured against the live API: a
-    /// value present (any visibility, `masked` included) is
-    /// [`Present`](Self::Present), an absent secret is
-    /// [`Unset`](Self::Unset), and a `restricted` secret read with a service
-    /// account token returned its value.
-    ///
-    /// The refusal in [`report`] still describes the state rather than
-    /// asserting the cause, because the visibility Doppler reports is the only
-    /// thing in the response that explains it.
-    Withheld { visibility: String },
-    /// `computed` is a JSON type this provider has not measured, named by type
-    /// so an error can never echo the value.
-    NotAString { json_type: &'static str },
-}
-
-/// Classifies one of Doppler's secret objects.
+/// Matched by shape in one place, and totally, so no shape can fall through to
+/// a neighboring diagnosis: a non-string value, for instance, can never read
+/// as withheld merely because it also carries a visibility. Each arm records
+/// the measurement that pins it.
 ///
-/// Total, and matched by shape in one place so no shape can fall through to a
-/// neighboring diagnosis: a non-string value, for instance, can never read as
-/// withheld merely because it also carries a visibility.
-fn classify(value: &serde_json::Value) -> SecretState {
+/// # Errors
+///
+/// Returns an error for a value Doppler withheld, a value that is not a
+/// string, or an object that is not any answer Doppler gives. None of them
+/// echoes the value.
+fn secret_value(value: &serde_json::Value, name: &str) -> Result<Option<SecretBytes>> {
     match &value["computed"] {
-        serde_json::Value::String(computed) => {
-            SecretState::Present(SecretBytes::from_utf8(computed.clone()))
-        }
-        // A visibility with no value is Doppler declining to serve one; an
-        // unset secret carries neither.
+        // A stored value: `computed`, never `raw`. Doppler resolves
+        // `${OTHER_SECRET}` references between secrets, and the two fields
+        // differ exactly when a secret uses one:
+        //
+        //   raw      = "postgres://${PLAIN_HOST}/app"
+        //   computed = "postgres://db.internal/app"    <- what `doppler run` injects
+        //
+        // Serving `raw` would hand the application a plausible-looking
+        // connection string containing a literal `${PLAIN_HOST}`, which fails
+        // at connect time far from its cause, or connects somewhere unintended.
+        //
+        // That guarantee is Doppler's, and it is conditional: when a
+        // reference's *target is deleted*, `computed` was measured to degrade
+        // to the unresolved template -- `computed == raw ==
+        // "pg://${PROBE_TARGET}/app"`, a string, with `masked` visibility and
+        // HTTP 200. So a dangling reference is served through as that literal,
+        // which is what `doppler run` injects for it too. SecretSpec stays
+        // faithful to Doppler rather than second-guessing which `${...}` in a
+        // value is a mistake; reading `raw` would produce the same literal for
+        // *every* reference, resolvable or not, which is the case this field
+        // choice exists to prevent.
+        serde_json::Value::String(computed) => Ok(Some(SecretBytes::from_utf8(computed.clone()))),
         serde_json::Value::Null => match value["computedVisibility"]
             .as_str()
             .or_else(|| value["rawVisibility"].as_str())
         {
-            Some(visibility) => SecretState::Withheld {
-                visibility: visibility.to_string(),
-            },
-            // An absent secret nulls every field, `raw` included. A stored
-            // `raw` with nothing under `computed` is therefore not Doppler's
-            // answer for one: see `SecretState::Unrecognized`.
-            None if value["raw"].is_string() => SecretState::Unrecognized,
-            None => SecretState::Unset,
-        },
-        other => SecretState::NotAString {
-            json_type: json_type(other),
-        },
-    }
-}
-
-/// SecretSpec's answer for each [`SecretState`].
-///
-/// A withheld value is an error rather than `None`: reading it as absent
-/// would have `secretspec check` offer to set -- and overwrite -- a secret
-/// this token was never allowed to read. A non-string value is an error
-/// naming the JSON type, never the value: misreporting it as withheld would
-/// send the user to fix permissions that are fine, and reporting it as unset
-/// would offer to overwrite it.
-fn report(state: SecretState, name: &str) -> Result<Option<SecretBytes>> {
-    match state {
-        SecretState::Present(value) => Ok(Some(value)),
-        SecretState::Unset => Ok(None),
-        SecretState::Unrecognized => Err(operation_error(format!(
-            "Doppler's answer for '{name}' carries a raw value but no computed one, which is \
-                 not a shape this provider recognizes -- an absent secret nulls every field. \
-                 SecretSpec refuses it rather than reading it as a secret that is not set."
-        ))),
-        SecretState::Withheld { visibility } => Err(operation_error(format!(
-            "Doppler withheld the value of '{name}': the secret exists with visibility \
+            // The secret exists, but Doppler served a visibility in place of
+            // its value. The distinction from "unset" rests on a measured fact:
+            // an unset secret answers with every field null,
+            // `computedVisibility` included. So a visibility without a value
+            // cannot mean unset, and reporting it as unset would have
+            // `secretspec check` offer to set -- and overwrite -- a secret
+            // this token was never allowed to read.
+            //
+            // Doppler documents exactly when this happens: a `restricted`
+            // secret's value "is not returned if the authentication method is
+            // tied to a user identity (like a personal token or CLI token)".
+            // So a `DOPPLER_TOKEN` holding a `dp.pt.` or `dp.ct.` token --
+            // what `doppler login` leaves behind on a developer machine --
+            // reads a `restricted` secret into this arm, while a service or
+            // service account token reads its value normally. That matches
+            // every read measured against the live API: a value present (any
+            // visibility, `masked` included) is a string above, an absent
+            // secret is all-null below, and a `restricted` secret read with a
+            // service account token returned its value.
+            //
+            // The refusal describes the state rather than asserting the
+            // cause, because the visibility Doppler reports is the only thing
+            // in the response that explains it.
+            Some(visibility) => Err(operation_error(format!(
+                "Doppler withheld the value of '{name}': the secret exists with visibility \
                  '{visibility}' but Doppler returned no value for it, so this token may see that \
                  it exists but not read it. Doppler does not serve a 'restricted' value to a \
                  token tied to a user identity, so use a service token (dp.st.) or a service \
                  account token (dp.sa.) rather than a personal (dp.pt.) or CLI (dp.ct.) one, or \
                  lower the secret's visibility in Doppler."
-        ))),
-        SecretState::NotAString { json_type } => Err(operation_error(format!(
+            ))),
+            // A secret object that is not any answer Doppler gives. Doppler
+            // reports an absent secret by nulling *every* field -- its own API
+            // clients test exactly that, all six fields at once -- so a `raw`
+            // that carries a string while `computed` carries nothing is not an
+            // absent secret. It is a body whose shape this provider does not
+            // recognize: a renamed or dropped field, or an intercepting proxy's
+            // envelope. Reported for the same reason the outer `value` guard in
+            // `parse_secret_value` exists: resolving it to unset makes a
+            // fallback chain treat it as an ordinary miss and serve the next
+            // provider's value with no warning, and makes `secretspec check`
+            // offer to set -- and overwrite -- a secret that exists.
+            None if value["raw"].is_string() => Err(operation_error(format!(
+                "Doppler's answer for '{name}' carries a raw value but no computed one, which is \
+                 not a shape this provider recognizes -- an absent secret nulls every field. \
+                 SecretSpec refuses it rather than reading it as a secret that is not set."
+            ))),
+            // No such secret: every field is null, the visibilities included.
+            None => Ok(None),
+        },
+        // `computed` is a JSON type this provider has not measured. Named by
+        // type so the error can never echo the value; misreporting it as
+        // withheld would send the user to fix permissions that are fine, and
+        // reporting it as unset would offer to overwrite it.
+        other => Err(operation_error(format!(
             "Doppler returned {json_type} rather than a string as the value of '{name}', \
-                 which SecretSpec cannot hand to a process as an environment variable. Store \
-                 the secret as a string in Doppler."
+             which SecretSpec cannot hand to a process as an environment variable. Store \
+             the secret as a string in Doppler.",
+            json_type = json_type(other),
         ))),
     }
 }
@@ -2360,8 +2318,8 @@ mod tests {
     ///
     /// Measured live: after deleting `PROBE_TARGET`, a secret holding
     /// `pg://${PROBE_TARGET}/app` answers HTTP 200 with `computed == raw ==`
-    /// the template, `masked` visibility -- a *string*, so this is
-    /// [`SecretState::Present`] and not withholding. Pinned because it bounds
+    /// the template, `masked` visibility -- a *string*, so [`secret_value`]
+    /// serves it and does not treat it as withheld. Pinned because it bounds
     /// what reading `computed` guarantees: the resolution promise is
     /// Doppler's, and it lapses when the target goes away. `doppler run`
     /// injects the same literal, so passing it through keeps SecretSpec

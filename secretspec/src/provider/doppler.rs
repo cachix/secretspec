@@ -3254,6 +3254,50 @@ mod tests {
         assert_eq!(line.matches("API_KEY").count(), 1, "{line}");
     }
 
+    /// A batch read answers a reserved name the way a single read does --
+    /// locally, without asking -- so the filter it sends never names one.
+    /// Naming it would ask Doppler for a secret on the same request that tells
+    /// Doppler to leave its managed secrets out.
+    #[test]
+    fn a_batch_read_never_asks_doppler_for_a_reserved_name() {
+        let (endpoint, server) = response_server(vec![(
+            "200 OK",
+            r#"{"secrets":{"API_KEY":{"raw":"k","computed":"k"}},"success":true}"#.to_string(),
+            None,
+        )]);
+        let p = fixture_provider("doppler://myapp/prd", endpoint);
+        let requests = [
+            ("API_KEY", Address::convention("unused", "prd", "API_KEY")),
+            (
+                "DOPPLER_PROJECT",
+                Address::convention("unused", "prd", "DOPPLER_PROJECT"),
+            ),
+        ];
+        let read = p.get_many(&requests).unwrap();
+        assert_eq!(read["API_KEY"].expose_secret(), b"k");
+        assert!(!read.contains_key("DOPPLER_PROJECT"));
+
+        let recorded = server.join().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert!(
+            !recorded[0].line.contains("DOPPLER_PROJECT"),
+            "a reserved name must not be asked for: {}",
+            recorded[0].line
+        );
+
+        // A config wanted only for reserved names is not asked at all: an
+        // empty filter would read the whole config, which is what the filter
+        // exists to prevent.
+        let (endpoint, server) = response_server(vec![]);
+        let p = fixture_provider("doppler://myapp/prd", endpoint);
+        let requests = [(
+            "DOPPLER_CONFIG",
+            Address::convention("unused", "prd", "DOPPLER_CONFIG"),
+        )];
+        assert!(p.get_many(&requests).unwrap().is_empty());
+        assert!(server.join().unwrap().is_empty(), "no request was sent");
+    }
+
     /// Deleting reads first so the `bool` tells a real invalidation from a
     /// no-op: an absent secret is one request and `false`, a stored one is a
     /// read followed by the null write and `true`.

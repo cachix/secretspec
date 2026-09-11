@@ -1627,10 +1627,20 @@ impl Provider for DopplerProvider {
         let listings = super::map_concurrently(&groups, super::get_each_concurrency(), |group| {
             let (config, wanted) = group;
             // Only the declared names are requested, so this reads no secret
-            // the manifest did not ask for: see `list_async`.
-            let mut names: Vec<String> = wanted.iter().map(|(_, key)| key.clone()).collect();
+            // the manifest did not ask for: see `list_async`. A reserved name
+            // is answered without asking, as `get_async` answers it, so it
+            // never reaches the filter -- and a config wanted for nothing else
+            // is not asked at all, since an empty filter reads the whole config.
+            let mut names: Vec<String> = wanted
+                .iter()
+                .map(|(_, key)| key.clone())
+                .filter(|key| !is_reserved(key))
+                .collect();
             names.sort_unstable();
             names.dedup();
+            if names.is_empty() {
+                return Ok(HashMap::new());
+            }
             super::block_on(self.list_async(config, &names))
         });
 

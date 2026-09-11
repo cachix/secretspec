@@ -1469,6 +1469,13 @@ mod tests {
     /// an unpinned URI takes its config from the active one.
     #[cfg(feature = "doppler")]
     fn doppler_cached_spec(sources: &[&str], cache: &str) -> Secrets {
+        doppler_cached_spec_with(cached_alias(sources, cache, "8h"))
+    }
+
+    /// [`doppler_cached_spec`] over an arbitrary cached alias, for the inline
+    /// `uri = ..., cache = {...}` spelling.
+    #[cfg(feature = "doppler")]
+    fn doppler_cached_spec_with(myprovider: ProviderAlias) -> Secrets {
         let declare = || HashMap::from([("API_KEY".to_string(), secret(Some(vec!["myprovider"])))]);
         let mut config = crate::tests::resolve_test_config(declare());
         for profile in ["prd", "dev"] {
@@ -1481,7 +1488,7 @@ mod tests {
             );
         }
         let mut providers = cached_aliases();
-        providers.insert("myprovider".to_string(), cached_alias(sources, cache, "8h"));
+        providers.insert("myprovider".to_string(), myprovider);
         config.providers = Some(providers);
         Secrets::new(config, None, None, None)
     }
@@ -1510,6 +1517,30 @@ mod tests {
             assert!(error.contains("same entry"), "{source} -> {cache}: {error}");
             assert!(error.contains("'prd'"), "{source} -> {cache}: {error}");
             assert!(error.contains("myprovider"), "{source} -> {cache}: {error}");
+        }
+    }
+
+    /// The inline spelling, `uri = "doppler://myapp/prd"` with a `cache`
+    /// table, names the same pairing as the `fallback` list and must be
+    /// refused the same way. Its route carries the alias's own name as the
+    /// primary spec, so a guard that re-resolves specs instead of reading the
+    /// resolved URI beside it never compares anything.
+    #[cfg(feature = "doppler")]
+    #[test]
+    fn a_doppler_inline_cached_alias_is_judged_like_the_fallback_form() {
+        let _env = scrub_resolution_env();
+        for (source, cache) in [
+            ("doppler://myapp/prd", "doppler://myapp"),
+            ("doppler://myapp", "doppler://myapp/prd"),
+        ] {
+            let inline = ProviderAlias::from(source)
+                .with_cache(ProviderCache::new(cache, "8h").expect("valid cache policy"));
+            let spec = doppler_cached_spec_with(inline);
+            let error = spec
+                .build_plan(Some("prd"))
+                .expect_err(&format!("inline {source} cached into {cache} under prd"))
+                .to_string();
+            assert!(error.contains("same entry"), "{source} -> {cache}: {error}");
         }
     }
 

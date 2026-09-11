@@ -1194,18 +1194,21 @@ impl DopplerProvider {
         Ok(profile.to_string())
     }
 
-    /// The write policy, applied to an already-resolved [`Location`].
+    /// Resolves an address and applies the write policy to it.
     ///
-    /// Split out of [`check_writable`](Provider::check_writable) so `set` can
-    /// resolve the address once and still apply exactly the same rule: the trait
-    /// requires the two to refuse for the same reason, and one owner of the rule
-    /// guarantees that where two calls to [`locate`](Self::locate) only repeat
-    /// the work.
+    /// The one owner of that policy: [`check_writable`](Provider::check_writable)
+    /// and [`check_deletable`](Provider::check_deletable) are this with the
+    /// location dropped, and [`set`](Provider::set) and
+    /// [`delete`](Provider::delete) open with it, so the trait's requirement
+    /// that preflight and operation refuse for the same reason holds by
+    /// construction rather than by four call sites agreeing.
     ///
     /// # Errors
     ///
-    /// Returns an error when Doppler reserves the name for itself.
-    fn check_location(&self, loc: &Location) -> Result<()> {
+    /// Returns an error when the address cannot be resolved or Doppler reserves
+    /// the name for itself.
+    fn locate_writable(&self, addr: Address<'_>) -> Result<Location> {
+        let loc = self.locate(addr)?;
         // Doppler answers a reserved name with "Unable to create/update secret
         // with reserved name" -- a round trip, and a 400 whose local
         // explanation blames service-token pinning instead. The name is
@@ -1218,7 +1221,7 @@ impl DopplerProvider {
                 loc.name
             )));
         }
-        Ok(())
+        Ok(loc)
     }
 
     /// The config `reflect` lists: the pinned one, else the profile discovery
@@ -1483,7 +1486,7 @@ impl Provider for DopplerProvider {
     ///
     /// [`delete`]: Provider::delete
     fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
-        self.check_location(&self.locate(addr)?)
+        self.locate_writable(addr).map(|_| ())
     }
 
     fn supports_delete(&self) -> bool {
@@ -1635,15 +1638,11 @@ impl Provider for DopplerProvider {
     /// permissive default would let `secretspec set` prompt for a value it is
     /// then guaranteed to throw away.
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
-        self.check_location(&self.locate(addr)?)
+        self.locate_writable(addr).map(|_| ())
     }
 
     fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
-        // Resolved once and then checked, rather than `check_writable(addr)`
-        // followed by a second `locate`: the same rule, without compiling the
-        // address twice. See `check_location`.
-        let loc = self.locate(addr)?;
-        self.check_location(&loc)?;
+        let loc = self.locate_writable(addr)?;
         // The address is writable but the value may still not be storable
         // unchanged: Doppler stores text, so the bytes must be UTF-8, and
         // must not read as a reference. Neither can live in `check_writable`,
@@ -1679,11 +1678,10 @@ impl Provider for DopplerProvider {
     /// in preflight. Destroying a value outranks preflight parity.
     ///
     /// A reserved name is refused here rather than at Doppler, so `delete` and
-    /// `check_deletable` refuse for the same reason. Resolved once and then
-    /// checked, as in [`set`](Provider::set).
+    /// `check_deletable` refuse for the same reason: see
+    /// [`locate_writable`](Self::locate_writable).
     fn delete(&self, addr: Address<'_>) -> Result<bool> {
-        let loc = self.locate(addr)?;
-        self.check_location(&loc)?;
+        let loc = self.locate_writable(addr)?;
         super::block_on(async {
             if self
                 .get_async(&loc, AbsentConfig::HoldsNothing)

@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Command generation rejects Unicode-whitespace-only output while preserving
+  accepted secrets byte-for-byte, including binary output and surrounding whitespace.
+
 - LastPass rejects NUL-containing values before writing instead of silently
   truncating them; use a manifest encoding such as base64 to store these values.
   Typed Rust loads record conversion and prompting failures as failed reads in

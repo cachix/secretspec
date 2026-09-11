@@ -416,7 +416,7 @@ fn generate_from_command(config: &GenerateConfig) -> crate::Result<SecretBytes> 
     // Output is kept byte for byte, but a command that printed nothing except
     // whitespace has not produced a secret. Storing its newline would persist
     // a mistake that no later run repairs.
-    if output.stdout.iter().all(u8::is_ascii_whitespace) {
+    if std::str::from_utf8(&output.stdout).is_ok_and(|text| text.trim().is_empty()) {
         return Err(SecretSpecError::GenerationFailed(format!(
             "command '{}' produced empty output",
             command
@@ -583,6 +583,10 @@ mod tests {
                 b"\0\xff\x80\r\n".as_slice(),
             ),
             ("printf ' x\\t\\n'", b" x\t\n".as_slice()),
+            (
+                "printf '\\302\\240secret\\343\\200\\200\\n'",
+                "\u{00a0}secret\u{3000}\n".as_bytes(),
+            ),
         ] {
             let config = GenerateConfig::Options(GenerateOptions {
                 command: Some(command.to_string()),
@@ -617,7 +621,13 @@ mod tests {
         // literally instead of suppressing the newline. Use `printf ''`
         // which produces zero bytes on every platform. Whitespace-only output
         // is just as empty: a bare newline must not be persisted as a secret.
-        for command in ["printf ''", "printf '\\n'", "printf ' \\t\\r\\n'"] {
+        for command in [
+            "printf ''",
+            "printf '\\n'",
+            "printf ' \\t\\r\\n'",
+            "printf '\\302\\240'", // U+00A0 NO-BREAK SPACE
+            "printf ' \\t\\302\\240\\342\\200\\203\\343\\200\\200\\n'",
+        ] {
             let config = GenerateConfig::Options(GenerateOptions {
                 command: Some(command.to_string()),
                 ..Default::default()

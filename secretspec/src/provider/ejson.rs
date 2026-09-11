@@ -976,7 +976,7 @@ mod tests {
     #[test]
     fn registration_advertises_private_key_credential() {
         assert_eq!(
-            crate::provider::credential_names_for_spec("ejson:secrets.ejson"),
+            crate::provider::credential_names_for_spec("ejson:secrets.ejson").unwrap(),
             &[PRIVATE_KEY]
         );
     }

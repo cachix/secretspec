@@ -3,6 +3,10 @@ title: IPC wire protocol
 description: Shared framing, negotiation, cancellation, errors, and lifecycle for SecretSpec IPC
 ---
 
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.21" />
+
 This document defines the transport-neutral wire contract shared by the
 [Secret Resolution Protocol](/reference/resolver-protocol) and the
 [Secret Provider Protocol](/reference/provider-protocol).
@@ -11,10 +15,9 @@ The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**,
 and **MAY** are interpreted as described by
 [BCP 14](https://www.rfc-editor.org/rfc/rfc8174).
 
-:::caution[Version compatibility]
 SecretSpec IPC wire protocol version 1 is available starting with SecretSpec
-0.20.
-:::
+0.21.
+
 
 ## Quick reference
 
@@ -27,9 +30,9 @@ SecretSpec IPC wire protocol version 1 is available starting with SecretSpec
 | Request IDs | Positive JSON integers from 1 through 9,007,199,254,740,991; strictly increasing within one direction of a session |
 | Concurrency | Negotiated, at least 1 and at most 32 in-flight requests in version 1 |
 | Deadline | Mandatory absolute Unix time in milliseconds on every request |
-| Discovery | Side-effect-free `rpc.discover` before or after initialization (0.20+) |
+| Discovery | Side-effect-free `rpc.discover` before or after initialization (0.21+) |
 | Cancellation | `rpc.cancel` notification naming the original request ID |
-| Callbacks | `client.`-prefixed requests an endpoint sends to its client, only when advertised (0.20+) |
+| Callbacks | `client.`-prefixed requests an endpoint sends to its client, only when advertised (0.21+) |
 | Shutdown | `rpc.shutdown`, then EOF and bounded process termination |
 
 ## Framing
@@ -55,7 +58,7 @@ close the transport if LF has not arrived before `max_frame_bytes` JSON bytes.
   frame-level lock or a single writer task so bytes from two messages cannot
   interleave.
 
-Discovery (0.20+) and initialization use the same absolute limit.
+Discovery (0.21+) and initialization use the same absolute limit.
 Initialization negotiates a possibly smaller `max_frame_bytes` for the rest of
 the session. Until the successful initialization response is committed, that
 1 MiB ceiling applies in both directions, including callback requests and
@@ -65,7 +68,7 @@ responses.
 
 Version 1 uses the JSON-RPC string `"2.0"`. Requests and responses use the
 standard `method`, `params`, `result`, and `error` members.
-`rpc.discover` (0.20+), `rpc.initialize`, `rpc.cancel`, and `rpc.shutdown` are
+`rpc.discover` (0.21+), `rpc.initialize`, `rpc.cancel`, and `rpc.shutdown` are
 the RPC-internal extensions defined by this profile. Application methods a
 client calls on an endpoint use the `resolver.` or `provider.` prefix; the
 [callbacks](#callbacks) an endpoint calls on its client use the `client.`
@@ -95,7 +98,7 @@ The receiver MUST reject requests with:
 - unknown top-level members;
 - unknown members in a method's `params` object;
 - a request sent before successful initialization, other than `rpc.discover`
-  (0.20+) or `rpc.initialize`;
+  (0.21+) or `rpc.initialize`;
 - a second `rpc.initialize` request.
 
 A notification has no response channel. Its envelope is nevertheless closed:
@@ -118,7 +121,7 @@ optional field is only optional to a peer that advertised the capability naming
 it, and a sender must not write the field to a peer that did not. Reviewers
 should read a new `params` member as a new capability until shown otherwise.
 
-## Runtime discovery (0.20+)
+## Runtime discovery (0.21+)
 
 `rpc.discover` returns the endpoint's self-contained
 [OpenRPC](https://spec.open-rpc.org/) document without initializing application
@@ -168,7 +171,7 @@ the endpoint-specific facts that do not belong to the application interface:
       "versions": [1],
       "server": {
         "name": "secretspec-resolver",
-        "version": "0.20.0"
+        "version": "0.21.0"
       },
       "methods": ["resolver.get", "resolver.release"],
       "absolute_max_frame_bytes": 1048576
@@ -199,7 +202,7 @@ Rules:
 ## Initialization and capabilities
 
 `rpc.initialize` MUST be the first request that creates or addresses application
-state. It MAY be preceded only by `rpc.discover` (0.20+) requests. Clients that
+state. It MAY be preceded only by `rpc.discover` (0.21+) requests. Clients that
 do not need discovery send initialization as request ID 1. Its envelope carries
 the startup deadline; clients commonly choose 5 seconds, and servers may enforce
 a shorter local startup bound. Its `application` member is defined by the
@@ -225,7 +228,7 @@ selected application protocol.
 }
 ```
 
-`client_methods` (0.20+) lists the [callbacks](#callbacks) this client can
+`client_methods` (0.21+) lists the [callbacks](#callbacks) this client can
 answer. It is optional and defaults to empty, which is what a client that
 answers none sends, so omitting it is the same as listing nothing.
 
@@ -241,7 +244,7 @@ application capability.
   "result": {
     "protocol": "secretspec.resolver",
     "version": 1,
-    "server": { "name": "secretspec-resolver", "version": "0.20.0" },
+    "server": { "name": "secretspec-resolver", "version": "0.21.0" },
     "methods": ["resolver.get", "resolver.release"],
     "capabilities": {},
     "limits": {
@@ -332,9 +335,10 @@ without allocating unbounded queues. A request over the limit receives an
 
 ## Callbacks
 
-:::caution[Version compatibility]
-Server-initiated requests are available starting with SecretSpec 0.20.
-:::
+<VersionCompatibility version="0.21" />
+
+Server-initiated requests are available starting with SecretSpec 0.21.
+
 
 Almost every request travels from client to server. One case does not, and it
 exists because the side that discovers a value is missing is never the side that
@@ -374,7 +378,7 @@ An implementation that answers no callbacks needs none of this: it advertises
 nothing, never receives a request, and continues to treat an inbound request as
 the protocol violation it is.
 
-Version 1 defines two callbacks (both available in SecretSpec 0.20+):
+Version 1 defines two callbacks (both available in SecretSpec 0.21+):
 
 - `client.prompt` lets a resolver ask its launching client for one declared
   secret value;
@@ -411,7 +415,7 @@ Cancellation has these race rules:
 
 An **accepted application request** is a complete, valid JSON-RPC request with a
 fresh ID that has passed initialization, capability, parameter, and
-in-flight-limit checks. Every accepted application or `rpc.discover` (0.20+)
+in-flight-limit checks. Every accepted application or `rpc.discover` (0.21+)
 request MUST produce exactly one terminal `result` or `error` response unless
 the transport disconnects before it can be written.
 The writer owns the atomic terminal-state transition so a handler, deadline,
@@ -470,7 +474,7 @@ SecretSpec reserves these server-error codes for both protocols:
 | `-32010` | `representation_mismatch` | No | The requested value/path representation does not match the declaration |
 
 `data` MUST contain `kind` and `retryable`. It may contain `retry_after_ms` only
-for `unavailable`. Starting in 0.20, an `interaction_required` error may instead
+for `unavailable`. Starting in 0.21, an `interaction_required` error may instead
 contain an `interaction` reference with a bounded opaque `id`, an interaction
 `kind`, and a nullable absolute expiry. Version 1 defines the `authorization`
 interaction kind. The reference correlates provider-owned interaction; it is

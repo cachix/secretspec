@@ -122,7 +122,8 @@ pub(crate) fn credential_names_for_spec(spec: &str) -> Result<Vec<String>> {
     let (scheme, _) = split_spec(spec);
     if let Some(registration) = registration_for_scheme(scheme) {
         return Ok(registration
-            .metadata.credential_names
+            .metadata
+            .credential_names
             .iter()
             .map(|name| (*name).to_string())
             .collect());
@@ -131,7 +132,7 @@ pub(crate) fn credential_names_for_spec(spec: &str) -> Result<Vec<String>> {
 }
 
 /// Whether `spec` names an external endpoint whose credential requirements
-/// are negotiated at runtime rather than registered statically (0.20+).
+/// are negotiated at runtime rather than registered statically (0.21+).
 pub(crate) fn spec_uses_dynamic_credentials(spec: &str) -> Result<bool> {
     let (scheme, _) = split_spec(spec);
     if registration_for_scheme(scheme).is_some() {

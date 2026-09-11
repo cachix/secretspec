@@ -3,6 +3,10 @@ title: Secret Resolution Protocol
 description: Version 1 IPC contract between an SDK or application and the SecretSpec resolver
 ---
 
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.21" />
+
 The Secret Resolution Protocol is the northbound IPC boundary between an
 application and a complete SecretSpec resolver. It lets a consumer resolve one
 declared name without linking SecretSpec or any provider SDK into the consumer.
@@ -10,10 +14,9 @@ declared name without linking SecretSpec or any provider SDK into the consumer.
 It uses the [shared IPC wire protocol](/reference/ipc-wire) with application
 protocol name `secretspec.resolver` and version `1`.
 
-:::caution[Version compatibility]
 The Secret Resolution Protocol and `secretspec serve` are available
-starting with SecretSpec 0.20.
-:::
+starting with SecretSpec 0.21.
+
 
 ## Scope
 
@@ -24,7 +27,7 @@ Version 1 deliberately exposes less than the embedded Rust API:
 - resolve one exact declared secret name and only its composed dependencies;
 - return an inline UTF-8 value or a resolver-owned temporary file;
 - release path leases explicitly or by closing the session;
-- store or remove one exact declared secret name (0.20+), when the endpoint
+- store or remove one exact declared secret name (0.21+), when the endpoint
   advertises the optional mutation capabilities.
 
 The resolver owns manifest parsing, inheritance, routing, caching, generation,
@@ -46,7 +49,7 @@ secretspec serve
 ```
 
 An endpoint that must not accept writes is launched as `secretspec serve
---read-only` (0.20+), which advertises resolution only.
+--read-only` (0.21+), which advertises resolution only.
 
 The executable and arguments come from trusted application or administrator
 configuration. The launcher MUST invoke the executable directly rather than
@@ -57,7 +60,7 @@ normal installation mechanism.
 
 The caller normally sends `rpc.initialize` immediately and applies a 5-second
 startup timeout by default. Inspection tooling may first call `rpc.discover`
-(0.20+), which does not initialize the resolver. A successful initialization
+(0.21+), which does not initialize the resolver. A successful initialization
 response is the readiness signal. The resolver must not open a global socket,
 daemonize, or detach from its parent in stdio mode.
 
@@ -66,7 +69,7 @@ The stdio resolver MUST NOT prompt through stdin, stdout, or stderr. It has no
 terminal of its own: the one process that can reach a person is the one that
 launched it. When a value can only come from a person, the resolver therefore
 asks the client, over the same session, with the
-[`client.prompt` callback](#ask-the-client-for-a-value) (0.20+).
+[`client.prompt` callback](#ask-the-client-for-a-value) (0.21+).
 
 Resolution may also wait for an independent provider-owned interaction channel
 within the request deadline; when neither that nor a client callback is
@@ -147,7 +150,7 @@ The server-advertised application capabilities MUST include:
 - `resolver.get`
 - `resolver.release`
 
-They MAY additionally include the mutation capabilities (0.20+):
+They MAY additionally include the mutation capabilities (0.21+):
 
 - `resolver.set`
 - `resolver.delete`
@@ -277,7 +280,7 @@ vouch for and decides accordingly.
 `source_provider` is present only for provider results and MUST be the
 credential-free display URI returned by `Provider::uri()`.
 
-Both absolute timestamps are available starting with SecretSpec 0.20. They are
+Both absolute timestamps are available starting with SecretSpec 0.21. They are
 required and nullable, but they answer different questions:
 
 - `expires_at_unix_ms` is the provider-reported time at which the secret itself
@@ -402,9 +405,10 @@ cleanup mechanism.
 
 ## Ask the client for a value
 
-:::caution[Version compatibility]
-`client.prompt` is available starting with SecretSpec 0.20.
-:::
+<VersionCompatibility version="0.21" />
+
+`client.prompt` is available starting with SecretSpec 0.21.
+
 
 This is the one method the resolver sends and the client answers. A declaration
 with `prompt = true` and no stored value can only be satisfied by a person, and
@@ -474,7 +478,7 @@ Rules:
 - Both sides MUST keep reading while a callback is outstanding. A client that
   blocks its reader to ask a person deadlocks the session, because the same
   connection carries the response it is waiting for.
-- `libsecretspec-resolver` answers prompts without a callback (0.20+). Its ABI
+- `libsecretspec-resolver` answers prompts without a callback (0.21+). Its ABI
   deliberately hands no function pointer to a foreign runtime, so the caller
   drives the answer instead: a session opened with the answer-prompts flag has
   its calls report that a prompt is pending, and the caller takes it, answers or
@@ -483,10 +487,11 @@ Rules:
 
 ## Store a value
 
-:::caution[Version compatibility]
+<VersionCompatibility version="0.21" />
+
 `resolver.set` and `resolver.delete` are available starting with SecretSpec
-0.20, and only from endpoints that advertise them.
-:::
+0.21, and only from endpoints that advertise them.
+
 
 `resolver.set` stores one exact declared name on the session's active profile
 and scope:

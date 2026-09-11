@@ -3,18 +3,21 @@ title: Implementing SecretSpec IPC
 description: Repository layout, handler design, trait mapping, conformance tests, and delivery order for IPC version 1
 ---
 
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.21" />
+
 This guide is the implementation plan for the
 [IPC architecture](/reference/ipc-architecture),
 [wire protocol](/reference/ipc-wire),
 [Secret Resolution Protocol](/reference/resolver-protocol), and
 [Secret Provider Protocol](/reference/provider-protocol).
 
-:::caution[Version compatibility]
 These IPC implementation APIs and repository components are available starting
-with SecretSpec 0.20. Release validation still requires the pure-C client, Rust
+with SecretSpec 0.21. Release validation still requires the pure-C client, Rust
 client/server, typed handlers, and conformance suite to pass on Linux, macOS,
 and Windows.
-:::
+
 
 ## Required deliverables
 
@@ -41,7 +44,7 @@ the wire version.
 
 ## Protocol v1 freeze gate
 
-Protocol version 1 becomes immutable when SecretSpec 0.20 is released. Before
+Protocol version 1 becomes immutable when SecretSpec 0.21 is released. Before
 that tag, all of these checks are required:
 
 1. An implementer who did not author the Rust client must review the wire
@@ -62,7 +65,7 @@ that tag, all of these checks are required:
    security review covering path replacement, ACL or mode inheritance,
    environment construction, handle inheritance, and child reaping.
 
-After 0.20, a breaking correction uses a new protocol integer. A bug fix may
+After 0.21, a breaking correction uses a new protocol integer. A bug fix may
 tighten rejection of input that version 1 already declares invalid, but must not
 reinterpret a previously valid transcript.
 
@@ -95,7 +98,7 @@ libsecretspec-resolver/
   meson.build
 
 secretspec-ipc/                  # Full Rust client/server implementation
-  schema/ipc/v1/                 # Packaged discovery descriptions (0.20+)
+  schema/ipc/v1/                 # Packaged discovery descriptions (0.21+)
   src/
     description.rs
     frame.rs
@@ -226,7 +229,7 @@ pub struct RequestContext {
     pub request_id: u64,
     pub deadline: Instant,
     pub cancellation: CancellationToken,
-    /// Calls back to the client on this session (0.20+). Bounded by this
+    /// Calls back to the client on this session (0.21+). Bounded by this
     /// request's deadline and cancellation, so a callback cannot outlive the
     /// request that raised it.
     pub peer: Peer,
@@ -392,7 +395,7 @@ calling threads, and make interruption/cancellation callable from another
 thread.
 
 Delay endpoint initialization until `with_base_dir`, the credential broker
-(0.20+),
+(0.21+),
 and the initial `set_reason` have been applied. The initialization request does
 not carry an eager credential map: the endpoint calls `client.credential` for
 the URI-specific semantic names it needs, and the adapter answers from explicit
@@ -426,7 +429,7 @@ For each registration:
 6. canonicalize and retain the resolved executable identity;
 7. launch that exact target with fixed arguments and private pipe handles.
 
-Starting with 0.20, the claim intentionally declares only executable identity. Credential names
+Starting with 0.21, the claim intentionally declares only executable identity. Credential names
 depend on the configured URI and evolve with the provider independently of its
 installation record. Validate semantic names when the endpoint requests them,
 bind every request to the discovered scheme, and bound the number of distinct
@@ -708,7 +711,7 @@ The Rust implementation must satisfy the same observable rules as C: bounded
 pre-initialization allocation, negotiated concurrency, continued reads while
 handlers run, exactly one terminal result, no uncertain replay, direct launch
 without a shell, bounded child reaping, and value-free errors and logs. The Rust
-server additionally answers side-effect-free `rpc.discover` (0.20+). Runtime
+server additionally answers side-effect-free `rpc.discover` (0.21+). Runtime
 discovery embeds the canonical OpenRPC and JSON Schema assets, rewrites their
 references into one self-contained document, and must not invoke the
 application handler's initialization hook. Its async API may differ
@@ -741,7 +744,7 @@ to the Rust implementation and every conforming endpoint.
 - zero, oversized, truncated, invalid UTF-8, malformed JSON, duplicate-key,
   excessive-nesting, and batch-array frames;
 - invalid, duplicate, and reused request IDs;
-- side-effect-free `rpc.discover` (0.20+) before and after initialization,
+- side-effect-free `rpc.discover` (0.21+) before and after initialization,
   including discovery followed by initialization with the next request ID;
 - application request before initialize and repeated initialize;
 - no common protocol version and invalid required-method advertisement;
@@ -830,7 +833,7 @@ processes and requires no external testing service. Every change runs a bounded
 case count on Linux, macOS, and Windows; scheduled and pre-release CI increase
 the case count using the same runner and retain every replay seed.
 
-The SecretSpec 0.20+ repository also links the pure-C client into the native
+The SecretSpec 0.21+ repository also links the pure-C client into the native
 conformance test process and runs serialized echo, cancellation, and deadline
 histories against that ABI and the independent Rust client through one
 deterministic child peer. This bounded local differential property is additive

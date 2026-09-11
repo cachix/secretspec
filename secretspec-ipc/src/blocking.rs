@@ -13,7 +13,7 @@
 //! permit, or cancellation arbitration appears here. Requests still carry their
 //! wire deadline, and [`Watchdog`] enforces it locally.
 //!
-//! A session opened here advertises no callbacks (0.20+), so the endpoint never
+//! A session opened here advertises no callbacks (0.21+), so the endpoint never
 //! sends one and an inbound request stays as fatal as any other envelope this
 //! side did not ask for. That also means a `prompt = true` declaration with no
 //! stored value resolves as missing rather than reaching a person, even though
@@ -137,7 +137,7 @@ impl ResolverSession {
     }
 
     /// Store one exact declared name on the session's fixed configuration
-    /// (0.20+).
+    /// (0.21+).
     ///
     /// The value lands wherever a [`Self::get`] of the same name would read it
     /// from, so a consumer that stores and then resolves does not have to model
@@ -149,7 +149,7 @@ impl ResolverSession {
         self.call(resolver_protocol::method::SET, params, deadline_unix_ms)
     }
 
-    /// Remove one exact declared name's stored value (0.20+).
+    /// Remove one exact declared name's stored value (0.21+).
     ///
     /// Advertised as `resolver.delete` under the same rule as [`Self::set`]. A
     /// name the store never held reports `deleted: false` rather than failing.

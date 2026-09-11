@@ -1,7 +1,7 @@
 # libsecretspec-resolver
 
 `libsecretspec-resolver` is the pure C11 client for SecretSpec IPC, available in
-SecretSpec 0.20+. It contains no Rust or SecretSpec resolver/provider code. The
+SecretSpec 0.21+. It contains no Rust or SecretSpec resolver/provider code. The
 public ABI is
 [include/secretspec_resolver.h](include/secretspec_resolver.h); JSON goes
 through yyjson behind a private adapter, and no yyjson type appears in the ABI.

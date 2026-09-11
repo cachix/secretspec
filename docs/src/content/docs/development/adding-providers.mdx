@@ -104,7 +104,7 @@ I/O-free capability check. In particular, `prompt = true` selects how a missing
 value is acquired; `prompted_value_persistence` decides what the provider does
 with the answer.
 
-In SecretSpec 0.20+, out-of-tree providers use the
+In SecretSpec 0.21+, out-of-tree providers use the
 [Secret Provider Protocol](/reference/provider-protocol) instead of linking an
 implementation into this crate. Its adapter maps the versioned IPC operations
 onto this trait; the [IPC implementation guide](/development/ipc-implementation)

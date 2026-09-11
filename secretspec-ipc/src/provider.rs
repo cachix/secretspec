@@ -164,7 +164,7 @@ pub trait ProviderHandler: Send + Sync + 'static {
 }
 
 /// Requests one provider credential from the client while serving the current
-/// request, normally from [`ProviderHandler::initialize`] (0.20+).
+/// request, normally from [`ProviderHandler::initialize`] (0.21+).
 ///
 /// A client that did not advertise credential brokerage behaves like an empty
 /// broker, allowing an endpoint to retain native environment, agent, or

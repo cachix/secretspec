@@ -455,7 +455,7 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
             },
             {
               label: "IPC protocols",
-              badge: { text: "0.20+", variant: "note" },
+              badge: { text: "0.21+", variant: "note" },
               items: [
                 {
                   label: "Architecture",
@@ -491,7 +491,7 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
             {
               label: "Implementing IPC",
               slug: "development/ipc-implementation",
-              badge: { text: "0.20+", variant: "note" },
+              badge: { text: "0.21+", variant: "note" },
             },
           ],
         },

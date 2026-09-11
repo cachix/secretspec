@@ -341,7 +341,7 @@ Provider credentials follow these rules:
   profiles should share one provider credential.
 - **Names are provider-specific.** The catalog above is exhaustive. Unsupported
   names are rejected before any source is read.
-- **External providers negotiate names (0.20+).** An out-of-tree endpoint asks
+- **External providers negotiate names (0.21+).** An out-of-tree endpoint asks
   for the URI-specific credentials it needs at runtime. Its alias does not need
   a `credentials` table: SecretSpec can load requested values from a
   provider-private operating-system keyring namespace, and `config provider

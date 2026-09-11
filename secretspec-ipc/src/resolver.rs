@@ -40,14 +40,14 @@ pub trait ResolverHandler: Send + Sync + 'static {
             .collect()
     }
 
-    /// Store one declared name (0.20+). Unreachable unless
+    /// Store one declared name (0.21+). Unreachable unless
     /// [`Self::capabilities`] advertises `resolver.set`: the server answers an
     /// unadvertised method itself and never reaches the handler.
     async fn set(&self, _context: RequestContext, _params: SetParams) -> RpcResult<SetResult> {
         Err(RpcError::new(ErrorKind::MethodNotFound))
     }
 
-    /// Remove one declared name's stored value (0.20+), advertised as
+    /// Remove one declared name's stored value (0.21+), advertised as
     /// `resolver.delete` under the same rule as [`Self::set`].
     async fn delete(
         &self,
@@ -140,7 +140,7 @@ impl<H: ResolverHandler> ApplicationHandler for ResolverApplication<H> {
 }
 
 /// Ask the client for one secret value, on behalf of the request in `context`
-/// (0.20+).
+/// (0.21+).
 ///
 /// Returns `interaction_required` when the client advertised no way to ask,
 /// which is the answer a headless consumer needs immediately rather than after

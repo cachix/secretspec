@@ -3,6 +3,10 @@ title: IPC architecture
 description: Design and trust boundaries for SecretSpec client and external-provider IPC
 ---
 
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.21" />
+
 SecretSpec needs two local IPC boundaries with different authority and method
 sets:
 
@@ -29,10 +33,9 @@ not one API:
 The [implementation guide](/development/ipc-implementation) turns these
 contracts into crates, handlers, tests, and an implementation order.
 
-:::caution[Version compatibility]
 The IPC libraries, resolver, external-provider adapter, and protocol version 1
-are available starting with SecretSpec 0.20.
-:::
+are available starting with SecretSpec 0.21.
+
 
 ## Decision
 
@@ -108,7 +111,7 @@ and Tokio and smol integrations. SecretSpec does not use it for these reasons:
 - **No bidirectional calls.** Varlink streams replies from a service, but does
   not define a service issuing a new call to its client and awaiting the answer
   on that connection. SecretSpec needs exactly that for `client.prompt` and
-  `client.credential` (0.20+); a second connection would add discovery,
+  `client.credential` (0.21+); a second connection would add discovery,
   correlation, authentication, and lifecycle state.
 - **Missing lifecycle semantics.** SecretSpec would still have to define
   version and capability negotiation, deadlines, cancellation, message bounds,
@@ -130,7 +133,7 @@ cancellation rules are small enough to specify here and implement without a
 large runtime.
 
 SecretSpec adopts Varlink's most useful operator-facing property without
-adopting its wire protocol: `rpc.discover` (0.20+) returns a self-contained
+adopting its wire protocol: `rpc.discover` (0.21+) returns a self-contained
 OpenRPC interface description before application initialization. It provides a
 safe foundation for generic inspection tooling without loading a manifest,
 opening a provider, or changing the private transport model.
@@ -145,7 +148,7 @@ could still be added later without changing the canonical application methods.
 The layers are independently owned and versioned:
 
 1. The wire layer owns frames, JSON-RPC envelopes, side-effect-free discovery
-   (0.20+), initialization, request IDs, deadlines, cancellation, shutdown,
+   (0.21+), initialization, request IDs, deadlines, cancellation, shutdown,
    common errors, resource bounds, and the callback direction an endpoint uses
    to ask its client something.
 2. `secretspec.resolver/1` owns resolver configuration, exact-name resolution,
@@ -180,7 +183,7 @@ platforms:
 
 - no global endpoint name is discoverable or connectable by another process;
 - possession of the inherited pipe handles is the session authority;
-- `rpc.discover` (0.20+) describes the endpoint but does not make it ready;
+- `rpc.discover` (0.21+) describes the endpoint but does not make it ready;
 - readiness is the successful `rpc.initialize` response;
 - EOF, `rpc.shutdown`, or child exit ends the session and releases every
   session resource;
@@ -213,7 +216,7 @@ JSON field. A process path, PID, `application_id`, user name, or similar value
 forwarded by the resolver is only an assertion and is not authenticated
 delegation.
 
-The provider initialization context (0.20+) follows the same rule. Its project,
+The provider initialization context (0.21+) follows the same rule. Its project,
 profile, base directory, reason, and requested authorization duration let an
 endpoint render useful approval and audit records and apply consent policy
 consistently to convention and native addresses. They remain resolver-declared
@@ -253,7 +256,7 @@ confused-deputy boundary.
 
 Dynamic secrets are issued on demand, have a backend-bounded lifetime, and may
 be renewed or revoked rather than merely read. Version 1 carries a
-provider-reported secret expiry on reads starting with SecretSpec 0.20. It does
+provider-reported secret expiry on reads starting with SecretSpec 0.21. It does
 not model issuance, renewal, an explicit credential-lease handle, revocation,
 or feedback from an application whose use of a value failed. Those lifecycle
 operations remain reserved here because the wire protocol's compatibility

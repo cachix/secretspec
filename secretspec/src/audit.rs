@@ -145,7 +145,7 @@ pub(crate) struct AuditContext<'a> {
     pub interaction: Option<&'a secretspec_ipc::InteractionReference>,
     pub reason: Option<&'a str>,
     pub caller: Option<&'a CallerContext>,
-    /// Structured caller context supplied by resolver-mode clients (0.20+).
+    /// Structured caller context supplied by resolver-mode clients (0.21+).
     /// It is audit attribution only, never identity or authorization input.
     pub purpose: Option<AuditPurpose<'a>>,
 }
@@ -197,7 +197,7 @@ struct AuditEvent<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     error_kind: Option<&'a str>,
     /// Opaque provider interaction correlation, never authorization material
-    /// (SecretSpec 0.20+).
+    /// (SecretSpec 0.21+).
     #[serde(skip_serializing_if = "Option::is_none")]
     interaction: Option<&'a secretspec_ipc::InteractionReference>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -205,7 +205,7 @@ struct AuditEvent<'a> {
     /// Caller-asserted software integration metadata (SecretSpec 0.20+).
     #[serde(skip_serializing_if = "Option::is_none")]
     caller: Option<&'a CallerContext>,
-    /// Resolver caller context (SecretSpec 0.20+).
+    /// Resolver caller context (SecretSpec 0.21+).
     #[serde(skip_serializing_if = "Option::is_none")]
     purpose: Option<AuditPurpose<'a>>,
     actor: &'a Actor,

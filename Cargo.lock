@@ -6070,7 +6070,7 @@ dependencies = [
 
 [[package]]
 name = "secretspec-ipc"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "async-trait",
  "jsonschema",
@@ -6086,7 +6086,7 @@ dependencies = [
 
 [[package]]
 name = "secretspec-ipc-conformance"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "async-trait",
  "cc",

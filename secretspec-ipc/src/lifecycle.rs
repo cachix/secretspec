@@ -103,7 +103,7 @@ pub struct ProviderSession {
 }
 
 /// Resolves provider authentication material requested over the private IPC
-/// session (0.20+).
+/// session (0.21+).
 ///
 /// Implementations must namespace the request by the already selected provider
 /// principal, must not log returned values, and should avoid consulting a
@@ -180,7 +180,7 @@ impl ProviderSession {
     }
 
     /// As [`Self::launch`], allowing the endpoint to request only the provider
-    /// credentials it actually needs while initialization is pending (0.20+).
+    /// credentials it actually needs while initialization is pending (0.21+).
     pub async fn launch_with_credential_broker(
         options: LaunchOptions,
         client: Product,
@@ -329,7 +329,7 @@ pub struct ResolverSession {
     initialized: ResolverInitializedApplication,
 }
 
-/// Obtains one secret value from a person on the resolver's behalf (0.20+).
+/// Obtains one secret value from a person on the resolver's behalf (0.21+).
 ///
 /// A resolver in stdio mode has no terminal: its stdin and stdout are the
 /// protocol. When a declaration says `prompt = true` and no value is stored,
@@ -397,7 +397,7 @@ impl ResolverSession {
     }
 
     /// As [`Self::launch`], letting the resolver ask this process for a value a
-    /// `prompt = true` declaration has no stored value for (0.20+).
+    /// `prompt = true` declaration has no stored value for (0.21+).
     pub async fn launch_with_prompt(
         options: LaunchOptions,
         client: Product,
@@ -481,7 +481,7 @@ impl ResolverSession {
             .await
     }
 
-    /// Store one declared name (0.20+). Only endpoints that advertise
+    /// Store one declared name (0.21+). Only endpoints that advertise
     /// `resolver.set` accept it, so check [`Self::supports`] first when the
     /// caller can explain a read-only endpoint better than the wire error does.
     pub async fn set(
@@ -495,7 +495,7 @@ impl ResolverSession {
             .await
     }
 
-    /// Remove one declared name's stored value (0.20+), advertised as
+    /// Remove one declared name's stored value (0.21+), advertised as
     /// `resolver.delete` under the same rule as [`Self::set`].
     pub async fn delete(
         &self,
@@ -555,7 +555,7 @@ where
 }
 
 /// As [`spawn`], installing the handler for the callbacks this client
-/// advertised in `client_methods` (0.20+).
+/// advertised in `client_methods` (0.21+).
 pub async fn spawn_with_callbacks<A, B>(
     options: LaunchOptions,
     initialize: InitializeParams<A>,

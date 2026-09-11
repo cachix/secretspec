@@ -35,7 +35,7 @@ pub struct RequestContext {
     pub request_id: RequestId,
     pub deadline: Instant,
     pub cancellation: CancellationToken,
-    /// Calls back to the client on this same session (0.20+). A handler uses it
+    /// Calls back to the client on this same session (0.21+). A handler uses it
     /// only for a method the client advertised; see [`Peer::supports`].
     pub peer: Peer,
 }

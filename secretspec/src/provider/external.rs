@@ -1088,10 +1088,11 @@ impl Provider for ExternalProvider {
             GetResult::Found {
                 value,
                 expires_at_unix_ms,
-            } => Some(ProviderValue::new(
-                SecretBytes::from_utf8(value),
-                expires_at_unix_ms,
-            )),
+                revision,
+            } => Some(
+                ProviderValue::new(SecretBytes::from_utf8(value), expires_at_unix_ms)
+                    .with_revision(revision),
+            ),
             GetResult::Missing => None,
         })
     }
@@ -1140,9 +1141,11 @@ impl Provider for ExternalProvider {
                 GetResult::Found {
                     value,
                     expires_at_unix_ms,
+                    revision,
                 } => Some((
                     item.name,
-                    ProviderValue::new(SecretBytes::from_utf8(value), expires_at_unix_ms),
+                    ProviderValue::new(SecretBytes::from_utf8(value), expires_at_unix_ms)
+                        .with_revision(revision),
                 )),
                 GetResult::Missing => None,
             })

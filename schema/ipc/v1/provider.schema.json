@@ -147,6 +147,13 @@
           "properties": {
             "status": { "const": "found" },
             "value": { "type": "string" },
+            "revision": {
+              "description": "Optional non-secret identity/generation of the returned value (0.21+); absent or null means unknown.",
+              "type": ["string", "null"],
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            },
             "expires_at_unix_ms": {
               "description": "Authoritative time at which the secret itself expires, or null when the provider knows no bound. This is not provider or resolver cache freshness.",
               "oneOf": [
@@ -194,6 +201,13 @@
             "name": { "type": "string", "minLength": 1, "maxLength": 4096 },
             "status": { "const": "found" },
             "value": { "type": "string" },
+            "revision": {
+              "description": "Optional non-secret identity/generation of the returned value (0.21+); absent or null means unknown.",
+              "type": ["string", "null"],
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            },
             "expires_at_unix_ms": {
               "oneOf": [
                 { "$ref": "common.schema.json#/$defs/DeadlineUnixMs" },

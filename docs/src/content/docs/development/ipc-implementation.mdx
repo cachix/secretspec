@@ -989,3 +989,42 @@ passing unchanged.
       providers and no forwarded JSON identity is trusted.
 - [ ] C warnings, sanitizers, Windows diagnostics, Rust formatting/lint, docs,
       schema, conformance, property, and native end-to-end checks pass.
+
+
+## Revision token derivation
+
+<VersionCompatibility version="0.21" />
+
+`Revision` is a bounded opaque token in `secretspec-ipc`. Provider values carry
+it alongside their bytes and expiry; both `get_with_metadata` and
+`get_many_with_metadata` must preserve it. SecretSpec caches this provider token
+with the stored representation, then derives a logical token for extraction and
+decoding. The embedded SDK schema is unchanged.
+
+The built-in algorithm encodes every string, including the domain discriminator,
+as a big-endian unsigned 64-bit UTF-8 byte length followed by those bytes. Hash
+the concatenation with SHA-256 and render `ssr1:` followed by lowercase hex.
+No secret bytes participate. The domains and ordered fields are:
+
+| Domain | Fields |
+| --- | --- |
+| `secretspec.awssm.v1` | Returned full ARN, returned version ID |
+| `secretspec.awssm.selection.v1` | Previous token, `whole` or `field`, field name (empty for whole-object reads) |
+| `secretspec.logical.v1` | Provider token, extraction format or empty, extraction pointer or empty, encoding name or empty |
+
+An empty field name is distinct from selecting the whole object. The logical
+step never includes a file path, cache clock, credentials, or composition literals.
+Changing projection semantics requires a new domain discriminator.
+
+The AWS base step with ARN
+`arn:aws:secretsmanager:us-east-1:123:secret:db-abcdef` and version
+`generation-1` yields:
+
+```text
+ssr1:349e0b0f3023130817fed919564410acbe95a5089e4bdef3e48a2349b1b0d76a
+```
+
+A cache hit must retain the stored token. A write with no returned revision
+stores unknown, and unsupported, generated, defaulted, and composed values stay
+unknown. Tests must cover rotation between fingerprinting and execution, batch
+parity, fallback, projection changes, old envelopes, and old/new IPC results.

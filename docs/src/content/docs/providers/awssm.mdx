@@ -230,3 +230,25 @@ $ secretspec run --provider awssm://us-east-1 -- deploy
 # Or with IAM roles (no credentials needed)
 $ secretspec run --provider awssm://us-east-1 -- deploy
 ```
+
+
+## Secret revisions
+
+<VersionCompatibility version="0.21" />
+
+IPC resolution returns an optional opaque `revision` derived from the full AWS
+secret ARN, the version ID returned with its value, and the selected JSON field.
+Rotation changes the revision; a recreated secret has a different ARN. A new
+version may change the revision even when the selected value is unchanged.
+SecretSpec also accounts for its own extraction and decoding before returning
+the logical value's revision.
+
+The token uses non-secret version metadata, never the secret value. AWS writers
+must use `ClientRequestToken` as non-secret metadata, as intended by AWS; a
+secret-derived version ID cannot satisfy this contract. Missing ARN or version
+metadata produces an unknown revision.
+
+Both single and batch reads preserve revisions. A SecretSpec cache returns the
+revision of its cached value, so rotation can remain unobserved until refresh.
+See [resolver revision semantics](/reference/resolver-protocol#secret-revisions)
+for task-cache integration and unknown-revision handling.

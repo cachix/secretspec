@@ -632,6 +632,9 @@ pub mod resolver {
         pub source_provider: Option<String>,
         #[serde(deserialize_with = "deserialize_required_nullable")]
         pub expires_at_unix_ms: Option<u64>,
+        /// Opaque revision of the returned logical value (0.21+).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub revision: Option<crate::Revision>,
         #[serde(deserialize_with = "deserialize_required_nullable")]
         pub refresh_at_unix_ms: Option<u64>,
     }
@@ -650,6 +653,9 @@ pub mod resolver {
         pub source_provider: Option<String>,
         #[serde(deserialize_with = "deserialize_required_nullable")]
         pub expires_at_unix_ms: Option<u64>,
+        /// Opaque revision of the returned logical value (0.21+).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub revision: Option<crate::Revision>,
         #[serde(deserialize_with = "deserialize_required_nullable")]
         pub refresh_at_unix_ms: Option<u64>,
     }
@@ -1158,6 +1164,8 @@ pub mod provider {
             value: String,
             #[serde(deserialize_with = "deserialize_required_nullable")]
             expires_at_unix_ms: Option<u64>,
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            revision: Option<crate::Revision>,
         },
         Missing,
     }
@@ -1215,6 +1223,8 @@ pub mod provider {
                 value: String,
                 #[serde(deserialize_with = "deserialize_required_nullable")]
                 expires_at_unix_ms: Option<u64>,
+                #[serde(default, skip_serializing_if = "Option::is_none")]
+                revision: Option<crate::Revision>,
             }
 
             #[derive(Deserialize)]
@@ -1248,11 +1258,13 @@ pub mod provider {
                     status: FoundStatus::Found,
                     value,
                     expires_at_unix_ms,
+                    revision,
                 }) => Ok(Self {
                     name,
                     outcome: GetResult::Found {
                         value,
                         expires_at_unix_ms,
+                        revision,
                     },
                 }),
                 Repr::Missing(Missing {
@@ -1520,6 +1532,7 @@ mod tests {
                 outcome: provider::GetResult::Found {
                     value: "secret".into(),
                     expires_at_unix_ms: None,
+                    revision: None,
                 }
             }
         );

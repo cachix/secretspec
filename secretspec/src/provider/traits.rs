@@ -39,7 +39,7 @@ pub enum ProducedValuePersistence {
     Ephemeral,
 }
 
-/// A provider value with an optional authoritative validity bound.
+/// A provider value with optional authoritative validity and revision metadata.
 ///
 /// `expires_at_unix_ms` is when the secret itself expires according to the
 /// provider. `None` means no bound is known. Resolver cache freshness is
@@ -48,6 +48,8 @@ pub enum ProducedValuePersistence {
 pub struct ProviderValue {
     pub value: SecretBytes,
     pub expires_at_unix_ms: Option<u64>,
+    /// Non-secret identity and generation of these provider bytes (0.21+).
+    pub revision: Option<secretspec_ipc::Revision>,
 }
 
 impl ProviderValue {
@@ -55,7 +57,16 @@ impl ProviderValue {
         Self {
             value,
             expires_at_unix_ms,
+            revision: None,
         }
+    }
+}
+
+impl ProviderValue {
+    /// Attach metadata from the same read. Unknown revisions remain `None`.
+    pub fn with_revision(mut self, revision: Option<secretspec_ipc::Revision>) -> Self {
+        self.revision = revision;
+        self
     }
 }
 
@@ -187,7 +198,7 @@ pub trait Provider: Send + Sync {
     /// Retrieves a value together with its provider-reported validity bound.
     ///
     /// Available starting with SecretSpec 0.21. Existing providers inherit a
-    /// compatibility implementation with unknown expiry. Providers issuing or
+    /// compatibility implementation with unknown expiry and revision. Providers issuing or
     /// reading time-bounded credentials override this method; callers use it in
     /// preference to [`get`](Provider::get) when they can preserve metadata.
     fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<ProviderValue>> {
@@ -636,7 +647,7 @@ pub trait Provider: Send + Sync {
     /// Batch form of [`get_with_metadata`](Provider::get_with_metadata).
     ///
     /// Existing providers retain their optimized `get_many` implementation and
-    /// report unknown expiry. A provider with per-value lifetime metadata must
+    /// report unknown expiry and revision. A provider with either kind of metadata must
     /// override this method as well as the single-value form.
     fn get_many_with_metadata(
         &self,

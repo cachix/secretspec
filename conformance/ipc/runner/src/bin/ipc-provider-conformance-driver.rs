@@ -465,6 +465,7 @@ async fn run_endpoint_operations(endpoint: &Path) -> Result<Vec<Value>, String> 
         != (GetResult::Found {
             value: CANARY.into(),
             expires_at_unix_ms: None,
+            revision: None,
         })
     {
         return Err("provider did not return the stored value".into());
@@ -480,6 +481,31 @@ async fn run_endpoint_operations(endpoint: &Path) -> Result<Vec<Value>, String> 
         )
         .await
         .map_err(stable)?;
+    let revision_batch: wire::GetManyResult = client
+        .call(
+            "provider.get_many",
+            &wire::GetManyParams {
+                requests: vec![wire::NamedRequest {
+                    name: "expiry".into(),
+                    address: wire_address("SECRET_EXPIRY"),
+                }],
+            },
+            deadline_after(Duration::from_secs(2)),
+        )
+        .await
+        .map_err(stable)?;
+    if revision_batch.results.len() != 1 || revision_batch.results[0].outcome != validity_bounded {
+        return Err("provider batch did not preserve value revision metadata".into());
+    }
+    if !matches!(
+        &validity_bounded,
+        GetResult::Found {
+            revision: Some(_),
+            ..
+        }
+    ) {
+        return Err("provider did not report the fixture revision".into());
+    }
     if !matches!(
         validity_bounded,
         GetResult::Found {
@@ -726,12 +752,26 @@ fn external_provider(endpoint: &Path, arguments: Vec<String>) -> Result<External
     external_provider_with_uri(endpoint, arguments, "memory://conformance")
 }
 
+// Conformance endpoints use their own fixture credentials. Never let optional
+// initialization callbacks consult the host keyring: an unavailable service
+// can consume the request deadline before the operation under test begins.
+struct NoHostCredentials;
+impl ProviderCredentialBroker for NoHostCredentials {
+    fn get(
+        &self,
+        _scheme: &str,
+        _request: &ProviderCredentialRequest,
+    ) -> secretspec::Result<Option<SecretBytes>> {
+        Ok(None)
+    }
+}
+
 fn external_provider_with_uri(
     endpoint: &Path,
     arguments: Vec<String>,
     uri: &str,
 ) -> Result<ExternalProvider, String> {
-    ExternalProvider::new(
+    let mut provider = ExternalProvider::new(
         ProviderEndpoint {
             scheme: "memory".into(),
             executable: endpoint.to_path_buf(),
@@ -739,7 +779,9 @@ fn external_provider_with_uri(
         },
         uri,
     )
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    provider.with_credential_broker(Arc::new(NoHostCredentials));
+    Ok(provider)
 }
 
 fn run_adapter_operations(endpoint: &Path) -> Result<Vec<Value>, String> {
@@ -829,6 +871,17 @@ fn run_adapter_operations(endpoint: &Path) -> Result<Vec<Value>, String> {
         .get_with_metadata(core_address("SECRET_EXPIRY"))
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "external adapter missed a validity-bounded value".to_string())?;
+    let revision_batch = provider
+        .get_many_with_metadata(&[("expiry", core_address("SECRET_EXPIRY"))])
+        .map_err(|error| error.to_string())?;
+    if validity_bounded.revision.is_none()
+        || revision_batch.get("expiry").is_none_or(|value| {
+            value.revision != validity_bounded.revision
+                || value.value.expose_secret() != validity_bounded.value.expose_secret()
+        })
+    {
+        return Err("external adapter dropped the single or batch revision".into());
+    }
     if validity_bounded.expires_at_unix_ms.is_none() {
         return Err("external adapter dropped the provider-reported expiry".into());
     }
@@ -1049,8 +1102,12 @@ fn run_adapter_errors(endpoint: &Path) -> Result<Vec<Value>, String> {
         let error = provider
             .get(core_address(key))
             .expect_err("one-shot provider error was automatically replayed");
-        if provider_protocol_kind(error) != Some(expected) {
-            return Err(format!("external adapter did not preserve {expected}"));
+        let category = error.kind();
+        let actual = provider_protocol_kind(error);
+        if actual != Some(expected) {
+            return Err(format!(
+                "external adapter did not preserve {expected}: category={category}, protocol={actual:?}"
+            ));
         }
     }
     let error = provider

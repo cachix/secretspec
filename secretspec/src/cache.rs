@@ -4,9 +4,10 @@
 //! [`crate::secrets`]. This module owns the provider-independent envelope
 //! format and the decisions that can be made from a stored value alone.
 
-use crate::SecretBytes;
+use crate::{ProviderValue, SecretBytes};
 use data_encoding::BASE64;
 use secrecy::zeroize::Zeroizing;
+use secretspec_ipc::Revision;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Marker every cache entry starts with, identifying the value as SecretSpec's
@@ -39,6 +40,8 @@ struct CacheEnvelope {
     route_fingerprint: String,
     #[serde(default)]
     secret_expires_at_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    revision: Option<Revision>,
     /// Strict padded base64 is the cache envelope's byte serialization. It is
     /// independent of a declaration's manifest `encoding`.
     #[serde(with = "zeroizing_string")]
@@ -121,6 +124,7 @@ pub(crate) enum CacheEntryStatus {
         value: SecretBytes,
         refresh_at_unix_ms: Option<u64>,
         expires_at_unix_ms: Option<u64>,
+        revision: Option<Revision>,
     },
     /// Expired (regardless of owner), or ours but no longer usable because its
     /// authoritative route or freshness policy changed.
@@ -264,59 +268,69 @@ fn inspect_entry_with_clock<E>(
     let Some(decoded) = decode(stored) else {
         return Ok(CacheEntryStatus::Unrecognized);
     };
-    let (project_owner, profile_owner, expires_at, envelope_max_age, route, value, secret_expiry) =
-        match decoded {
-            Ok(DecodedEnvelope::Current(envelope)) => {
-                let value = BASE64
-                    .decode(envelope.value_base64.as_bytes())
-                    .map(SecretBytes::from_vec)
-                    .map_err(|_| ())
-                    .ok();
-                (
-                    envelope.project,
-                    envelope.profile,
-                    envelope.expires_at,
-                    envelope.max_age_secs,
-                    envelope.route_fingerprint,
-                    value,
-                    envelope.secret_expires_at_unix_ms,
-                )
-            }
-            Ok(DecodedEnvelope::V3(envelope)) => (
+    let (
+        project_owner,
+        profile_owner,
+        expires_at,
+        envelope_max_age,
+        route,
+        value,
+        secret_expiry,
+        revision,
+    ) = match decoded {
+        Ok(DecodedEnvelope::Current(envelope)) => {
+            let value = BASE64
+                .decode(envelope.value_base64.as_bytes())
+                .map(SecretBytes::from_vec)
+                .map_err(|_| ())
+                .ok();
+            (
                 envelope.project,
                 envelope.profile,
                 envelope.expires_at,
                 envelope.max_age_secs,
                 envelope.route_fingerprint,
-                Some(SecretBytes::from_utf8(envelope.value.as_str())),
+                value,
                 envelope.secret_expires_at_unix_ms,
-            ),
-            Ok(DecodedEnvelope::Legacy(envelope)) => {
-                if envelope.project != project || envelope.profile != profile {
-                    return Ok(CacheEntryStatus::Foreign {
-                        project: envelope.project,
-                        profile: envelope.profile,
-                    });
-                }
-                if envelope.route_fingerprint != route_fingerprint {
-                    return Ok(CacheEntryStatus::Stale);
-                }
-                let now = clock()?;
-                if envelope.cached_at > now || now.saturating_sub(envelope.cached_at) > max_age_secs
-                {
-                    return Ok(CacheEntryStatus::Stale);
-                }
-                return Ok(CacheEntryStatus::Fresh {
-                    value: SecretBytes::from_utf8(envelope.value.as_str()),
-                    refresh_at_unix_ms: envelope
-                        .cached_at
-                        .checked_add(max_age_secs)
-                        .and_then(|expires_at| expires_at.checked_mul(1000)),
-                    expires_at_unix_ms: None,
+                envelope.revision,
+            )
+        }
+        Ok(DecodedEnvelope::V3(envelope)) => (
+            envelope.project,
+            envelope.profile,
+            envelope.expires_at,
+            envelope.max_age_secs,
+            envelope.route_fingerprint,
+            Some(SecretBytes::from_utf8(envelope.value.as_str())),
+            envelope.secret_expires_at_unix_ms,
+            None,
+        ),
+        Ok(DecodedEnvelope::Legacy(envelope)) => {
+            if envelope.project != project || envelope.profile != profile {
+                return Ok(CacheEntryStatus::Foreign {
+                    project: envelope.project,
+                    profile: envelope.profile,
                 });
             }
-            Err(_) => return Ok(CacheEntryStatus::OursUnreadable),
-        };
+            if envelope.route_fingerprint != route_fingerprint {
+                return Ok(CacheEntryStatus::Stale);
+            }
+            let now = clock()?;
+            if envelope.cached_at > now || now.saturating_sub(envelope.cached_at) > max_age_secs {
+                return Ok(CacheEntryStatus::Stale);
+            }
+            return Ok(CacheEntryStatus::Fresh {
+                value: SecretBytes::from_utf8(envelope.value.as_str()),
+                refresh_at_unix_ms: envelope
+                    .cached_at
+                    .checked_add(max_age_secs)
+                    .and_then(|expires_at| expires_at.checked_mul(1000)),
+                expires_at_unix_ms: None,
+                revision: None,
+            });
+        }
+        Err(_) => return Ok(CacheEntryStatus::OursUnreadable),
+    };
     let now = clock()?;
     if now >= expires_at || secret_expiry.is_some_and(|expiry| now.saturating_mul(1000) >= expiry) {
         // Expiration is intrinsic to v3 and v4 entries, so whoever encounters it can
@@ -345,6 +359,7 @@ fn inspect_entry_with_clock<E>(
             value,
             refresh_at_unix_ms: expires_at.checked_mul(1000),
             expires_at_unix_ms: secret_expiry,
+            revision,
         },
         None => CacheEntryStatus::OursUnreadable,
     })
@@ -376,33 +391,30 @@ pub(crate) fn encode_entry(
     profile: &str,
     max_age_secs: u64,
     route_fingerprint: String,
-    value: &SecretBytes,
-    secret_expires_at_unix_ms: Option<u64>,
+    value: &ProviderValue,
 ) -> Result<SecretBytes, CacheEncodeError> {
-    encode_entry_at(
+    encode_provider_entry_at(
         project,
         profile,
         unix_timestamp()?,
         max_age_secs,
         route_fingerprint,
         value,
-        secret_expires_at_unix_ms,
     )
 }
 
-fn encode_entry_at(
+fn encode_provider_entry_at(
     project: &str,
     profile: &str,
     now: u64,
     max_age_secs: u64,
     route_fingerprint: String,
-    value: &SecretBytes,
-    secret_expires_at_unix_ms: Option<u64>,
+    value: &ProviderValue,
 ) -> Result<SecretBytes, CacheEncodeError> {
     let cache_expires_at = now
         .checked_add(max_age_secs)
         .ok_or(CacheEncodeError::ExpirationOverflow)?;
-    let expires_at = match secret_expires_at_unix_ms {
+    let expires_at = match value.expires_at_unix_ms {
         Some(secret_expiry) => {
             let secret_expiry_secs = secret_expiry / 1000;
             if secret_expiry_secs <= now {
@@ -418,8 +430,9 @@ fn encode_entry_at(
         expires_at,
         max_age_secs,
         route_fingerprint,
-        value_base64: Zeroizing::new(BASE64.encode(value.expose_secret())),
-        secret_expires_at_unix_ms,
+        value_base64: Zeroizing::new(BASE64.encode(value.value.expose_secret())),
+        secret_expires_at_unix_ms: value.expires_at_unix_ms,
+        revision: value.revision.clone(),
     };
     // Both plaintext renderings of the envelope are held in buffers that
     // zeroize on drop.
@@ -429,8 +442,83 @@ fn encode_entry_at(
 }
 
 #[cfg(test)]
+fn encode_entry_at(
+    project: &str,
+    profile: &str,
+    now: u64,
+    max_age_secs: u64,
+    route_fingerprint: String,
+    value: &SecretBytes,
+    expiry: Option<u64>,
+) -> Result<SecretBytes, CacheEncodeError> {
+    encode_provider_entry_at(
+        project,
+        profile,
+        now,
+        max_age_secs,
+        route_fingerprint,
+        &ProviderValue::new(value.clone(), expiry),
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn revision_cache_envelopes_preserve_pairs_and_accept_older_entries() {
+        let value = ProviderValue::new(SecretBytes::from_utf8("old-value"), Some(1_055_000))
+            .with_revision(Some(
+                Revision::new("provider:old-generation".into()).unwrap(),
+            ));
+        let encoded = encode_provider_entry_at(
+            PROJECT,
+            PROFILE,
+            WRITTEN_AT,
+            MAX_AGE,
+            FINGERPRINT.into(),
+            &value,
+        )
+        .unwrap();
+        let CacheEntryStatus::Fresh {
+            value: cached,
+            revision,
+            expires_at_unix_ms,
+            refresh_at_unix_ms,
+        } = inspect_entry_at(
+            &encoded,
+            PROJECT,
+            PROFILE,
+            FINGERPRINT,
+            MAX_AGE,
+            WRITTEN_AT + 1,
+        )
+        else {
+            panic!()
+        };
+        assert_eq!(cached.expose_secret(), b"old-value");
+        assert_eq!(revision, value.revision);
+        assert_eq!(expires_at_unix_ms, Some(1_055_000));
+        assert_eq!(refresh_at_unix_ms, Some(1_055_000));
+        let mut envelope: serde_json::Value = serde_json::from_str(
+            encoded
+                .try_as_utf8()
+                .unwrap()
+                .strip_prefix(CACHE_ENVELOPE_MARKER)
+                .unwrap(),
+        )
+        .unwrap();
+        envelope.as_object_mut().unwrap().remove("revision");
+        let old = SecretBytes::from_utf8(format!("{CACHE_ENVELOPE_MARKER}{envelope}"));
+        let CacheEntryStatus::Fresh {
+            revision, value, ..
+        } = inspect_entry_at(&old, PROJECT, PROFILE, FINGERPRINT, MAX_AGE, WRITTEN_AT + 1)
+        else {
+            panic!()
+        };
+        assert!(revision.is_none());
+        assert_eq!(value.expose_secret(), b"old-value");
+    }
 
     const PROJECT: &str = "project";
     const PROFILE: &str = "default";
@@ -472,6 +560,7 @@ mod tests {
             value,
             refresh_at_unix_ms,
             expires_at_unix_ms,
+            ..
         } = status
         else {
             panic!("an entry is fresh before its expiration timestamp");
@@ -741,6 +830,7 @@ mod tests {
             value,
             refresh_at_unix_ms,
             expires_at_unix_ms,
+            ..
         } = status
         else {
             panic!("v2 preserves its original inclusive freshness boundary");

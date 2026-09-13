@@ -57,6 +57,7 @@ mod native;
 mod plan;
 mod report;
 mod resolve;
+mod revision;
 mod secret_value;
 mod secrets;
 #[cfg(feature = "cli")]
@@ -129,6 +130,7 @@ pub use resolve::{
 };
 pub use secrets::ExportFormat;
 pub use secrets::Secrets;
+pub use secretspec_ipc::Revision;
 pub use spec::{
     Generation, OpenPgpAlgorithm, OpenPgpCapability, PasswordCharset, Profile, Secret, Spec,
     SpecBuilder, SshKeyAlgorithm,

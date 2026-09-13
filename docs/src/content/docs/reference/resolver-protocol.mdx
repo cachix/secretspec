@@ -312,6 +312,38 @@ remove it earlier.
 The result carries secret data. The client should copy it directly into its
 final protected destination and release its JSON/frame buffers promptly.
 
+### Secret revisions
+
+<VersionCompatibility version="0.21" />
+
+Inline and leased-path results may include an opaque `revision` string. It
+identifies the returned logical secret bytes, including extraction and decoding;
+it does not identify a temporary path or its lease. Absent or null means unknown.
+Currently AWS Secrets Manager and revision-aware external providers can supply
+revisions. Generated, defaulted, composed, and unsupported provider values report
+unknown. This metadata is exposed through IPC; the embedded SDK JSON response
+has a separate schema and does not yet expose revisions.
+
+The resolver preserves the provider revision with the cached bytes. A cache hit
+reports the revision of that copy, even if the upstream secret has since rotated.
+Neither a revision, `expires_at_unix_ms`, nor `refresh_at_unix_ms` guarantees the
+backend is unchanged. A source without SecretSpec caching is needed when each
+resolution must consult the provider, subject to that provider's own caching.
+
+For task caching, resolve once, fingerprint only sorted secret names and known
+revisions, and retain those exact values for execution on a cache miss. Do not
+fingerprint one resolution and launch another resolution through `secretspec run`.
+Keep secret values outside task hash manifests and logs. If any selected resolved
+secret has unknown revision, bypass task-cache reads and writes for that invocation.
+Keep file leases alive through execution and release them on a hit or completion.
+If known expiry requires re-resolution before launch, rebuild the fingerprint.
+Task outputs still depend on their ordinary inputs; revisions alone do not make
+remote data or secret-bearing outputs safe to cache.
+
+Different revisions may identify equal bytes. Consumers must treat tokens as
+opaque equality values and never order or parse them. A change to an unrelated
+field in a versioned provider object may conservatively invalidate a task.
+
 ### Leased path
 
 ```json

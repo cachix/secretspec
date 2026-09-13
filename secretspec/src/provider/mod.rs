@@ -45,6 +45,7 @@
 //! - [`bw::BitwardenProvider`]: Bitwarden Password Manager (0.18+)
 //! - [`sops::SopsProvider`]: SOPS-encrypted file integration (0.17+)
 //! - [`kubernetes::KubernetesProvider`]: Kubernetes integration (0.20+)
+//! - [`setec::SetecProvider`]: Tailscale Setec integration (0.21+)
 //!
 //! ## URI-Based Configuration
 //!
@@ -156,7 +157,8 @@ pub(crate) use registry::{
     feature = "cloudflare",
     feature = "gcsm",
     feature = "infisical",
-    feature = "scaleway"
+    feature = "scaleway",
+    feature = "setec"
 ))]
 pub(crate) use runtime::block_on;
 #[cfg(test)]
@@ -215,6 +217,8 @@ pub mod passbolt;
 pub mod protonpass;
 #[cfg(feature = "scaleway")]
 pub mod scaleway;
+#[cfg(feature = "setec")]
+pub mod setec;
 #[cfg(feature = "sops")]
 pub mod sops;
 pub mod systemd_credential;

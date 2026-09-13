@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Tailscale Setec can store, retrieve, discover, and delete secrets through a
+  tailnet-authenticated Setec server, including reads pinned to a Setec version
+  (0.21+).
+
 - Secret values can flow through providers, fallback chains, imports, and the
   cache as arbitrary bytes. `Secrets::set` and `secretspec set --from-file`
   accept exact byte input, `as_path` preserves it byte-for-byte, the file and

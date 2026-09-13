@@ -49,6 +49,8 @@ disabled!("kubernetes", KUBERNETES);
 disabled!("openbao", OPENBAO);
 #[cfg(not(feature = "scaleway"))]
 disabled!("scaleway", SCALEWAY);
+#[cfg(not(feature = "setec"))]
+disabled!("setec", SETEC);
 #[cfg(not(feature = "sops"))]
 disabled!("sops", SOPS);
 #[cfg(not(feature = "vault"))]
@@ -70,6 +72,24 @@ mod tests {
                 ref provider,
                 feature: "keyring"
             } if provider == "keyring"
+        ));
+    }
+
+    #[test]
+    #[cfg(not(feature = "setec"))]
+    fn disabled_setec_provider_reports_its_feature() {
+        let spec = "setec://secrets.example.ts.net";
+        assert!(super::super::spec_names_known_provider(spec).unwrap());
+        let error = match Box::<dyn super::super::Provider>::try_from(spec) {
+            Ok(_) => panic!("disabled setec provider unexpectedly constructed"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            crate::SecretSpecError::ProviderFeatureDisabled {
+                ref provider,
+                feature: "setec"
+            } if provider == "setec"
         ));
     }
 }

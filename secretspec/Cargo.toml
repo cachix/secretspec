@@ -88,7 +88,7 @@ signal-hook.workspace = true
 windows-sys = { workspace = true, optional = true }
 
 [features]
-default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "bw", "age", "ejson", "scaleway", "sops", "kubernetes", "cloudflare"]
+default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "bw", "age", "ejson", "scaleway", "sops", "kubernetes", "cloudflare", "setec"]
 cli = ["dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable", "dep:dunce"]
 keyring = ["dep:keyring", "dep:whoami"]
 kdbx = ["dep:keepass"]
@@ -101,6 +101,7 @@ vault = ["dep:reqwest", "tokio/sync"]
 # payloads use data-encoding, which is already a non-optional dependency.
 scaleway = ["dep:reqwest"]
 cloudflare = ["dep:reqwest"]
+setec = ["dep:reqwest"]
 openbao = ["dep:reqwest", "tokio/sync"]
 # `tokio/sync` for the async `OnceCell` that serializes the Universal Auth
 # exchange. It is already on transitively via reqwest, but a provider should

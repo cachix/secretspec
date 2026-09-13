@@ -46,6 +46,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [AWS Secrets Manager](https://secretspec.dev/providers/awssm)
   - [AWS Systems Manager Parameter Store](https://secretspec.dev/providers/awsps) (0.18+)
   - [Scaleway Secret Manager](https://secretspec.dev/providers/scaleway) (0.17+)
+  - [Tailscale Setec](https://secretspec.dev/providers/setec) (0.21+)
   - [Vault](https://secretspec.dev/providers/vault)
   - [OpenBao](https://secretspec.dev/providers/openbao) (0.17+)
   - [Bitwarden Password Manager](https://secretspec.dev/providers/bw) (0.18+)
@@ -106,6 +107,7 @@ $ secretspec config global init  # 0.17+
   awssm: AWS Secrets Manager
   awsps: AWS Systems Manager Parameter Store (0.18+)
   scaleway: Scaleway Secret Manager (0.17+)
+  setec: Tailscale Setec secrets service (0.21+)
   vault: HashiCorp Vault secret management
   openbao: OpenBao secret management (0.17+)
   bw: Bitwarden Password Manager (0.18+)
@@ -238,6 +240,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[AWS Secrets Manager](https://secretspec.dev/providers/awssm)** - AWS secret management
 - **[AWS Systems Manager Parameter Store](https://secretspec.dev/providers/awsps)** (0.18+) - Encrypted hierarchical parameters in AWS
 - **[Scaleway Secret Manager](https://secretspec.dev/providers/scaleway)** (0.17+) - Scaleway secret management
+- **[Tailscale Setec](https://secretspec.dev/providers/setec)** (0.21+) - Tailnet-authenticated secret storage with versioned values
 - **[Vault](https://secretspec.dev/providers/vault)** - HashiCorp Vault KV engine
 - **[OpenBao](https://secretspec.dev/providers/openbao)** (0.17+) - OpenBao KV integration; SecretSpec 0.16 accepts `openbao://` through the Vault provider
 - **[Bitwarden Password Manager](https://secretspec.dev/providers/bw)** (0.18+) - Bitwarden Password Manager vault via the `bw` CLI

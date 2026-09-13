@@ -1,0 +1,179 @@
+---
+title: Tailscale Setec Provider
+description: Store secrets in a tailnet-authenticated Setec service
+---
+
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.21" />
+
+The [Tailscale Setec](https://github.com/tailscale/setec) provider stores
+versioned secrets in a lightweight service reached and authorized through your
+tailnet.
+
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `setec` |
+| URI | `setec://HOST[:PORT][?prefix=PATH][&tls=false]` |
+| Access | Read, write, delete, and discovery |
+| Best for | Self-hosted secrets shared with tailnet workloads |
+| Authentication | Tailscale identity and Setec grants |
+| Build feature | `setec` |
+| Default storage | `secretspec/{project}/{profile}/{key}` |
+
+## Quick start
+
+Complete the [setup](#setup), then point SecretSpec at the Setec server:
+
+```bash
+$ secretspec set DATABASE_URL --provider setec://secrets.example.ts.net
+Enter value for DATABASE_URL: postgresql://localhost/mydb
+✓ Secret 'DATABASE_URL' saved to setec (profile: default)
+
+$ secretspec get DATABASE_URL --provider setec://secrets.example.ts.net
+
+$ secretspec run --provider setec://secrets.example.ts.net -- npm start
+```
+
+## Setup
+
+### Prerequisites
+
+- A running Setec server reachable from the machine's tailnet
+- A Tailscale policy granting the caller the required Setec actions
+- A SecretSpec build containing the `setec` feature (included by default in
+  0.21+)
+
+Setec authenticates each request using its Tailscale connection identity. No
+API token, password, or SecretSpec provider credential is required.
+
+Grant only the actions needed by the workflow:
+
+| SecretSpec operation | Setec actions |
+| --- | --- |
+| `get`, `check`, or `run` | `get` |
+| `set` or persistent generation | `put`, `activate` |
+| `delete` | `info`, `delete` |
+| `init --from` | `info` |
+
+Setec's `put` operation appends an inactive version when a secret already
+exists. SecretSpec follows it with `activate`, making the written value the one
+returned by subsequent unpinned reads.
+
+See Setec's [API and permission documentation](https://github.com/tailscale/setec/blob/main/docs/api.md)
+and [server setup guide](https://github.com/tailscale/setec/blob/main/docs/server.md).
+
+## Configuration
+
+### URI format
+
+```text
+setec://HOST[:PORT][?prefix=PATH][&tls=false]
+```
+
+- `HOST` is required and normally uses the Setec server's tailnet DNS name.
+- `PORT` selects a non-default server port.
+- `prefix` prepends a slash-separated namespace to convention-created names.
+- HTTPS is the default. Set `tls=false` explicitly for a local development
+  server; do not use plaintext HTTP across an untrusted network.
+
+URI paths, userinfo, fragments, and unknown query parameters are rejected.
+
+### URI examples
+
+```text
+setec://secrets.example.ts.net
+setec://secrets.example.ts.net:8443
+setec://secrets.example.ts.net?prefix=platform
+setec://127.0.0.1:8080?prefix=local&tls=false
+```
+
+### Project configuration
+
+Check a provider alias into `secretspec.toml` so the server and namespace are
+shared by the team:
+
+```toml title="secretspec.toml"
+[providers]
+production_setec = "setec://secrets.example.ts.net?prefix=platform"
+
+[profiles.production]
+DATABASE_URL = { description = "Production database", providers = ["production_setec"] }
+```
+
+## Storage model
+
+Convention-managed secrets use this Setec name:
+
+```text
+[prefix/]secretspec/{project}/{profile}/{key}
+```
+
+For example, `DATABASE_URL` in project `myapp`, profile `production`, and a
+`platform` prefix is stored as
+`platform/secretspec/myapp/production/DATABASE_URL`.
+
+Each `set` appends a Setec version and activates the returned version. If the
+write succeeds but activation fails, SecretSpec reports the stored version so
+an operator can inspect or activate it. SecretSpec does not cache Setec values;
+each resolution reads the server's current active version unless a reference
+pins one.
+
+## Use existing secrets
+
+Set `ref.item` to the exact Setec secret name. Add a positive integer
+`ref.version` to read a historical version instead of the active one:
+
+```toml title="secretspec.toml"
+[providers]
+setec_prod = "setec://secrets.example.ts.net"
+
+[profiles.production]
+API_TOKEN = { description = "Current API token", ref = { item = "prod/api-token" }, providers = ["setec_prod"] }
+OLD_SIGNING_KEY = { description = "Signing key version 4", ref = { item = "prod/signing-key", version = "4" }, providers = ["setec_prod"] }
+```
+
+Unversioned references can be written and deleted. Version-pinned references
+are read-only: writing creates a new Setec version, while SecretSpec deletion
+represents deleting the complete secret rather than one historical version.
+
+## Discover existing convention secrets
+
+Setec discovery lists metadata only and never copies secret values into the
+manifest. It is bounded to the convention namespace for the requested project
+and profile:
+
+```bash
+$ secretspec init --from setec://secrets.example.ts.net?prefix=platform \
+    --project myapp --profile production
+```
+
+Only direct children of
+`platform/secretspec/myapp/production/` become declarations. Other projects,
+profiles, and nested names are ignored. The caller needs Setec `info` access
+for names it should discover.
+
+## CI/CD
+
+Join the runner or workload to the tailnet, grant its tagged Tailscale identity
+the minimum Setec actions, and use the same provider URI as local clients. No
+long-lived Setec credential needs to be injected into the job.
+
+```bash
+$ secretspec run --provider setec://secrets.example.ts.net -- deploy
+```
+
+## Security considerations and limitations
+
+- Setec's access decisions come from Tailscale identity and grants; access to
+  the hostname alone does not grant a Setec action.
+- SecretSpec disables redirects so a Setec request body cannot be replayed to
+  an origin selected by a server response.
+- `tls=false` sends secret values over plaintext HTTP and is intended only for
+  isolated local development.
+- Setec supports arbitrary byte strings, but SecretSpec secret values must be
+  valid UTF-8.
+- A write can create a new inactive version before `activate` fails. The error
+  identifies this partial result; the previously active value remains active.

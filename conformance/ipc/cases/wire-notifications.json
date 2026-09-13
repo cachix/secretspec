@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "wire.notifications",
+  "targets": ["provider-endpoint", "rust-server"],
+  "timeout_ms": 10000,
+  "actions": [
+    {"kind": "unknown_method"},
+    {"kind": "malformed_cancel"},
+    {"kind": "unknown_cancel_id"},
+    {"kind": "terminal_cancel_id"},
+    {"kind": "unknown_member"}
+  ],
+  "required_events": [
+    "unknown_notification_ignored",
+    "malformed_cancel_ignored",
+    "unknown_cancel_ignored",
+    "terminal_cancel_ignored",
+    "unknown_member_rejected",
+    "closed"
+  ]
+}

@@ -117,7 +117,7 @@ impl Provider for VaultProvider {
         self.core.with_credentials(credentials);
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 

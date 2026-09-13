@@ -1,6 +1,6 @@
 //! Core secrets management functionality
 
-use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
+use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome, AuditPurpose};
 use crate::cache::{self, CacheEntryStatus, CacheOwnership};
 use crate::compiled_spec::{CompiledSpec, MissingPolicy};
 use crate::config::{
@@ -11,7 +11,7 @@ use crate::error::{Result, SecretSpecError};
 use crate::plan::{PlannedSecret, ResolutionPlan, ResolvedCache, Route};
 use crate::provider::{
     Address, OwnedAddress, ProducedValuePersistence, Provider as ProviderTrait,
-    ProviderCredentials, same_storage_container,
+    ProviderCredentials, ProviderValue, same_storage_container,
 };
 use crate::report::{ResolutionReport, ResolutionStatus, SecretResolution};
 use crate::resolve::{
@@ -29,6 +29,8 @@ use secrecy::ExposeSecret;
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
 #[cfg(unix)]
 use signal_hook::iterator::{Handle as SignalHandle, Signals};
+#[cfg(feature = "cli")]
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::hash::Hash;
@@ -260,7 +262,10 @@ fn group_names(group: &[&PlannedSecret]) -> String {
 /// What a stored cache entry can do for the read that found it.
 enum CachedEntry {
     /// Fresh, and written for this route: serve it.
-    Fresh(SecretBytes),
+    Fresh {
+        value: ProviderValue,
+        refresh_at_unix_ms: Option<u64>,
+    },
     /// A SecretSpec entry no read will serve: expired regardless of owner, or
     /// ours but unreadable or written for another route or freshness policy.
     /// Safe to drop.
@@ -292,7 +297,15 @@ fn cached_entry(
         &route_fingerprint,
         cache.max_age_secs,
     ) {
-        Ok(CacheEntryStatus::Fresh(value)) => CachedEntry::Fresh(value),
+        Ok(CacheEntryStatus::Fresh {
+            value,
+            refresh_at_unix_ms,
+            expires_at_unix_ms,
+            revision,
+        }) => CachedEntry::Fresh {
+            value: ProviderValue::new(value, expires_at_unix_ms).with_revision(revision),
+            refresh_at_unix_ms,
+        },
         Ok(CacheEntryStatus::Stale) => CachedEntry::Stale,
         Ok(CacheEntryStatus::OursUnreadable) => {
             cache_read_warning(&planned.name, "the cache entry could not be read");
@@ -363,6 +376,162 @@ impl CredentialSource {
 
 type ProviderCredentialsKey = (String, String);
 type ProviderKey = (String, String);
+struct BrokerCredentialSource {
+    source: CredentialSource,
+    provider: Arc<dyn ProviderTrait>,
+}
+
+/// Host-side resolver for credentials requested by one external provider.
+///
+/// A manifest mapping is an explicit override, not a declaration of the
+/// endpoint's complete credential vocabulary. Requests without a mapping use
+/// SecretSpec's provider-private keyring namespace. Values are memoized only
+/// for the lifetime of the provider operation that owns this broker.
+struct SecretsProviderCredentialBroker {
+    alias: String,
+    scheme: String,
+    project: String,
+    profile: String,
+    configured: HashMap<String, BrokerCredentialSource>,
+    fallback: crate::provider::external::KeyringCredentialBroker,
+    cache: Mutex<HashMap<(String, String), Option<SecretBytes>>>,
+    audit: Option<Arc<AuditLogger>>,
+    reason: Option<String>,
+    caller: Option<CallerContext>,
+    #[cfg(feature = "cli")]
+    purpose: Option<IpcAuditPurpose>,
+}
+
+impl SecretsProviderCredentialBroker {
+    fn record(
+        &self,
+        name: &str,
+        provider_uri: String,
+        reference: Option<&NativeAddress>,
+        outcome: AuditOutcome,
+        error_kind: Option<&str>,
+    ) {
+        let Some(logger) = &self.audit else { return };
+        #[cfg(feature = "cli")]
+        let purpose = self.purpose.as_ref().map(|purpose| AuditPurpose {
+            consumer: &purpose.consumer,
+            operation: &purpose.operation,
+            host: purpose.host.as_deref(),
+            path: purpose.path.as_deref(),
+        });
+        #[cfg(not(feature = "cli"))]
+        let purpose: Option<AuditPurpose<'_>> = None;
+        logger.record(
+            AuditAction::Get,
+            AuditContext {
+                project: &self.project,
+                profile: &self.profile,
+                scope: None,
+                key: Some(name),
+                keys: &[],
+                command: Some("credential"),
+                provider_uri: Some(provider_uri),
+                reference: reference.map(NativeAddress::render),
+                outcome,
+                error_kind,
+                interaction: None,
+                reason: self.reason.as_deref(),
+                caller: self.caller.as_ref(),
+                purpose,
+            },
+        );
+    }
+}
+
+impl crate::provider::external::ProviderCredentialBroker for SecretsProviderCredentialBroker {
+    fn get(
+        &self,
+        scheme: &str,
+        request: &secretspec_ipc::protocol::callback::CredentialParams,
+    ) -> Result<Option<SecretBytes>> {
+        // The responder supplies the discovered endpoint's scheme, but retain
+        // this check at the authority boundary so a future caller cannot reuse
+        // a broker across provider principals.
+        if scheme != self.scheme {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "external provider credential principal changed".to_string(),
+            ));
+        }
+        let identity = (
+            if self.configured.contains_key(&request.name) {
+                String::new()
+            } else {
+                request.scope.clone()
+            },
+            request.name.clone(),
+        );
+        // Hold the per-operation cache lock through population. Credential
+        // callbacks may be concurrent; single-flight prevents duplicate source
+        // reads or duplicate interactive prompts for one identity.
+        let mut cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = cache.get(&identity).cloned() {
+            return Ok(cached);
+        }
+
+        let value = if let Some(configured) = self.configured.get(&request.name) {
+            let fetched = configured
+                .provider
+                .get(configured.source.address(&self.project, &request.name));
+            let (outcome, error_kind) = match &fetched {
+                Ok(Some(_)) => (AuditOutcome::Found, None),
+                Ok(None) => (AuditOutcome::Missing, None),
+                Err(error) => (AuditOutcome::Error, Some(error.kind())),
+            };
+            self.record(
+                &request.name,
+                configured.provider.uri(),
+                configured.source.reference.as_ref(),
+                outcome,
+                error_kind,
+            );
+            match fetched? {
+                Some(value) => Some(value),
+                None => {
+                    return Err(credential_missing_error(
+                        &request.name,
+                        &self.alias,
+                        &configured.source.location(&self.project, &request.name),
+                    ));
+                }
+            }
+        } else {
+            let address = crate::provider::external::brokered_credential_address(
+                scheme,
+                &request.scope,
+                &request.name,
+            );
+            let fetched = crate::provider::external::ProviderCredentialBroker::get(
+                &self.fallback,
+                scheme,
+                request,
+            );
+            let (outcome, error_kind) = match &fetched {
+                Ok(Some(_)) => (AuditOutcome::Found, None),
+                Ok(None) => (AuditOutcome::Missing, None),
+                Err(error) => (AuditOutcome::Error, Some(error.kind())),
+            };
+            self.record(
+                &request.name,
+                "keyring://".to_string(),
+                Some(&address),
+                outcome,
+                error_kind,
+            );
+            fetched?
+        };
+
+        cache.insert(identity, value.clone());
+        Ok(value)
+    }
+}
 type GroupFetch<'a> = (
     Option<&'a str>,
     Vec<&'a PlannedSecret>,
@@ -378,7 +547,7 @@ struct FallbackReadRequest<'a> {
 }
 
 struct FallbackRead {
-    value: Option<SecretBytes>,
+    value: Option<ProviderValue>,
     provider_uri: Option<String>,
     native_address: Option<NativeAddress>,
 }
@@ -504,13 +673,7 @@ impl<'a> ImportPlan<'a> {
             },
         );
 
-        if self.delete_source
-            && !crate::provider::spec_provider_deletes(
-                &self
-                    .secrets
-                    .resolve_provider_spec(self.from_provider.to_string()),
-            )
-        {
+        if self.delete_source && !self.secrets.provider_supports_delete(self.from_provider)? {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "provider '{}' does not support deleting secrets and cannot be used with import --delete-source",
                 source.name()
@@ -1041,7 +1204,10 @@ struct ResolutionExecution<'secrets, 'plan, 'filter, 'addresses> {
     temp_files: Vec<tempfile::NamedTempFile>,
     resolution: Vec<SecretResolution>,
     group_uris: HashMap<Option<&'plan str>, String>,
-    fetched_values: HashMap<String, SecretBytes>,
+    fetched_values: HashMap<String, ProviderValue>,
+    secret_expiries: HashMap<String, u64>,
+    refreshes: HashMap<String, u64>,
+    revisions: HashMap<String, secretspec_ipc::Revision>,
     failed_primary_uris: HashMap<Option<&'plan str>, SecretSpecError>,
     cached_uris: HashMap<String, String>,
     fallback_results: HashMap<String, FallbackReadResult>,
@@ -1071,6 +1237,9 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             resolution: Vec::new(),
             group_uris: HashMap::new(),
             fetched_values: HashMap::new(),
+            secret_expiries: HashMap::new(),
+            refreshes: HashMap::new(),
+            revisions: HashMap::new(),
             failed_primary_uris: HashMap::new(),
             cached_uris: HashMap::new(),
             fallback_results: HashMap::new(),
@@ -1085,6 +1254,9 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 with_defaults: Vec::new(),
                 resolution: Vec::new(),
                 temp_files: Vec::new(),
+                secret_expiries: HashMap::new(),
+                refreshes: HashMap::new(),
+                revisions: HashMap::new(),
             }));
         }
 
@@ -1097,10 +1269,13 @@ impl<'secrets, 'plan, 'filter, 'addresses>
     }
 
     fn read_cached_values(&mut self) {
-        for (name, (value, uri)) in self
+        for (name, (value, uri, refresh)) in self
             .manager
             .read_cached_group(self.plan, &self.plan.profile)
         {
+            if let Some(refresh) = refresh {
+                self.refreshes.insert(name.clone(), refresh);
+            }
             self.cached_uris.insert(name.clone(), uri);
             self.fetched_values.insert(name, value);
         }
@@ -1153,7 +1328,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             (provider_uri, group, provider): GroupFetch<'a>,
             project: &str,
             profile: &str,
-        ) -> (Option<&'a str>, Result<HashMap<String, SecretBytes>>) {
+        ) -> (Option<&'a str>, Result<HashMap<String, ProviderValue>>) {
             let result = manager.fetch_group(&*provider, provider_uri, &group, project, profile);
             (provider_uri, result)
         }
@@ -1262,6 +1437,14 @@ impl<'secrets, 'plan, 'filter, 'addresses>
 
             match self.fetched_values.remove(name.as_str()) {
                 Some(value) => {
+                    if let Some(expiry) = value.expires_at_unix_ms {
+                        self.secret_expiries.insert(name.clone(), expiry);
+                    }
+                    if let Some(revision) =
+                        crate::revision::effective(value.revision.as_ref(), planned)
+                    {
+                        self.revisions.insert(name.clone(), revision);
+                    }
                     let was_cached = self.cached_uris.contains_key(name);
                     source_provider = self
                         .cached_uris
@@ -1284,7 +1467,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                             &mut self.temp_files,
                             planned,
                             diagnostic_name,
-                            value,
+                            value.value,
                             ResolvedRepresentation::Stored,
                         )?;
                     }
@@ -1337,6 +1520,14 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                         addresses.insert(name.clone(), reference);
                     }
                     if let Some(value) = fallback_value {
+                        if let Some(expiry) = value.expires_at_unix_ms {
+                            self.secret_expiries.insert(name.clone(), expiry);
+                        }
+                        if let Some(revision) =
+                            crate::revision::effective(value.revision.as_ref(), planned)
+                        {
+                            self.revisions.insert(name.clone(), revision);
+                        }
                         source_provider = fallback_uri;
                         if materialize.values() {
                             manager.write_cached_secret(planned, route, profile, &value);
@@ -1345,7 +1536,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                                 &mut self.temp_files,
                                 planned,
                                 diagnostic_name,
-                                value,
+                                value.value,
                                 ResolvedRepresentation::Stored,
                             )?;
                         }
@@ -1504,6 +1695,24 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 .iter()
                 .all(|dependency| statuses.get(dependency) == Some(&ResolutionStatus::Resolved));
             let status = if dependencies_resolved {
+                if let Some(expiry) = template
+                    .dependencies()
+                    .iter()
+                    .filter_map(|name| self.secret_expiries.get(name))
+                    .copied()
+                    .min()
+                {
+                    self.secret_expiries.insert(planned.name.clone(), expiry);
+                }
+                if let Some(refresh) = template
+                    .dependencies()
+                    .iter()
+                    .filter_map(|name| self.refreshes.get(name))
+                    .copied()
+                    .min()
+                {
+                    self.refreshes.insert(planned.name.clone(), refresh);
+                }
                 if self.materialize.values() {
                     let inputs = template
                         .dependencies()
@@ -1573,6 +1782,8 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             return;
         };
         self.values.retain(|name, _| filter.contains(name));
+        self.secret_expiries.retain(|name, _| filter.contains(name));
+        self.refreshes.retain(|name, _| filter.contains(name));
         self.resolution.retain(|entry| filter.contains(&entry.name));
         self.missing_required.retain(|name| filter.contains(name));
         self.missing_optional.retain(|name| filter.contains(name));
@@ -1685,6 +1896,9 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 with_defaults: self.with_defaults,
                 resolution: self.resolution,
                 temp_files: self.temp_files,
+                secret_expiries: self.secret_expiries,
+                refreshes: self.refreshes,
+                revisions: self.revisions,
             }))
         }
     }
@@ -1701,7 +1915,115 @@ enum PreparedSecret {
     },
 }
 
-/// Whether resolved bytes came from a storage boundary and are eligible for
+/// Named resolution with temporary-file ownership retained by the caller.
+/// The resolver converts these owners into session leases; the embedded API
+/// persists them to preserve its existing one-shot path behavior.
+pub(crate) enum OwnedNamedResolution<T = String> {
+    Undeclared,
+    Missing {
+        required: bool,
+    },
+    Value {
+        value: T,
+        source: ResolvedSource,
+        source_provider: Option<String>,
+        #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+        expires_at_unix_ms: Option<u64>,
+        #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+        refresh_at_unix_ms: Option<u64>,
+        #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+        revision: Option<secretspec_ipc::Revision>,
+        supporting_files: Vec<tempfile::NamedTempFile>,
+    },
+    File {
+        file: tempfile::NamedTempFile,
+        source: ResolvedSource,
+        source_provider: Option<String>,
+        #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+        expires_at_unix_ms: Option<u64>,
+        #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+        refresh_at_unix_ms: Option<u64>,
+        #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+        revision: Option<secretspec_ipc::Revision>,
+        supporting_files: Vec<tempfile::NamedTempFile>,
+    },
+}
+
+impl<T> OwnedNamedResolution<T> {
+    fn into_embedded(self) -> Result<NamedResolution<T>> {
+        match self {
+            Self::Undeclared => Ok(NamedResolution::Undeclared),
+            Self::Missing { required } => Ok(NamedResolution::Missing { required }),
+            Self::Value {
+                value,
+                source,
+                source_provider,
+                supporting_files,
+                ..
+            } => {
+                keep_owned_files(supporting_files)?;
+                Ok(NamedResolution::Resolved(ResolvedSecret {
+                    value: Some(value),
+                    path: None,
+                    as_path: false,
+                    source,
+                    source_provider,
+                }))
+            }
+            Self::File {
+                file,
+                source,
+                source_provider,
+                supporting_files,
+                ..
+            } => {
+                keep_owned_files(supporting_files)?;
+                let path = file
+                    .into_temp_path()
+                    .keep()
+                    .map_err(|error| SecretSpecError::Io(error.error))?;
+                Ok(NamedResolution::Resolved(ResolvedSecret {
+                    value: None,
+                    path: Some(path.to_string_lossy().into_owned()),
+                    as_path: true,
+                    source,
+                    source_provider,
+                }))
+            }
+        }
+    }
+}
+
+/// Where a write landed. Reported instead of printed, so the caller that knows
+/// whether it owns a terminal decides how the destination is announced.
+pub(crate) struct StoredSecret {
+    pub(crate) profile: String,
+    /// Display name of the provider that took the write, as the CLI prints it.
+    pub(crate) provider_name: String,
+    /// Credential-free URI of the same provider, as audit records it.
+    #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+    pub(crate) provider_uri: String,
+}
+
+/// The outcome of removing one stored value, with the same attribution a write
+/// reports.
+pub(crate) struct DeletedSecret {
+    /// `false` when the store held nothing: removal is idempotent.
+    pub(crate) deleted: bool,
+    #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+    pub(crate) provider_uri: String,
+}
+
+fn keep_owned_files(files: Vec<tempfile::NamedTempFile>) -> Result<()> {
+    for file in files {
+        file.into_temp_path()
+            .keep()
+            .map_err(|error| SecretSpecError::Io(error.error))?;
+    }
+    Ok(())
+}
+
+/// Whether a resolved string came from a storage boundary and is eligible for
 /// decoding, or is already the logical value produced inside SecretSpec.
 #[derive(Clone, Copy)]
 enum ResolvedRepresentation {
@@ -1761,8 +2083,14 @@ pub struct Secrets {
     global_config: Option<GlobalConfig>,
     /// The provider to use (if set via builder)
     provider: Option<String>,
+    /// Resolver sessions fix provider selection at initialization and must not
+    /// inherit the resolver process's provider environment.
+    ignore_ambient_provider: bool,
     /// The profile to use (if set via builder)
     profile: Option<String>,
+    /// Resolver sessions fix profile selection at initialization and must not
+    /// inherit the resolver process's profile environment.
+    ignore_ambient_profile: bool,
     /// The active secret scope (if set via builder/`--scope`/`SECRETSPEC_SCOPE`).
     /// `None` resolves the complete profile; a scope narrows resolution to the
     /// intersection of the merged profile and the scope's secret list.
@@ -1777,6 +2105,9 @@ pub struct Secrets {
     /// Reason for this session's secret access, forwarded to providers that
     /// support audit logging (set via [`Secrets::with_reason`]).
     reason: Option<String>,
+    /// App-requested authorization lifetime, forwarded to providers as an
+    /// untrusted default for approval surfaces.
+    requested_authorization_duration: Option<std::time::Duration>,
     /// Software integration that invoked SecretSpec. This is audit context, not
     /// a user-supplied reason, and never satisfies `require_reason`.
     caller: Option<CallerContext>,
@@ -1785,15 +2116,20 @@ pub struct Secrets {
     require_reason: RequireReason,
     /// Audit logger, if auditing is enabled (user-global `[audit]` config). `None`
     /// disables auditing. Built once per `Secrets` so all events share a session id.
-    audit: Option<AuditLogger>,
-    /// Provider credentials memoized per (profile, raw provider spec), so N
-    /// secrets routed at one alias fetch its credentials from the source provider
-    /// once per session, not once per provider build. The stored *values* are
+    audit: Option<Arc<AuditLogger>>,
+    /// Built-in provider credentials memoized per (profile, raw provider spec),
+    /// so N secrets routed at one alias fetch its credentials from the source
+    /// provider once per session, not once per provider build. External
+    /// providers use their operation-local lazy broker instead. The stored *values* are
     /// profile-independent (see `PROVIDER_CREDENTIAL_SCOPE`); the profile is kept
     /// in the key only so each profile's operations audit their own credential
     /// read. Cleared by [`Secrets::store_provider_credential`] so a freshly
     /// stored credential is re-read.
     provider_credentials_cache: ProviderCredentialsCache,
+    /// Memoized `provider.delete` support for external providers, keyed by
+    /// resolved spec. In-tree providers answer from the static registry and
+    /// never reach this map.
+    external_delete_capability: Mutex<HashMap<String, bool>>,
     /// Optional CLI-owned observer for writes that are about to prompt for or
     /// consume a value. Library and SDK instances leave this unset, so planning
     /// a write never produces unsolicited output outside the CLI.
@@ -1801,6 +2137,13 @@ pub struct Secrets {
     /// Test seam for deterministic run-prompt coverage. Production CLI
     /// instances leave this unset and use the controlling terminal.
     prompt_reader: Option<PromptReader>,
+    /// Whether generation and prompting may write their progress lines to
+    /// stderr. False in resolver mode; see [`Secrets::silence_progress`].
+    progress: bool,
+    /// Whether a resolution may store a value it produced. False when an
+    /// operator withheld the mutation methods; see
+    /// [`Secrets::refuse_produced_writes`].
+    refuse_produced_writes: bool,
 }
 
 /// Credential-free description of one provider write, computed after routing
@@ -1814,7 +2157,7 @@ pub(crate) struct WriteTarget {
 }
 
 type WriteTargetReporter = Arc<dyn Fn(&WriteTarget) + Send + Sync>;
-type PromptReader = Arc<dyn Fn(&str, &str) -> Result<SecretBytes> + Send + Sync>;
+type PromptReader = Arc<dyn Fn(&str, &str, Option<&str>) -> Result<SecretBytes> + Send + Sync>;
 
 /// secretspec's own opt-in for marking the current process as an agent. Lets any
 /// harness that the `detect-coding-agent` crate does not recognize identify itself.
@@ -1962,6 +2305,41 @@ struct AuditFields<'a> {
     reference: Option<&'a NativeAddress>,
     /// Stable error-variant token when the outcome is an error.
     error_kind: Option<&'a str>,
+    /// Opaque provider interaction correlation for actionable failures.
+    interaction: Option<&'a secretspec_ipc::InteractionReference>,
+}
+
+#[derive(Clone)]
+#[cfg(feature = "cli")]
+pub(crate) struct IpcAuditPurpose {
+    pub consumer: String,
+    pub operation: String,
+    pub host: Option<String>,
+    pub path: Option<String>,
+}
+
+#[cfg(feature = "cli")]
+thread_local! {
+    static IPC_AUDIT_PURPOSE: RefCell<Option<IpcAuditPurpose>> = const { RefCell::new(None) };
+}
+
+#[cfg(feature = "cli")]
+struct IpcPurposeGuard(Option<IpcAuditPurpose>);
+
+#[cfg(feature = "cli")]
+impl Drop for IpcPurposeGuard {
+    fn drop(&mut self) {
+        IPC_AUDIT_PURPOSE.with(|slot| {
+            slot.replace(self.0.take());
+        });
+    }
+}
+
+#[cfg(feature = "cli")]
+fn with_ipc_audit_purpose<T>(purpose: IpcAuditPurpose, operation: impl FnOnce() -> T) -> T {
+    let previous = IPC_AUDIT_PURPOSE.with(|slot| slot.replace(Some(purpose)));
+    let _guard = IpcPurposeGuard(previous);
+    operation()
 }
 
 impl Secrets {
@@ -1991,16 +2369,22 @@ impl Secrets {
             config_dir: PathBuf::from("."),
             global_config,
             provider,
+            ignore_ambient_provider: false,
             profile,
+            ignore_ambient_profile: false,
             scope: None,
             ignore_ambient_scope: false,
             reason: None,
+            requested_authorization_duration: None,
             caller: None,
             require_reason: RequireReason::Never,
             audit: None,
             provider_credentials_cache: ProviderCredentialsCache::default(),
+            external_delete_capability: Mutex::new(HashMap::new()),
             write_target_reporter: None,
             prompt_reader: None,
+            progress: true,
+            refuse_produced_writes: false,
         }
     }
 
@@ -2071,6 +2455,36 @@ impl Secrets {
         // A Spec already owns the exact compiled view produced by validation,
         // so file and Rust frontends both arrive here without recompiling.
         let (config, manifest) = spec.into_parts();
+        Self::from_compiled_spec(config, manifest, base_dir.into(), true)
+    }
+
+    /// Load an explicit path for a resolver session without consulting ambient
+    /// provider, profile, scope, or reason variables.
+    #[cfg(feature = "cli")]
+    pub(crate) fn load_from_ipc(path: &Path) -> Result<Self> {
+        let spec = Spec::try_from(path)?;
+        let config_dir = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let (config, manifest) = spec.into_parts();
+        Self::from_compiled_spec(config, manifest, config_dir, false)
+    }
+
+    /// Parse an inline resolver manifest with inheritance rooted at `base_dir`.
+    #[cfg(feature = "cli")]
+    pub(crate) fn load_inline_ipc(source: &str, base_dir: &Path) -> Result<Self> {
+        let config = Config::from_inline(source, base_dir)?;
+        let manifest = config.validate_and_compile()?;
+        Self::from_compiled_spec(config, manifest, base_dir.to_path_buf(), false)
+    }
+
+    fn from_compiled_spec(
+        config: Config,
+        manifest: CompiledSpec,
+        config_dir: PathBuf,
+        use_ambient_session: bool,
+    ) -> Result<Self> {
         let global_config = GlobalConfig::load()?;
         // Auditing is a per-machine concern configured in the user-global config
         // (`[audit]` in ~/.config/secretspec/config.toml), not the project. It is
@@ -2080,23 +2494,30 @@ impl Secrets {
                 .as_ref()
                 .and_then(|g| g.audit.clone())
                 .unwrap_or_default(),
-        );
+        )
+        .map(Arc::new);
         Ok(Self {
             require_reason: config.project.require_reason.unwrap_or_default(),
             config,
             manifest,
-            config_dir: base_dir.into(),
+            config_dir,
             global_config,
             provider: None,
+            ignore_ambient_provider: !use_ambient_session,
             profile: None,
+            ignore_ambient_profile: !use_ambient_session,
             scope: None,
-            ignore_ambient_scope: false,
-            reason: env_reason(),
+            ignore_ambient_scope: !use_ambient_session,
+            reason: use_ambient_session.then(env_reason).flatten(),
+            requested_authorization_duration: None,
             caller: None,
             audit,
             provider_credentials_cache: ProviderCredentialsCache::default(),
+            external_delete_capability: Mutex::new(HashMap::new()),
             write_target_reporter: None,
             prompt_reader: None,
+            progress: true,
+            refuse_produced_writes: false,
         })
     }
 
@@ -2116,12 +2537,54 @@ impl Secrets {
         self.write_target_reporter = Some(Arc::new(reporter));
     }
 
-    #[cfg(test)]
+    /// Replaces controlling-terminal input for `prompt = true` declarations.
+    ///
+    /// Tests use it for deterministic coverage. The resolver uses it because it
+    /// has no terminal to read from at all: its stdin and stdout are the
+    /// protocol, so the only process that can ask a person is the one that
+    /// launched it, and the reader forwards the question there.
+    #[cfg(any(test, feature = "cli"))]
     pub(crate) fn set_prompt_reader(
         &mut self,
-        reader: impl Fn(&str, &str) -> Result<SecretBytes> + Send + Sync + 'static,
+        reader: impl Fn(&str, &str, Option<&str>) -> Result<SecretBytes> + Send + Sync + 'static,
     ) {
         self.prompt_reader = Some(Arc::new(reader));
+    }
+
+    /// Refuses every resolution that would produce a value and store it in a
+    /// provider (0.21+).
+    ///
+    /// Resolving is not always read-only: a generatable secret with no stored
+    /// value is minted *and written back*, and a prompted one is written back
+    /// after a person answers. An operator who withheld the mutation methods
+    /// means those writes too, so this closes the paths that would otherwise
+    /// let a read reach the store. It does not touch SecretSpec's own cache:
+    /// populating a derived copy is not a change to the secret.
+    #[cfg(feature = "cli")]
+    pub(crate) fn refuse_produced_writes(&mut self) {
+        self.refuse_produced_writes = true;
+    }
+
+    /// Rejects a produced value that would have to be stored, before it is
+    /// generated or asked of a person.
+    fn ensure_produced_write_allowed(&self, name: &str) -> Result<()> {
+        if self.refuse_produced_writes {
+            return Err(SecretSpecError::ProducedValueWriteRefused(name.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Suppresses the progress lines that generation and prompting write to
+    /// stderr (0.21+).
+    ///
+    /// A CLI run wants them. A resolver does not: its stderr is captured by
+    /// whatever launched it, which the wire protocol requires the host to treat
+    /// as sensitive until it has applied a redaction policy. Naming which
+    /// secrets a session generated or provisioned is not something to hand over
+    /// by default.
+    #[cfg(feature = "cli")]
+    pub(crate) fn silence_progress(&mut self) {
+        self.progress = false;
     }
 
     /// Sets the provider to use for secret operations
@@ -2242,6 +2705,16 @@ impl Secrets {
         self
     }
 
+    /// Requests a default authorization lifetime from providers that expose an
+    /// approval surface. Available starting with SecretSpec 0.21.
+    ///
+    /// The provider or approving user may choose a different lifetime. A zero
+    /// duration clears the request.
+    pub fn with_requested_authorization_duration(mut self, duration: std::time::Duration) -> Self {
+        self.requested_authorization_duration = (!duration.is_zero()).then_some(duration);
+        self
+    }
+
     /// Records the software integration that invoked SecretSpec.
     ///
     /// Caller context describes *what* is requesting secrets, while
@@ -2351,6 +2824,34 @@ impl Secrets {
         self.build_provider_for_use(spec, profile, false)
     }
 
+    pub(crate) fn provider_supports_delete(&self, spec: &str) -> Result<bool> {
+        let resolved = self.resolve_provider_spec(spec.to_string());
+        if let Some(supports_delete) = crate::provider::static_delete_capability(&resolved) {
+            return Ok(supports_delete);
+        }
+        // An external provider advertises deletion during its handshake, so
+        // answering costs a full endpoint launch and teardown. Planning asks
+        // this for every cached alias on every plan build, so the answer is
+        // memoized per resolved spec for the life of this `Secrets`.
+        if let Some(cached) = self
+            .external_delete_capability
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&resolved)
+        {
+            return Ok(*cached);
+        }
+        let profile = self.resolve_profile_name(None);
+        let supports_delete = self
+            .build_provider(spec.to_string(), Some(&profile))
+            .map(|provider| provider.supports_delete())?;
+        self.external_delete_capability
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(resolved, supports_delete);
+        Ok(supports_delete)
+    }
+
     /// Builds the authoritative leaf selected by a planned route.
     ///
     /// The 0.19+ inline cache form is both a complete route and the alias for
@@ -2378,13 +2879,22 @@ impl Secrets {
         // credential stores merely to discover that it cannot build the alias.
         self.ensure_provider_use_allowed(&spec, allow_inline_cached)?;
 
-        // When `spec` names an alias with a `credentials` map, resolve those
-        // values from their source providers and hand them to the built provider.
+        let profile = self.resolve_profile_name(profile);
+        let resolved = self.resolve_provider_spec(spec.clone());
+        if crate::provider::spec_uses_dynamic_credentials(&resolved)? {
+            let broker = self.external_provider_credential_broker(&spec, &resolved, &profile)?;
+            let mut provider = crate::provider::external_provider_from_spec(&resolved, broker)
+                .map_err(|err| self.explain_unknown_provider(err, &resolved))?;
+            self.apply_provider_context(provider.as_mut(), Some(&profile));
+            return Ok(provider);
+        }
+
+        // Built-in providers declare a closed credential vocabulary. Resolve
+        // every configured value before construction and inject that snapshot.
         // Memoized per (profile, spec) so rebuilding a provider (per-secret chain walks,
         // interactive prompting) does not refetch the same credentials from
         // the source store, while a profile switch on this instance does not
         // reuse the other profile's credentials.
-        let profile = self.resolve_profile_name(profile);
         let key = (profile.clone(), spec.clone());
         let credentials = self
             .provider_credentials_cache
@@ -2395,6 +2905,59 @@ impl Secrets {
             allow_inline_cached,
             Some(&profile),
         )
+    }
+
+    fn external_provider_credential_broker(
+        &self,
+        alias: &str,
+        resolved: &str,
+        profile: &str,
+    ) -> Result<Arc<dyn crate::provider::external::ProviderCredentialBroker>> {
+        self.validate_credential_sources(alias)?;
+        let declared = self
+            .lookup_provider_alias_entry(alias)
+            .and_then(ProviderAlias::credentials)
+            .map(sorted_credential_entries)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, source)| (name.clone(), source.clone()))
+            .collect::<Vec<_>>();
+
+        // Credentials sharing a source share one provider session, just as
+        // they did under eager resolution. Constructing these providers is
+        // side-effect free; their stores are contacted only from `get` below.
+        let mut providers: HashMap<String, Arc<dyn ProviderTrait>> = HashMap::new();
+        let mut configured = HashMap::new();
+        for (name, source) in declared {
+            let provider = match providers.entry(source.provider.clone()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let provider: Arc<dyn ProviderTrait> =
+                        Arc::from(self.build_source_provider(&source.provider)?);
+                    entry.insert(provider.clone());
+                    provider
+                }
+            };
+            configured.insert(name, BrokerCredentialSource { source, provider });
+        }
+
+        let scheme = crate::provider::provider_url_from_spec(resolved)?
+            .scheme()
+            .to_string();
+        Ok(Arc::new(SecretsProviderCredentialBroker {
+            alias: alias.to_string(),
+            scheme,
+            project: self.config.project.name.clone(),
+            profile: profile.to_string(),
+            configured,
+            fallback: Default::default(),
+            cache: Mutex::new(HashMap::new()),
+            audit: self.audit.clone(),
+            reason: self.reason.clone(),
+            caller: self.caller.clone(),
+            #[cfg(feature = "cli")]
+            purpose: IPC_AUDIT_PURPOSE.with(|slot| slot.borrow().clone()),
+        }))
     }
 
     /// [`Self::build_provider`], memoized within one resolution so repeated
@@ -2452,7 +3015,8 @@ impl Secrets {
 
     /// The shared construction body behind generic, routed, and credential
     /// source providers: alias expansion, error enrichment, and the
-    /// base-dir/reason/caller hooks live only here, so those paths cannot drift.
+    /// base-dir/reason/caller/project/profile hooks live only here, so those
+    /// paths cannot drift.
     fn build_provider_with_credentials(
         &self,
         spec: &str,
@@ -2471,9 +3035,16 @@ impl Secrets {
         let resolved = self.resolve_provider_spec(spec.to_string());
         let mut provider = crate::provider::provider_from_spec(resolved.as_str(), credentials)
             .map_err(|err| self.explain_unknown_provider(err, &resolved))?;
+        self.apply_provider_context(provider.as_mut(), profile);
+        Ok(provider)
+    }
+
+    fn apply_provider_context(&self, provider: &mut dyn ProviderTrait, profile: Option<&str>) {
         provider.with_base_dir(&self.config_dir);
         provider.set_reason(self.reason.clone());
+        provider.set_requested_authorization_duration(self.requested_authorization_duration);
         provider.set_caller(self.caller.clone());
+        provider.set_project(&self.config.project.name);
         // Context a native address cannot carry: a `ref` names coordinates only,
         // so a provider whose store is partitioned by something outside them
         // (Infisical's environment) reads the operation's profile here. It is
@@ -2485,11 +3056,10 @@ impl Secrets {
         if let Some(profile) = profile {
             provider.set_profile(profile);
         }
-        Ok(provider)
     }
 
-    /// Resolves the credentials declared by a provider alias, fetching each
-    /// semantic `(name, source)` entry from its source provider.
+    /// Resolves the credentials declared by a built-in provider alias, fetching
+    /// each semantic `(name, source)` entry from its source provider.
     ///
     /// `profile` scopes the convention path a bare-string source reads from.
     /// Returns an empty map for a spec that is not an alias, or an alias with
@@ -2604,6 +3174,31 @@ impl Secrets {
             .collect())
     }
 
+    /// Initializes an external provider with a caller-supplied credential
+    /// broker. Used by `config provider login` to discover URI-specific
+    /// requirements and store answers without a per-alias credentials table.
+    #[cfg(any(feature = "cli", test))]
+    pub(crate) fn initialize_external_provider_with_broker(
+        &self,
+        spec: &str,
+        broker: Arc<dyn crate::provider::external::ProviderCredentialBroker>,
+    ) -> Result<()> {
+        self.ensure_provider_use_allowed(spec, false)?;
+        let resolved = self.resolve_provider_spec(spec.to_string());
+        let url = crate::provider::provider_url_from_spec(&resolved)?;
+        let endpoint = crate::provider::external::discover(url.scheme())?
+            .ok_or_else(|| SecretSpecError::ProviderNotFound(url.scheme().to_string()))?;
+        let mut provider = crate::provider::external::ExternalProvider::from_url(endpoint, &url);
+        provider.with_credential_broker(broker);
+        provider.with_base_dir(&self.config_dir);
+        provider.set_reason(self.reason.clone());
+        provider.set_requested_authorization_duration(self.requested_authorization_duration);
+        provider.set_caller(self.caller.clone());
+        provider.set_project(&self.config.project.name);
+        provider.set_profile(&self.resolve_profile_name(None));
+        provider.initialize()
+    }
+
     /// Stores one provider credential at its source provider — the exact
     /// location [`Self::resolve_provider_credentials`] later reads it from (a `ref`
     /// or the profile-independent convention path for the active project). Errors
@@ -2647,6 +3242,42 @@ impl Secrets {
         Ok(source.location(&project, name))
     }
 
+    /// Stores one dynamically requested external-provider credential in the
+    /// provider-private keyring namespace and records the write like an
+    /// explicitly mapped credential source (0.21+).
+    #[cfg(any(feature = "cli", test))]
+    pub(crate) fn store_external_provider_credential(
+        &self,
+        scheme: &str,
+        scope: &str,
+        name: &str,
+        value: &SecretBytes,
+    ) -> Result<String> {
+        self.ensure_reason_for(AuditAction::Set, Some(name))?;
+        let result =
+            crate::provider::external::store_brokered_credential(scheme, scope, name, value);
+        let address = crate::provider::external::brokered_credential_address(scheme, scope, name);
+        let (outcome, error_kind) = match &result {
+            Ok(_) => (AuditOutcome::Written, None),
+            Err(error) => (AuditOutcome::Error, Some(error.kind())),
+        };
+        let profile = self.resolve_profile_name(None);
+        self.record(
+            AuditAction::Set,
+            &profile,
+            outcome,
+            AuditFields {
+                key: Some(name),
+                command: Some("credential"),
+                provider_uri: Some("keyring://".into()),
+                reference: Some(&address),
+                error_kind,
+                ..Default::default()
+            },
+        );
+        result
+    }
+
     /// Validates a spec's `credentials` (pure map lookups, no I/O): every name
     /// must be accepted by the target provider, every source must resolve to a
     /// known provider, and no source may itself declare credentials. Credential
@@ -2663,10 +3294,13 @@ impl Secrets {
             return Ok(());
         };
         let resolved_target = self.resolve_provider_spec(spec.to_string());
-        let supported = crate::provider::credential_names_for_spec(&resolved_target);
+        let supported = crate::provider::credential_names_for_spec(&resolved_target)?;
+        let dynamic = crate::provider::spec_uses_dynamic_credentials(&resolved_target)?;
         let provider_name = crate::provider::provider_display_name_for_spec(&resolved_target);
         for (name, source) in sorted_credential_entries(credentials) {
-            if !supported.contains(&name.as_str()) {
+            if dynamic {
+                validate_provider_credential_name(name)?;
+            } else if !supported.iter().any(|supported| supported == name) {
                 let supported_display = if supported.is_empty() {
                     "none".to_string()
                 } else {
@@ -2751,6 +3385,17 @@ impl Secrets {
         fields: AuditFields<'_>,
     ) {
         if let Some(logger) = &self.audit {
+            #[cfg(feature = "cli")]
+            let ipc_purpose = IPC_AUDIT_PURPOSE.with(|slot| slot.borrow().clone());
+            #[cfg(feature = "cli")]
+            let purpose = ipc_purpose.as_ref().map(|purpose| AuditPurpose {
+                consumer: &purpose.consumer,
+                operation: &purpose.operation,
+                host: purpose.host.as_deref(),
+                path: purpose.path.as_deref(),
+            });
+            #[cfg(not(feature = "cli"))]
+            let purpose: Option<AuditPurpose<'_>> = None;
             // Scopes affect only these bulk resolution surfaces. `get`, `set`,
             // and `import` deliberately ignore an ambient scope, so attaching it
             // to those events would falsely imply that it constrained the action.
@@ -2778,8 +3423,10 @@ impl Secrets {
                     reference: fields.reference.map(NativeAddress::render),
                     outcome,
                     error_kind: fields.error_kind,
+                    interaction: fields.interaction,
                     reason: self.reason.as_deref(),
                     caller: self.caller.as_ref(),
+                    purpose,
                 },
             );
         }
@@ -2800,9 +3447,9 @@ impl Secrets {
         reference: Option<&NativeAddress>,
         command: Option<&str>,
     ) {
-        let (outcome, error_kind) = match result {
-            Ok(()) => (AuditOutcome::Written, None),
-            Err(e) => (AuditOutcome::Error, Some(e.kind())),
+        let (outcome, error_kind, interaction) = match result {
+            Ok(()) => (AuditOutcome::Written, None, None),
+            Err(e) => (AuditOutcome::Error, Some(e.kind()), e.interaction()),
         };
         self.record(
             AuditAction::Set,
@@ -2814,6 +3461,7 @@ impl Secrets {
                 provider_uri,
                 reference,
                 error_kind,
+                interaction,
                 ..Default::default()
             },
         );
@@ -2830,10 +3478,10 @@ impl Secrets {
         provider_uri: Option<String>,
         reference: Option<&NativeAddress>,
     ) {
-        let (outcome, error_kind) = match result {
-            Ok(true) => (AuditOutcome::Deleted, None),
-            Ok(false) => (AuditOutcome::Missing, None),
-            Err(error) => (AuditOutcome::Error, Some(error.kind())),
+        let (outcome, error_kind, interaction) = match result {
+            Ok(true) => (AuditOutcome::Deleted, None, None),
+            Ok(false) => (AuditOutcome::Missing, None, None),
+            Err(error) => (AuditOutcome::Error, Some(error.kind()), error.interaction()),
         };
         self.record(
             AuditAction::Delete,
@@ -2844,6 +3492,7 @@ impl Secrets {
                 provider_uri,
                 reference,
                 error_kind,
+                interaction,
                 ..Default::default()
             },
         );
@@ -2872,6 +3521,7 @@ impl Secrets {
                 provider_uri,
                 reference,
                 error_kind: Some(err.kind()),
+                interaction: err.interaction(),
                 ..Default::default()
             },
         );
@@ -3130,7 +3780,7 @@ impl Secrets {
     /// Attach an audit logger (for testing which events an operation emits).
     #[cfg(test)]
     pub(crate) fn set_audit_for_test(&mut self, logger: crate::audit::AuditLogger) {
-        self.audit = Some(logger);
+        self.audit = Some(Arc::new(logger));
     }
 
     /// Override the `require_reason` policy (for testing the gate without going
@@ -3162,6 +3812,9 @@ impl Secrets {
             .map(|p| p.to_string())
             .or_else(|| self.profile.clone())
             .or_else(|| {
+                if self.ignore_ambient_profile {
+                    return None;
+                }
                 env::var("SECRETSPEC_PROFILE")
                     .ok()
                     .as_deref()
@@ -3198,6 +3851,12 @@ impl Secrets {
                     .as_deref()
                     .and_then(non_blank)
             })
+    }
+
+    #[cfg(feature = "cli")]
+    pub(crate) fn validate_ipc_selection(&self) -> Result<()> {
+        let profile = self.resolve_profile_name(None);
+        Surface::Scoped.names(self, &profile).map(|_| ())
     }
 
     /// The set of secret names the active scope admits, or `None` when no scope
@@ -3545,6 +4204,9 @@ impl Secrets {
             .map(|spec| spec.to_string())
             .or_else(|| self.provider.clone())
             .or_else(|| {
+                if self.ignore_ambient_provider {
+                    return None;
+                }
                 env::var("SECRETSPEC_PROVIDER")
                     .ok()
                     .as_deref()
@@ -3564,7 +4226,7 @@ impl Secrets {
         group: &[&PlannedSecret],
         project: &str,
         profile: &str,
-    ) -> Result<HashMap<String, SecretBytes>> {
+    ) -> Result<HashMap<String, ProviderValue>> {
         let addresses = group
             .iter()
             .map(|planned| self.address_for_spec(planned, provider_spec, project, profile))
@@ -3574,7 +4236,7 @@ impl Secrets {
             .zip(&addresses)
             .map(|(planned, address)| (planned.name.as_str(), address.as_address()))
             .collect();
-        provider.get_many(&requests)
+        provider.get_many_with_metadata(&requests)
     }
 
     /// Cache-first read for a whole plan: one provider per distinct cache store,
@@ -3590,7 +4252,7 @@ impl Secrets {
         &self,
         plan: &ResolutionPlan,
         profile: &str,
-    ) -> HashMap<String, (SecretBytes, String)> {
+    ) -> HashMap<String, (ProviderValue, String, Option<u64>)> {
         // Grouped by cache spec (not URI) so an alias's `credentials` stays
         // reachable at build time, and sorted so warnings come out in a stable
         // order.
@@ -3638,8 +4300,14 @@ impl Secrets {
                     .and_then(Route::cache)
                     .expect("the group was built from secrets with a cached route");
                 match cached_entry(planned, cache, stored, &self.config.project.name, profile) {
-                    CachedEntry::Fresh(value) => {
-                        cached.insert(planned.name.clone(), (value, uri.clone()));
+                    CachedEntry::Fresh {
+                        value,
+                        refresh_at_unix_ms,
+                    } => {
+                        cached.insert(
+                            planned.name.clone(),
+                            (value, uri.clone(), refresh_at_unix_ms),
+                        );
                     }
                     CachedEntry::Stale => {
                         self.evict_cache_entry(provider.as_ref(), &planned.name, profile)
@@ -3671,7 +4339,7 @@ impl Secrets {
         planned: &PlannedSecret,
         route: &Route,
         profile: &str,
-        value: &SecretBytes,
+        value: &ProviderValue,
     ) {
         let Some(cache) = route.cache() else {
             return;
@@ -3909,7 +4577,12 @@ impl Secrets {
         value: &SecretBytes,
     ) {
         if route.cache().is_some() {
-            self.write_cached_secret(planned, route, profile, value);
+            self.write_cached_secret(
+                planned,
+                route,
+                profile,
+                &ProviderValue::new(value.clone(), None),
+            );
             return;
         }
         // Only re-plan when the declared routing could name a cached route at
@@ -4217,7 +4890,7 @@ impl Secrets {
                 request.profile,
             )?;
             last_reference = address.native().cloned();
-            match provider.get(address.as_address()) {
+            match provider.get_with_metadata(address.as_address()) {
                 Ok(Some(value)) => {
                     return Ok(FallbackRead {
                         value: Some(value),
@@ -4390,6 +5063,22 @@ impl Secrets {
         name: &str,
         input: impl FnOnce(&str) -> Result<SecretBytes>,
     ) -> Result<()> {
+        let stored = self.store_secret_with_input(name, input)?;
+        eprintln!(
+            "{} Secret '{}' saved to {} (profile: {})",
+            "✓".green(),
+            name,
+            stored.provider_name,
+            stored.profile
+        );
+        Ok(())
+    }
+
+    fn store_secret_with_input(
+        &self,
+        name: &str,
+        input: impl FnOnce(&str) -> Result<SecretBytes>,
+    ) -> Result<StoredSecret> {
         self.ensure_reason_for(AuditAction::Set, Some(name))?;
         // Check if the secret exists in the spec
         let profile_name = self.resolve_profile_name(None);
@@ -4525,15 +5214,11 @@ impl Secrets {
         result?;
         self.sync_cache_after_write(&planned, route, &profile_name, stored_value);
 
-        eprintln!(
-            "{} Secret '{}' saved to {} (profile: {})",
-            "✓".green(),
-            name,
-            backend.name(),
-            profile_name
-        );
-
-        Ok(())
+        Ok(StoredSecret {
+            profile: profile_name,
+            provider_name: backend.name().to_string(),
+            provider_uri: backend.uri(),
+        })
     }
 
     /// Deletes one secret value from its authoritative provider. Available
@@ -4545,6 +5230,12 @@ impl Secrets {
     /// also invalidates the manifest's cache so a later read cannot return the
     /// removed value. Missing values are an idempotent `Ok(false)`.
     pub fn delete(&self, name: &str) -> Result<bool> {
+        Ok(self.delete_secret(name)?.deleted)
+    }
+
+    /// Shared core of [`Self::delete`] and the resolver's `resolver.delete`,
+    /// reporting the provider the removal was addressed to.
+    fn delete_secret(&self, name: &str) -> Result<DeletedSecret> {
         self.ensure_reason_for(AuditAction::Delete, Some(name))?;
         let profile_name = self.resolve_profile_name(None);
         self.require_profile(&profile_name)?;
@@ -4616,7 +5307,10 @@ impl Secrets {
         // Even a no-op authoritative delete must invalidate the cache: the
         // cache may still contain the only surviving copy of the value.
         self.sync_cache_after_delete(&planned, route, &profile_name);
-        Ok(deleted)
+        Ok(DeletedSecret {
+            deleted,
+            provider_uri: backend.uri(),
+        })
     }
 
     /// Resolves one secret and prints it to stdout: the CLI's `secretspec get`.
@@ -5335,14 +6029,21 @@ impl Secrets {
         let backend = self.write_provider_for_route(route, Some(profile_name))?;
 
         if backend.generated_value_persistence() == ProducedValuePersistence::Ephemeral {
-            eprintln!(
-                "{} {} - generated for this resolution without provider storage (profile: {})",
-                "✓".green(),
-                name,
-                profile_name
-            );
+            if self.progress {
+                eprintln!(
+                    "{} {} - generated for this resolution without provider storage (profile: {})",
+                    "✓".green(),
+                    name,
+                    profile_name
+                );
+            }
             return Ok(Some(value));
         }
+
+        // Checked only on the persisting branch: an ephemeral provider returned
+        // above without touching a store, and refusing that would deny a read
+        // that never wrote anything.
+        self.ensure_produced_write_allowed(name)?;
 
         // The provider states why a write is refused; wrapping it here would
         // only nest a second "Provider operation failed" prefix.
@@ -5371,13 +6072,15 @@ impl Secrets {
             stored_value,
         );
 
-        eprintln!(
-            "{} {} - generated and saved to {} (profile: {})",
-            "✓".green(),
-            name,
-            backend.name(),
-            profile_name
-        );
+        if self.progress {
+            eprintln!(
+                "{} {} - generated and saved to {} (profile: {})",
+                "✓".green(),
+                name,
+                backend.name(),
+                profile_name
+            );
+        }
 
         Ok(Some(value))
     }
@@ -5387,9 +6090,14 @@ impl Secrets {
     /// input handle on Windows) when stdin is redirected, so the child retains
     /// its original stdin stream. Persistence is deliberately handled by
     /// [`Self::try_prompt_secret`], after this input-only step succeeds.
-    fn prompt_run_secret(&self, name: &str, profile: &str) -> Result<SecretBytes> {
+    fn prompt_run_secret(
+        &self,
+        name: &str,
+        profile: &str,
+        target_provider: Option<&str>,
+    ) -> Result<SecretBytes> {
         let value = if let Some(reader) = &self.prompt_reader {
-            reader(name, profile)?
+            reader(name, profile, target_provider)?
         } else {
             let message = format!("Enter value for {name} (profile: {profile}):");
             let entered = inquire::Password::new(&message)
@@ -5438,17 +6146,26 @@ impl Secrets {
         // and reject a read-only destination, before asking the operator for a
         // value. Ephemeral providers explicitly bypass the write path.
         if persistence == ProducedValuePersistence::Persist {
+            // Refused before anyone is asked: a person who answers a prompt
+            // whose answer is then thrown away has been asked for nothing.
+            self.ensure_produced_write_allowed(name)?;
             self.preflight_write(planned, profile_name, backend.as_ref())?;
         }
 
-        let value = self.prompt_run_secret(name, profile_name)?;
+        // Named only when the answer is actually going to be stored there, so a
+        // person is never shown a destination that will not receive it.
+        let target_provider =
+            (persistence == ProducedValuePersistence::Persist).then(|| backend.uri());
+        let value = self.prompt_run_secret(name, profile_name, target_provider.as_deref())?;
         if persistence == ProducedValuePersistence::Ephemeral {
-            eprintln!(
-                "{} {} - entered for this run without provider storage (profile: {})",
-                "✓".green(),
-                name,
-                profile_name
-            );
+            if self.progress {
+                eprintln!(
+                    "{} {} - entered for this run without provider storage (profile: {})",
+                    "✓".green(),
+                    name,
+                    profile_name
+                );
+            }
             return Ok(value);
         }
 
@@ -5466,13 +6183,15 @@ impl Secrets {
         set_result?;
         self.sync_cache_after_write(planned, route, profile_name, stored_value);
 
-        eprintln!(
-            "{} {} - entered and saved to {} (profile: {})",
-            "✓".green(),
-            name,
-            backend.name(),
-            profile_name
-        );
+        if self.progress {
+            eprintln!(
+                "{} {} - entered and saved to {} (profile: {})",
+                "✓".green(),
+                name,
+                backend.name(),
+                profile_name
+            );
+        }
         Ok(value)
     }
 
@@ -5692,6 +6411,99 @@ impl Secrets {
         self.resolve_named_within(name, Surface::Scoped, |_, value| Ok(value))
     }
 
+    /// Named resolution retaining every materialized file owner, as the
+    /// resolver sees it but without its caller attribution or prompting.
+    #[cfg(test)]
+    pub(crate) fn resolve_named_owned(&self, name: &str) -> Result<OwnedNamedResolution> {
+        self.resolve_named_owned_within(
+            name,
+            Surface::Scoped,
+            Materialize::Values,
+            |name, value| Ok(value.try_as_utf8_for(name)?.to_owned()),
+        )
+    }
+
+    /// Resolver-mode resolution with structured caller attribution scoped to the
+    /// blocking worker that performs the read (0.21+).
+    ///
+    /// `interactive` decides whether a `prompt = true` declaration with no
+    /// stored value may ask for one. It is true only when the session's client
+    /// advertised that it can reach a person; otherwise the declaration is left
+    /// to fail as unavailable rather than blocking on a question nobody will
+    /// see.
+    #[cfg(feature = "cli")]
+    pub(crate) fn resolve_named_owned_for_ipc(
+        &self,
+        name: &str,
+        purpose: IpcAuditPurpose,
+        interactive: bool,
+    ) -> Result<OwnedNamedResolution> {
+        let materialize = if interactive {
+            Materialize::Run
+        } else {
+            Materialize::Values
+        };
+        with_ipc_audit_purpose(purpose, || {
+            self.resolve_named_owned_within(name, Surface::Scoped, materialize, |name, value| {
+                Ok(value.try_as_utf8_for(name)?.to_owned())
+            })
+        })
+    }
+
+    /// Resolver-mode write of one declared name (0.21+).
+    ///
+    /// The value goes where a resolver read of the same name would look for it,
+    /// so a consumer that stores and then resolves never has to model routing.
+    /// The session's scope bounds this exactly as it bounds a read: a name the
+    /// scope does not offer is not a name this session may write, which is why
+    /// the surface is checked here rather than left to the CLI's unscoped rule.
+    #[cfg(feature = "cli")]
+    pub(crate) fn store_named_for_ipc(
+        &self,
+        name: &str,
+        value: String,
+        purpose: IpcAuditPurpose,
+    ) -> Result<StoredSecret> {
+        with_ipc_audit_purpose(purpose, || {
+            self.require_ipc_surface(AuditAction::Set, name)?;
+            self.store_secret_with_input(name, |_| Ok(SecretBytes::from_utf8(value)))
+        })
+    }
+
+    /// Resolver-mode removal of one declared name's stored value (0.21+), under
+    /// the same scope rule as [`Self::store_named_for_ipc`].
+    #[cfg(feature = "cli")]
+    pub(crate) fn delete_named_for_ipc(
+        &self,
+        name: &str,
+        purpose: IpcAuditPurpose,
+    ) -> Result<DeletedSecret> {
+        with_ipc_audit_purpose(purpose, || {
+            self.require_ipc_surface(AuditAction::Delete, name)?;
+            self.delete_secret(name)
+        })
+    }
+
+    /// Rejects a mutation of a name the session's scope does not offer, and
+    /// audits the attempt the way a read of a hidden name is audited.
+    #[cfg(feature = "cli")]
+    fn require_ipc_surface(&self, action: AuditAction, name: &str) -> Result<()> {
+        let profile_name = self.resolve_profile_name(None);
+        let visible = match Surface::Scoped.names(self, &profile_name) {
+            Ok(visible) => visible,
+            Err(err) => {
+                self.record_key_error(action, &profile_name, name, None, None, &err);
+                return Err(err);
+            }
+        };
+        if visible.iter().any(|declared| declared == name) {
+            return Ok(());
+        }
+        let err = SecretSpecError::SecretNotFound(name.to_string());
+        self.record_key_error(action, &profile_name, name, None, None, &err);
+        Err(err)
+    }
+
     /// Shared core of [`Self::resolve_named`] and [`Self::get`].
     ///
     /// They differ only in which surface decides that a name exists: the SDK
@@ -5704,6 +6516,17 @@ impl Secrets {
         surface: Surface,
         convert: impl FnOnce(&str, SecretBytes) -> Result<T>,
     ) -> Result<NamedResolution<T>> {
+        self.resolve_named_owned_within(name, surface, Materialize::Values, convert)?
+            .into_embedded()
+    }
+
+    fn resolve_named_owned_within<T>(
+        &self,
+        name: &str,
+        surface: Surface,
+        materialize: Materialize,
+        convert: impl FnOnce(&str, SecretBytes) -> Result<T>,
+    ) -> Result<OwnedNamedResolution<T>> {
         self.ensure_reason_for(AuditAction::Get, Some(name))?;
         let profile_name = self.resolve_profile_name(None);
 
@@ -5722,7 +6545,7 @@ impl Secrets {
             // records an undefined secret). No provider can be attributed.
             let err = SecretSpecError::SecretNotFound(name.to_string());
             self.record_key_error(AuditAction::Get, &profile_name, name, None, None, &err);
-            return Ok(NamedResolution::Undeclared);
+            return Ok(OwnedNamedResolution::Undeclared);
         }
 
         // The target plus its transitive composition inputs: the same
@@ -5740,22 +6563,14 @@ impl Secrets {
         // would additionally enable the whole-profile constraint checks that a
         // single-secret read does not own.
         let mut read_addresses = HashMap::new();
-        let outcome =
-            match self.execute_plan(&plan, Materialize::Values, None, Some(&mut read_addresses)) {
-                Ok(outcome) => outcome,
-                Err(err) => {
-                    let reference = read_addresses.get(name);
-                    self.record_key_error(
-                        AuditAction::Get,
-                        &profile_name,
-                        name,
-                        None,
-                        reference,
-                        &err,
-                    );
-                    return Err(err);
-                }
-            };
+        let outcome = match self.execute_plan(&plan, materialize, None, Some(&mut read_addresses)) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                let reference = read_addresses.get(name);
+                self.record_key_error(AuditAction::Get, &profile_name, name, None, reference, &err);
+                return Err(err);
+            }
+        };
         // Exactly the coordinates the read reached, never the declared ones: an
         // alias `ref` template resolves to a different address per provider, and
         // a read served from cache addressed no authoritative store at all.
@@ -5782,7 +6597,7 @@ impl Secrets {
                             ..Default::default()
                         },
                     );
-                    return Ok(NamedResolution::Missing {
+                    return Ok(OwnedNamedResolution::Missing {
                         required: entry.required,
                     });
                 }
@@ -5812,8 +6627,6 @@ impl Secrets {
                         return Err(err);
                     }
                 };
-                // Conversion must succeed before temporary files are persisted.
-                validated.keep_temp_files()?;
 
                 self.record(
                     AuditAction::Get,
@@ -5830,13 +6643,50 @@ impl Secrets {
                         ..Default::default()
                     },
                 );
-                Ok(NamedResolution::Resolved(ResolvedSecret {
-                    value,
-                    path,
-                    as_path: entry.as_path,
-                    source: resolved_source(&entry),
-                    source_provider: entry.source_provider,
-                }))
+                let source = resolved_source(&entry);
+                let source_provider = entry.source_provider;
+                let expires_at_unix_ms = validated.secret_expiries.remove(name);
+                let refresh_at_unix_ms = validated.refreshes.remove(name);
+                let revision = validated.revisions.remove(name);
+                let mut supporting_files = std::mem::take(&mut validated.temp_files);
+                if entry.as_path {
+                    // Every resolution branch materializes an `as_path` value
+                    // through `insert_resolved`, so the owner is expected to be
+                    // present. This stays an error rather than a panic because
+                    // it runs inside the public SDK entry point and the resolver's
+                    // blocking worker, where every other failure is recoverable.
+                    let target = supporting_files
+                        .iter()
+                        .position(|file| {
+                            Some(file.path().to_string_lossy().as_ref()) == path.as_deref()
+                        })
+                        .ok_or_else(|| {
+                            SecretSpecError::ProviderOperationFailed(format!(
+                                "secret '{name}' is declared `as_path` but its resolved value has \
+                                 no retained file owner"
+                            ))
+                        })?;
+                    let file = supporting_files.swap_remove(target);
+                    Ok(OwnedNamedResolution::File {
+                        file,
+                        source,
+                        source_provider,
+                        expires_at_unix_ms,
+                        refresh_at_unix_ms,
+                        revision,
+                        supporting_files,
+                    })
+                } else {
+                    Ok(OwnedNamedResolution::Value {
+                        value: value.expect("inline value was converted"),
+                        source,
+                        source_provider,
+                        expires_at_unix_ms,
+                        refresh_at_unix_ms,
+                        revision,
+                        supporting_files,
+                    })
+                }
             }
             Err(errors) => {
                 // Constraints are skipped for this partial plan, so a violation
@@ -5872,7 +6722,7 @@ impl Secrets {
                         ..Default::default()
                     },
                 );
-                Ok(NamedResolution::Missing { required })
+                Ok(OwnedNamedResolution::Missing { required })
             }
         }
     }
@@ -6591,6 +7441,19 @@ impl Secrets {
     }
 }
 
+fn validate_provider_credential_name(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+    if name.len() > 256
+        || !matches!(chars.next(), Some('a'..='z'))
+        || chars.any(|character| !matches!(character, 'a'..='z' | '0'..='9' | '_'))
+    {
+        return Err(SecretSpecError::ProviderOperationFailed(format!(
+            "invalid provider credential name '{name}'"
+        )));
+    }
+    Ok(())
+}
+
 /// Output format for [`Secrets::export`]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
@@ -6821,7 +7684,7 @@ mod write_target_tests {
             Ok("described".to_string())
         }
 
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             "counting"
         }
 
@@ -7179,6 +8042,103 @@ mod provider_credentials_cache_tests {
             );
         }
         assert_eq!(fetches.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[cfg(test)]
+mod external_provider_credential_broker_tests {
+    use super::*;
+    use crate::provider::external::ProviderCredentialBroker;
+
+    struct RecordingSource {
+        reads: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl ProviderTrait for RecordingSource {
+        fn convention_address(
+            &self,
+            _project: &str,
+            _profile: &str,
+            key: &str,
+        ) -> Result<NativeAddress> {
+            Ok(NativeAddress {
+                item: key.to_string(),
+                ..NativeAddress::default()
+            })
+        }
+
+        fn get(&self, address: Address<'_>) -> Result<Option<SecretBytes>> {
+            let item = match address {
+                Address::Native(address) => address.item.clone(),
+                Address::Convention { key, .. } => key.to_string(),
+            };
+            self.reads.lock().unwrap().push(item.clone());
+            Ok(Some(SecretBytes::from_utf8(format!("value-for-{item}"))))
+        }
+
+        fn set(&self, _address: Address<'_>, _value: &SecretBytes) -> Result<()> {
+            Ok(())
+        }
+
+        fn name(&self) -> &str {
+            "recording"
+        }
+
+        fn uri(&self) -> String {
+            "recording://".into()
+        }
+    }
+
+    #[test]
+    fn configured_external_credentials_are_read_only_when_requested_and_memoized() {
+        let reads = Arc::new(Mutex::new(Vec::new()));
+        let source: Arc<dyn ProviderTrait> = Arc::new(RecordingSource {
+            reads: reads.clone(),
+        });
+        let configured = [("access_token", "token-a"), ("client_secret", "token-b")]
+            .into_iter()
+            .map(|(name, item)| {
+                (
+                    name.to_string(),
+                    BrokerCredentialSource {
+                        source: CredentialSource {
+                            provider: "recording://".into(),
+                            reference: Some(NativeAddress {
+                                item: item.into(),
+                                ..NativeAddress::default()
+                            }),
+                        },
+                        provider: source.clone(),
+                    },
+                )
+            })
+            .collect();
+        let broker = SecretsProviderCredentialBroker {
+            alias: "remote".into(),
+            scheme: "example".into(),
+            project: "payments".into(),
+            profile: "production".into(),
+            configured,
+            fallback: Default::default(),
+            cache: Mutex::new(HashMap::new()),
+            audit: None,
+            reason: None,
+            caller: None,
+            #[cfg(feature = "cli")]
+            purpose: None,
+        };
+        let request = secretspec_ipc::protocol::callback::CredentialParams {
+            name: "access_token".into(),
+            scope: "example://team-a".into(),
+            required: true,
+        };
+
+        let first = broker.get("example", &request).unwrap().unwrap();
+        let second = broker.get("example", &request).unwrap().unwrap();
+
+        assert_eq!(first.expose_secret(), b"value-for-token-a");
+        assert_eq!(second.expose_secret(), b"value-for-token-a");
+        assert_eq!(reads.lock().unwrap().as_slice(), ["token-a"]);
     }
 }
 
@@ -7593,7 +8553,7 @@ mod run_prompt_tests {
         let prompts = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&prompts);
         let mut spec = prompted_spec();
-        spec.set_prompt_reader(move |name, profile| {
+        spec.set_prompt_reader(move |name, profile, _| {
             assert_eq!(name, "DEPLOY_PASSWORD");
             assert_eq!(profile, "default");
             observed.fetch_add(1, Ordering::SeqCst);
@@ -7630,7 +8590,7 @@ mod run_prompt_tests {
         let prompts = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&prompts);
         let mut spec = prompted_dotenv_spec(&dotenv_path);
-        spec.set_prompt_reader(move |name, profile| {
+        spec.set_prompt_reader(move |name, profile, _| {
             assert_eq!(name, "DEPLOY_PASSWORD");
             assert_eq!(profile, "default");
             observed.fetch_add(1, Ordering::SeqCst);
@@ -7661,7 +8621,9 @@ mod run_prompt_tests {
     fn run_surfaces_an_unavailable_controlling_terminal() {
         let _env = crate::tests::scrub_resolution_env();
         let mut spec = prompted_spec();
-        spec.set_prompt_reader(|name, _| Err(SecretSpecError::PromptUnavailable(name.to_string())));
+        spec.set_prompt_reader(|name, _, _| {
+            Err(SecretSpecError::PromptUnavailable(name.to_string()))
+        });
 
         let error = match spec.validate_audited(false, Materialize::Run) {
             Err(error) => error,
@@ -7678,7 +8640,7 @@ mod run_prompt_tests {
     fn run_injects_the_prompted_value_into_the_child() {
         let _env = crate::tests::scrub_resolution_env();
         let mut spec = prompted_spec();
-        spec.set_prompt_reader(|_, _| Ok(SecretBytes::from_utf8("entered-once")));
+        spec.set_prompt_reader(|_, _, _| Ok(SecretBytes::from_utf8("entered-once")));
 
         let exit = spec
             .run_command(vec![

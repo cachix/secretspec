@@ -129,7 +129,7 @@ impl Provider for OpenBaoProvider {
         self.core.with_credentials(credentials);
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 

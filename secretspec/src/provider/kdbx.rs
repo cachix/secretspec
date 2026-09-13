@@ -372,7 +372,7 @@ impl Provider for KdbxProvider {
         Ok(())
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -608,7 +608,7 @@ mod tests {
         .unwrap();
         assert_eq!(provider.name(), "kdbx");
         assert_eq!(
-            crate::provider::credential_names_for_spec("kdbx:./vault.kdbx"),
+            crate::provider::credential_names_for_spec("kdbx:./vault.kdbx").unwrap(),
             &[PASSWORD_CREDENTIAL]
         );
     }

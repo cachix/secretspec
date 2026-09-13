@@ -1,0 +1,36 @@
+[package]
+name = "secretspec-ipc"
+version.workspace = true
+edition.workspace = true
+repository = "https://github.com/cachix/secretspec"
+description = "Independent Rust implementation of the SecretSpec IPC protocols"
+license = "Apache-2.0"
+
+[features]
+default = ["tokio"]
+# Synchronous `secretspec.resolver/1` sessions over `std::process`, for consumers
+# that have no async runtime and must not acquire one. Adds no dependencies.
+blocking = []
+tokio = [
+  "dep:async-trait",
+  "dep:tokio",
+  "dep:tokio-util",
+]
+
+[dependencies]
+async-trait = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# `Zeroizing` only. Declared here rather than inherited from the workspace so
+# the unused `derive` feature, and the proc-macro crate behind it, stay out of
+# the dependency tree of a consumer that depends on this crate alone.
+zeroize = { version = "1.8", default-features = false, features = ["alloc"] }
+tokio = { workspace = true, optional = true, features = ["io-util", "macros", "process", "sync", "time"] }
+tokio-util = { workspace = true, optional = true }
+
+[dev-dependencies]
+jsonschema = { version = "0.48.5", default-features = false }
+proptest.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "process", "sync", "time"] }

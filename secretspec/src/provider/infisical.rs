@@ -1115,7 +1115,7 @@ impl Provider for InfisicalProvider {
         self.credentials = credentials;
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 

@@ -29,6 +29,14 @@ pub struct ValidatedSecrets {
     /// cleaned up when dropped.
     #[doc(hidden)]
     pub(crate) temp_files: Vec<NamedTempFile>,
+    /// Provider-reported absolute validity bound of the secret itself.
+    #[doc(hidden)]
+    pub(crate) secret_expiries: HashMap<String, u64>,
+    /// Absolute time after which the resolver will not serve its cached copy.
+    #[doc(hidden)]
+    pub(crate) refreshes: HashMap<String, u64>,
+    /// Effective revisions of provider-backed logical bytes (0.21+).
+    pub(crate) revisions: HashMap<String, secretspec_ipc::Revision>,
 }
 
 impl ValidatedSecrets {

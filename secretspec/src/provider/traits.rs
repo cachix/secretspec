@@ -1,9 +1,9 @@
-use super::address::reject_unsupported_coords;
+use super::address::unsupported_coord_error;
 use super::{Address, ProviderCredentials};
 use crate::config::NativeAddress;
 use crate::{Result, SecretBytes, SecretSpecError};
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Context supplied when a provider discovers secret declarations.
 ///
@@ -37,6 +37,37 @@ pub enum ProducedValuePersistence {
     /// Return the produced value only from the current materializing
     /// resolution. No provider write or cache refresh is performed.
     Ephemeral,
+}
+
+/// A provider value with optional authoritative validity and revision metadata.
+///
+/// `expires_at_unix_ms` is when the secret itself expires according to the
+/// provider. `None` means no bound is known. Resolver cache freshness is
+/// separate metadata and must never be placed here.
+#[derive(Clone)]
+pub struct ProviderValue {
+    pub value: SecretBytes,
+    pub expires_at_unix_ms: Option<u64>,
+    /// Non-secret identity and generation of these provider bytes (0.21+).
+    pub revision: Option<secretspec_ipc::Revision>,
+}
+
+impl ProviderValue {
+    pub fn new(value: SecretBytes, expires_at_unix_ms: Option<u64>) -> Self {
+        Self {
+            value,
+            expires_at_unix_ms,
+            revision: None,
+        }
+    }
+}
+
+impl ProviderValue {
+    /// Attach metadata from the same read. Unknown revisions remain `None`.
+    pub fn with_revision(mut self, revision: Option<secretspec_ipc::Revision>) -> Self {
+        self.revision = revision;
+        self
+    }
 }
 
 /// Trait defining the interface for secret storage providers.
@@ -93,6 +124,16 @@ pub trait Provider: Send + Sync {
         &[]
     }
 
+    /// Returns whether this provider understands an optional native-address
+    /// coordinate. Available since SecretSpec 0.21.
+    ///
+    /// Static providers inherit the existing slice-based behavior. External
+    /// providers override this hook because their coordinate list is selected
+    /// during protocol initialization and is therefore owned by the instance.
+    fn supports_coord(&self, name: &str) -> bool {
+        self.supported_coords().contains(&name)
+    }
+
     /// Resolves any [`Address`] to this store's native coordinates: a `ref`'s
     /// coordinates pass through as-is, a convention address is compiled via
     /// [`convention_address`](Provider::convention_address). Coordinates
@@ -107,7 +148,14 @@ pub trait Provider: Send + Sync {
                 key,
             } => Cow::Owned(self.convention_address(project, profile, key)?),
         };
-        reject_unsupported_coords(self.name(), &coords, self.supported_coords())?;
+        for (name, value) in coords.coordinates() {
+            if name == "item" || value.is_none() {
+                continue;
+            }
+            if !self.supports_coord(name) {
+                return Err(unsupported_coord_error(self.name(), &coords, name));
+            }
+        }
         Ok(coords)
     }
 
@@ -146,6 +194,37 @@ pub trait Provider: Send + Sync {
     /// }
     /// ```
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>>;
+
+    /// Retrieves a value together with its provider-reported validity bound.
+    ///
+    /// Available starting with SecretSpec 0.21. Existing providers inherit a
+    /// compatibility implementation with unknown expiry and revision. Providers issuing or
+    /// reading time-bounded credentials override this method; callers use it in
+    /// preference to [`get`](Provider::get) when they can preserve metadata.
+    fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<ProviderValue>> {
+        self.get(addr)
+            .map(|value| value.map(|value| ProviderValue::new(value, None)))
+    }
+
+    /// Whether this provider can return plaintext values through
+    /// [`get`](Provider::get) or [`get_many`](Provider::get_many).
+    ///
+    /// Available starting with SecretSpec 0.21. Write-only stores override this
+    /// to return `false`; callers that only need presence can then use
+    /// [`exists`](Provider::exists) without accidentally attempting a value
+    /// read. This capability check never returns a secret value.
+    fn supports_read(&self) -> bool {
+        true
+    }
+
+    /// Tests whether one addressed secret exists without requiring its value.
+    ///
+    /// Available starting with SecretSpec 0.21. Readable providers inherit the
+    /// compatibility implementation. Write-only providers must override it with
+    /// a value-free backend operation.
+    fn exists(&self, addr: Address<'_>) -> Result<bool> {
+        Ok(self.get(addr)?.is_some())
+    }
 
     /// Stores a secret value at `addr`.
     ///
@@ -327,7 +406,7 @@ pub trait Provider: Send + Sync {
     /// Returns the name of this provider.
     ///
     /// This should match the name registered with the provider macro.
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
     /// Returns the full URI representation of this provider.
     ///
@@ -433,6 +512,13 @@ pub trait Provider: Send + Sync {
     /// [`Secrets::with_reason`]: crate::Secrets::with_reason
     fn set_reason(&self, _reason: Option<String>) {}
 
+    /// Records the app-requested authorization lifetime for approval surfaces.
+    /// Available starting with SecretSpec 0.21.
+    ///
+    /// This is an untrusted default: the provider and user decide the actual
+    /// grant lifetime. The default implementation ignores it.
+    fn set_requested_authorization_duration(&self, _duration: Option<std::time::Duration>) {}
+
     /// Records structured context about the software integration invoking
     /// SecretSpec, such as `git` performing `credential_get` for `github.com`.
     ///
@@ -445,6 +531,16 @@ pub trait Provider: Send + Sync {
     ///
     /// Available since SecretSpec 0.20.
     fn set_caller(&self, _caller: Option<crate::CallerContext>) {}
+
+    /// Records the declared project for this provider session. Available
+    /// starting with SecretSpec 0.21.
+    ///
+    /// This is resolver-declared context for provider policy, audit, and
+    /// approval surfaces. It is not an authenticated application identity and
+    /// must not be used as one. Convention addresses carry the same project;
+    /// native addresses need this session context because their coordinates do
+    /// not.
+    fn set_project(&self, _project: &str) {}
 
     /// Records the profile this session resolves under. Available starting with
     /// SecretSpec 0.20.
@@ -546,6 +642,39 @@ pub trait Provider: Send + Sync {
     /// listing, a bulk API) should override this to cut round-trips further.
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         get_each(self, requests)
+    }
+
+    /// Batch form of [`get_with_metadata`](Provider::get_with_metadata).
+    ///
+    /// Existing providers retain their optimized `get_many` implementation and
+    /// report unknown expiry and revision. A provider with either kind of metadata must
+    /// override this method as well as the single-value form.
+    fn get_many_with_metadata(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, ProviderValue>> {
+        self.get_many(requests).map(|values| {
+            values
+                .into_iter()
+                .map(|(name, value)| (name, ProviderValue::new(value, None)))
+                .collect()
+        })
+    }
+
+    /// Tests a batch of addressed secrets for presence, returning the request
+    /// names that exist.
+    ///
+    /// Available starting with SecretSpec 0.21. Readable providers reuse their
+    /// batch read surface. Write-only providers use bounded concurrent
+    /// [`exists`](Provider::exists) calls unless they override this with a native
+    /// listing operation.
+    fn exists_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashSet<String>> {
+        if self.supports_read() {
+            return self
+                .get_many(requests)
+                .map(|values| values.into_keys().collect());
+        }
+        exists_each(self, requests)
     }
 }
 
@@ -653,16 +782,42 @@ pub(crate) fn get_each<P: Provider + ?Sized>(
     get_each_with(requests, |addr| provider.get(addr))
 }
 
+/// Bounded, deduplicating fallback for write-only providers that expose only a
+/// single-address presence operation.
+pub(crate) fn exists_each<P: Provider + ?Sized>(
+    provider: &P,
+    requests: &[(&str, Address<'_>)],
+) -> Result<HashSet<String>> {
+    let mut groups: HashMap<Address<'_>, Vec<&str>> = HashMap::new();
+    for (name, addr) in requests {
+        groups.entry(*addr).or_default().push(name);
+    }
+    let groups: Vec<(Address<'_>, Vec<&str>)> = groups.into_iter().collect();
+    let checked: Vec<(Vec<&str>, Result<bool>)> =
+        map_concurrently(&groups, get_each_concurrency(), |(addr, names)| {
+            (names.clone(), provider.exists(*addr))
+        });
+
+    let mut present = HashSet::new();
+    for (names, result) in checked {
+        if result? {
+            present.extend(names.into_iter().map(str::to_string));
+        }
+    }
+    Ok(present)
+}
+
 /// [`get_each`] with an operation-scoped fetch function.
 ///
 /// Providers can use this when the per-address reads need to share state that
 /// belongs to exactly one `get_many` call, such as a short-lived login token.
-pub(crate) fn get_each_with<'a, F>(
+pub(crate) fn get_each_with<'a, F, T>(
     requests: &[(&str, Address<'a>)],
     fetch: F,
-) -> Result<HashMap<String, SecretBytes>>
+) -> Result<HashMap<String, T>>
 where
-    F: Fn(Address<'a>) -> Result<Option<SecretBytes>> + Sync,
+    F: Fn(Address<'a>) -> Result<Option<T>> + Sync,
+    T: Clone + Send,
 {
     let mut groups: HashMap<Address<'_>, Vec<&str>> = HashMap::new();
     for (name, addr) in requests {
@@ -676,7 +831,7 @@ where
     // One address is the common case (a single secret, or several sharing a
     // `ref`); `map_concurrently` keeps it on this thread. Larger sets fan out in
     // capped waves so they do not stampede a provider.
-    let fetched: Vec<(Vec<&str>, Result<Option<SecretBytes>>)> =
+    let fetched: Vec<(Vec<&str>, Result<Option<T>>)> =
         map_concurrently(&groups, get_each_concurrency(), |(addr, names)| {
             (names.clone(), fetch(*addr))
         });
@@ -699,6 +854,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn supported_coords(&self) -> &'static [&'static str] {
         (**self).supported_coords()
     }
+    fn supports_coord(&self, name: &str) -> bool {
+        (**self).supports_coord(name)
+    }
     fn resolve_coords<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
         (**self).resolve_coords(addr)
     }
@@ -707,6 +865,15 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     }
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         (**self).get(addr)
+    }
+    fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<ProviderValue>> {
+        (**self).get_with_metadata(addr)
+    }
+    fn supports_read(&self) -> bool {
+        (**self).supports_read()
+    }
+    fn exists(&self, addr: Address<'_>) -> Result<bool> {
+        (**self).exists(addr)
     }
     fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         (**self).set(addr, value)
@@ -743,7 +910,7 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn auth_scope_key(&self) -> Option<String> {
         (**self).auth_scope_key()
     }
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         (**self).name()
     }
     fn uri(&self) -> String {
@@ -772,8 +939,14 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn set_reason(&self, reason: Option<String>) {
         (**self).set_reason(reason);
     }
+    fn set_requested_authorization_duration(&self, duration: Option<std::time::Duration>) {
+        (**self).set_requested_authorization_duration(duration);
+    }
     fn set_caller(&self, caller: Option<crate::CallerContext>) {
         (**self).set_caller(caller);
+    }
+    fn set_project(&self, project: &str) {
+        (**self).set_project(project);
     }
     fn set_profile(&self, profile: &str) {
         (**self).set_profile(profile);
@@ -783,5 +956,14 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     }
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         (**self).get_many(requests)
+    }
+    fn get_many_with_metadata(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, ProviderValue>> {
+        (**self).get_many_with_metadata(requests)
+    }
+    fn exists_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashSet<String>> {
+        (**self).exists_many(requests)
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Minimal C smoke test for the SecretSpec C ABI. Proves the cdylib links, the
+ * Minimal C smoke test for libsecretspec. Proves the cdylib links, the
  * three entry points are callable from C, and the malloc/free roundtrip works.
  * Run by the ffi-build workflow against the freshly built library.
  */

@@ -371,7 +371,7 @@ impl Provider for FileProvider {
         true
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 

@@ -226,6 +226,7 @@ impl ResolverHandler for ResolverHandlerImpl {
                 source_provider,
                 expires_at_unix_ms,
                 refresh_at_unix_ms,
+                revision,
                 supporting_files,
             } => {
                 if params.representation == Representation::Path {
@@ -241,6 +242,7 @@ impl ResolverHandler for ResolverHandlerImpl {
                     source_provider,
                     expires_at_unix_ms,
                     refresh_at_unix_ms,
+                    revision,
                 }))
             }
             OwnedNamedResolution::File {
@@ -249,6 +251,7 @@ impl ResolverHandler for ResolverHandlerImpl {
                 source_provider,
                 expires_at_unix_ms,
                 refresh_at_unix_ms,
+                revision,
                 supporting_files,
             } => {
                 if params.representation == Representation::Value {
@@ -315,6 +318,7 @@ impl ResolverHandler for ResolverHandlerImpl {
                     source_provider,
                     expires_at_unix_ms,
                     refresh_at_unix_ms,
+                    revision,
                 }))
             }
         }
@@ -789,11 +793,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exact_resolution_and_file_leases_are_session_owned() {
+    async fn revision_resolution_and_file_leases_are_session_owned() {
         let directory = tempfile::tempdir().unwrap();
         let manifest = directory.path().join("secretspec.toml");
-        let dotenv = directory.path().join("values.env");
-        std::fs::write(&dotenv, "TOKEN=inline-value\nCERT=file-value\n").unwrap();
+        use crate::provider::{Address, Provider, tests::RevisionTestProvider};
+        for (name, value) in [("TOKEN", "inline-value"), ("CERT", "file-value")] {
+            RevisionTestProvider
+                .set(
+                    Address::convention("ipc-test", "default", name),
+                    &SecretBytes::from_utf8(value),
+                )
+                .unwrap();
+        }
         std::fs::write(
             &manifest,
             r#"
@@ -835,7 +846,7 @@ UNRELATED = { description = "must not fail named resolution", required = true }
                 manifest: Manifest::Path {
                     path: manifest.to_string_lossy().into_owned(),
                 },
-                provider: Some(format!("dotenv:{}", dotenv.display())),
+                provider: Some("revisiontest://".into()),
                 profile: Some("default".to_string()),
                 scope: None,
                 reason: None,
@@ -874,6 +885,35 @@ UNRELATED = { description = "must not fail named resolution", required = true }
             GetResult::Value(ResolvedValueResult { ref value, .. }) if value == "inline-value"
         ));
 
+        let GetResult::Value(ref retained) = value else {
+            panic!("expected inline result")
+        };
+        assert!(retained.revision.is_some());
+        RevisionTestProvider
+            .set(
+                Address::convention("ipc-test", "default", "TOKEN"),
+                &SecretBytes::from_utf8("rotated-value"),
+            )
+            .unwrap();
+        let rotated = client
+            .call(
+                method::GET,
+                &GetParams {
+                    name: "TOKEN".into(),
+                    representation: Representation::Value,
+                    purpose: purpose.clone(),
+                },
+                deadline(),
+            )
+            .await
+            .unwrap();
+        let GetResult::Value(rotated) = rotated else {
+            panic!("expected inline result")
+        };
+        assert_eq!(rotated.value, "rotated-value");
+        assert_ne!(retained.revision, rotated.revision);
+        assert_eq!(retained.value, "inline-value");
+
         let file = client
             .call(
                 method::GET,
@@ -890,6 +930,7 @@ UNRELATED = { description = "must not fail named resolution", required = true }
             panic!("expected file result")
         };
         assert_eq!(std::fs::read_to_string(&file.path).unwrap(), "file-value");
+        assert!(file.revision.is_some());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

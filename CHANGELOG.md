@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- IPC resolution exposes optional non-secret revision tokens for downstream task
+  cache invalidation (0.21+). AWS Secrets Manager reports value-bound revisions,
+  preserved through SecretSpec caches and field extraction.
+
 - IPC resolution preserves binary secret values through caches and file leases,
   while text protocol fields report explicit UTF-8 errors (0.21+).
 

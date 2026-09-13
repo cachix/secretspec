@@ -481,6 +481,31 @@ freshness. Providers such as passive keyrings usually return null. Providers
 backed by expiring tokens, leases, certificates, or similar credentials should
 return the bound they can authoritatively establish.
 
+### Secret revisions
+
+<VersionCompatibility version="0.21" />
+
+A found result may include `revision`, an opaque string identifying the identity
+and generation of the exact provider bytes returned, including provider-side
+field selection. The same field is supported on each found `provider.get_many`
+entry. Absent or null means unknown; neither is a reusable equality token.
+
+Tokens contain 1–256 ASCII letters, digits, `.`, `_`, `:`, or `-`. They must be
+stable across clients observing the same provider state. Equal tokens must imply
+equal bytes within the provider's identity contract; different tokens may still
+identify equal bytes. Include backend/resource identity and account for resource
+recreation. A bare version counter or a mutable label is insufficient.
+
+Only non-secret identity/version metadata may contribute to a revision. Never
+use secret digests, credentials, lease handles, session IDs, or cache timestamps.
+Return metadata from the same read as the value, never a separate latest-version
+lookup. Syntax validation cannot prove a provider honored this contract.
+
+These are optional result fields: old peers ignore them and new peers accept
+responses without them. Neither a new protocol version nor a capability flag is
+required. A write that does not return value-bound metadata leaves the new
+cached revision unknown until an authoritative read supplies it.
+
 ### `provider.get_many`
 
 Batch reads carry names only as correlation keys. Each address retains its

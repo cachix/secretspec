@@ -198,7 +198,7 @@ fn fixture_schema<'a>(role: &str, path: &Path, envelope: &'a Value) -> (&'static
             "https://secretspec.dev/schema/ipc/v1/resolver.schema.json#/$defs/GetParams",
             &envelope["params"],
         ),
-        ("resolver", "get-value-result.json") => (
+        ("resolver", "get-value-result.json" | "get-revision-result.json") => (
             "https://secretspec.dev/schema/ipc/v1/resolver.schema.json#/$defs/GetResult",
             &envelope["result"],
         ),
@@ -246,7 +246,7 @@ fn fixture_schema<'a>(role: &str, path: &Path, envelope: &'a Value) -> (&'static
             "https://secretspec.dev/schema/ipc/v1/provider.schema.json#/$defs/AddressParams",
             &envelope["params"],
         ),
-        ("provider", "get-result.json") => (
+        ("provider", "get-result.json" | "get-revision-result.json") => (
             "https://secretspec.dev/schema/ipc/v1/provider.schema.json#/$defs/GetResult",
             &envelope["result"],
         ),

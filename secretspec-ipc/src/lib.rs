@@ -10,6 +10,7 @@ pub mod frame;
 pub mod jsonrpc;
 pub mod launch;
 pub mod protocol;
+pub mod revision;
 
 #[cfg(feature = "tokio")]
 mod description;
@@ -34,6 +35,7 @@ pub use error::{
 };
 pub use jsonrpc::{Envelope, Notification, Request, RequestId, Response};
 pub use protocol::{Limits, Product};
+pub use revision::Revision;
 
 /// Wire protocol major version implemented by this crate.
 pub const WIRE_VERSION: u32 = 1;

@@ -99,7 +99,11 @@ impl ProviderHandler for MemoryProvider {
             .unwrap()
             .get(&key(address))
             .cloned()
-            .map(|value| ProvidedSecret::new(value, None)))
+            .map(|value| {
+                ProvidedSecret::new(value, None).with_revision(Some(
+                    secretspec_ipc::Revision::new("test:version-1".into()).unwrap(),
+                ))
+            }))
     }
 
     async fn exists(&self, _context: RequestContext, address: Address) -> RpcResult<bool> {
@@ -294,6 +298,7 @@ async fn typed_provider_handler_covers_naming_reads_mutations_and_reflection() {
         GetResult::Found {
             value: "canary-value".into(),
             expires_at_unix_ms: None,
+            revision: Some(secretspec_ipc::Revision::new("test:version-1".into()).unwrap()),
         }
     );
     let reflected: ReflectResult = client

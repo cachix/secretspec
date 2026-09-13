@@ -2856,3 +2856,77 @@ fn providers_do_not_support_deletion_unless_they_say_so() {
     assert!(!CountingProvider::new(&[]).supports_delete());
     assert!(DeletingProvider.supports_delete());
 }
+
+/// Atomic value/generation storage for resolver revision tests. The generation
+/// is independent of bytes, including when the same bytes are written again.
+static REVISION_STORE: std::sync::LazyLock<Mutex<HashMap<String, crate::ProviderValue>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static REVISION_GENERATION: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) struct RevisionTestProvider;
+impl RevisionTestProvider {
+    fn new(_: MemTestConfig) -> Self {
+        Self
+    }
+}
+crate::register_provider! {
+    struct: RevisionTestProvider,
+    config: MemTestConfig,
+    name: "revisiontest",
+    description: "Versioned in-memory test provider",
+    schemes: ["revisiontest"],
+    examples: ["revisiontest://"],
+    credential_names: [],
+    deletes: true,
+}
+impl Provider for RevisionTestProvider {
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        MemTestProvider.convention_address(project, profile, key)
+    }
+    fn name(&self) -> &str {
+        Self::PROVIDER_NAME
+    }
+    fn uri(&self) -> String {
+        "revisiontest://".into()
+    }
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
+        self.get_with_metadata(addr).map(|v| v.map(|v| v.value))
+    }
+    fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<crate::ProviderValue>> {
+        Ok(REVISION_STORE
+            .lock()
+            .unwrap()
+            .get(super::flat_item(self, addr)?.as_ref())
+            .cloned())
+    }
+    fn get_many_with_metadata(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, crate::ProviderValue>> {
+        super::get_each_with(requests, |addr| self.get_with_metadata(addr))
+    }
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        let item = super::flat_item(self, addr)?.into_owned();
+        let mut store = REVISION_STORE.lock().unwrap();
+        let generation = REVISION_GENERATION.fetch_add(1, Ordering::SeqCst);
+        let revision =
+            crate::revision::digest("test-generation", &[&item, &generation.to_string()]);
+        store.insert(
+            item,
+            crate::ProviderValue::new(value.clone(), None).with_revision(Some(revision)),
+        );
+        Ok(())
+    }
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        Ok(REVISION_STORE
+            .lock()
+            .unwrap()
+            .remove(super::flat_item(self, addr)?.as_ref())
+            .is_some())
+    }
+}

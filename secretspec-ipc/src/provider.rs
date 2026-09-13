@@ -49,6 +49,7 @@ impl SecretValue {
 pub struct ProvidedSecret {
     value: SecretValue,
     expires_at_unix_ms: Option<u64>,
+    revision: Option<crate::Revision>,
 }
 
 impl ProvidedSecret {
@@ -56,6 +57,7 @@ impl ProvidedSecret {
         Self {
             value: SecretValue::new(value),
             expires_at_unix_ms,
+            revision: None,
         }
     }
 
@@ -67,8 +69,22 @@ impl ProvidedSecret {
         self.expires_at_unix_ms
     }
 
-    fn into_parts(self) -> (String, Option<u64>) {
-        (self.value.into_string(), self.expires_at_unix_ms)
+    /// Attach non-secret identity/version metadata from the same read (0.21+).
+    pub fn with_revision(mut self, revision: Option<crate::Revision>) -> Self {
+        self.revision = revision;
+        self
+    }
+
+    pub fn revision(&self) -> Option<&crate::Revision> {
+        self.revision.as_ref()
+    }
+
+    fn into_parts(self) -> (String, Option<u64>, Option<crate::Revision>) {
+        (
+            self.value.into_string(),
+            self.expires_at_unix_ms,
+            self.revision,
+        )
     }
 }
 
@@ -296,10 +312,11 @@ impl<H: ProviderHandler> ApplicationHandler for ProviderApplication<H> {
                 let params = self.address_params(params)?;
                 let result = match self.handler.get(context, params.address).await? {
                     Some(value) => {
-                        let (value, expires_at_unix_ms) = value.into_parts();
+                        let (value, expires_at_unix_ms, revision) = value.into_parts();
                         GetResult::Found {
                             value,
                             expires_at_unix_ms,
+                            revision,
                         }
                     }
                     None => GetResult::Missing,

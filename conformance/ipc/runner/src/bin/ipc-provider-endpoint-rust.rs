@@ -40,6 +40,7 @@ struct StoredValue {
     value: String,
     storage_expires_at: Option<Instant>,
     secret_expires_at_unix_ms: Option<u64>,
+    revision: Option<secretspec_ipc::Revision>,
 }
 
 #[derive(Default)]
@@ -68,7 +69,10 @@ impl MemoryProvider {
         }
     }
 
-    fn read(values: &mut HashMap<String, StoredValue>, key: &str) -> Option<(String, Option<u64>)> {
+    fn read(
+        values: &mut HashMap<String, StoredValue>,
+        key: &str,
+    ) -> Option<(String, Option<u64>, Option<secretspec_ipc::Revision>)> {
         let now_unix_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .ok()
@@ -85,9 +89,13 @@ impl MemoryProvider {
             values.remove(key);
             return None;
         }
-        values
-            .get(key)
-            .map(|entry| (entry.value.clone(), entry.secret_expires_at_unix_ms))
+        values.get(key).map(|entry| {
+            (
+                entry.value.clone(),
+                entry.secret_expires_at_unix_ms,
+                entry.revision.clone(),
+            )
+        })
     }
 
     fn maybe_crash(&self) {
@@ -198,8 +206,11 @@ impl ProviderHandler for MemoryProvider {
             return Err(error);
         }
         self.maybe_crash();
-        Ok(Self::read(&mut self.values.lock().unwrap(), &key)
-            .map(|(value, expires_at)| ProvidedSecret::new(value, expires_at)))
+        Ok(Self::read(&mut self.values.lock().unwrap(), &key).map(
+            |(value, expires_at, revision)| {
+                ProvidedSecret::new(value, expires_at).with_revision(revision)
+            },
+        ))
     }
 
     async fn get_many(
@@ -216,9 +227,10 @@ impl ProviderHandler for MemoryProvider {
                 .map(|request| NamedGetResult {
                     name: request.name,
                     outcome: match Self::read(&mut values, &Self::key(&request.address)) {
-                        Some((value, expires_at_unix_ms)) => wire::GetResult::Found {
+                        Some((value, expires_at_unix_ms, revision)) => wire::GetResult::Found {
                             value,
                             expires_at_unix_ms,
+                            revision,
                         },
                         None => wire::GetResult::Missing,
                     },
@@ -252,12 +264,25 @@ impl ProviderHandler for MemoryProvider {
                     .and_then(|now| now.checked_add(60_000))
             })
             .flatten();
+        // Only this fixture reports revisions; ordinary entries exercise old
+        // endpoints that have no generation metadata. The nonce is test state,
+        // never derived from the canary value.
+        static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let revision = secret_expires_at_unix_ms.map(|_| {
+            secretspec_ipc::Revision::new(format!(
+                "fixture:{}:{}",
+                std::process::id(),
+                GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ))
+            .unwrap()
+        });
         self.values.lock().unwrap().insert(
             key,
             StoredValue {
                 value: value.expose().to_string(),
                 storage_expires_at: None,
                 secret_expires_at_unix_ms,
+                revision,
             },
         );
         Ok(())
@@ -276,6 +301,7 @@ impl ProviderHandler for MemoryProvider {
                 value: value.expose().to_string(),
                 storage_expires_at: Some(Instant::now() + Duration::from_millis(ttl_ms)),
                 secret_expires_at_unix_ms: None,
+                revision: None,
             },
         );
         Ok(())

@@ -35,6 +35,8 @@ pub struct ValidatedSecrets {
     /// Absolute time after which the resolver will not serve its cached copy.
     #[doc(hidden)]
     pub(crate) refreshes: HashMap<String, u64>,
+    /// Effective revisions of provider-backed logical bytes (0.21+).
+    pub(crate) revisions: HashMap<String, secretspec_ipc::Revision>,
 }
 
 impl ValidatedSecrets {

@@ -301,8 +301,9 @@ fn cached_entry(
             value,
             refresh_at_unix_ms,
             expires_at_unix_ms,
+            revision,
         }) => CachedEntry::Fresh {
-            value: ProviderValue::new(value, expires_at_unix_ms),
+            value: ProviderValue::new(value, expires_at_unix_ms).with_revision(revision),
             refresh_at_unix_ms,
         },
         Ok(CacheEntryStatus::Stale) => CachedEntry::Stale,
@@ -1206,6 +1207,7 @@ struct ResolutionExecution<'secrets, 'plan, 'filter, 'addresses> {
     fetched_values: HashMap<String, ProviderValue>,
     secret_expiries: HashMap<String, u64>,
     refreshes: HashMap<String, u64>,
+    revisions: HashMap<String, secretspec_ipc::Revision>,
     failed_primary_uris: HashMap<Option<&'plan str>, SecretSpecError>,
     cached_uris: HashMap<String, String>,
     fallback_results: HashMap<String, FallbackReadResult>,
@@ -1237,6 +1239,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             fetched_values: HashMap::new(),
             secret_expiries: HashMap::new(),
             refreshes: HashMap::new(),
+            revisions: HashMap::new(),
             failed_primary_uris: HashMap::new(),
             cached_uris: HashMap::new(),
             fallback_results: HashMap::new(),
@@ -1253,6 +1256,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 temp_files: Vec::new(),
                 secret_expiries: HashMap::new(),
                 refreshes: HashMap::new(),
+                revisions: HashMap::new(),
             }));
         }
 
@@ -1436,6 +1440,11 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                     if let Some(expiry) = value.expires_at_unix_ms {
                         self.secret_expiries.insert(name.clone(), expiry);
                     }
+                    if let Some(revision) =
+                        crate::revision::effective(value.revision.as_ref(), planned)
+                    {
+                        self.revisions.insert(name.clone(), revision);
+                    }
                     let was_cached = self.cached_uris.contains_key(name);
                     source_provider = self
                         .cached_uris
@@ -1450,13 +1459,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                         addresses.insert(name.clone(), native.clone());
                     }
                     if !was_cached && materialize.values() {
-                        manager.write_cached_secret(
-                            planned,
-                            route,
-                            profile,
-                            &value.value,
-                            value.expires_at_unix_ms,
-                        );
+                        manager.write_cached_secret(planned, route, profile, &value);
                     }
                     if materialize.values() {
                         manager.insert_resolved(
@@ -1520,15 +1523,14 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                         if let Some(expiry) = value.expires_at_unix_ms {
                             self.secret_expiries.insert(name.clone(), expiry);
                         }
+                        if let Some(revision) =
+                            crate::revision::effective(value.revision.as_ref(), planned)
+                        {
+                            self.revisions.insert(name.clone(), revision);
+                        }
                         source_provider = fallback_uri;
                         if materialize.values() {
-                            manager.write_cached_secret(
-                                planned,
-                                route,
-                                profile,
-                                &value.value,
-                                value.expires_at_unix_ms,
-                            );
+                            manager.write_cached_secret(planned, route, profile, &value);
                             manager.insert_resolved(
                                 &mut self.values,
                                 &mut self.temp_files,
@@ -1896,6 +1898,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 temp_files: self.temp_files,
                 secret_expiries: self.secret_expiries,
                 refreshes: self.refreshes,
+                revisions: self.revisions,
             }))
         }
     }
@@ -1928,6 +1931,8 @@ pub(crate) enum OwnedNamedResolution<T = String> {
         expires_at_unix_ms: Option<u64>,
         #[cfg_attr(not(feature = "cli"), allow(dead_code))]
         refresh_at_unix_ms: Option<u64>,
+        #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+        revision: Option<secretspec_ipc::Revision>,
         supporting_files: Vec<tempfile::NamedTempFile>,
     },
     File {
@@ -1938,6 +1943,8 @@ pub(crate) enum OwnedNamedResolution<T = String> {
         expires_at_unix_ms: Option<u64>,
         #[cfg_attr(not(feature = "cli"), allow(dead_code))]
         refresh_at_unix_ms: Option<u64>,
+        #[cfg_attr(not(feature = "cli"), allow(dead_code))]
+        revision: Option<secretspec_ipc::Revision>,
         supporting_files: Vec<tempfile::NamedTempFile>,
     },
 }
@@ -4338,8 +4345,7 @@ impl Secrets {
         planned: &PlannedSecret,
         route: &Route,
         profile: &str,
-        value: &SecretBytes,
-        expires_at_unix_ms: Option<u64>,
+        value: &ProviderValue,
     ) {
         let Some(cache) = route.cache() else {
             return;
@@ -4365,7 +4371,6 @@ impl Secrets {
             cache.max_age_secs,
             planned.cache_fingerprint(cache, &self.config.project.name, profile),
             value,
-            expires_at_unix_ms,
         ) {
             Ok(serialized) => serialized,
             Err(error) => {
@@ -4578,7 +4583,12 @@ impl Secrets {
         value: &SecretBytes,
     ) {
         if route.cache().is_some() {
-            self.write_cached_secret(planned, route, profile, value, None);
+            self.write_cached_secret(
+                planned,
+                route,
+                profile,
+                &ProviderValue::new(value.clone(), None),
+            );
             return;
         }
         // Only re-plan when the declared routing could name a cached route at
@@ -6643,6 +6653,7 @@ impl Secrets {
                 let source_provider = entry.source_provider;
                 let expires_at_unix_ms = validated.secret_expiries.remove(name);
                 let refresh_at_unix_ms = validated.refreshes.remove(name);
+                let revision = validated.revisions.remove(name);
                 let mut supporting_files = std::mem::take(&mut validated.temp_files);
                 if entry.as_path {
                     // Every resolution branch materializes an `as_path` value
@@ -6668,6 +6679,7 @@ impl Secrets {
                         source_provider,
                         expires_at_unix_ms,
                         refresh_at_unix_ms,
+                        revision,
                         supporting_files,
                     })
                 } else {
@@ -6677,6 +6689,7 @@ impl Secrets {
                         source_provider,
                         expires_at_unix_ms,
                         refresh_at_unix_ms,
+                        revision,
                         supporting_files,
                     })
                 }

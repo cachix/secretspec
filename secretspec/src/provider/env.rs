@@ -1,6 +1,6 @@
 use super::{Address, Provider, ProviderUrl};
+use crate::SecretBytes;
 use crate::{Result, SecretSpecError};
-use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::env;
 
@@ -162,9 +162,9 @@ impl Provider for EnvProvider {
     /// let value = provider.get(Address::convention("myproject", "production", "MY_SECRET")).unwrap();
     /// assert_eq!(value, Some("value123".to_string()));
     /// ```
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let var = super::flat_item(self, addr)?;
-        Ok(env::var(&*var).ok().map(|v| SecretString::new(v.into())))
+        Ok(env::var_os(&*var).map(|value| SecretBytes::from_vec(value.into_encoded_bytes())))
     }
 
     /// Attempts to set a secret value (always fails).
@@ -193,7 +193,7 @@ impl Provider for EnvProvider {
     /// let result = provider.set(Address::convention("myproject", "production", "MY_SECRET"), "value");
     /// assert!(result.is_err());
     /// ```
-    fn set(&self, addr: Address<'_>, _value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, _value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)
     }
 
@@ -251,5 +251,28 @@ mod tests {
         };
         let err = p.get(Address::Native(&addr)).unwrap_err();
         assert!(err.to_string().contains("`field`"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_value_is_preserved_instead_of_reported_missing() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let _env = crate::tests::scrub_resolution_env();
+        let expected = b"secret-\xff\x80\n";
+        let _value = crate::tests::EnvVarGuard::set(
+            "SECRETSPEC_ENV_BINARY_TEST",
+            std::ffi::OsStr::from_bytes(expected),
+        );
+        let provider = EnvProvider::new(EnvConfig::default());
+        let value = provider
+            .get(Address::convention(
+                "project",
+                "default",
+                "SECRETSPEC_ENV_BINARY_TEST",
+            ))
+            .unwrap()
+            .expect("a non-UTF-8 environment variable is present");
+        assert_eq!(value.expose_secret(), expected);
     }
 }

@@ -7,6 +7,11 @@ import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro
 
 <VersionCompatibility version="0.20" />
 
+In 0.21+, Kubernetes Secret values preserve arbitrary bytes on reads and
+writes. SecretSpec handles the API's base64 representation automatically;
+manifest `encoding` is not needed for binary storage. ConfigMap `data` entries
+remain text and require UTF-8.
+
 The [Kubernetes](https://kubernetes.io/) provider reads from and writes to
 Kubernetes ConfigMaps or Secrets.
 

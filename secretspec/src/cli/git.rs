@@ -456,13 +456,13 @@ fn login(
     )?;
     embedded
         .secrets
-        .set(&embedded.password_secret, None)
+        .prompt_and_set(&embedded.password_secret)
         .into_diagnostic()
         .wrap_err("Failed to store Git password or token")?;
     if let Some(username) = username {
         embedded
             .secrets
-            .set(&embedded.username_secret, Some(username))
+            .set_text(&embedded.username_secret, &username)
             .into_diagnostic()
             .wrap_err("Failed to store Git username")?;
     }

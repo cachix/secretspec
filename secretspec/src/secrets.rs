@@ -1,6 +1,5 @@
 //! Core secrets management functionality
 
-use crate::CallerContext;
 use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome};
 use crate::cache::{self, CacheEntryStatus, CacheOwnership};
 use crate::compiled_spec::{CompiledSpec, MissingPolicy};
@@ -20,11 +19,12 @@ use crate::resolve::{
 };
 use crate::spec::Spec;
 use crate::validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
+use crate::{CallerContext, SecretBytes};
 use colored::Colorize;
 use data_encoding::{
     BASE64, BASE64_NOPAD, BASE64URL, BASE64URL_NOPAD, Encoding, HEXLOWER, HEXLOWER_PERMISSIVE,
 };
-use secrecy::{ExposeSecret, SecretSlice, SecretString};
+use secrecy::ExposeSecret;
 #[cfg(unix)]
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
 #[cfg(unix)]
@@ -207,6 +207,14 @@ fn credential_missing_error(name: &str, alias_spec: &str, location: &str) -> Sec
     ))
 }
 
+fn credential_empty_error(name: &str, alias_spec: &str, location: &str) -> SecretSpecError {
+    SecretSpecError::ProviderOperationFailed(format!(
+        "credential '{name}' for provider '{alias_spec}' resolved to an empty value from \
+         {location}; store a non-empty value with `secretspec config provider login \
+         {alias_spec}` or remove the credential to use the provider's environment fallback"
+    ))
+}
+
 /// An alias's credential entries sorted by semantic name. The one
 /// ordering rule, so fetch order, validation-error order, and the login prompt
 /// order all agree.
@@ -252,7 +260,7 @@ fn group_names(group: &[&PlannedSecret]) -> String {
 /// What a stored cache entry can do for the read that found it.
 enum CachedEntry {
     /// Fresh, and written for this route: serve it.
-    Fresh(SecretString),
+    Fresh(SecretBytes),
     /// A SecretSpec entry no read will serve: expired regardless of owner, or
     /// ours but unreadable or written for another route or freshness policy.
     /// Safe to drop.
@@ -272,7 +280,7 @@ enum CachedEntry {
 fn cached_entry(
     planned: &PlannedSecret,
     cache: &ResolvedCache,
-    stored: &SecretString,
+    stored: &SecretBytes,
     project: &str,
     profile: &str,
 ) -> CachedEntry {
@@ -370,7 +378,7 @@ struct FallbackReadRequest<'a> {
 }
 
 struct FallbackRead {
-    value: Option<SecretString>,
+    value: Option<SecretBytes>,
     provider_uri: Option<String>,
     native_address: Option<NativeAddress>,
 }
@@ -392,8 +400,8 @@ struct PreparedImport {
     target_provider: Box<dyn ProviderTrait>,
     source_address: OwnedAddress,
     target_address: OwnedAddress,
-    source_value: Option<SecretString>,
-    target_value: Option<SecretString>,
+    source_value: Option<SecretBytes>,
+    target_value: Option<SecretBytes>,
     copied: bool,
     source_deleted: bool,
 }
@@ -1026,14 +1034,14 @@ struct ResolutionExecution<'secrets, 'plan, 'filter, 'addresses> {
     materialize: Materialize,
     output_filter: Option<&'filter HashSet<String>>,
     read_addresses: Option<&'addresses mut HashMap<String, NativeAddress>>,
-    values: HashMap<String, SecretString>,
+    values: HashMap<String, SecretBytes>,
     missing_required: Vec<String>,
     missing_optional: Vec<String>,
     with_defaults: Vec<(String, String)>,
     temp_files: Vec<tempfile::NamedTempFile>,
     resolution: Vec<SecretResolution>,
     group_uris: HashMap<Option<&'plan str>, String>,
-    fetched_values: HashMap<String, SecretString>,
+    fetched_values: HashMap<String, SecretBytes>,
     failed_primary_uris: HashMap<Option<&'plan str>, SecretSpecError>,
     cached_uris: HashMap<String, String>,
     fallback_results: HashMap<String, FallbackReadResult>,
@@ -1145,7 +1153,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             (provider_uri, group, provider): GroupFetch<'a>,
             project: &str,
             profile: &str,
-        ) -> (Option<&'a str>, Result<HashMap<String, SecretString>>) {
+        ) -> (Option<&'a str>, Result<HashMap<String, SecretBytes>>) {
             let result = manager.fetch_group(&*provider, provider_uri, &group, project, profile);
             (provider_uri, result)
         }
@@ -1404,7 +1412,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                                         &mut self.temp_files,
                                         planned,
                                         diagnostic_name,
-                                        SecretString::new(default_value.clone().into()),
+                                        SecretBytes::from_utf8(default_value),
                                         ResolvedRepresentation::Logical,
                                     )?;
                                     self.with_defaults
@@ -1497,19 +1505,26 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 .all(|dependency| statuses.get(dependency) == Some(&ResolutionStatus::Resolved));
             let status = if dependencies_resolved {
                 if self.materialize.values() {
-                    let rendered = template
-                        .render(|dependency| {
-                            self.values
-                                .get(dependency)
-                                .map(|value| value.expose_secret())
+                    let inputs = template
+                        .dependencies()
+                        .iter()
+                        .filter_map(|name| self.values.get(name).map(|value| (name, value)))
+                        .map(|(name, value)| {
+                            let diagnostic_name =
+                                Secrets::diagnostic_secret_name(name, self.output_filter);
+                            Self::text_input(diagnostic_name, value)
+                                .map(|text| (name.as_str(), text))
                         })
+                        .collect::<Result<HashMap<_, _>>>()?;
+                    let rendered = template
+                        .render(|dependency| inputs.get(dependency).copied())
                         .map_err(SecretSpecError::CompositionFailed)?;
                     self.manager.insert_resolved(
                         &mut self.values,
                         &mut self.temp_files,
                         planned,
                         Secrets::diagnostic_secret_name(&planned.name, self.output_filter),
-                        SecretString::new(rendered.into()),
+                        SecretBytes::from_utf8(rendered),
                         ResolvedRepresentation::Logical,
                     )?;
                 }
@@ -1543,6 +1558,14 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             });
         }
         Ok(())
+    }
+
+    fn text_input<'a>(name: &str, value: &'a SecretBytes) -> Result<&'a str> {
+        value.try_as_utf8().map_err(|_| {
+            SecretSpecError::CompositionFailed(format!(
+                "dependency '{name}' is not valid UTF-8; declare `as_path = true` to compose its file path"
+            ))
+        })
     }
 
     fn apply_output_filter(&mut self) {
@@ -1668,17 +1691,17 @@ impl<'secrets, 'plan, 'filter, 'addresses>
 }
 
 /// A logical value in the shape exposed to callers. Inline values remain
-/// secret strings; file-shaped values carry their owner so the caller decides
+/// secret bytes; file-shaped values carry their owner so the caller decides
 /// whether cleanup follows the resolved-value lifetime or the path is kept.
 enum PreparedSecret {
-    Inline(SecretString),
+    Inline(SecretBytes),
     File {
         owner: tempfile::NamedTempFile,
         path: String,
     },
 }
 
-/// Whether a resolved string came from a storage boundary and is eligible for
+/// Whether resolved bytes came from a storage boundary and are eligible for
 /// decoding, or is already the logical value produced inside SecretSpec.
 #[derive(Clone, Copy)]
 enum ResolvedRepresentation {
@@ -1791,7 +1814,7 @@ pub(crate) struct WriteTarget {
 }
 
 type WriteTargetReporter = Arc<dyn Fn(&WriteTarget) + Send + Sync>;
-type PromptReader = Arc<dyn Fn(&str, &str) -> Result<SecretString> + Send + Sync>;
+type PromptReader = Arc<dyn Fn(&str, &str) -> Result<SecretBytes> + Send + Sync>;
 
 /// secretspec's own opt-in for marking the current process as an agent. Lets any
 /// harness that the `detect-coding-agent` crate does not recognize identify itself.
@@ -1831,13 +1854,14 @@ where
 /// Unix). Unlike agent detection ([`utf8_env`]), which may safely *drop*
 /// non-UTF-8 entries, `run` must stay transparent: the child inherits every
 /// parent variable untouched, UTF-8 or not. Secrets overwrite same-named vars.
-fn child_env_from<I, S>(
+fn child_env_from<I, S, V>(
     vars: I,
     secrets: S,
 ) -> std::collections::HashMap<std::ffi::OsString, std::ffi::OsString>
 where
     I: IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
-    S: IntoIterator<Item = (String, String)>,
+    S: IntoIterator<Item = (String, V)>,
+    V: Into<std::ffi::OsString>,
 {
     let mut env: std::collections::HashMap<std::ffi::OsString, std::ffi::OsString> =
         vars.into_iter().collect();
@@ -2095,7 +2119,7 @@ impl Secrets {
     #[cfg(test)]
     pub(crate) fn set_prompt_reader(
         &mut self,
-        reader: impl Fn(&str, &str) -> Result<SecretString> + Send + Sync + 'static,
+        reader: impl Fn(&str, &str) -> Result<SecretBytes> + Send + Sync + 'static,
     ) {
         self.prompt_reader = Some(Arc::new(reader));
     }
@@ -2504,7 +2528,18 @@ impl Secrets {
                     entry.insert(self.build_source_provider(&source.provider)?)
                 }
             };
-            let fetched = source_provider.get(source.address(&project, name));
+            // An empty credential cannot authenticate and, if kept, would
+            // shadow the provider's environment fallback, so reject it here
+            // where every provider's credentials are assembled.
+            let fetched =
+                source_provider
+                    .get(source.address(&project, name))
+                    .and_then(|value| match value {
+                        Some(value) if value.expose_secret().is_empty() => Err(
+                            credential_empty_error(name, spec, &source.location(&project, name)),
+                        ),
+                        value => Ok(value),
+                    });
             // Audit the source read (design: every secret access is recorded).
             // The key is the semantic credential name and the event carries a
             // `credential` marker plus the source provider's credential-free
@@ -2584,7 +2619,7 @@ impl Secrets {
         &self,
         source: &CredentialSource,
         name: &str,
-        value: &SecretString,
+        value: &SecretBytes,
     ) -> Result<String> {
         self.ensure_reason_for(AuditAction::Set, Some(name))?;
         // The store location is profile-independent (see `PROVIDER_CREDENTIAL_SCOPE`);
@@ -2864,19 +2899,20 @@ impl Secrets {
         Ok(())
     }
 
-    /// Decode a stored textual representation. Exactly one trailing LF or CRLF
-    /// is ignored to accommodate a value captured from command output; every
-    /// other non-alphabet character remains a hard error.
+    /// Decode a stored representation as strict ASCII base64/base64url/hex.
+    /// Exactly one trailing LF or CRLF is ignored to accommodate a value
+    /// captured from command output or a file; every other non-alphabet byte
+    /// remains a hard error.
     fn decode_stored_value(
         encoding: SecretEncoding,
         diagnostic_name: &str,
-        value: &SecretString,
-    ) -> Result<SecretSlice<u8>> {
-        let encoded = value
-            .expose_secret()
-            .strip_suffix("\r\n")
-            .or_else(|| value.expose_secret().strip_suffix('\n'))
-            .unwrap_or_else(|| value.expose_secret());
+        value: &SecretBytes,
+    ) -> Result<SecretBytes> {
+        let stored = value.expose_secret();
+        let encoded = stored
+            .strip_suffix(b"\r\n")
+            .or_else(|| stored.strip_suffix(b"\n"))
+            .unwrap_or(stored);
 
         fn decode_base(
             encoded: &[u8],
@@ -2894,12 +2930,10 @@ impl Secrets {
         }
 
         let decoded = match encoding {
-            SecretEncoding::Base64 => decode_base(encoded.as_bytes(), &BASE64, &BASE64_NOPAD),
-            SecretEncoding::Base64Url => {
-                decode_base(encoded.as_bytes(), &BASE64URL, &BASE64URL_NOPAD)
-            }
+            SecretEncoding::Base64 => decode_base(encoded, &BASE64, &BASE64_NOPAD),
+            SecretEncoding::Base64Url => decode_base(encoded, &BASE64URL, &BASE64URL_NOPAD),
             SecretEncoding::Hex => HEXLOWER_PERMISSIVE
-                .decode(encoded.as_bytes())
+                .decode(encoded)
                 .map_err(|error| error.to_string()),
         }
         .map_err(|reason| SecretSpecError::DecodeFailed {
@@ -2908,24 +2942,23 @@ impl Secrets {
             reason,
         })?;
 
-        Ok(decoded.into())
+        Ok(SecretBytes::from_vec(decoded))
     }
 
-    /// Encode a logical UTF-8 value into the canonical stored representation
-    /// for its declared encoding.
-    fn encode_logical_value(encoding: SecretEncoding, value: &SecretString) -> SecretString {
-        let bytes = value.expose_secret().as_bytes();
+    /// Encode logical bytes into the canonical stored representation.
+    fn encode_logical_value(encoding: SecretEncoding, value: &SecretBytes) -> SecretBytes {
+        let bytes = value.expose_secret();
         let encoded = match encoding {
             SecretEncoding::Base64 => BASE64.encode(bytes),
             SecretEncoding::Base64Url => BASE64URL_NOPAD.encode(bytes),
             SecretEncoding::Hex => HEXLOWER.encode(bytes),
         };
-        SecretString::new(encoded.into())
+        SecretBytes::from_utf8(encoded)
     }
 
     /// Return an encoded copy only when this secret declares an encoding. The
     /// caller can otherwise pass the original value through without cloning it.
-    fn encoded_for_storage(planned: &PlannedSecret, value: &SecretString) -> Option<SecretString> {
+    fn encoded_for_storage(planned: &PlannedSecret, value: &SecretBytes) -> Option<SecretBytes> {
         planned
             .encoding()
             .map(|encoding| Self::encode_logical_value(encoding, value))
@@ -2934,26 +2967,15 @@ impl Secrets {
     /// Validate a stored value before import copies it into another provider.
     /// Import moves the stored representation verbatim, so an invalid encoded
     /// source must fail before any target write (and especially before source
-    /// cleanup) instead of creating an unreadable destination.
+    /// cleanup). Logical bytes need not be UTF-8: text constraints belong to
+    /// consumers, independently of whether the declaration uses `as_path`.
     fn validate_import_value(
         planned: &PlannedSecret,
         diagnostic_name: &str,
-        value: &SecretString,
+        value: &SecretBytes,
     ) -> Result<()> {
-        let Some(encoding) = planned.encoding() else {
-            return Ok(());
-        };
-        let decoded = Self::decode_stored_value(encoding, diagnostic_name, value)?;
-        if !planned.as_path() {
-            std::str::from_utf8(decoded.expose_secret()).map_err(|error| {
-                SecretSpecError::DecodeFailed {
-                    name: diagnostic_name.to_string(),
-                    encoding: encoding.as_str(),
-                    reason: format!(
-                        "decoded bytes are not valid UTF-8 ({error}); set `as_path = true` to expose binary data"
-                    ),
-                }
-            })?;
+        if let Some(encoding) = planned.encoding() {
+            Self::decode_stored_value(encoding, diagnostic_name, value)?;
         }
         Ok(())
     }
@@ -2965,7 +2987,7 @@ impl Secrets {
         extract: &SecretExtract,
         diagnostic_name: &str,
         value: &str,
-    ) -> Result<SecretString> {
+    ) -> Result<SecretBytes> {
         let failed = |reason: String| SecretSpecError::DecodeFailed {
             name: diagnostic_name.to_string(),
             encoding: extract.format.as_str(),
@@ -2986,26 +3008,28 @@ impl Secrets {
                 // pointer and reports what the document holds, unlike a
                 // provider `field`, where a null means "not set" and the chain
                 // continues. See crate::json_field.
-                Ok(crate::json_field::render(selected))
+                Ok(SecretBytes::from_utf8(
+                    crate::json_field::render(selected).expose_secret(),
+                ))
             }
             // The pointer grammar and the lookup that follows it live together
             // in crate::ini_field, next to the validation that rejects every
             // other shape at config time.
             ExtractFormat::Ini => crate::ini_field::select(value, &extract.pointer)
-                .map(|selected| SecretString::new(selected.into()))
+                .map(SecretBytes::from_utf8)
                 .map_err(failed),
         }
     }
 
     /// Decode and extract a stored representation independently of its exposure
-    /// shape, then either return UTF-8 text or materialize the bytes to an
+    /// shape, then either return bytes or materialize the bytes to an
     /// owner-only file. Extraction follows decoding and applies only across a
     /// storage boundary; defaults and generated values are already logical.
     fn prepare_resolved(
         &self,
         planned: &PlannedSecret,
         diagnostic_name: &str,
-        value: SecretString,
+        value: SecretBytes,
         representation: ResolvedRepresentation,
     ) -> Result<PreparedSecret> {
         let decoded = match (representation, planned.encoding()) {
@@ -3020,7 +3044,7 @@ impl Secrets {
             (ResolvedRepresentation::Stored, Some(extract)) => {
                 let text = match &decoded {
                     Some((encoding, decoded)) => {
-                        std::str::from_utf8(decoded.expose_secret()).map_err(|error| {
+                        decoded.try_as_utf8().map_err(|error| {
                             SecretSpecError::DecodeFailed {
                                 name: diagnostic_name.to_string(),
                                 encoding: encoding.as_str(),
@@ -3031,7 +3055,16 @@ impl Secrets {
                             }
                         })?
                     }
-                    None => value.expose_secret(),
+                    None => value.try_as_utf8().map_err(|error| {
+                        SecretSpecError::DecodeFailed {
+                            name: diagnostic_name.to_string(),
+                            encoding: extract.format.as_str(),
+                            reason: format!(
+                                "stored bytes are not valid UTF-8 and cannot be extracted as {} ({error})",
+                                extract.format.as_str()
+                            ),
+                        }
+                    })?,
                 };
                 Some(Self::extract_stored_value(extract, diagnostic_name, text)?)
             }
@@ -3041,28 +3074,17 @@ impl Secrets {
         if planned.as_path() {
             let bytes = extracted
                 .as_ref()
-                .map(|value| value.expose_secret().as_bytes())
+                .map(|value| value.expose_secret())
                 .or_else(|| decoded.as_ref().map(|(_, decoded)| decoded.expose_secret()))
-                .unwrap_or_else(|| value.expose_secret().as_bytes());
+                .unwrap_or_else(|| value.expose_secret());
             let (owner, path) = self.write_secret_to_temp_file(bytes)?;
             Ok(PreparedSecret::File { owner, path })
-        } else if let Some(extracted) = extracted {
-            Ok(PreparedSecret::Inline(extracted))
-        } else if let Some((encoding, decoded)) = decoded {
-            let text = std::str::from_utf8(decoded.expose_secret()).map_err(|error| {
-                SecretSpecError::DecodeFailed {
-                    name: diagnostic_name.to_string(),
-                    encoding: encoding.as_str(),
-                    reason: format!(
-                        "decoded bytes are not valid UTF-8 ({error}); set `as_path = true` to expose binary data"
-                    ),
-                }
-            })?;
-            Ok(PreparedSecret::Inline(SecretString::new(
-                text.to_owned().into(),
-            )))
         } else {
-            Ok(PreparedSecret::Inline(value))
+            Ok(PreparedSecret::Inline(
+                extracted
+                    .or_else(|| decoded.map(|(_, value)| value))
+                    .unwrap_or(value),
+            ))
         }
     }
 
@@ -3073,11 +3095,11 @@ impl Secrets {
     /// every resolution branch so stored-value transforms cannot drift.
     fn insert_resolved(
         &self,
-        secrets: &mut HashMap<String, SecretString>,
+        secrets: &mut HashMap<String, SecretBytes>,
         temp_files: &mut Vec<tempfile::NamedTempFile>,
         planned: &PlannedSecret,
         diagnostic_name: &str,
-        value: SecretString,
+        value: SecretBytes,
         representation: ResolvedRepresentation,
     ) -> Result<()> {
         match self.prepare_resolved(planned, diagnostic_name, value, representation)? {
@@ -3086,7 +3108,7 @@ impl Secrets {
             }
             PreparedSecret::File { owner, path } => {
                 temp_files.push(owner);
-                secrets.insert(planned.name.clone(), SecretString::new(path.into()));
+                secrets.insert(planned.name.clone(), SecretBytes::from_utf8(path));
             }
         }
         Ok(())
@@ -3542,7 +3564,7 @@ impl Secrets {
         group: &[&PlannedSecret],
         project: &str,
         profile: &str,
-    ) -> Result<HashMap<String, SecretString>> {
+    ) -> Result<HashMap<String, SecretBytes>> {
         let addresses = group
             .iter()
             .map(|planned| self.address_for_spec(planned, provider_spec, project, profile))
@@ -3568,7 +3590,7 @@ impl Secrets {
         &self,
         plan: &ResolutionPlan,
         profile: &str,
-    ) -> HashMap<String, (SecretString, String)> {
+    ) -> HashMap<String, (SecretBytes, String)> {
         // Grouped by cache spec (not URI) so an alias's `credentials` stays
         // reachable at build time, and sorted so warnings come out in a stable
         // order.
@@ -3649,7 +3671,7 @@ impl Secrets {
         planned: &PlannedSecret,
         route: &Route,
         profile: &str,
-        value: &SecretString,
+        value: &SecretBytes,
     ) {
         let Some(cache) = route.cache() else {
             return;
@@ -3884,7 +3906,7 @@ impl Secrets {
         planned: &PlannedSecret,
         route: &Route,
         profile: &str,
-        value: &SecretString,
+        value: &SecretBytes,
     ) {
         if route.cache().is_some() {
             self.write_cached_secret(planned, route, profile, value);
@@ -4292,17 +4314,13 @@ impl Secrets {
         Ok(cleared)
     }
 
-    /// Sets a secret value in the provider
-    ///
-    /// If no value is provided, the user will be prompted to enter it securely.
+    /// Sets arbitrary secret bytes in the provider. Available starting with
+    /// SecretSpec 0.21.
     ///
     /// # Arguments
     ///
     /// * `name` - The name of the secret to set
-    /// * `value` - Optional value to set (prompts if None)
-    /// * `provider_arg` - Optional provider to use
-    /// * `profile` - Optional profile to use
-    ///
+    /// * `value` - Arbitrary bytes to set
     /// # Returns
     ///
     /// `Ok(())` if the secret was successfully set
@@ -4317,12 +4335,61 @@ impl Secrets {
     /// # Example
     ///
     /// ```no_run
-    /// use secretspec::Secrets;
+    /// use secretspec::{SecretBytes, Secrets};
     ///
-    /// let mut spec = Secrets::load().unwrap();
-    /// spec.set("DATABASE_URL", Some("postgres://localhost".to_string())).unwrap();
+    /// let spec = Secrets::load().unwrap();
+    /// spec.set("DATABASE_URL", SecretBytes::from_utf8("postgres://localhost"))
+    ///     .unwrap();
     /// ```
-    pub fn set(&self, name: &str, value: Option<String>) -> Result<()> {
+    pub fn set(&self, name: &str, value: SecretBytes) -> Result<()> {
+        self.set_with_input(name, |_| Ok(value))
+    }
+
+    /// Stores a UTF-8 secret value. Available starting with SecretSpec 0.21.
+    pub fn set_text(&self, name: &str, value: &str) -> Result<()> {
+        self.set(name, SecretBytes::from_utf8(value))
+    }
+
+    /// Prompts for a textual secret value and stores it. Available starting
+    /// with SecretSpec 0.21.
+    ///
+    /// When stdin is not a terminal the value is read from it as text with
+    /// surrounding whitespace trimmed, so `echo value | secretspec set NAME`
+    /// stores `value`. Use [`Self::set`] or `secretspec set --from-file` to
+    /// store exact bytes.
+    pub fn prompt_and_set(&self, name: &str) -> Result<()> {
+        self.set_with_input(name, |profile_name| {
+            if io::stdin().is_terminal() {
+                let secret = inquire::Password::new(&format!(
+                    "Enter value for {name} (profile: {profile_name}):"
+                ))
+                .without_confirmation()
+                .prompt()?;
+                Ok(SecretBytes::from_utf8(secret))
+            } else {
+                // Read from stdin when input is piped
+                let mut buffer = Vec::new();
+                io::stdin().read_to_end(&mut buffer)?;
+                let text = SecretBytes::from_vec(buffer);
+                let text =
+                    text.try_as_utf8_for(name)
+                        .map_err(|_| SecretSpecError::SecretNotText {
+                            name: name.to_string(),
+                            reason: "piped input is not valid UTF-8; use `--from-file -` to store \
+                                 exact bytes"
+                                .to_string(),
+                        })?;
+                Ok(SecretBytes::from_utf8(text.trim()))
+            }
+        })
+    }
+
+    /// Requests the value only after validating and reporting the write destination.
+    pub(crate) fn set_with_input(
+        &self,
+        name: &str,
+        input: impl FnOnce(&str) -> Result<SecretBytes>,
+    ) -> Result<()> {
         self.ensure_reason_for(AuditAction::Set, Some(name))?;
         // Check if the secret exists in the spec
         let profile_name = self.resolve_profile_name(None);
@@ -4411,20 +4478,22 @@ impl Secrets {
             return Err(err);
         }
 
-        let value = if let Some(v) = value {
-            SecretString::new(v.into())
-        } else if io::stdin().is_terminal() {
-            let secret = inquire::Password::new(&format!(
-                "Enter value for {name} (profile: {profile_name}):"
-            ))
-            .without_confirmation()
-            .prompt()?;
-            SecretString::new(secret.into())
-        } else {
-            // Read from stdin when input is piped
-            let mut buffer = String::new();
-            io::stdin().read_to_string(&mut buffer)?;
-            SecretString::new(buffer.trim().to_string().into())
+        // Reading the value (a file, stdin, or a prompt) can fail after the
+        // destination was already previewed; the audit trail must close that
+        // attempt like every other failure here does.
+        let value = match input(&profile_name) {
+            Ok(value) => value,
+            Err(err) => {
+                self.record_key_error(
+                    AuditAction::Set,
+                    &profile_name,
+                    name,
+                    Some(backend.uri()),
+                    None,
+                    &err,
+                );
+                return Err(err);
+            }
         };
 
         if value.expose_secret().is_empty() {
@@ -4557,7 +4626,10 @@ impl Secrets {
     /// value from the manifest's `default`, a `generate` config, or a
     /// composition prints like any other.
     ///
-    /// Library callers want [`Self::resolve_named`], which returns the value
+    /// Since 0.21, inline values are written verbatim without a trailing newline.
+    /// A materialized path is still followed by a newline.
+    ///
+    /// Library callers can use [`Self::resolve_named_bytes`], which returns the value
     /// instead of printing it and distinguishes an undeclared name from a
     /// declared secret with no value.
     ///
@@ -4567,19 +4639,36 @@ impl Secrets {
     /// active profile and scope, or is declared but produced no value. Provider
     /// and configuration failures surface as their own errors.
     pub fn get(&self, name: &str) -> Result<()> {
+        let stdout = io::stdout();
+        let interactive = stdout.is_terminal();
+        self.get_to(name, &mut stdout.lock(), interactive)
+    }
+
+    /// Prints the value exactly when `interactive` is false, so a pipe or
+    /// redirect receives the stored bytes and nothing else. On a terminal a
+    /// newline follows the value, keeping the shell prompt off the secret.
+    pub(crate) fn get_to(
+        &self,
+        name: &str,
+        out: &mut dyn io::Write,
+        interactive: bool,
+    ) -> Result<()> {
         // A printer over the library API, so the CLI's single-secret read makes
         // exactly the resolution decisions `resolve_named` makes (and audits
         // them once, there) rather than maintaining a second single-secret path.
-        match self.resolve_named_within(name, Surface::WholeProfile)? {
+        match self.resolve_named_within(name, Surface::WholeProfile, |_, value| Ok(value))? {
             NamedResolution::Resolved(secret) => {
                 // `as_path` secrets are materialized and their temp file
                 // persisted during resolution, so a printed path is still valid
                 // after this process exits.
-                let rendered = secret
-                    .value
-                    .or(secret.path)
-                    .expect("a resolved secret carries either a value or a path");
-                println!("{rendered}");
+                if let Some(value) = secret.value {
+                    out.write_all(value.expose_secret())?;
+                    if interactive {
+                        out.write_all(b"\n")?;
+                    }
+                } else {
+                    writeln!(out, "{}", secret.path.expect("a resolved file has a path"))?;
+                }
                 Ok(())
             }
             // Undeclared and missing are one error for the CLI: either way there
@@ -4721,7 +4810,7 @@ impl Secrets {
                                 format!("[{}/{}] Enter value for {}:", i + 1, total, secret_name,);
                             let prompt = inquire::Password::new(&prompt_msg).without_confirmation();
 
-                            let value = SecretString::new(prompt.prompt()?.into());
+                            let value = SecretBytes::from_utf8(prompt.prompt()?);
 
                             let encoded_value = Self::encoded_for_storage(&planned, &value);
                             let stored_value = encoded_value.as_ref().unwrap_or(&value);
@@ -5206,7 +5295,7 @@ impl Secrets {
         &self,
         planned: &PlannedSecret,
         profile_name: &str,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Option<SecretBytes>> {
         let name = planned.name.as_str();
         let gen_config = match &planned.config().generate {
             Some(config) if config.is_enabled() => config,
@@ -5298,7 +5387,7 @@ impl Secrets {
     /// input handle on Windows) when stdin is redirected, so the child retains
     /// its original stdin stream. Persistence is deliberately handled by
     /// [`Self::try_prompt_secret`], after this input-only step succeeds.
-    fn prompt_run_secret(&self, name: &str, profile: &str) -> Result<SecretString> {
+    fn prompt_run_secret(&self, name: &str, profile: &str) -> Result<SecretBytes> {
         let value = if let Some(reader) = &self.prompt_reader {
             reader(name, profile)?
         } else {
@@ -5312,7 +5401,7 @@ impl Secrets {
                     }
                     other => SecretSpecError::InquireError(other),
                 })?;
-            SecretString::new(entered.into())
+            SecretBytes::from_utf8(entered)
         };
 
         if value.expose_secret().is_empty() {
@@ -5329,7 +5418,7 @@ impl Secrets {
         &self,
         planned: &PlannedSecret,
         profile_name: &str,
-    ) -> Result<SecretString> {
+    ) -> Result<SecretBytes> {
         let name = planned.name.as_str();
         let route = planned
             .route
@@ -5475,11 +5564,32 @@ impl Secrets {
     /// }
     /// ```
     ///
-    /// This is the public read/resolution entry point — used directly by the SDK
-    /// and by `secretspec-derive`-generated code — so it records exactly one
-    /// `Check` audit event per call.
+    /// This public read/resolution entry point records exactly one `Check`
+    /// audit event per call.
     pub fn validate(&self) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
         self.validate_audited(true, Materialize::Values)
+    }
+
+    /// Load a generated Rust type, including prompting and conversion in the
+    /// read audit outcome (0.21+). Temporary files transfer only on success.
+    #[doc(hidden)]
+    pub fn load_typed<T>(
+        &self,
+        prompt_missing: bool,
+        convert: impl FnOnce(&HashMap<String, SecretBytes>) -> Result<T>,
+    ) -> Result<Resolved<T>> {
+        self.validate_audited_outcome_with(true, Materialize::Values, |outcome| {
+            let validated = match outcome {
+                Ok(validated) => validated,
+                Err(errors) if prompt_missing && !errors.missing_required.is_empty() => {
+                    self.ensure_secrets(None, None, true)?
+                }
+                Err(errors) => return Ok(Err(errors)),
+            };
+            let data = convert(&validated.resolved.secrets)?;
+            Ok(Ok(validated.into_resolved(data)))
+        })?
+        .map_err(validation_failure)
     }
 
     /// Resolve every declared secret into a value-carrying [`ResolveResponse`],
@@ -5494,8 +5604,19 @@ impl Secrets {
     /// `as_path` temp files are persisted so the returned paths stay valid for
     /// the caller; this is a one-shot boundary and the caller owns their
     /// lifetime thereafter.
+    /// Inline values must be UTF-8; use [`Self::resolve_bytes`] for arbitrary bytes.
     pub fn resolve(&self) -> Result<ResolveResponse> {
-        self.resolve_impl(true)
+        self.resolve_impl(true, |name, value| {
+            Ok(value.try_as_utf8_for(name)?.to_owned())
+        })
+    }
+
+    /// Resolve inline values as arbitrary bytes (0.21+).
+    ///
+    /// Like [`Self::resolve`], but without converting inline values to text.
+    /// `as_path` values still return paths to persisted temporary files.
+    pub fn resolve_bytes(&self) -> Result<ResolveResponse<SecretBytes>> {
+        self.resolve_impl(true, |_, value| Ok(value))
     }
 
     /// Like [`Self::resolve`], but value-free and side-effect-free: every
@@ -5511,7 +5632,9 @@ impl Secrets {
     /// [`Self::resolve`]. For a value-free view that tolerates missing required
     /// secrets, use [`Self::report`].
     pub fn resolve_without_values(&self) -> Result<ResolveResponse> {
-        self.resolve_impl(false)
+        self.resolve_impl(false, |name, value| {
+            Ok(value.try_as_utf8_for(name)?.to_owned())
+        })
     }
 
     /// Resolve one declared secret by name.
@@ -5539,6 +5662,7 @@ impl Secrets {
     /// Like [`Self::resolve`], this carries the value, mints a generatable
     /// secret, and persists an `as_path` temp file so the returned path outlives
     /// the call. Treat the payload as sensitive.
+    /// Inline values must be UTF-8; use [`Self::resolve_named_bytes`] for arbitrary bytes.
     ///
     /// Available since SecretSpec 0.19.
     ///
@@ -5555,7 +5679,17 @@ impl Secrets {
     /// }
     /// ```
     pub fn resolve_named(&self, name: &str) -> Result<NamedResolution> {
-        self.resolve_named_within(name, Surface::Scoped)
+        self.resolve_named_within(name, Surface::Scoped, |name, value| {
+            Ok(value.try_as_utf8_for(name)?.to_owned())
+        })
+    }
+
+    /// Resolve one inline value as arbitrary bytes (0.21+).
+    ///
+    /// Uses the same scope, missing-value rules, and temporary-file lifetime
+    /// as [`Self::resolve_named`], without requiring inline UTF-8.
+    pub fn resolve_named_bytes(&self, name: &str) -> Result<NamedResolution<SecretBytes>> {
+        self.resolve_named_within(name, Surface::Scoped, |_, value| Ok(value))
     }
 
     /// Shared core of [`Self::resolve_named`] and [`Self::get`].
@@ -5564,7 +5698,12 @@ impl Secrets {
     /// resolves what the session exposes (a scope narrows it), while the CLI's
     /// `get` names one secret and has no `--scope`, so an ambient or configured
     /// scope must not hide a secret from it.
-    fn resolve_named_within(&self, name: &str, surface: Surface) -> Result<NamedResolution> {
+    fn resolve_named_within<T>(
+        &self,
+        name: &str,
+        surface: Surface,
+        convert: impl FnOnce(&str, SecretBytes) -> Result<T>,
+    ) -> Result<NamedResolution<T>> {
         self.ensure_reason_for(AuditAction::Get, Some(name))?;
         let profile_name = self.resolve_profile_name(None);
 
@@ -5648,21 +5787,33 @@ impl Secrets {
                     });
                 }
 
-                // Persist as_path temp files so the returned path stays valid
-                // for the caller, exactly as `resolve` does.
-                validated.keep_temp_files()?;
                 let raw = validated
                     .resolved
                     .secrets
-                    .get(name)
-                    .expect("a Resolved entry always has a value")
-                    .expose_secret()
-                    .to_string();
-                let (value, path) = if entry.as_path {
-                    (None, Some(raw))
+                    .remove(name)
+                    .expect("a Resolved entry always has a value");
+                let converted = if entry.as_path {
+                    raw.try_as_utf8_for(name)
+                        .map(|path| (None, Some(path.to_owned())))
                 } else {
-                    (Some(raw), None)
+                    convert(name, raw).map(|value| (Some(value), None))
                 };
+                let (value, path) = match converted {
+                    Ok(converted) => converted,
+                    Err(err) => {
+                        self.record_key_error(
+                            AuditAction::Get,
+                            &profile_name,
+                            name,
+                            None,
+                            reference,
+                            &err,
+                        );
+                        return Err(err);
+                    }
+                };
+                // Conversion must succeed before temporary files are persisted.
+                validated.keep_temp_files()?;
 
                 self.record(
                     AuditAction::Get,
@@ -5730,71 +5881,69 @@ impl Secrets {
     /// `include_values` gates whether resolved secret values are copied into the
     /// response and, in turn, whether the underlying pass mints generated
     /// secrets and writes `as_path` temp files at all.
-    fn resolve_impl(&self, include_values: bool) -> Result<ResolveResponse> {
+    fn resolve_impl<T>(
+        &self,
+        include_values: bool,
+        convert: impl Fn(&str, SecretBytes) -> Result<T>,
+    ) -> Result<ResolveResponse<T>> {
         let materialize = if include_values {
             Materialize::Values
         } else {
             Materialize::None
         };
-        match self.validate_audited(true, materialize)? {
-            Ok(mut validated) => {
-                // Persist as_path temp files so returned paths outlive this call.
-                // Only the full pass writes any: under `Materialize::None` no
-                // temp file is ever created, so there is nothing to persist and
-                // nothing is left on disk.
-                if include_values {
-                    validated.keep_temp_files()?;
+        let outcome = self.validate_audited_with(true, materialize, |mut validated| {
+            let mut secrets = BTreeMap::new();
+            for entry in &validated.resolution {
+                if entry.status != ResolutionStatus::Resolved {
+                    continue;
                 }
-
-                let mut secrets = BTreeMap::new();
-                for entry in &validated.resolution {
-                    if entry.status != ResolutionStatus::Resolved {
-                        continue;
-                    }
-                    let source = resolved_source(entry);
-                    // Only copy the secret value out when the caller wants it;
-                    // otherwise the bytes never enter the response.
-                    let (value, path) = if !include_values {
-                        (None, None)
+                let source = resolved_source(entry);
+                // Only copy the secret value out when the caller wants it;
+                // otherwise the bytes never enter the response.
+                let (value, path) = if !include_values {
+                    (None, None)
+                } else {
+                    let raw = validated
+                        .resolved
+                        .secrets
+                        .remove(&entry.name)
+                        .expect("a Resolved entry always has a value");
+                    if entry.as_path {
+                        (None, Some(raw.try_as_utf8_for(&entry.name)?.to_owned()))
                     } else {
-                        let raw = validated
-                            .resolved
-                            .secrets
-                            .get(&entry.name)
-                            .expect("a Resolved entry always has a value")
-                            .expose_secret()
-                            .to_string();
-                        if entry.as_path {
-                            (None, Some(raw))
-                        } else {
-                            (Some(raw), None)
-                        }
-                    };
-                    secrets.insert(
-                        entry.name.clone(),
-                        ResolvedSecret {
-                            value,
-                            path,
-                            as_path: entry.as_path,
-                            source,
-                            source_provider: entry.source_provider.clone(),
-                        },
-                    );
-                }
-
-                let mut missing_optional = validated.missing_optional.clone();
-                missing_optional.sort();
-
-                Ok(ResolveResponse {
-                    schema_version: RESOLVE_SCHEMA_VERSION,
-                    provider: validated.resolved.provider.clone(),
-                    profile: validated.resolved.profile.clone(),
-                    scope: self.resolve_scope_name(None),
-                    secrets,
-                    missing_required: Vec::new(),
-                    missing_optional,
-                })
+                        (Some(convert(&entry.name, raw)?), None)
+                    }
+                };
+                secrets.insert(
+                    entry.name.clone(),
+                    ResolvedSecret {
+                        value,
+                        path,
+                        as_path: entry.as_path,
+                        source,
+                        source_provider: entry.source_provider.clone(),
+                    },
+                );
             }
+
+            if include_values {
+                validated.keep_temp_files()?;
+            }
+            let mut missing_optional = validated.missing_optional.clone();
+            missing_optional.sort();
+
+            Ok(ResolveResponse {
+                schema_version: RESOLVE_SCHEMA_VERSION,
+                provider: validated.resolved.provider.clone(),
+                profile: validated.resolved.profile.clone(),
+                scope: self.resolve_scope_name(None),
+                secrets,
+                missing_required: Vec::new(),
+                missing_optional,
+            })
+        })?;
+        match outcome {
+            Ok(response) => Ok(response),
             Err(errors) => {
                 if !errors.constraint_violations.is_empty() {
                     return Err(SecretSpecError::ValidationFailed(Box::new(errors)));
@@ -5863,6 +6012,31 @@ impl Secrets {
         emit_check: bool,
         materialize: Materialize,
     ) -> Result<std::result::Result<ValidatedSecrets, ValidationErrors>> {
+        self.validate_audited_with(emit_check, materialize, Ok)
+    }
+
+    /// Include consumer conversion in the read audit outcome. Text conversion
+    /// failures must be recorded before a response is reported as successful.
+    fn validate_audited_with<T>(
+        &self,
+        emit_check: bool,
+        materialize: Materialize,
+        finish: impl FnOnce(ValidatedSecrets) -> Result<T>,
+    ) -> Result<std::result::Result<T, ValidationErrors>> {
+        self.validate_audited_outcome_with(emit_check, materialize, |outcome| match outcome {
+            Ok(validated) => finish(validated).map(Ok),
+            Err(errors) => Ok(Err(errors)),
+        })
+    }
+
+    fn validate_audited_outcome_with<T>(
+        &self,
+        emit_check: bool,
+        materialize: Materialize,
+        finish: impl FnOnce(
+            std::result::Result<ValidatedSecrets, ValidationErrors>,
+        ) -> Result<std::result::Result<T, ValidationErrors>>,
+    ) -> Result<std::result::Result<T, ValidationErrors>> {
         // Enforce the reason policy. For the top-level read (`emit_check`) a denial
         // is itself audited; internal re-validations (emit_check=false) re-check the
         // gate silently, since the reason is already present by the time they run.
@@ -5917,12 +6091,10 @@ impl Secrets {
         // failure — is captured in `result` and recorded as the single `Check`
         // event below rather than escaping unaudited. `record` is a no-op when
         // auditing is off.
-        let result: Result<std::result::Result<ValidatedSecrets, ValidationErrors>> =
-            visible_result
-                .and_then(|_| self.build_plan_from_names(profile_name.clone(), worklist))
-                .and_then(|plan| {
-                    self.execute_plan(&plan, materialize, output_filter.as_ref(), None)
-                });
+        let result: Result<std::result::Result<T, ValidationErrors>> = visible_result
+            .and_then(|_| self.build_plan_from_names(profile_name.clone(), worklist))
+            .and_then(|plan| self.execute_plan(&plan, materialize, output_filter.as_ref(), None))
+            .and_then(finish);
 
         // Record exactly one `Check` event for the whole batch when this is a
         // top-level read, regardless of how the resolution exited — so a failed
@@ -6201,8 +6373,21 @@ impl Secrets {
         // must stay alive until the child process has terminated.
         let resolution = self
             .validate_audited(false, Materialize::Run)
-            .and_then(|result| result.map_err(validation_failure));
-        let validation_result = match resolution {
+            .and_then(|result| result.map_err(validation_failure))
+            .and_then(|validated| {
+                let values = validated
+                    .resolved
+                    .secrets
+                    .iter()
+                    .map(|(key, secret)| {
+                        secret
+                            .try_as_env_value_for(key)
+                            .map(|value| (key.clone(), value.to_owned()))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok((validated, child_env_from(env::vars_os(), values)))
+            });
+        let (validation_result, env_vars) = match resolution {
             Ok(v) => v,
             Err(e) => {
                 // Record the attempt even when validation fails and the command
@@ -6229,15 +6414,6 @@ impl Secrets {
         // already validated the scope (`ensure_secrets` above), so this cannot
         // fail on an unknown scope here.
         let excluded = self.scope_excluded_names()?;
-        let env_vars = child_env_from(
-            env::vars_os(),
-            validation_result
-                .resolved
-                .secrets
-                .iter()
-                .map(|(key, secret)| (key.clone(), secret.expose_secret().to_string())),
-        );
-
         // Record which secrets were injected into which command (argv[0] only —
         // arguments may contain secrets). Keys are computed before the spawn but
         // the event is emitted after it so the outcome reflects whether the
@@ -6333,6 +6509,24 @@ impl Secrets {
             }
         };
 
+        if let Err(err) = validated
+            .resolved
+            .secrets
+            .iter()
+            .try_for_each(|(key, value)| value.try_as_utf8_for(key).map(|_| ()))
+        {
+            self.record(
+                AuditAction::Export,
+                &profile,
+                AuditOutcome::Error,
+                AuditFields {
+                    error_kind: Some(err.kind()),
+                    ..Default::default()
+                },
+            );
+            return Err(err);
+        }
+
         // Persist as_path temp files *before* emitting, so a persistence failure
         // aborts up front rather than after the paths have already been written
         // out (a consumer captures stdout regardless of the exit code) and the
@@ -6359,7 +6553,14 @@ impl Secrets {
             .resolved
             .secrets
             .iter()
-            .map(|(key, value)| (key.as_str(), value.expose_secret()))
+            .map(|(key, value)| {
+                (
+                    key.as_str(),
+                    value
+                        .try_as_utf8()
+                        .expect("export text was validated above"),
+                )
+            })
             .collect();
         entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
@@ -6602,11 +6803,11 @@ mod write_target_tests {
             })
         }
 
-        fn get(&self, _addr: Address<'_>) -> Result<Option<SecretString>> {
+        fn get(&self, _addr: Address<'_>) -> Result<Option<SecretBytes>> {
             Ok(None)
         }
 
-        fn set(&self, _addr: Address<'_>, _value: &SecretString) -> Result<()> {
+        fn set(&self, _addr: Address<'_>, _value: &SecretBytes) -> Result<()> {
             Ok(())
         }
 
@@ -6962,7 +7163,7 @@ mod provider_credentials_cache_tests {
                             // every caller to contend on the same key.
                             thread::sleep(Duration::from_millis(50));
                             let mut credentials = ProviderCredentials::new();
-                            credentials.insert("token".into(), SecretString::new("value".into()));
+                            credentials.insert("token".into(), SecretBytes::from_utf8("value"));
                             Ok(credentials)
                         })
                         .unwrap()
@@ -6974,7 +7175,7 @@ mod provider_credentials_cache_tests {
             let credentials = thread.join().unwrap();
             assert_eq!(
                 credentials.get("token").map(|value| value.expose_secret()),
-                Some("value")
+                Some(b"value".as_slice())
             );
         }
         assert_eq!(fetches.load(Ordering::SeqCst), 1);
@@ -7146,11 +7347,7 @@ mod provider_credential_scope_tests {
             .expect("alias declares one credential")
             .1;
         logged_in
-            .store_provider_credential(
-                &source,
-                "access_token",
-                &SecretString::new("tok-123".into()),
-            )
+            .store_provider_credential(&source, "access_token", &SecretBytes::from_utf8("tok-123"))
             .unwrap();
 
         // Resolving the same alias under `production` must still find it.
@@ -7162,7 +7359,7 @@ mod provider_credential_scope_tests {
             resolved
                 .get("access_token")
                 .map(|value| value.expose_secret()),
-            Some("tok-123"),
+            Some(b"tok-123".as_slice()),
         );
     }
 }
@@ -7272,16 +7469,21 @@ mod encoding_tests {
     #[test]
     fn decoding_accepts_exactly_one_trailing_line_ending() {
         for encoded in ["Zg==\n", "Zg==\r\n"] {
-            let value = SecretString::new(encoded.to_string().into());
+            let value = SecretBytes::from_utf8(encoded);
             let decoded =
                 Secrets::decode_stored_value(SecretEncoding::Base64, "VALUE", &value).unwrap();
-            assert_eq!(decoded.expose_secret(), b"f");
+            assert_eq!(decoded.expose_secret(), b"f", "{encoded:?}");
         }
+    }
 
-        let value = SecretString::new("Zg==\n\n".to_string().into());
-        let error =
-            Secrets::decode_stored_value(SecretEncoding::Base64, "VALUE", &value).unwrap_err();
-        assert_eq!(error.kind(), "decode_failed");
+    #[test]
+    fn decoding_rejects_other_whitespace() {
+        for encoded in ["Zg==\n\n", "Zg==\r", " Zg==", "Zg ==", "Zg==\t"] {
+            let value = SecretBytes::from_utf8(encoded);
+            let error =
+                Secrets::decode_stored_value(SecretEncoding::Base64, "VALUE", &value).unwrap_err();
+            assert_eq!(error.kind(), "decode_failed", "{encoded:?}");
+        }
     }
 
     #[test]
@@ -7293,9 +7495,9 @@ mod encoding_tests {
         ];
 
         for (encoding, logical, expected) in cases {
-            let logical = SecretString::new(logical.to_string().into());
+            let logical = SecretBytes::from_utf8(logical);
             let stored = Secrets::encode_logical_value(encoding, &logical);
-            assert_eq!(stored.expose_secret(), expected);
+            assert_eq!(stored.expose_secret(), expected.as_bytes());
         }
     }
 }
@@ -7355,7 +7557,6 @@ mod report_provider_tests {
 mod run_prompt_tests {
     use super::*;
     use crate::config::Secret;
-    use secrecy::ExposeSecret;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn prompted_spec() -> Secrets {
@@ -7396,7 +7597,7 @@ mod run_prompt_tests {
             assert_eq!(name, "DEPLOY_PASSWORD");
             assert_eq!(profile, "default");
             observed.fetch_add(1, Ordering::SeqCst);
-            Ok(SecretString::new("entered-once".into()))
+            Ok(SecretBytes::from_utf8("entered-once"))
         });
 
         for expected_prompts in 1..=2 {
@@ -7405,7 +7606,9 @@ mod run_prompt_tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(
-                validated.resolved.secrets["DEPLOY_PASSWORD"].expose_secret(),
+                validated.resolved.secrets["DEPLOY_PASSWORD"]
+                    .try_as_utf8()
+                    .unwrap(),
                 "entered-once"
             );
             assert_eq!(prompts.load(Ordering::SeqCst), expected_prompts);
@@ -7431,7 +7634,7 @@ mod run_prompt_tests {
             assert_eq!(name, "DEPLOY_PASSWORD");
             assert_eq!(profile, "default");
             observed.fetch_add(1, Ordering::SeqCst);
-            Ok(SecretString::new("persisted-answer".into()))
+            Ok(SecretBytes::from_utf8("persisted-answer"))
         });
 
         for _ in 0..2 {
@@ -7440,7 +7643,9 @@ mod run_prompt_tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(
-                validated.resolved.secrets["DEPLOY_PASSWORD"].expose_secret(),
+                validated.resolved.secrets["DEPLOY_PASSWORD"]
+                    .try_as_utf8()
+                    .unwrap(),
                 "persisted-answer"
             );
         }
@@ -7473,7 +7678,7 @@ mod run_prompt_tests {
     fn run_injects_the_prompted_value_into_the_child() {
         let _env = crate::tests::scrub_resolution_env();
         let mut spec = prompted_spec();
-        spec.set_prompt_reader(|_, _| Ok(SecretString::new("entered-once".into())));
+        spec.set_prompt_reader(|_, _| Ok(SecretBytes::from_utf8("entered-once")));
 
         let exit = spec
             .run_command(vec![

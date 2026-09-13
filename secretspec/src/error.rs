@@ -116,6 +116,10 @@ pub enum SecretSpecError {
         encoding: &'static str,
         reason: String,
     },
+    /// A secret's bytes cannot be used where text is required, such as an
+    /// inline `String` value or a process environment (0.21+).
+    #[error("Secret '{name}' is not usable as text: {reason}")]
+    SecretNotText { name: String, reason: String },
     #[error(
         "Accessing secrets requires a reason. Provide one with --reason \"<why you are accessing \
          these secrets>\", the SECRETSPEC_REASON environment variable, or Secrets::with_reason() in \
@@ -162,6 +166,7 @@ impl SecretSpecError {
             SecretSpecError::ValidationFailed(_) => "validation_failed",
             SecretSpecError::GenerationFailed(_) => "generation_failed",
             SecretSpecError::DecodeFailed { .. } => "decode_failed",
+            SecretSpecError::SecretNotText { .. } => "secret_not_text",
             SecretSpecError::ReasonRequired => "reason_required",
         }
     }
@@ -303,6 +308,13 @@ mod tests {
                     reason: "invalid length".into(),
                 },
                 "decode_failed",
+            ),
+            (
+                SecretSpecError::SecretNotText {
+                    name: "VALUE".into(),
+                    reason: "it contains a NUL byte".into(),
+                },
+                "secret_not_text",
             ),
             (SecretSpecError::ReasonRequired, "reason_required"),
         ];

@@ -1,7 +1,7 @@
 use super::{Address, DiscoveryContext, ProducedValuePersistence, Provider, ProviderCredentials};
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
-use secrecy::SecretString;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
@@ -136,12 +136,12 @@ impl Provider for PreflightGuard {
         self.inner.entry_coordinates(addr)
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         self.check()?;
         self.inner.get(addr)
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         self.check()?;
         self.inner.set(addr, value)
     }
@@ -151,7 +151,7 @@ impl Provider for PreflightGuard {
     fn set_expiring(
         &self,
         addr: Address<'_>,
-        value: &SecretString,
+        value: &SecretBytes,
         max_age: std::time::Duration,
     ) -> Result<()> {
         self.check()?;
@@ -251,7 +251,7 @@ impl Provider for PreflightGuard {
         self.inner.reflect(context)
     }
 
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         self.check()?;
         self.inner.get_many(requests)
     }
@@ -261,9 +261,9 @@ impl Provider for PreflightGuard {
 mod tests {
     use super::{AuthCheckCache, PreflightGuard, ProviderWithPreflight};
     use crate::Result;
+    use crate::SecretBytes;
     use crate::config::NativeAddress;
     use crate::provider::{Address, Provider};
-    use secrecy::SecretString;
     use std::cell::Cell;
     use std::sync::{Arc, Mutex};
 
@@ -284,11 +284,11 @@ mod tests {
             })
         }
 
-        fn get(&self, _addr: Address<'_>) -> Result<Option<SecretString>> {
+        fn get(&self, _addr: Address<'_>) -> Result<Option<SecretBytes>> {
             Ok(None)
         }
 
-        fn set(&self, _addr: Address<'_>, _value: &SecretString) -> Result<()> {
+        fn set(&self, _addr: Address<'_>, _value: &SecretBytes) -> Result<()> {
             Ok(())
         }
 

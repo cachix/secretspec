@@ -399,7 +399,7 @@ fn login(
     )?;
     embedded
         .secrets
-        .set(&embedded.password_secret, None)
+        .prompt_and_set(&embedded.password_secret)
         .into_diagnostic()
         .wrap_err("Failed to store Docker password or token")?;
     println!("Stored Docker credential for {registry}.");

@@ -5,12 +5,12 @@
 //! field. Native addresses may select an existing resource by UUID or exact
 //! name and may select its password, username, URI, or description field.
 
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::provider::{
     Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl, credential_or_env,
 };
 use crate::{Result, Secret, SecretSpecError};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -54,27 +54,27 @@ impl PassboltResource {
 /// Authentication applied to every child process. Secret values use the
 /// environment names read by `go-passbolt-cli`; only the server and key-file
 /// path are placed on argv.
-#[derive(Hash)]
 struct CliAuth {
     server: Option<String>,
     key_file: Option<String>,
-    key_inline: Option<String>,
-    passphrase: Option<String>,
+    key_inline: Option<SecretBytes>,
+    passphrase: Option<SecretBytes>,
 }
 
 impl CliAuth {
-    fn apply(&self, command: &mut Command) {
+    fn apply(&self, command: &mut Command) -> Result<()> {
         if let Some(server) = &self.server {
             command.arg("--serverAddress").arg(server);
         }
         if let Some(key_file) = &self.key_file {
             command.arg("--userPrivateKeyFile").arg(key_file);
         } else if let Some(key) = &self.key_inline {
-            command.env("USERPRIVATEKEY", key);
+            command.env("USERPRIVATEKEY", super::credential_env_value(key)?);
         }
         if let Some(passphrase) = &self.passphrase {
-            command.env("USERPASSWORD", passphrase);
+            command.env("USERPASSWORD", super::credential_env_value(passphrase)?);
         }
+        Ok(())
     }
 }
 
@@ -254,18 +254,11 @@ impl PassboltProvider {
         })
     }
 
-    fn explicit_credential(&self, name: &str) -> Option<String> {
-        self.credentials
-            .get(name)
-            .map(|value| value.expose_secret().to_string())
-            .filter(|value| !value.is_empty())
-    }
-
     fn cli_auth(&self) -> CliAuth {
         // An explicit provider credential wins over both environment-based key
         // forms. Otherwise the CLI's documented file-over-inline precedence is
         // preserved.
-        let explicit_key = self.explicit_credential(PRIVATE_KEY);
+        let explicit_key = self.credentials.get(PRIVATE_KEY).cloned();
         let (key_file, key_inline) = if let Some(key) = explicit_key {
             (None, Some(key))
         } else if let Some(path) = std::env::var(ENV_PRIVATE_KEY_FILE)
@@ -288,15 +281,15 @@ impl PassboltProvider {
         }
     }
 
-    fn command(&self) -> Command {
+    fn command(&self) -> Result<Command> {
         let mut command = Command::new(&self.cli_binary_path);
-        self.cli_auth().apply(&mut command);
-        command
+        self.cli_auth().apply(&mut command)?;
+        Ok(command)
     }
 
     fn run(&self, args: &[&str]) -> Result<String> {
         let output = match self
-            .command()
+            .command()?
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -519,7 +512,13 @@ impl Provider for PassboltProvider {
     fn auth_scope_key(&self) -> Option<String> {
         let auth = self.cli_auth();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        auth.hash(&mut hasher);
+        (
+            &auth.server,
+            &auth.key_file,
+            auth.key_inline.as_ref().map(SecretBytes::expose_secret),
+            auth.passphrase.as_ref().map(SecretBytes::expose_secret),
+        )
+            .hash(&mut hasher);
         Some(format!("{}:{:016x}", self.cli_binary_path, hasher.finish()))
     }
 
@@ -559,7 +558,7 @@ impl Provider for PassboltProvider {
         }
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let coords = self.operation_coordinates(addr)?;
         let field = coords.field.as_deref().expect("operation fills field");
         let Some(id) = self.resolve_read_id(&coords.item)? else {
@@ -568,12 +567,10 @@ impl Provider for PassboltProvider {
         let Some(resource) = self.get_resource(&id)? else {
             return Ok(None);
         };
-        Ok(resource
-            .field(field)
-            .map(|value| SecretString::new(value.into())))
+        Ok(resource.field(field).map(SecretBytes::from_utf8))
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         if value.expose_secret().is_empty() {
             return Err(SecretSpecError::ProviderOperationFailed(
                 "Passbolt cannot store an empty value: go-passbolt-cli treats empty update \
@@ -584,7 +581,7 @@ impl Provider for PassboltProvider {
         let coords = self.operation_coordinates(addr)?;
         let field = coords.field.as_deref().expect("operation fills field");
         let flag = format!("--{field}");
-        let secret = value.expose_secret();
+        let secret = super::require_utf8("passbolt", value)?;
 
         let existing_id = match addr {
             Address::Native(_) => self
@@ -617,7 +614,7 @@ impl Provider for PassboltProvider {
         Ok(())
     }
 
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         if requests.is_empty() {
             return Ok(HashMap::new());
         }
@@ -679,7 +676,7 @@ impl Provider for PassboltProvider {
             };
             for (name, field) in requests {
                 if let Some(value) = resource.field(&field) {
-                    output.insert(name, SecretString::new(value.into()));
+                    output.insert(name, SecretBytes::from_utf8(value));
                 }
             }
         }
@@ -987,7 +984,7 @@ esac
 
     fn command_args_envs(auth: &CliAuth) -> (Vec<String>, Vec<(String, String)>) {
         let mut command = Command::new("passbolt");
-        auth.apply(&mut command);
+        auth.apply(&mut command).unwrap();
         let args = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -1027,15 +1024,40 @@ esac
     fn explicit_provider_credentials_feed_cli_auth() {
         let mut provider = PassboltProvider::default();
         let mut credentials = ProviderCredentials::new();
-        credentials.insert(PRIVATE_KEY.into(), SecretString::new("key".into()));
-        credentials.insert(PASSPHRASE.into(), SecretString::new("phrase".into()));
+        credentials.insert(PRIVATE_KEY.into(), SecretBytes::from_utf8("key"));
+        credentials.insert(PASSPHRASE.into(), SecretBytes::from_utf8("phrase"));
         provider.with_credentials(credentials);
         let auth = provider.cli_auth();
-        assert_eq!(auth.key_inline.as_deref(), Some("key"));
-        assert_eq!(auth.passphrase.as_deref(), Some("phrase"));
+        assert_eq!(auth.key_inline, Some(SecretBytes::from("key")));
+        assert_eq!(auth.passphrase, Some(SecretBytes::from("phrase")));
         let scope = provider.auth_scope_key().unwrap();
         assert!(!scope.contains("key"));
         assert!(!scope.contains("phrase"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn binary_private_key_overrides_environment_key_file() {
+        use std::os::unix::ffi::OsStrExt;
+        let _lock = crate::tests::scrub_resolution_env();
+        let _file = crate::tests::EnvVarGuard::set(ENV_PRIVATE_KEY_FILE, "/another-identity.key");
+        let _key = crate::tests::EnvVarGuard::set(ENV_PRIVATE_KEY, "another-identity");
+        let mut provider = PassboltProvider::default();
+        let bytes = b"private-key\xff";
+        provider.with_credentials(ProviderCredentials::from([(
+            PRIVATE_KEY.into(),
+            SecretBytes::from_slice(bytes),
+        )]));
+        let auth = provider.cli_auth();
+        assert!(auth.key_file.is_none());
+        let command = provider.command().unwrap();
+        let key = command
+            .get_envs()
+            .find(|(key, _)| *key == "USERPRIVATEKEY")
+            .unwrap()
+            .1
+            .unwrap();
+        assert_eq!(key.as_bytes(), bytes);
     }
 
     #[test]
@@ -1086,7 +1108,7 @@ esac
         let error = PassboltProvider::default()
             .set(
                 Address::Native(&native),
-                &SecretString::new(String::new().into()),
+                &SecretBytes::from_utf8(String::new()),
             )
             .unwrap_err();
         assert!(error.to_string().contains("cannot store an empty value"));
@@ -1108,10 +1130,7 @@ esac
 
         provider.check_writable(Address::Native(&native)).unwrap();
         provider
-            .set(
-                Address::Native(&native),
-                &SecretString::new("updated".into()),
-            )
+            .set(Address::Native(&native), &SecretBytes::from_utf8("updated"))
             .unwrap();
 
         let invocations = fake.invocations();
@@ -1143,10 +1162,7 @@ esac
         };
 
         provider
-            .set(
-                Address::Native(&native),
-                &SecretString::new("updated".into()),
-            )
+            .set(Address::Native(&native), &SecretBytes::from_utf8("updated"))
             .unwrap();
 
         let list_count = fake

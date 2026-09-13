@@ -39,10 +39,10 @@
 //! ```
 
 use super::{Address, Provider, ProviderUrl};
+use crate::SecretBytes;
 use crate::{Result, SecretSpecError};
 use google_cloud_secretmanager_v1::client::SecretManagerService;
 use google_cloud_secretmanager_v1::model::{Replication, Secret, SecretPayload, replication};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 /// Configuration for the Google Cloud Secret Manager provider.
@@ -171,13 +171,13 @@ trait GcsmBackend {
         &self,
         secret_name: &str,
         version: &str,
-    ) -> Result<Option<SecretString>>;
+    ) -> Result<Option<SecretBytes>>;
 
     /// Creating a secret that already exists succeeds: callers only need the
     /// resource to be there before adding a version.
     async fn create_secret(&self, secret_name: &str) -> Result<()>;
 
-    async fn add_secret_version(&self, secret_name: &str, value: &SecretString) -> Result<()>;
+    async fn add_secret_version(&self, secret_name: &str, value: &SecretBytes) -> Result<()>;
 }
 
 struct GoogleGcsmBackend<'a> {
@@ -190,7 +190,7 @@ impl GcsmBackend for GoogleGcsmBackend<'_> {
         &self,
         secret_name: &str,
         version: &str,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Option<SecretBytes>> {
         let secret_version_path = format!(
             "projects/{}/secrets/{secret_name}/versions/{version}",
             self.project_id
@@ -205,12 +205,7 @@ impl GcsmBackend for GoogleGcsmBackend<'_> {
         {
             Ok(response) => {
                 if let Some(payload) = response.payload {
-                    let data = String::from_utf8(payload.data.to_vec()).map_err(|error| {
-                        SecretSpecError::ProviderOperationFailed(format!(
-                            "Secret data is not valid UTF-8: {error}"
-                        ))
-                    })?;
-                    Ok(Some(SecretString::new(data.into())))
+                    Ok(Some(SecretBytes::from_vec(payload.data.to_vec())))
                 } else {
                     Ok(None)
                 }
@@ -245,16 +240,14 @@ impl GcsmBackend for GoogleGcsmBackend<'_> {
         }
     }
 
-    async fn add_secret_version(&self, secret_name: &str, value: &SecretString) -> Result<()> {
+    async fn add_secret_version(&self, secret_name: &str, value: &SecretBytes) -> Result<()> {
         self.client
             .add_secret_version()
             .set_parent(format!(
                 "projects/{}/secrets/{secret_name}",
                 self.project_id
             ))
-            .set_payload(
-                SecretPayload::default().set_data(value.expose_secret().as_bytes().to_vec()),
-            )
+            .set_payload(SecretPayload::default().set_data(value.to_vec()))
             .send()
             .await
             .map_err(|error| {
@@ -383,7 +376,7 @@ impl GcsmProvider {
     async fn get_coords_with_backend(
         backend: &impl GcsmBackend,
         coords: &crate::config::NativeAddress,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Option<SecretBytes>> {
         let version = coords.version.as_deref().unwrap_or("latest");
         backend.access_secret_version(&coords.item, version).await
     }
@@ -394,7 +387,7 @@ impl GcsmProvider {
     async fn get_coords_async(
         &self,
         coords: &crate::config::NativeAddress,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Option<SecretBytes>> {
         let client = self.create_client().await?;
         let backend = GoogleGcsmBackend {
             project_id: &self.config.project_id,
@@ -412,7 +405,7 @@ impl GcsmProvider {
     async fn read_legacy_value(
         backend: &impl GcsmBackend,
         legacy_name: &str,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Option<SecretBytes>> {
         match backend.access_secret_version(legacy_name, "latest").await {
             Err(error) if Self::is_permission_denied_error(&error) => Ok(None),
             result => result,
@@ -432,7 +425,7 @@ impl GcsmProvider {
         project: &str,
         profile: &str,
         key: &str,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Option<SecretBytes>> {
         let legacy_name = Self::format_legacy_secret_name(project, profile, key);
         let secret_name = match Self::format_secret_name(project, profile, key) {
             Ok(name) => name,
@@ -493,7 +486,7 @@ impl GcsmProvider {
         project: &str,
         profile: &str,
         key: &str,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Option<SecretBytes>> {
         let client = self.create_client().await?;
         let backend = GoogleGcsmBackend {
             project_id: &self.config.project_id,
@@ -504,18 +497,18 @@ impl GcsmProvider {
 
     /// Creates or updates a secret in GCP Secret Manager.
     ///
-    /// Always attempts to create the secret first (idempotent operation), then adds a new version.
+    /// Validates the input, then creates the secret (idempotent operation) and adds a new version.
     /// This avoids TOCTOU race conditions by not checking existence before creation.
     async fn set_secret_with_backend(
         backend: &impl GcsmBackend,
         secret_name: &str,
-        value: &SecretString,
+        value: &SecretBytes,
     ) -> Result<()> {
         backend.create_secret(secret_name).await?;
         backend.add_secret_version(secret_name, value).await
     }
 
-    async fn set_secret_async(&self, secret_name: &str, value: &SecretString) -> Result<()> {
+    async fn set_secret_async(&self, secret_name: &str, value: &SecretBytes) -> Result<()> {
         let client = self.create_client().await?;
         let backend = GoogleGcsmBackend {
             project_id: &self.config.project_id,
@@ -553,7 +546,7 @@ impl Provider for GcsmProvider {
         &["version"]
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         match addr {
             Address::Convention {
                 project,
@@ -567,7 +560,7 @@ impl Provider for GcsmProvider {
         }
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)?;
         let coords = self.resolve_coords(addr)?;
         super::block_on(self.set_secret_async(&coords.item, value))
@@ -619,10 +612,7 @@ mod reference_tests {
         assert!(refusal.to_string().contains("read-only"), "{refusal}");
         // `set` refuses with the same reason, so the pre-check cannot drift.
         let err = p
-            .set(
-                Address::Native(&addr),
-                &secrecy::SecretString::new("v".into()),
-            )
+            .set(Address::Native(&addr), &crate::SecretBytes::from_utf8("v"))
             .unwrap_err();
         assert_eq!(err.to_string(), refusal.to_string());
     }
@@ -763,7 +753,7 @@ mod legacy_fallback_tests {
     struct FakeGcsmBackend {
         /// An empty vector means that the Secret resource exists without a
         /// version. Vector indices are the zero-based form of GCSM version ids.
-        secrets: Mutex<HashMap<String, Vec<String>>>,
+        secrets: Mutex<HashMap<String, Vec<SecretBytes>>>,
         accesses: Mutex<Vec<String>>,
         writes: Mutex<Vec<String>>,
         failures: Mutex<HashMap<String, String>>,
@@ -774,7 +764,7 @@ mod legacy_fallback_tests {
             self.secrets
                 .lock()
                 .unwrap()
-                .insert(name.to_string(), vec![value.to_string()]);
+                .insert(name.to_string(), vec![SecretBytes::from_utf8(value)]);
         }
 
         fn insert_empty(&self, name: &str) {
@@ -790,7 +780,7 @@ mod legacy_fallback_tests {
                 .unwrap()
                 .get(name)
                 .and_then(|versions| versions.last())
-                .cloned()
+                .map(|value| value.try_as_utf8().unwrap().to_owned())
         }
 
         /// Simulates the secret-level IAM binding a caller was never granted:
@@ -812,7 +802,7 @@ mod legacy_fallback_tests {
             &self,
             secret_name: &str,
             version: &str,
-        ) -> Result<Option<SecretString>> {
+        ) -> Result<Option<SecretBytes>> {
             self.accesses
                 .lock()
                 .unwrap()
@@ -835,7 +825,7 @@ mod legacy_fallback_tests {
                         .and_then(|index| versions.get(index))
                 }
             });
-            Ok(value.cloned().map(|value| SecretString::new(value.into())))
+            Ok(value.cloned())
         }
 
         async fn create_secret(&self, secret_name: &str) -> Result<()> {
@@ -851,7 +841,7 @@ mod legacy_fallback_tests {
             Ok(())
         }
 
-        async fn add_secret_version(&self, secret_name: &str, value: &SecretString) -> Result<()> {
+        async fn add_secret_version(&self, secret_name: &str, value: &SecretBytes) -> Result<()> {
             self.writes
                 .lock()
                 .unwrap()
@@ -862,16 +852,16 @@ mod legacy_fallback_tests {
                     "secret '{secret_name}' was not created"
                 ))
             })?;
-            versions.push(value.expose_secret().to_string());
+            versions.push(value.clone());
             Ok(())
         }
     }
 
-    fn read(backend: &FakeGcsmBackend) -> Result<Option<SecretString>> {
+    fn read(backend: &FakeGcsmBackend) -> Result<Option<SecretBytes>> {
         read_project(backend, "my-app")
     }
 
-    fn read_project(backend: &FakeGcsmBackend, project: &str) -> Result<Option<SecretString>> {
+    fn read_project(backend: &FakeGcsmBackend, project: &str) -> Result<Option<SecretBytes>> {
         crate::provider::block_on(GcsmProvider::get_convention_with_backend(
             backend, project, "prod", "K",
         ))
@@ -881,8 +871,24 @@ mod legacy_fallback_tests {
         crate::provider::block_on(GcsmProvider::set_secret_with_backend(
             backend,
             CURRENT,
-            &SecretString::new(value.into()),
+            &SecretBytes::from_utf8(value),
         ))
+    }
+
+    #[test]
+    fn binary_input_round_trips_through_secret_versions() {
+        let backend = FakeGcsmBackend::default();
+        let expected = SecretBytes::from_slice(b"\0\xff\x80\r\n");
+        crate::provider::block_on(GcsmProvider::set_secret_with_backend(
+            &backend, CURRENT, &expected,
+        ))
+        .unwrap();
+
+        assert_eq!(read(&backend).unwrap(), Some(expected));
+        assert_eq!(
+            *backend.writes.lock().unwrap(),
+            vec![format!("create {CURRENT}"), format!("add {CURRENT}")]
+        );
     }
 
     /// A project written by 0.19 keeps reading after the upgrade, and the read
@@ -893,7 +899,7 @@ mod legacy_fallback_tests {
         backend.insert(LEGACY, "legacy-value");
 
         let value = read(&backend).unwrap().unwrap();
-        assert_eq!(value.expose_secret(), "legacy-value");
+        assert_eq!(value.expose_secret(), b"legacy-value");
         assert!(backend.writes.lock().unwrap().is_empty());
         assert_eq!(backend.value(LEGACY).as_deref(), Some("legacy-value"));
         assert!(!backend.secrets.lock().unwrap().contains_key(CURRENT));
@@ -908,7 +914,7 @@ mod legacy_fallback_tests {
         backend.insert_empty(CURRENT);
 
         let value = read(&backend).unwrap().unwrap();
-        assert_eq!(value.expose_secret(), "legacy-value");
+        assert_eq!(value.expose_secret(), b"legacy-value");
         assert!(backend.writes.lock().unwrap().is_empty());
     }
 
@@ -919,7 +925,7 @@ mod legacy_fallback_tests {
         backend.insert(CURRENT, "current-value");
 
         let value = read(&backend).unwrap().unwrap();
-        assert_eq!(value.expose_secret(), "current-value");
+        assert_eq!(value.expose_secret(), b"current-value");
         assert_eq!(
             backend.accesses.lock().unwrap().as_slice(),
             &[format!("{CURRENT}@latest")]
@@ -938,7 +944,7 @@ mod legacy_fallback_tests {
         backend.accesses.lock().unwrap().clear();
 
         let value = read(&backend).unwrap().unwrap();
-        assert_eq!(value.expose_secret(), "new-value");
+        assert_eq!(value.expose_secret(), b"new-value");
         assert_eq!(
             backend.accesses.lock().unwrap().as_slice(),
             &[format!("{CURRENT}@latest")]
@@ -965,7 +971,7 @@ mod legacy_fallback_tests {
         backend.deny_access(CURRENT);
 
         let value = read(&backend).unwrap().unwrap();
-        assert_eq!(value.expose_secret(), "legacy-value");
+        assert_eq!(value.expose_secret(), b"legacy-value");
     }
 
     /// If the compatibility probe finds no legacy value, the provider cannot
@@ -1020,7 +1026,7 @@ mod legacy_fallback_tests {
         backend.insert("secretspec-my--app-prod-K", "legacy-value");
 
         let value = read_project(&backend, "my--app").unwrap().unwrap();
-        assert_eq!(value.expose_secret(), "legacy-value");
+        assert_eq!(value.expose_secret(), b"legacy-value");
         assert!(backend.writes.lock().unwrap().is_empty());
     }
 

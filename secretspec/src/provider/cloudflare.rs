@@ -7,10 +7,10 @@
 //! current OAuth/API credentials via `wrangler auth token --json`.
 
 use super::{Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl};
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, Secret, SecretSpecError};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -267,7 +267,7 @@ impl CloudflareProvider {
         Ok(account_id)
     }
 
-    fn api_token(&self) -> Option<String> {
+    fn api_token(&self) -> Option<SecretBytes> {
         super::credential_or_env(&self.credentials, API_TOKEN, API_TOKEN_ENV)
     }
 
@@ -313,30 +313,29 @@ impl CloudflareProvider {
     }
 
     fn auth_headers(&self) -> Result<HeaderMap> {
-        let credentials = match self.config.auth {
-            CloudflareAuth::Auto => self.api_token().map_or_else(
-                || self.wrangler_credentials(),
-                |token| Ok(WranglerCredentials::ApiToken { token }),
-            )?,
-            CloudflareAuth::Token => WranglerCredentials::ApiToken {
-                token: self.api_token().ok_or_else(|| {
-                    operation_error(format!(
-                        "Cloudflare auth=token requires the `{API_TOKEN}` provider credential or {API_TOKEN_ENV}"
-                    ))
-                })?,
-            },
-            CloudflareAuth::Wrangler => self.wrangler_credentials()?,
-        };
-
         let mut headers = HeaderMap::new();
+        if self.config.auth != CloudflareAuth::Wrangler {
+            if let Some(token) = self.api_token() {
+                headers.insert(
+                    AUTHORIZATION,
+                    super::credentials::credential_bearer_header(token.expose_secret())?,
+                );
+                return Ok(headers);
+            }
+            if self.config.auth == CloudflareAuth::Token {
+                return Err(operation_error(format!(
+                    "Cloudflare auth=token requires the `{API_TOKEN}` provider credential or {API_TOKEN_ENV}"
+                )));
+            }
+        }
+
+        let credentials = self.wrangler_credentials()?;
         match credentials {
             WranglerCredentials::ApiToken { token } | WranglerCredentials::Oauth { token } => {
-                let mut value =
-                    HeaderValue::from_str(&format!("Bearer {token}")).map_err(|error| {
-                        operation_error(format!("invalid Cloudflare token: {error}"))
-                    })?;
-                value.set_sensitive(true);
-                headers.insert(AUTHORIZATION, value);
+                headers.insert(
+                    AUTHORIZATION,
+                    super::credentials::credential_bearer_header(token.as_bytes())?,
+                );
             }
             WranglerCredentials::ApiKey { key, email } => {
                 let mut key = HeaderValue::from_str(&key).map_err(|error| {
@@ -473,12 +472,13 @@ impl CloudflareProvider {
         Ok(())
     }
 
-    async fn set_async(&self, name: &str, value: &SecretString) -> Result<()> {
+    async fn set_async(&self, name: &str, value: &SecretBytes) -> Result<()> {
+        let value = super::require_utf8("cloudflare", value)?;
         let account_id = self.account_id()?;
         let client = self.client()?;
         if let Some(existing) = self.lookup_secret(&client, &account_id, name).await? {
             return self
-                .update_secret(&client, &account_id, &existing.id, value.expose_secret())
+                .update_secret(&client, &account_id, &existing.id, value)
                 .await;
         }
 
@@ -487,7 +487,7 @@ impl CloudflareProvider {
             .json(&[CreateSecret {
                 name,
                 scopes: &self.config.scopes,
-                value: value.expose_secret(),
+                value,
             }])
             .send()
             .await
@@ -495,7 +495,7 @@ impl CloudflareProvider {
         if response.status() == reqwest::StatusCode::CONFLICT {
             if let Some(existing) = self.lookup_secret(&client, &account_id, name).await? {
                 return self
-                    .update_secret(&client, &account_id, &existing.id, value.expose_secret())
+                    .update_secret(&client, &account_id, &existing.id, value)
                     .await;
             }
             return Err(operation_error(format!(
@@ -590,7 +590,7 @@ impl Provider for CloudflareProvider {
         format!("cloudflare://{account_id}/{}", self.config.store_id)
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let _ = self.secret_name(addr)?;
         Err(operation_error(
             "Cloudflare Secrets Store is write-only at the management API: plaintext values can only be read by bound Cloudflare services; use this provider with `secretspec set`, `secretspec delete`, or `secretspec init --from`",
@@ -601,7 +601,7 @@ impl Provider for CloudflareProvider {
         self.secret_name(addr).map(|_| ())
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)?;
         if value.expose_secret().len() > MAX_SECRET_BYTES {
             return Err(operation_error(format!(
@@ -727,9 +727,36 @@ mod tests {
         provider.api_base = format!("http://{endpoint}");
         provider.with_credentials(ProviderCredentials::from([(
             API_TOKEN.to_string(),
-            SecretString::new("test-token".into()),
+            SecretBytes::from_utf8("test-token"),
         )]));
         provider
+    }
+
+    #[test]
+    fn explicit_token_bytes_never_fall_back_to_environment_or_wrangler() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = crate::tests::EnvVarGuard::set(API_TOKEN_ENV, "another-identity");
+        let mut provider = CloudflareProvider::new(config(&format!(
+            "cloudflare://{STORE}?account_id={ACCOUNT}"
+        )));
+        provider.wrangler_binary_path = "/must-not-run-wrangler".into();
+        provider.with_credentials(ProviderCredentials::from([(
+            API_TOKEN.into(),
+            SecretBytes::from_slice(b"private-token\xff"),
+        )]));
+        let headers = provider.auth_headers().unwrap();
+        assert_eq!(
+            headers[AUTHORIZATION].as_bytes(),
+            b"Bearer private-token\xff"
+        );
+
+        provider.with_credentials(ProviderCredentials::from([(
+            API_TOKEN.into(),
+            SecretBytes::from_slice(b"private-token\r\n"),
+        )]));
+        let error = provider.auth_headers().unwrap_err();
+        assert!(error.to_string().contains("HTTP Authorization header"));
+        assert!(!format!("{error:?}: {error}").contains("private-token"));
     }
 
     fn response_server(
@@ -847,7 +874,7 @@ mod tests {
     #[test]
     fn rejects_values_larger_than_cloudflares_limit_before_authentication() {
         let provider = CloudflareProvider::new(config(&format!("cloudflare://{STORE}")));
-        let oversized = SecretString::new("x".repeat(MAX_SECRET_BYTES + 1).into());
+        let oversized = SecretBytes::from_utf8("x".repeat(MAX_SECRET_BYTES + 1));
         let error = provider
             .set(
                 Address::convention("project", "production", "API_KEY"),
@@ -867,7 +894,7 @@ mod tests {
         provider
             .set(
                 Address::convention("project", "production", "API_KEY"),
-                &SecretString::new("super-secret".into()),
+                &SecretBytes::from_utf8("super-secret"),
             )
             .unwrap();
 
@@ -901,7 +928,7 @@ mod tests {
         provider
             .set(
                 Address::convention("project", "production", "API_KEY"),
-                &SecretString::new("replacement".into()),
+                &SecretBytes::from_utf8("replacement"),
             )
             .unwrap();
 

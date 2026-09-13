@@ -1,8 +1,8 @@
 //! Validation results for secret checking
 
+use crate::SecretBytes;
 use crate::config::Resolved;
 use crate::report::{ResolutionReport, SecretResolution};
-use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -13,8 +13,10 @@ use tempfile::NamedTempFile;
 /// This struct contains the validated secrets along with information about
 /// which secrets are present, missing, or using default values.
 pub struct ValidatedSecrets {
-    /// Resolved secrets with provider and profile information
-    pub resolved: Resolved<HashMap<String, SecretString>>,
+    /// Resolved secrets with provider and profile information.
+    /// Inline values retain arbitrary bytes starting with 0.21; `as_path`
+    /// entries contain the UTF-8 bytes of their temporary-file paths.
+    pub resolved: Resolved<HashMap<String, SecretBytes>>,
     /// List of optional secrets that are missing
     pub missing_optional: Vec<String>,
     /// List of secrets using their default values (name, default_value)

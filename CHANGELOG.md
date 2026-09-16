@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## Unreleased
 
 ### Added
 
@@ -236,6 +236,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comparing store identities alone cannot see: an unpinned `doppler://myapp`
   under profile `prd` names the same secret as `doppler://myapp/prd`, and a
   cache at that pairing would overwrite or delete the secret it caches (0.21+).
+
+- **Elixir SDK (0.21+)** (`secretspec-ex`) resolves SecretSpec declarations from
+  Elixir through a Rustler binding, with precompiled NIF archives for supported
+  Linux, macOS, and Windows targets.
 
 ### Fixed
 

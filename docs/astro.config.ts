@@ -420,6 +420,11 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
               slug: "sdk/jvm",
               badge: { text: "0.20+", variant: "note" },
             },
+            {
+              label: "Elixir",
+              slug: "sdk/elixir",
+              badge: { text: "0.21+", variant: "note" },
+            },
           ],
         },
         {

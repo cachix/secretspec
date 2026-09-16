@@ -6,6 +6,7 @@ members = [
   "secretspec-node",
   "secretspec-php",
   "secretspec-py",
+  "secretspec-ex/native/secretspec_native",
 ]
 resolver = "2"
 

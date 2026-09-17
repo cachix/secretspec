@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Bitwarden Password Manager resolves a batch of secrets with a single `bw
+  list items` instead of one listing per secret (0.21+). The provider did not
+  override `Provider::get_many`, so batch reads used the per-request default.
+
 - Command generation rejects Unicode-whitespace-only output while preserving
   accepted secrets byte-for-byte, including binary output and surrounding whitespace.
 

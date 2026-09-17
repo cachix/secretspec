@@ -2782,6 +2782,40 @@ impl Provider for BitwardenProvider {
         self.get_from_password_manager(item_name, target_field)
     }
 
+    /// Resolves the whole batch from a single `bw list items`.
+    ///
+    /// The default implementation calls `get` per request, and each `get`
+    /// lists the vault, so a batch of N secrets listed it N times.
+    ///
+    /// The listing is unfiltered. `get` may prefilter a name with bw's
+    /// `--search`, but a batch can mix item IDs, which `--search` does not
+    /// match, and prefiltering per request would reintroduce the per-request
+    /// invocation. This is the set `get` falls back to and the one `set` uses.
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
+        if requests.is_empty() {
+            return Ok(HashMap::new());
+        }
+        if !self.is_authenticated()? {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "Bitwarden authentication required. Please run 'bw login' and 'bw unlock', then set the BW_SESSION environment variable.".to_string(),
+            ));
+        }
+
+        let items = self.list_items(None)?;
+        let item_type = self.resolved_item_type()?;
+        let mut found = HashMap::with_capacity(requests.len());
+        for (name, addr) in requests {
+            let coords = self.resolve_coords(*addr)?;
+            let Some(item) = find_addressed_item(&items, &coords.item, item_type)? else {
+                continue;
+            };
+            if let Some(value) = self.extract_value_from_item(item, coords.field.as_deref())? {
+                found.insert((*name).to_string(), value);
+            }
+        }
+        Ok(found)
+    }
+
     /// Stores or updates a secret in Bitwarden.
     ///
     /// Searches for an existing item matching the resolved item name.
@@ -5144,6 +5178,63 @@ mod tests {
                 !log.contains("<--search>"),
                 "an item UUID must bypass bw's non-ID search: {log}"
             );
+        });
+    }
+
+    /// One listing regardless of batch size; the default lists once per request.
+    #[cfg(unix)]
+    #[test]
+    fn get_many_reads_the_vault_once_for_the_whole_batch() {
+        let fake = FakeBw::new().with_items(json!([
+            {"id": "11111111-1111-1111-1111-111111111111", "name": "One",
+             "type": 1, "login": {"password": "first"}},
+            {"id": "22222222-2222-2222-2222-222222222222", "name": "Two",
+             "type": 1, "login": {"password": "second"}},
+            {"id": "33333333-3333-3333-3333-333333333333", "name": "Three",
+             "type": 1, "login": {"password": "third"}}
+        ]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let first = crate::config::NativeAddress {
+                item: "11111111-1111-1111-1111-111111111111".to_string(),
+                ..Default::default()
+            };
+            let third = crate::config::NativeAddress {
+                item: "33333333-3333-3333-3333-333333333333".to_string(),
+                ..Default::default()
+            };
+            let absent = crate::config::NativeAddress {
+                item: "44444444-4444-4444-4444-444444444444".to_string(),
+                ..Default::default()
+            };
+            let requests = [
+                ("FIRST", Address::Native(&first)),
+                ("THIRD", Address::Native(&third)),
+                ("ABSENT", Address::Native(&absent)),
+            ];
+            let got = provider.get_many(&requests).unwrap();
+
+            assert_eq!(
+                got.get("FIRST")
+                    .map(|s| s.try_as_utf8().unwrap().to_string()),
+                Some("first".to_string())
+            );
+            assert_eq!(
+                got.get("THIRD")
+                    .map(|s| s.try_as_utf8().unwrap().to_string()),
+                Some("third".to_string())
+            );
+            assert!(
+                !got.contains_key("ABSENT"),
+                "an item that is not there is omitted, not invented"
+            );
+
+            let log = fake.invocations();
+            let listings = log
+                .lines()
+                .filter(|line| line.contains("<list> <items>"))
+                .count();
+            assert_eq!(listings, 1, "three secrets must cost one listing: {log}");
         });
     }
 

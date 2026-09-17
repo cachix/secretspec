@@ -3,9 +3,9 @@ defmodule SecretSpec.Native do
 
   version = Mix.Project.config()[:version]
 
-  local_checkout? =
-    File.exists?(Path.expand("../../native/secretspec_native/Cargo.toml", __DIR__))
-
+  # Prebuilt consumers (Nix) provide the compiled NIF at
+  # priv/native/secretspec_native.so and skip both the cargo build and the
+  # precompiled-artifact download, which are unavailable in a build sandbox.
   use RustlerPrecompiled,
     otp_app: :secretspec,
     crate: "secretspec_native",
@@ -16,7 +16,7 @@ defmodule SecretSpec.Native do
       "x86_64-pc-windows-msvc"
     ],
     base_url: "https://github.com/cachix/secretspec/releases/download/v#{version}",
-    force_build: local_checkout?,
+    force_build: System.get_env("SECRETSPEC_EX_FORCE_BUILD") in ~w[1 true],
     version: version
 
   def resolve(_request) do

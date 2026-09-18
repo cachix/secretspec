@@ -75,7 +75,7 @@ Providers support URI-based configuration (e.g., `keyring://`, `onepassword://va
 When adding a new provider, update **every** location below — provider names appear in several listings that drift out of sync if any are missed:
 
 1. `docs/src/content/docs/providers/<provider>.mdx` - Create the provider's doc page and add a version compatibility notice if it is unreleased. Put page-level notices at the very top, after imports, and section-level notices immediately below the section heading. New features use the bodyless `<VersionCompatibility version="0.20" />`, which renders “New in version 0.20”. Changes to existing behavior use `<VersionCompatibility version="0.20" kind="changed">...</VersionCompatibility>`, which renders “Changed in version 0.20” and requires a clarifying body. When the provider accepts provider credentials, also import the shared `ProviderCredentials` component and add its catalog entry as described below.
-2. `docs/astro.config.ts` - Add to sidebar navigation under "Providers" **and** to the providers sentence in the `starlightLlmsTxt` description block
+2. `docs/astro.config.ts` - Add to sidebar navigation under "Providers" **and** to the providers sentence in the `starlightLlmActions` description block
 3. `docs/src/content/docs/concepts/providers.mdx` - Add a row to the "Available Providers" table
 4. `docs/src/content/docs/reference/providers.mdx` - Add a provider section **and** a row in the "Security Considerations" table
 5. `docs/src/pages/index.astro` - Add to the `providerMetadata` array (top of file) **and** to the `secretspec config init` mini-terminal in the hero

@@ -69,6 +69,10 @@
     enable = true;
     jdk.package = pkgs.jdk21;
   };
+  languages.elixir = {
+    enable = true;
+    package = pkgs.beam28Packages.elixir_1_19;
+  };
 
   packages = [
     # documentation link validation
@@ -102,6 +106,8 @@
   env = {
     # Gradle runs on JDK 21 but compiles the JVM SDK against this JDK 11 toolchain.
     SECRETSPEC_JVM_TARGET_JDK = "${pkgs.jdk11}";
+    # Force-build the development version of the Elixir SDK
+    SECRETSPEC_EX_FORCE_BUILD = true;
   } //
   # Fully-static musl build of the Go SDK (-tags static + -extldflags -static).
   # Keep these Linux-only: interpolating the cross-toolchain paths on macOS makes

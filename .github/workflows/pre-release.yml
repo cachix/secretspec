@@ -21,6 +21,8 @@ on:
       - "secretspec-dotnet/src/SecretSpec/SecretSpec.csproj"
       - "secretspec-jvm/gradle.properties"
       - "Package.swift"
+      - "secretspec-ex/**"
+      - ".github/workflows/elixir-package.yml"
 
 permissions:
   contents: read
@@ -82,6 +84,16 @@ jobs:
     with:
       pre_release: true
       publish: false
+
+  elixir:
+    name: Elixir SDK
+    needs: authorize
+    permissions:
+      contents: read
+    uses: ./.github/workflows/elixir-package.yml
+    with:
+      pre_release: true
+      release_tag: ""
 
   python:
     name: Python wheels

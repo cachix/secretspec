@@ -1,0 +1,11 @@
+[package]
+name = "secretspec_native"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.38"
+secretspec = { workspace = true }

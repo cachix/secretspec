@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Setec preserves binary secret values on reads and writes, and discovery
+  handles empty results from servers with no visible secrets (0.21+).
+
 - Command generation rejects Unicode-whitespace-only output while preserving
   accepted secrets byte-for-byte, including binary output and surrounding whitespace.
 

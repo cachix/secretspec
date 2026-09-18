@@ -173,7 +173,7 @@ $ secretspec run --provider setec://secrets.example.ts.net -- deploy
   an origin selected by a server response.
 - `tls=false` sends secret values over plaintext HTTP and is intended only for
   isolated local development.
-- Setec supports arbitrary byte strings, but SecretSpec secret values must be
-  valid UTF-8.
+- SecretSpec preserves arbitrary bytes in Setec values (0.21+). Text-only
+  consumers still require valid UTF-8.
 - A write can create a new inactive version before `activate` fails. The error
   identifies this partial result; the previously active value remains active.

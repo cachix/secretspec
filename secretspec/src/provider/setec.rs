@@ -13,9 +13,8 @@
 
 use super::{Address, DiscoveryContext, Provider, ProviderUrl};
 use crate::config::NativeAddress;
-use crate::{Result, Secret, SecretSpecError};
+use crate::{Result, Secret, SecretBytes, SecretSpecError};
 use data_encoding::BASE64;
-use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -274,7 +273,7 @@ impl SetecProvider {
         })
     }
 
-    async fn get_async(&self, name: &str, version: u32) -> Result<Option<SecretString>> {
+    async fn get_async(&self, name: &str, version: u32) -> Result<Option<SecretBytes>> {
         let Some(response): Option<GetResponse> = self
             .post(
                 "/api/get",
@@ -290,16 +289,11 @@ impl SetecProvider {
                 "Setec returned invalid base64 for secret '{name}': {error}"
             ))
         })?;
-        let value = String::from_utf8(bytes).map_err(|_| {
-            operation_error(format!(
-                "Setec secret '{name}' is not UTF-8 and cannot be represented by SecretSpec"
-            ))
-        })?;
-        Ok(Some(SecretString::new(value.into())))
+        Ok(Some(SecretBytes::from_vec(bytes)))
     }
 
-    async fn set_async(&self, name: &str, value: &SecretString) -> Result<()> {
-        let encoded = BASE64.encode(value.expose_secret().as_bytes());
+    async fn set_async(&self, name: &str, value: &SecretBytes) -> Result<()> {
+        let encoded = BASE64.encode(value.expose_secret());
         let version: u32 = self
             .post(
                 "/api/put",
@@ -361,11 +355,12 @@ impl SetecProvider {
     ) -> Result<HashMap<String, Secret>> {
         let parent = self.convention_parent(context.project, context.profile)?;
         let prefix = format!("{parent}/");
-        let listed: Vec<SecretInfo> = self
+        let listed: Option<Vec<SecretInfo>> = self
             .post("/api/list", &serde_json::json!({}), "listing secrets")
             .await?
             .ok_or_else(|| operation_error("Setec list endpoint was not found"))?;
         Ok(listed
+            .unwrap_or_default()
             .into_iter()
             .filter_map(|info| {
                 let key = info.name.strip_prefix(&prefix)?;
@@ -394,7 +389,7 @@ impl Provider for SetecProvider {
         &["version"]
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let coordinates = self.resolved(addr)?;
         let version = coordinates
             .version
@@ -416,7 +411,7 @@ impl Provider for SetecProvider {
         Ok(())
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)?;
         let coordinates = self.resolve_coords(addr)?;
         super::block_on(self.set_async(&coordinates.item, value))
@@ -646,7 +641,7 @@ mod tests {
             .get(Address::convention("app", "prod", "KEY"))
             .unwrap()
             .unwrap();
-        assert_eq!(active.expose_secret(), "secret value");
+        assert_eq!(active.expose_secret(), b"secret value");
         let native = NativeAddress {
             item: "existing/name".into(),
             version: Some("2".into()),
@@ -672,11 +667,11 @@ mod tests {
         server.join().unwrap();
 
         let (endpoint, server) =
-            response_server(vec![("200 OK", r#"{"Value":"/w==","Version":1}"#)]);
+            response_server(vec![("200 OK", r#"{"Value":"not base64!","Version":1}"#)]);
         let error = provider(endpoint)
-            .get(Address::convention("app", "prod", "BINARY"))
+            .get(Address::convention("app", "prod", "BAD_BASE64"))
             .unwrap_err();
-        assert!(error.to_string().contains("not UTF-8"), "{error}");
+        assert!(error.to_string().contains("invalid base64"), "{error}");
         server.join().unwrap();
     }
 
@@ -703,7 +698,7 @@ mod tests {
         provider(endpoint)
             .set(
                 Address::convention("app", "prod", "KEY"),
-                &SecretString::new("replacement".into()),
+                &SecretBytes::from_utf8("replacement"),
             )
             .unwrap();
         let requests = server.join().unwrap();
@@ -714,13 +709,34 @@ mod tests {
     }
 
     #[test]
+    fn binary_values_round_trip() {
+        let (endpoint, server) = response_server(vec![
+            ("200 OK", "1"),
+            ("200 OK", "{}"),
+            ("200 OK", r#"{"Value":"/wBhCg==","Version":1}"#),
+        ]);
+        let provider = provider(endpoint);
+        let address = Address::convention("app", "prod", "BINARY");
+        let expected = b"\xff\x00a\n";
+        provider
+            .set(address, &SecretBytes::from_vec(expected.to_vec()))
+            .unwrap();
+        let value = provider.get(address).unwrap().unwrap();
+        assert_eq!(value.expose_secret(), expected);
+        let requests = server.join().unwrap();
+        assert_eq!(requests[0].body["Value"], "/wBhCg==");
+        assert_eq!(requests[1].line, "POST /api/activate HTTP/1.1");
+        assert_eq!(requests[2].line, "POST /api/get HTTP/1.1");
+    }
+
+    #[test]
     fn activation_failure_reports_partial_write() {
         let (endpoint, server) =
             response_server(vec![("200 OK", "8"), ("403 Forbidden", "access denied")]);
         let error = provider(endpoint)
             .set(
                 Address::convention("app", "prod", "KEY"),
-                &SecretString::new("replacement".into()),
+                &SecretBytes::from_utf8("replacement"),
             )
             .unwrap_err();
         assert!(error.to_string().contains("stored version 8"), "{error}");
@@ -778,6 +794,35 @@ mod tests {
         assert_eq!(reflected.len(), 1);
         assert!(reflected.contains_key("FIRST"));
         server.join().unwrap();
+    }
+
+    #[test]
+    fn reflection_accepts_empty_and_null_lists() {
+        for body in ["[]", "null"] {
+            let (endpoint, server) = response_server(vec![("200 OK", body)]);
+            let reflected = provider(endpoint)
+                .reflect(DiscoveryContext::new("app", "prod"))
+                .unwrap();
+            assert!(reflected.is_empty(), "{body}");
+            let requests = server.join().unwrap();
+            assert_eq!(requests[0].line, "POST /api/list HTTP/1.1");
+        }
+    }
+
+    #[test]
+    fn reflection_rejects_missing_endpoint_and_invalid_json() {
+        for (status, body, expected) in [
+            ("404 Not Found", "not found", "list endpoint was not found"),
+            ("200 OK", "not-json", "invalid JSON"),
+            ("200 OK", "{}", "invalid JSON"),
+        ] {
+            let (endpoint, server) = response_server(vec![(status, body)]);
+            let error = provider(endpoint)
+                .reflect(DiscoveryContext::new("app", "prod"))
+                .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+            server.join().unwrap();
+        }
     }
 
     #[test]

@@ -2685,7 +2685,7 @@ impl Provider for BitwardenProvider {
         &self,
         addr: Address<'a>,
     ) -> Result<std::borrow::Cow<'a, crate::config::NativeAddress>> {
-        let mut coords = self.resolve_coords(addr)?.into_owned();
+        let mut coords = self.configured_entry_coordinates(addr)?.into_owned();
         // A title and an ID can address the same existing item, even when the
         // selected field is absent. Use the write path's scoped, unfiltered
         // lookup so import preflight detects that collision before any writes.
@@ -2693,6 +2693,14 @@ impl Provider for BitwardenProvider {
         if let Some(item) = find_addressed_item(&items, &coords.item, self.resolved_item_type()?)? {
             coords.item = item.id.clone();
         }
+        Ok(std::borrow::Cow::Owned(coords))
+    }
+
+    fn configured_entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<std::borrow::Cow<'a, crate::config::NativeAddress>> {
+        let mut coords = self.resolve_coords(addr)?.into_owned();
         if coords.field.is_none() {
             coords.field = Some(
                 match std::env::var("BITWARDEN_DEFAULT_FIELD")
@@ -4653,6 +4661,102 @@ mod tests {
     }
 
     // -- fake-bw CLI subprocess tests -------------------------------------
+
+    #[cfg(unix)]
+    #[test]
+    fn configured_cache_comparison_does_not_list_bitwarden_items() {
+        with_clean_env(|| {
+            let fake = FakeBw::new().with_failure(1, "", "vault must not be read");
+            fake.run(|| {
+                let source = BitwardenProvider::new(BitwardenConfig {
+                    folder_prefix: Some("source".to_string()),
+                    ..Default::default()
+                });
+                let cache = BitwardenProvider::new(BitwardenConfig {
+                    folder_prefix: Some("cache".to_string()),
+                    ..Default::default()
+                });
+                for key in ["A", "B"] {
+                    let addr = Address::convention("project", "default", key);
+                    assert!(
+                        !crate::provider::same_configured_entries(&source, addr, &cache, addr,)
+                            .unwrap()
+                    );
+                    assert!(
+                        crate::provider::same_configured_entries(&source, addr, &source, addr,)
+                            .unwrap()
+                    );
+                    let native = crate::config::NativeAddress {
+                        item: format!("source/{key}"),
+                        field: Some("password".to_string()),
+                        ..Default::default()
+                    };
+                    assert!(
+                        crate::provider::same_configured_entries(
+                            &source,
+                            addr,
+                            &cache,
+                            Address::Native(&native),
+                        )
+                        .unwrap()
+                    );
+                }
+                assert!(fake.invocations().is_empty());
+            });
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_cache_resolution_does_not_list_source_items() {
+        let _env = crate::tests::scrub_resolution_env();
+        with_clean_env(|| {
+            let fake = FakeBw::new().with_items(json!([
+                { "id": "source-a", "name": "source/A", "type": 1,
+                  "login": { "password": "value-a" } },
+                { "id": "source-b", "name": "source/B", "type": 1,
+                  "login": { "password": "value-b" } }
+            ]));
+            fake.run(|| {
+                let mut config: crate::config::Config = toml::from_str(
+                    r#"
+                    [project]
+                    name = "cache-read-test"
+                    revision = "1.0"
+                    [providers]
+                    source = "bw://?folder=source"
+                    cached = { fallback = ["source"], cache = { provider = "local", max_age = "8h" } }
+                    [profiles.default]
+                    A = { providers = ["cached"] }
+                    B = { providers = ["cached"] }
+                "#,
+                )
+                .unwrap();
+                config.providers.as_mut().unwrap().insert(
+                    "local".to_string(),
+                    crate::config::ProviderAlias::from(format!(
+                        "dotenv://{}",
+                        fake.dir.join("cache.env").display()
+                    )),
+                );
+                let secrets = crate::Secrets::new(config, None, None, None);
+                // Populate both cache entries through the normal resolution path.
+                let first = secrets.resolve().unwrap();
+                assert_eq!(first.secrets["A"].value.as_deref(), Some("value-a"));
+                assert_eq!(first.secrets["B"].value.as_deref(), Some("value-b"));
+                std::fs::write(fake.dir.join("invocations.log"), "").unwrap();
+
+                let cached = secrets.resolve().unwrap();
+                assert_eq!(cached.secrets["A"].value.as_deref(), Some("value-a"));
+                assert_eq!(cached.secrets["B"].value.as_deref(), Some("value-b"));
+                let log = fake.invocations();
+                assert!(
+                    log.is_empty(),
+                    "fresh cache resolution must not invoke the Bitwarden source: {log}"
+                );
+            });
+        });
+    }
 
     // -- check_server ------------------------------------------------------
 

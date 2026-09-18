@@ -31,6 +31,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [plaintext files](https://secretspec.dev/providers/file) (0.19+)
   - [1Password](https://secretspec.dev/providers/onepassword)
   - [Keeper Secrets Manager](https://secretspec.dev/providers/keeper) (0.18+)
+  - [Doppler](https://secretspec.dev/providers/doppler) (0.21+)
   - [LastPass](https://secretspec.dev/providers/lastpass)
   - [Dashlane](https://secretspec.dev/providers/dashlane) (0.18+)
   - [Pass](https://secretspec.dev/providers/pass)
@@ -89,6 +90,7 @@ $ secretspec config global init  # 0.17+
   kdbx: KeePass KDBX databases (0.17+)
   onepassword: 1Password password manager
   keeper: Keeper Secrets Manager (0.18+) via official Rust SDK
+  doppler: Doppler secret management (0.21+)
   dotenv: Traditional .env files
   file: Plaintext files, one per secret (0.19+)
   env: Read-only environment variables
@@ -232,6 +234,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Passbolt](https://secretspec.dev/providers/passbolt)** (0.19+) - Self-hosted Passbolt through go-passbolt-cli
 - **[1Password](https://secretspec.dev/providers/onepassword)** - Team secret management
 - **[Keeper Secrets Manager](https://secretspec.dev/providers/keeper)** (0.18+) - Machine secrets through Keeper's official Rust SDK
+- **[Doppler](https://secretspec.dev/providers/doppler)** (0.21+) - Doppler projects and configs over its REST API, with verbatim secret names
 - **[LastPass](https://secretspec.dev/providers/lastpass)** - Cloud password manager
 - **[Dashlane](https://secretspec.dev/providers/dashlane)** (0.18+) - Read-only access to a Dashlane vault via the `dcli` CLI
 - **[Google Cloud Secret Manager](https://secretspec.dev/providers/gcsm)** - GCP secret management

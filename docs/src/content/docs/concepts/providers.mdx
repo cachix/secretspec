@@ -64,6 +64,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [awssm](/providers/awssm/) | AWS Secrets Manager, including `SecretBinary` (0.21+; requires the `awssm` build feature) | ✓ | ✓ | ✓ | — |
 | [awsps](/providers/awsps/) (0.18+) | AWS Systems Manager Parameter Store (requires the `awsps` build feature in 0.18+) | ✓ | ✓ | ✓ (`SecureString`) | — |
 | [scaleway](/providers/scaleway/) (0.17+) | Scaleway Secret Manager (requires the `scaleway` build feature) | ✓ | ✓ | ✓ | — |
+| [setec](/providers/setec/) (0.21+) | Tailscale Setec (requires the `setec` build feature) | ✓ | ✓ | ✓ | Depends on server key configuration |
 | [vault](/providers/vault/) | HashiCorp Vault (requires the `vault` build feature) | ✓ | ✓ | ✓ | — |
 | [openbao](/providers/openbao/) (0.17+) | OpenBao (requires the `openbao` build feature; 0.16 uses `openbao://` through `vault`) | ✓ | ✓ | ✓ | — |
 | [bw](/providers/bw/) (0.18+) | Bitwarden Password Manager via the `bw` CLI (requires the `bw` build feature) | ✓ | ✓ | ✓ | — |

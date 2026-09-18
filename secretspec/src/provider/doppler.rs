@@ -1459,7 +1459,10 @@ impl Provider for DopplerProvider {
     /// that identity before removing a source entry. Every operation resolves
     /// through [`locate`](Self::locate), which supplies the same default, so
     /// this does too.
-    fn entry_coordinates<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
+    fn configured_entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<Cow<'a, NativeAddress>> {
         let loc = self.locate(addr)?;
         Ok(Cow::Owned(NativeAddress {
             item: format!("{}/{}", loc.config, loc.name),

@@ -61,6 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Cache overlap checks no longer read provider storage before consulting cached
+  values, avoiding redundant Bitwarden vault listings during planning.
+
 - Command generation rejects Unicode-whitespace-only output while preserving
   accepted secrets byte-for-byte, including binary output and surrounding whitespace.
 

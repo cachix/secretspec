@@ -168,7 +168,9 @@ pub(crate) use traits::GET_EACH_CONCURRENCY_ENV;
 pub(crate) use traits::get_each;
 #[cfg(any(feature = "infisical", feature = "openbao", feature = "vault"))]
 pub(crate) use traits::get_each_with;
-pub(crate) use traits::{get_each_concurrency, map_concurrently, same_storage_container};
+pub(crate) use traits::{
+    get_each_concurrency, map_concurrently, same_configured_entries, same_storage_container,
+};
 pub(crate) use url::{ProviderUrl, URI_ENCODE_SET};
 
 // Provider implementations.

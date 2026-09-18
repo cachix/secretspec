@@ -490,8 +490,7 @@ impl Secrets {
     /// none, so a refresh would overwrite the authoritative value with the
     /// envelope and `cache clear` would null it. This is the one place the
     /// profile and the address are both known before any store is touched, so
-    /// the comparison is the provider's own
-    /// [`same_entries`](crate::provider::Provider::same_entries), over the
+    /// the comparison uses configuration-only entry coordinates, over the
     /// addresses the cache and the source will actually use.
     ///
     /// Like the identity guard, this refuses only on a positive match. A
@@ -530,13 +529,15 @@ impl Secrets {
                 continue;
             };
             let source_addr = self.address_for_spec(planned, Some(spec), project, profile)?;
-            let overlaps = source
-                .same_entries(
-                    source_addr.as_address(),
-                    cache_provider.as_ref(),
-                    cache_addr.as_address(),
-                )
-                .unwrap_or(false);
+            // `same_entries` may list vault items to resolve titles to IDs.
+            // Planning must not make those unaudited reads before a cache hit.
+            let overlaps = crate::provider::same_configured_entries(
+                source.as_ref(),
+                source_addr.as_address(),
+                cache_provider.as_ref(),
+                cache_addr.as_address(),
+            )
+            .unwrap_or(false);
             if overlaps {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
                     "cached provider alias '{alias}' caches '{name}' at the same entry its \
@@ -1327,6 +1328,90 @@ mod tests {
 
     fn cached_spec(secret_providers: Vec<&str>) -> Secrets {
         cached_spec_with(secret_providers, &[])
+    }
+
+    // A source sharing the cache's container but using a different namespace.
+    // Its destructive comparison models a provider that reads storage.
+    struct CacheProbeProvider;
+    static CACHE_PROBE_READS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    impl CacheProbeProvider {
+        fn new(_: crate::provider::tests::MemTestConfig) -> Self {
+            Self
+        }
+    }
+
+    crate::register_provider! {
+        struct: CacheProbeProvider,
+        config: crate::provider::tests::MemTestConfig,
+        name: "cacheprobe",
+        description: "Cache planning regression source",
+        schemes: ["cacheprobe"],
+        examples: ["cacheprobe://"],
+    }
+
+    impl crate::provider::Provider for CacheProbeProvider {
+        fn name(&self) -> &'static str {
+            Self::PROVIDER_NAME
+        }
+        fn uri(&self) -> String {
+            "cacheprobe://".to_string()
+        }
+        fn entry_container_identity(&self) -> String {
+            "memtest://".to_string()
+        }
+        fn convention_address(
+            &self,
+            project: &str,
+            profile: &str,
+            key: &str,
+        ) -> Result<NativeAddress> {
+            Ok(NativeAddress {
+                item: format!("source/{project}/{profile}/{key}"),
+                ..Default::default()
+            })
+        }
+        fn entry_coordinates<'a>(
+            &self,
+            _: crate::provider::Address<'a>,
+        ) -> Result<std::borrow::Cow<'a, NativeAddress>> {
+            panic!("planning must not invoke a storage-reading entry comparison")
+        }
+        fn get(&self, _: crate::provider::Address<'_>) -> Result<Option<crate::SecretBytes>> {
+            CACHE_PROBE_READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Some(crate::SecretBytes::from_utf8("source-value")))
+        }
+        fn set(&self, _: crate::provider::Address<'_>, _: &crate::SecretBytes) -> Result<()> {
+            panic!("source must not be written")
+        }
+    }
+
+    #[test]
+    fn fresh_cache_resolution_skips_storage_reading_entry_comparisons() {
+        let _env = scrub_resolution_env();
+        CACHE_PROBE_READS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let config = toml::from_str(r#"
+            [project]
+            name = "cache-probe-regression"
+            revision = "1.0"
+            [providers]
+            cached = { fallback = ["cacheprobe://"], cache = { provider = "memtest://", max_age = "8h" } }
+            [profiles.default]
+            A = { providers = ["cached"] }
+            B = { providers = ["cached"] }
+        "#).unwrap();
+        let spec = Secrets::new(config, None, None, None);
+        for _ in 0..2 {
+            let resolved = spec.resolve().unwrap();
+            for key in ["A", "B"] {
+                assert_eq!(resolved.secrets[key].value.as_deref(), Some("source-value"));
+            }
+            assert_eq!(
+                CACHE_PROBE_READS.load(std::sync::atomic::Ordering::SeqCst),
+                2
+            );
+        }
     }
 
     #[test]

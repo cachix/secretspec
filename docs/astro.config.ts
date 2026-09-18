@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
-import starlightLlmsTxt from "starlight-llms-txt";
+import starlightLlmActions from "starlight-llm-actions";
 import starlightBlog from "starlight-blog";
 import { siteKitAstro } from "@cachix/site-kit/astro";
 import { siteKitStarlight } from "@cachix/site-kit/starlight";
 import { siteBlogOptions } from "@cachix/site-kit/starlight/blog";
-import { siteLlmsOptions } from "@cachix/site-kit/starlight/llms";
+import { siteLlmActionsOptions } from "@cachix/site-kit/starlight/llms";
 import { preserveHeadingIdPlugin } from "./src/lib/preserve-heading-id.mjs";
 
 const rustSdkBasicExample = readFileSync(
@@ -29,7 +29,7 @@ export default defineConfig({
       plugins: [
         siteKitStarlight(),
         starlightBlog(siteBlogOptions()),
-        starlightLlmsTxt(siteLlmsOptions(`SecretSpec is a declarative secrets manager for development workflows. It separates secret **declaration** from secret **storage**: commit a \`secretspec.toml\` that declares what secrets your application needs, while the actual values live in a secure provider (system keyring, 1Password, Vault, etc.).
+        starlightLlmActions(siteLlmActionsOptions(`SecretSpec is a declarative secrets manager for development workflows. It separates secret **declaration** from secret **storage**: commit a \`secretspec.toml\` that declares what secrets your application needs, while the actual values live in a secure provider (system keyring, 1Password, Vault, etc.).
 
 SecretSpec answers three questions for every project:
 

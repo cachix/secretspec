@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Setec preserves binary secret values on reads and writes, and discovery
   handles empty results from servers with no visible secrets (0.21+).
 
+- Bitwarden Password Manager resolves a batch of secrets with a single `bw
+  list items` instead of one listing per secret (0.21+). Single reads whose
+  `bw list items --search` prefilter returns only similarly named items now
+  fall back to the full listing, so they find the same items as batch reads
+  and writes.
+
 - Command generation rejects Unicode-whitespace-only output while preserving
   accepted secrets byte-for-byte, including binary output and surrounding whitespace.
 

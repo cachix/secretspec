@@ -6,6 +6,10 @@
   "assets": {
     "directory": "./dist",
     "not_found_handling": "404-page", // If you have a custom `src/pages/404.astro` page
-    "binding": "ASSETS" // Lets worker.js fall back to static assets
+    "binding": "ASSETS", // Lets worker.js fall back to static assets
+    // Run the Worker before static assets so `Accept: text/markdown` requests
+    // for a page can be answered from the prebuilt `index.md` beside it.
+    // Hashed build assets skip the Worker entirely.
+    "run_worker_first": ["/*", "!/_astro/*"]
   }
 }

@@ -278,7 +278,7 @@ impl Provider for KdbxProvider {
         &["field"]
     }
 
-    fn entry_coordinates<'a>(
+    fn configured_entry_coordinates<'a>(
         &self,
         addr: Address<'a>,
     ) -> Result<std::borrow::Cow<'a, NativeAddress>> {

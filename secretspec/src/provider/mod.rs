@@ -18,6 +18,7 @@
 //! - [`keyring::KeyringProvider`]: System keyring integration (default)
 //! - [`kdbx::KdbxProvider`]: KeePass KDBX database integration (0.17+)
 //! - [`keeper::KeeperProvider`]: Keeper Secrets Manager integration (0.18+)
+//! - [`doppler::DopplerProvider`]: Doppler integration (0.21+)
 //! - [`dotenv::DotEnvProvider`]: `.env` file support
 //! - [`env::EnvProvider`]: Environment variables (read-only)
 //! - [`ejson::EjsonProvider`]: EJSON encrypted files (0.20+)
@@ -59,6 +60,7 @@
 //! onepassword://vault
 //! lastpass://folder
 //! keeper://SHARED_FOLDER_UID  # Keeper, 0.18+
+//! doppler://myapp/prd         # Doppler, 0.21+
 //! ```
 //!
 //! ## Example
@@ -155,6 +157,7 @@ pub(crate) use registry::{
     feature = "awsps",
     feature = "awssm",
     feature = "cloudflare",
+    feature = "doppler",
     feature = "gcsm",
     feature = "infisical",
     feature = "scaleway",
@@ -167,7 +170,9 @@ pub(crate) use traits::GET_EACH_CONCURRENCY_ENV;
 pub(crate) use traits::get_each;
 #[cfg(any(feature = "infisical", feature = "openbao", feature = "vault"))]
 pub(crate) use traits::get_each_with;
-pub(crate) use traits::{get_each_concurrency, map_concurrently, same_storage_container};
+pub(crate) use traits::{
+    get_each_concurrency, map_concurrently, same_configured_entries, same_storage_container,
+};
 pub(crate) use url::{ProviderUrl, URI_ENCODE_SET};
 
 // Provider implementations.
@@ -188,6 +193,8 @@ pub mod bws;
 #[cfg(feature = "cloudflare")]
 pub mod cloudflare;
 pub mod dashlane;
+#[cfg(feature = "doppler")]
+pub mod doppler;
 pub mod dotenv;
 #[cfg(feature = "ejson")]
 pub mod ejson;

@@ -131,8 +131,14 @@ impl Provider for PreflightGuard {
         self.inner.resolve_coords(addr)
     }
 
+    fn configured_entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<Cow<'a, NativeAddress>> {
+        self.inner.configured_entry_coordinates(addr)
+    }
+
     fn entry_coordinates<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
-        // Pure naming, no I/O: needs no auth preflight.
         self.inner.entry_coordinates(addr)
     }
 

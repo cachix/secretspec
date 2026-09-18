@@ -62,7 +62,7 @@ pub(crate) fn credential_env_value(value: &SecretBytes) -> Result<&OsStr> {
 
 /// Builds a sensitive bearer header directly from credential bytes, validating
 /// the HTTP header syntax without imposing a UTF-8 requirement.
-#[cfg(any(feature = "cloudflare", feature = "infisical"))]
+#[cfg(any(feature = "cloudflare", feature = "doppler", feature = "infisical"))]
 pub(crate) fn credential_bearer_header(value: &[u8]) -> Result<reqwest::header::HeaderValue> {
     let mut bearer = b"Bearer ".to_vec();
     bearer.extend_from_slice(value);
@@ -195,7 +195,7 @@ mod tests {
         assert!(!format!("{error:?}: {error}").contains("private-credential"));
     }
 
-    #[cfg(any(feature = "cloudflare", feature = "infisical"))]
+    #[cfg(any(feature = "cloudflare", feature = "doppler", feature = "infisical"))]
     #[test]
     fn bearer_headers_preserve_bytes_and_reject_invalid_header_syntax() {
         let header = super::credential_bearer_header(b"private-credential\xff").unwrap();

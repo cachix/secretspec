@@ -111,16 +111,28 @@ pub trait Provider: Send + Sync {
         Ok(coords)
     }
 
+    /// Resolves entry coordinates using only configuration and address defaults.
+    /// Available since SecretSpec 0.21.
+    ///
+    /// This must not read provider storage or invoke a provider CLI. Planning
+    /// uses it before consulting the cache. Providers should fill in implicit
+    /// coordinates here; aliases that require a lookup, such as an item title
+    /// and UUID, are resolved only by [`Self::entry_coordinates`].
+    fn configured_entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<Cow<'a, NativeAddress>> {
+        self.resolve_coords(addr)
+    }
+
     /// Resolves the canonical coordinates an operation uses to identify one
     /// physical entry. Available since SecretSpec 0.19.
     ///
-    /// The default is the validated address returned by
-    /// [`resolve_coords`](Provider::resolve_coords). Providers that interpret
-    /// an omitted coordinate as a concrete default must override this method
-    /// and fill that default, so destructive preflight compares the same
-    /// identity that `get`, `set`, and `delete` operate on.
+    /// Defaults to [`Self::configured_entry_coordinates`]. Providers may read
+    /// storage to resolve aliases here, so this is suitable for destructive
+    /// preflight but must not be used during cache planning.
     fn entry_coordinates<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
-        self.resolve_coords(addr)
+        self.configured_entry_coordinates(addr)
     }
 
     /// Retrieves the secret named by `addr`.
@@ -396,6 +408,9 @@ pub trait Provider: Send + Sync {
     /// only meaningful after resolving a concrete address. The physical store
     /// and the resolved native coordinates must both match before an entry is
     /// considered shared.
+    ///
+    /// This may read provider storage through [`Self::entry_coordinates`] and
+    /// must not be used for cache planning.
     fn same_entries(
         &self,
         self_addr: Address<'_>,
@@ -589,6 +604,21 @@ where
     }
 }
 
+/// Compares configured entry addresses without reading provider storage.
+/// Aliases that require remote lookup are deliberately left unresolved.
+pub(crate) fn same_configured_entries(
+    left: &dyn Provider,
+    left_addr: Address<'_>,
+    right: &dyn Provider,
+    right_addr: Address<'_>,
+) -> Result<bool> {
+    if !same_storage_container(left, right) {
+        return Ok(false);
+    }
+    Ok(left.configured_entry_coordinates(left_addr)?
+        == right.configured_entry_coordinates(right_addr)?)
+}
+
 /// Default max concurrent unique-address fetches in [`get_each`].
 ///
 /// Providers that open one TCP connection per concurrent `get` (cold HTTP
@@ -702,6 +732,13 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn resolve_coords<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
         (**self).resolve_coords(addr)
     }
+    fn configured_entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<Cow<'a, NativeAddress>> {
+        (**self).configured_entry_coordinates(addr)
+    }
+
     fn entry_coordinates<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
         (**self).entry_coordinates(addr)
     }

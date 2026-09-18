@@ -882,7 +882,7 @@ Stores fall into two groups for `field`:
 
 | Store | Shape of one secret | `field` |
 |-------|---------------------|---------|
-| dotenv, file (0.19+), env, pass, LastPass, Proton Pass, Bitwarden, AWS Parameter Store (0.18+) | a single value | Rejected: there is nothing to select |
+| dotenv, file (0.19+), env, pass, LastPass, Proton Pass, Bitwarden, AWS Parameter Store (0.18+), Doppler (0.21+) | a single value | Rejected: there is nothing to select |
 | 1Password, Keeper (0.18+), Passbolt (0.19+), Vault KV, AWS Secrets Manager, keyring | a record of named parts | Selects the part: field label, map key, JSON key, account |
 
 `vault` is the only container coordinate. For every store except 1Password the
@@ -963,6 +963,7 @@ entry declares neither, it inherits whichever form `[profiles.default]` uses.
 | [AWS Secrets Manager](/providers/awssm/#use-existing-secrets) | Secret name or ARN | JSON key (UTF-8 only) | Whole `SecretString` or `SecretBinary` value (0.21+) | — (read-only) |
 | [AWS Parameter Store (0.18+)](/providers/awsps/#use-existing-parameters) | Parameter name or ARN; `version` selects a version or label | Rejected | Reads the decrypted value | ✅ by unversioned parameter name; version, label, and ARN refs are read-only |
 | [GCSM](/providers/gcsm/#use-existing-secrets) | Secret id; `version` also applies | Rejected | Reads latest or the pinned version | — (read-only) |
+| [Doppler (0.21+)](/providers/doppler/#use-existing-secrets) | `config/NAME`, or a bare `NAME` when the URI pins a config | Rejected | Reads the secret's resolved value | ✅ |
 | [Bitwarden (bws)](/providers/bws/#use-existing-secrets) | BWS key name | Rejected | Reads the key | ✅ |
 | [Azure Key Vault (0.15+)](/providers/akv/#use-existing-secrets) | Secret name; `version` pins a version (0.20+) | Rejected | Reads latest or the pinned version (0.20+) | — (read-only) |
 | [Azure App Configuration (0.20+)](/providers/aac/#use-existing-key-values) | App Configuration key | Rejected | Reads the direct value or resolves its canonical Key Vault reference | — (read-only) |

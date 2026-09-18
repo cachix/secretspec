@@ -1084,7 +1084,7 @@ impl Provider for InfisicalProvider {
     /// Resolves every part of the entry identity that Infisical sends to the
     /// API. In particular, the environment may come from session profile
     /// context rather than the provider URI or native coordinates.
-    fn entry_coordinates<'a>(
+    fn configured_entry_coordinates<'a>(
         &self,
         addr: Address<'a>,
     ) -> Result<std::borrow::Cow<'a, NativeAddress>> {

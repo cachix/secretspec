@@ -1,2 +1,4 @@
 secretspec/src/provider/sops/test_fixtures/** text eol=lf
+# Generated schemas must match the CLI's LF output on every platform.
+docs/public/schema/*.json text eol=lf
 *.bat text eol=crlf

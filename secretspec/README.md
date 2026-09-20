@@ -150,6 +150,14 @@ See the [installation guide](https://secretspec.dev/quick-start#installation) fo
 
 ## Configuration
 
+Editor autocomplete is available through JSON Schemas (0.21+). Add
+`#:schema https://secretspec.dev/schema/secretspec.schema.json` at the top of
+`secretspec.toml`, or `#:schema https://secretspec.dev/schema/config.schema.json`
+at the top of your user `config.toml`, in an editor using Taplo. Generate a schema
+matching your installed CLI with `secretspec schema --config project` or
+`secretspec schema --config global` (0.21+); use `--output FILE` to save it. See the
+[editor setup guide](https://secretspec.dev/reference/configuration/#editor-autocomplete).
+
 Each project has a `secretspec.toml` file that declares the required secrets:
 
 ```toml

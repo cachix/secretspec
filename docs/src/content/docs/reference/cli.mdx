@@ -588,6 +588,7 @@ For a composed secret, `get` resolves its transitive dependencies and prints
 the derived value. Available since SecretSpec 0.16.
 
 ### schema
+
 Emit a single-root JSON Schema for the manifest's typed shape: by default the
 union `SecretSpec` (safe for any profile); with `--profile`, that profile's exact
 fields. Value-free: reads only the manifest, never a provider.
@@ -621,6 +622,24 @@ print(s.database_url)   # typed str
 The same pattern works in every SDK: Go `UnmarshalSecretSpec(resolved.FieldsJSON())`,
 TypeScript `Convert.toSecretSpec(resolved.fieldsJson())`, Ruby
 `SecretSpec.from_dynamic!(resolved.fields)`.
+
+#### Configuration editor schemas
+
+<VersionCompatibility version="0.21" />
+
+Use `--config project` for the `secretspec.toml` editor schema or `--config global`
+for the user `config.toml` editor schema. Both are generated from the installed
+CLI's Rust configuration types, with completion descriptions and allowed values.
+They require no configuration files and never read secrets or contact providers.
+
+```bash
+$ secretspec schema --config project
+$ secretspec schema --config global --output config.schema.json
+```
+
+`--output` writes to a file instead of stdout. `--config` cannot be combined with
+`--profile`. See [editor autocomplete](/reference/configuration/#editor-autocomplete)
+for how to associate the generated schemas with TOML files.
 
 ### add {/* #add-018 */}
 

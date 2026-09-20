@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- JSON Schemas for `secretspec.toml` and user `config.toml` provide editor
+  autocomplete, hover descriptions, and structural validation. Export schemas
+  matching the installed CLI with `secretspec schema --config project` or
+  `secretspec schema --config global` (0.21+).
+
 - Secret values can flow through providers, fallback chains, imports, and the
   cache as arbitrary bytes. `Secrets::set` and `secretspec set --from-file`
   accept exact byte input, `as_path` preserves it byte-for-byte, the file and

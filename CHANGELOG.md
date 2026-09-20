@@ -66,6 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- KeePass KDBX 4.0 databases can be written after creation or editing in
+  KeePassXC. Writes upgrade the file format to KDBX 4.1 while preserving
+  encryption and key-derivation settings (0.21+).
+
 - Bitwarden Password Manager resolves a batch of secrets with a single `bw
   list items` instead of one listing per secret (0.21+). Single reads whose
   `bw list items --search` prefilter returns only similarly named items now

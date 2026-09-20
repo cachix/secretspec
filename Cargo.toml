@@ -24,6 +24,7 @@ keeper-secrets-manager-core = { version = "17.3.0", default-features = false, fe
 libc = "0.2"
 signal-hook = "0.4"
 serde = { version = "1.0", features = ["derive"] }
+schemars = "1.2"
 toml = "1.1"
 toml_edit = { version = "0.25", features = ["serde"] }
 thiserror = "2.0"

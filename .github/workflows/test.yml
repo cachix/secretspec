@@ -63,6 +63,7 @@ jobs:
         code=false
         while IFS= read -r path; do
           case "$path" in
+            docs/public/schema/*) code=true; break ;;
             docs/*|*.md|*.mdx) ;;
             *) code=true; break ;;
           esac

@@ -251,11 +251,18 @@ enum Commands {
     /// describes the union `SecretSpec` (safe for any profile); `--profile` gives
     /// that profile's exact fields. Value-free: reads only the manifest.
     ///
+    /// With --config project or --config global (0.21+), emit an editor schema
+    /// for the TOML configuration format instead. No configuration files or
+    /// providers are accessed in this mode.
+    ///
     /// Example: `secretspec schema | quicktype -s schema --top-level SecretSpec --lang typescript`
     Schema {
         /// Emit the schema for this profile's fields instead of the union
-        #[arg(short = 'P', long, add = clap_complete::ArgValueCompleter::new(completion::profiles))]
+        #[arg(short = 'P', long, conflicts_with = "config", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
         profile: Option<String>,
+        /// Emit an editor schema for project secretspec.toml or global config.toml (0.21+)
+        #[arg(long, value_enum)]
+        config: Option<ConfigSchemaKind>,
         /// Write to this file instead of stdout
         #[arg(short, long, value_hint = ValueHint::FilePath)]
         output: Option<PathBuf>,
@@ -333,6 +340,15 @@ enum CacheAction {
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
         profile: Option<String>,
     },
+}
+
+/// Which TOML document an editor schema describes.
+#[derive(Clone, Copy, ValueEnum)]
+enum ConfigSchemaKind {
+    /// Project secretspec.toml
+    Project,
+    /// User-global config.toml
+    Global,
 }
 
 /// Configuration-related subcommands.
@@ -1604,10 +1620,21 @@ pub fn main() -> Result<()> {
                 .wrap_err("Failed to persist temporary files")?;
             Ok(())
         }
-        // Generate typed accessors for another language (value-free)
-        Commands::Schema { profile, output } => {
-            let spec = load_spec(&cli.file)?;
-            let schema = spec.schema_json(profile.as_deref()).into_diagnostic()?;
+        // Export typed-accessor or configuration editor schemas (value-free).
+        Commands::Schema {
+            profile,
+            config,
+            output,
+        } => {
+            let schema = match config {
+                Some(kind) => {
+                    crate::config::schema::generate(matches!(kind, ConfigSchemaKind::Global))
+                        .into_diagnostic()?
+                }
+                None => load_spec(&cli.file)?
+                    .schema_json(profile.as_deref())
+                    .into_diagnostic()?,
+            };
             match output {
                 Some(path) => fs::write(&path, schema)
                     .into_diagnostic()

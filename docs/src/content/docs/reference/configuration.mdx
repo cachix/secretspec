@@ -9,6 +9,47 @@ import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro
 
 The `secretspec.toml` file defines project-specific secret requirements. This file should be checked into version control.
 
+### Editor autocomplete
+
+<VersionCompatibility version="0.21" />
+
+Add this comment at the top of `secretspec.toml` to enable completion, hover
+descriptions, and structural validation in editors using Taplo, including the
+Even Better TOML extension for VS Code:
+
+```toml
+#:schema https://secretspec.dev/schema/secretspec.schema.json
+```
+
+For the user configuration, typically `~/.config/secretspec/config.toml`, use:
+
+```toml
+#:schema https://secretspec.dev/schema/config.schema.json
+```
+
+These are [Taplo schema directives](https://taplo.tamasfe.dev/configuration/directives.html#the-schema-directive),
+so they remain ordinary comments to SecretSpec. The schemas describe the current
+`main` branch; fields marked with a minimum version may require a newer release
+than your installed CLI. Editor validation catches structural errors and unknown
+fields; SecretSpec still checks inheritance, references, provider support, and
+other semantic constraints when loading the configuration.
+
+You can also download the [project schema](/schema/secretspec.schema.json) or
+[user schema](/schema/config.schema.json) and point the directive at a local path
+for offline use. Each schema is self-contained.
+
+With SecretSpec 0.21+, generate the schema from your installed CLI to match its
+configuration types:
+
+```bash
+secretspec schema --config project --output secretspec.schema.json
+secretspec schema --config global --output config.schema.json
+```
+
+Then use `#:schema ./secretspec.schema.json` in a project manifest, or point the
+user configuration's directive at the generated `config.schema.json`. These
+commands need no project or user configuration and never contact a provider.
+
 ### [project] Section
 
 ```toml

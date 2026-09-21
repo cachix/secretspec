@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tailnet-authenticated Setec server, including reads pinned to a Setec version
   (0.21+).
 
+- JSON Schemas for `secretspec.toml` and user `config.toml` provide editor
+  autocomplete, hover descriptions, and structural validation. Export schemas
+  matching the installed CLI with `secretspec schema --config project` or
+  `secretspec schema --config global` (0.21+).
+
 - Secret values can flow through providers, fallback chains, imports, and the
   cache as arbitrary bytes. `Secrets::set` and `secretspec set --from-file`
   accept exact byte input, `as_path` preserves it byte-for-byte, the file and
@@ -67,6 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Setec preserves binary secret values on reads and writes, and discovery
   handles empty results from servers with no visible secrets (0.21+).
+
+- KeePass KDBX 4.0 databases can be written after creation or editing in
+  KeePassXC. Writes upgrade the file format to KDBX 4.1 while preserving
+  encryption and key-derivation settings (0.21+).
 
 - Bitwarden Password Manager resolves a batch of secrets with a single `bw
   list items` instead of one listing per secret (0.21+). Single reads whose

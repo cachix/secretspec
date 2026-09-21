@@ -19,7 +19,7 @@ databases directly, without requiring KeePass or KeePassXC to be installed.
 | --- | --- |
 | Provider | `kdbx` |
 | URI | `kdbx:PATH[?keyfile=PATH][&prefix=TEMPLATE]` |
-| Access | KDBX 3 read; KDBX 4 read and write |
+| Access | KDBX 3 read; KDBX 4.1 read and write; KDBX 4.0 writes supported in 0.21+ |
 | Best for | Local, portable KeePass-compatible encrypted storage |
 | Authentication | Master password, key file, or both |
 | Build feature | `kdbx` (0.17+) |
@@ -177,7 +177,17 @@ you want SecretSpec to write to a manually created database, save it as KDBX 4.
 You can also let `secretspec set` create the missing groups and entry
 automatically.
 
-Reads open KDBX 3 and KDBX 4 databases. Writes create KDBX 4 databases and
+### Database compatibility
+
+<VersionCompatibility version="0.21" kind="changed">
+  Writing a KDBX 4.0 database, including one saved by KeePassXC, upgrades its
+  file format to KDBX 4.1. Encryption and key-derivation settings, including
+  Argon2 memory, iterations, and parallelism, are preserved. Earlier versions
+  could read these files but failed to write them with “Unsupported database
+  version”.
+</VersionCompatibility>
+
+Reads open KDBX 3 and KDBX 4 databases. Writes create KDBX 4.1 databases and
 atomically replace an existing KDBX 4 file only after the complete encrypted
 replacement has been flushed. KDBX 3 databases must be upgraded with KeePass
 or KeePassXC before SecretSpec can write them.

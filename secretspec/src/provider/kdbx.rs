@@ -199,9 +199,14 @@ impl KdbxProvider {
             })
     }
 
-    fn save(&self, database: &Database) -> Result<()> {
+    fn save(&self, database: &mut Database) -> Result<()> {
         if !matches!(database.config.version, DatabaseVersion::KDB4(_)) {
             return Err(write_version_error());
+        }
+        // KeePassXC can save KDBX 4.0, but keepass only writes 4.1. Upgrade
+        // that minor version without resetting the cipher or KDF settings.
+        if database.config.version == DatabaseVersion::KDB4(0) {
+            database.config.version = DatabaseVersion::KDB4(1);
         }
 
         let parent = self
@@ -337,7 +342,7 @@ impl Provider for KdbxProvider {
             }
         }
 
-        self.save(&database)
+        self.save(&mut database)
     }
 
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
@@ -786,6 +791,49 @@ mod tests {
     }
 
     #[test]
+    fn writes_kdbx40_preserving_security_settings_and_existing_entries() {
+        for fixture in [
+            include_bytes!("../fixtures/kdbx/test_db_kdbx4_with_password_argon2.kdbx").as_slice(),
+            include_bytes!("../fixtures/kdbx/test_db_kdbx4_with_password_argon2id.kdbx").as_slice(),
+        ] {
+            let temp = TempDir::new().unwrap();
+            let path = temp.path().join("vault.kdbx");
+            std::fs::write(&path, fixture).unwrap();
+            let provider = provider(path, "demopass");
+            let original = provider.load().unwrap().unwrap();
+            assert_eq!(original.config.version, DatabaseVersion::KDB4(0));
+            let mut expected_config = original.config.clone();
+            expected_config.version = DatabaseVersion::KDB4(1);
+
+            provider.check_writable(convention("TOKEN")).unwrap();
+            for value in ["first", "updated"] {
+                provider
+                    .set(convention("TOKEN"), &SecretBytes::from_utf8(value))
+                    .unwrap();
+                assert_eq!(
+                    provider
+                        .get(convention("TOKEN"))
+                        .unwrap()
+                        .unwrap()
+                        .expose_secret(),
+                    value.as_bytes()
+                );
+                let saved = provider.load().unwrap().unwrap();
+                assert_eq!(saved.config, expected_config);
+                assert_eq!(
+                    saved.root().entries().count(),
+                    original.root().entries().count()
+                );
+                for entry in original.root().entries() {
+                    let preserved = saved.entry(entry.id()).unwrap();
+                    assert_eq!(preserved.get_title(), entry.get_title());
+                    assert_eq!(preserved.get_password(), entry.get_password());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn set_updates_existing_entry_and_preserves_other_fields() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("vault.kdbx");
@@ -926,7 +974,7 @@ mod tests {
                 });
             }
         }
-        provider.save(&database).unwrap();
+        provider.save(&mut database).unwrap();
 
         let address = NativeAddress {
             item: "duplicate".into(),
@@ -982,7 +1030,7 @@ mod tests {
             entry.set_unprotected(fields::URL, "https://example.com");
             entry.set(fields::PASSWORD, Value::protected("old"));
         });
-        provider.save(&database).unwrap();
+        provider.save(&mut database).unwrap();
 
         let address = NativeAddress {
             item: "existing".into(),

@@ -35,6 +35,7 @@ keyring = { workspace = true, optional = true }
 keepass = { workspace = true, optional = true }
 keeper-secrets-manager-core = { workspace = true, optional = true }
 serde.workspace = true
+schemars.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
 thiserror.workspace = true

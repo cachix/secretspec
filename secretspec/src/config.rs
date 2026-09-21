@@ -35,6 +35,7 @@
 
 use crate::compiled_spec::CompiledSpec;
 use crate::composition::Template;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
 use std::fs;
@@ -43,6 +44,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
+
+#[path = "config_schema.rs"]
+pub(crate) mod schema;
 
 /// Where one credential required by a provider comes from.
 ///
@@ -112,6 +116,16 @@ impl Serialize for CredentialSource {
     }
 }
 
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CredentialSourceTable {
+    /// Provider alias, name, or URI supplying the credential.
+    provider: String,
+    /// Native coordinates of the credential; otherwise uses convention naming.
+    #[serde(default, rename = "ref")]
+    reference: Option<NativeAddress>,
+}
+
 impl<'de> Deserialize<'de> for CredentialSource {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct SourceVisitor;
@@ -131,14 +145,9 @@ impl<'de> Deserialize<'de> for CredentialSource {
                 self,
                 map: M,
             ) -> Result<CredentialSource, M::Error> {
-                #[derive(Deserialize)]
-                #[serde(deny_unknown_fields)]
-                struct Table {
-                    provider: String,
-                    #[serde(default, rename = "ref")]
-                    reference: Option<NativeAddress>,
-                }
-                let table = Table::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                let table = CredentialSourceTable::deserialize(
+                    serde::de::value::MapAccessDeserializer::new(map),
+                )?;
                 Ok(CredentialSource {
                     provider: table.provider,
                     reference: table.reference,
@@ -158,11 +167,14 @@ impl<'de> Deserialize<'de> for CredentialSource {
 /// [`ProviderCache::new`] is the only constructor, and the fields carrying the
 /// validated values are private, so a policy that exists always has a
 /// non-empty provider spec and a `max_age` that parsed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[schemars(description = "Cache storage and freshness policy (0.17+).")]
 pub struct ProviderCache {
     /// Leaf provider spec used to persist the cache envelope.
+    #[schemars(regex(pattern = r"\S"))]
     provider: String,
     /// Human-readable freshness duration (`30m`, `8h`, `1d`, or combinations).
+    #[schemars(length(min = 1))]
     max_age: String,
     /// [`Self::max_age`] in seconds, parsed once at construction. Derived, so
     /// it is not part of the serialized form.
@@ -551,6 +563,27 @@ impl Serialize for ProviderAlias {
     }
 }
 
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ProviderAliasTable {
+    /// Provider URI, for example dotenv://.env.
+    #[serde(default)]
+    uri: Option<String>,
+    /// Provider credentials mapped to their secret sources.
+    #[serde(default)]
+    credentials: Option<HashMap<String, CredentialSource>>,
+    /// Native address template (0.19+); accepts {project}, {profile}, and {key}.
+    #[serde(default, rename = "ref")]
+    reference_template: Option<NativeAddressTemplate>,
+    /// Ordered leaf provider aliases for a cached fallback chain (0.17+).
+    #[serde(default)]
+    #[schemars(length(min = 1))]
+    fallback: Option<Vec<String>>,
+    /// Cache storage and freshness policy (0.17+).
+    #[serde(default)]
+    cache: Option<ProviderCache>,
+}
+
 impl<'de> Deserialize<'de> for ProviderAlias {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct AliasVisitor;
@@ -576,21 +609,9 @@ impl<'de> Deserialize<'de> for ProviderAlias {
                 // A dedicated struct gives precise field-level errors (unknown
                 // key, missing `uri`) rather than the opaque message an
                 // `#[serde(untagged)]` enum would produce on any typo.
-                #[derive(Deserialize)]
-                #[serde(deny_unknown_fields)]
-                struct Table {
-                    #[serde(default)]
-                    uri: Option<String>,
-                    #[serde(default)]
-                    credentials: Option<HashMap<String, CredentialSource>>,
-                    #[serde(default, rename = "ref")]
-                    reference_template: Option<NativeAddressTemplate>,
-                    #[serde(default)]
-                    fallback: Option<Vec<String>>,
-                    #[serde(default)]
-                    cache: Option<ProviderCache>,
-                }
-                let table = Table::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+                let table = ProviderAliasTable::deserialize(
+                    serde::de::value::MapAccessDeserializer::new(map),
+                )?;
                 match (table.uri, table.fallback, table.cache) {
                     (Some(uri), None, cache) => {
                         if let Some(template) = &table.reference_template {
@@ -651,11 +672,12 @@ impl<'de> Deserialize<'de> for ProviderAlias {
 ///
 /// This is the top-level type that represents the entire `secretspec.toml` file.
 /// It contains project metadata and profile-specific secret definitions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Config {
     /// Project metadata including name, revision, and optional inheritance
     pub project: Project,
     /// Map of profile names to their configurations (e.g., "default", "production", "staging")
+    #[schemars(extend("minProperties" = 1))]
     pub profiles: HashMap<String, Profile>,
     /// Project-wide defaults applied to every provider-backed secret (0.21+).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1207,11 +1229,13 @@ impl<'de> Deserialize<'de> for RequireReason {
 /// Contains essential project information and optional configuration inheritance.
 /// The `extends` field allows projects to inherit secrets from other configurations,
 /// enabling shared configuration patterns across multiple projects.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Project {
     /// The name of the project, used for identification and namespacing
+    #[schemars(length(min = 1))]
     pub name: String,
     /// Configuration format revision (currently must be "1.0")
+    #[schemars(extend("enum" = ["1.0"]))]
     pub revision: String,
     /// Optional list of relative paths to other SecretSpec projects to inherit from
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1252,7 +1276,7 @@ impl Default for Project {
 /// [audit]
 /// enabled = false
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct AuditConfig {
     /// Whether to record secret access. Defaults to `true`.
@@ -1363,7 +1387,7 @@ fn home_dir() -> Option<PathBuf> {
 ///
 /// A profile represents a specific environment or context (e.g., "default", "production", "staging").
 /// Each profile contains its own set of secret definitions with their requirements.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Profile {
     /// Default configuration for secrets in this profile
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1378,11 +1402,12 @@ pub struct Profile {
 /// This is deliberately narrower than [`ProfileDefaults`]: a project can
 /// select one provider chain without assigning the same fallback value or
 /// requiredness policy to every secret in every profile.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectDefaults {
     /// Provider aliases, names, or URIs used when neither a secret nor its
     /// profile declares a provider chain.
+    #[schemars(length(min = 1))]
     pub providers: Vec<String>,
 }
 
@@ -1410,7 +1435,7 @@ impl ProjectDefaults {
 /// resolution. Selecting `--scope api` resolves exactly the intersection of the
 /// merged profile and this scope's `secrets` list, so a single service loads only
 /// what it declares instead of the entire profile.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Scope {
     /// The secret names that belong to this scope. Every name must be declared by
     /// at least one profile; an unknown name is a configuration error.
@@ -1421,7 +1446,7 @@ pub struct Scope {
 ///
 /// Provides defaults that apply to all secrets within the profile.
 /// Individual secrets can override any of these defaults.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProfileDefaults {
     /// Whether this non-default profile inherits declarations and omitted
     /// fields from `[profiles.default]`. Omitted means `true`. Available since
@@ -1564,7 +1589,7 @@ impl IntoIterator for Profile {
 ///
 /// Can be either a simple boolean (`generate = true`) or a table with
 /// type-specific options (`generate = { length = 64 }`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum GenerateConfig {
     /// Simple boolean flag to enable/disable generation with defaults
@@ -1584,7 +1609,7 @@ impl GenerateConfig {
 }
 
 /// Type-specific options for secret generation.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 pub struct GenerateOptions {
     /// Length of generated password (for `password` type)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1594,21 +1619,25 @@ pub struct GenerateOptions {
     pub bytes: Option<usize>,
     /// Character set for password generation ("alphanumeric" or "ascii")
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("enum" = ["alphanumeric", "ascii"]))]
     pub charset: Option<String>,
     /// Shell command to run (for `command` type)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    /// RSA key size in bits (`rsa_private_key` defaults to 2048; OpenPGP and SSH RSA default to 3072).
+    /// RSA key size in bits (`rsa_private_key` defaults to 2048;
+    /// OpenPGP and SSH RSA in 0.21+ default to 3072).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bits: Option<usize>,
     /// OpenPGP or SSH key algorithm (`ed25519` or `rsa`, default `ed25519`; 0.21+).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("enum" = ["ed25519", "rsa"]))]
     pub algorithm: Option<String>,
     /// OpenPGP User ID bound to a generated certificate (0.21+).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
     /// OpenPGP subkey capabilities (`sign` and/or `encrypt`, 0.21+).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1), extend("items" = {"type": "string", "enum": ["sign", "encrypt"]}))]
     pub capabilities: Option<Vec<String>>,
     /// Comment embedded in a generated OpenSSH private key (0.21+).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1651,12 +1680,16 @@ pub(crate) const SSH_RSA_MAX_BITS: usize = 8192;
 ///   from the provider URI instead.
 ///
 /// Unknown TOML keys are rejected at parse time.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, JsonSchema)]
+#[schemars(
+    description = "Provider-native coordinates for one secret. Routing follows the selected provider chain; supported coordinates depend on the provider."
+)]
 pub struct NativeAddress {
     /// The store's own name for the secret: item title (1Password, Proton
     /// Pass, LastPass), entry path (pass), KV path (Vault), secret name/ARN
     /// (AWS), secret id (GCSM), key name (BWS, dotenv), variable name (env),
     /// service (keyring).
+    #[schemars(length(min = 1))]
     pub item: String,
     /// A component within the item: field label (1Password), KV field
     /// (Vault), JSON key (AWS), account (keyring). Providers whose secrets
@@ -1716,7 +1749,7 @@ impl NativeAddress {
 /// and `{key}`. The template belongs to one provider alias, so fallback links
 /// and import endpoints can map the same logical secret into different native
 /// address shapes without sharing provider-specific coordinates.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NativeAddressTemplate {
     /// Template for the provider's required `item` coordinate.
@@ -1931,6 +1964,13 @@ fn ref_string_hint(s: &str) -> String {
     )
 }
 
+#[derive(Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum GroupNames {
+    One(String),
+    Many(Vec<String>),
+}
+
 /// Deserialize a group membership as either `"name"` or `["name", ...]`.
 fn deserialize_group_names<'de, D>(
     deserializer: D,
@@ -1938,16 +1978,9 @@ fn deserialize_group_names<'de, D>(
 where
     D: serde::Deserializer<'de>,
 {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum OneOrMany {
-        One(String),
-        Many(Vec<String>),
-    }
-
-    Ok(Some(match OneOrMany::deserialize(deserializer)? {
-        OneOrMany::One(name) => vec![name],
-        OneOrMany::Many(names) => names,
+    Ok(Some(match GroupNames::deserialize(deserializer)? {
+        GroupNames::One(name) => vec![name],
+        GroupNames::Many(names) => names,
     }))
 }
 
@@ -2005,59 +2038,79 @@ impl<'de> Deserialize<'de> for NativeAddress {
 
 /// The serialized form of `required`: either the existing boolean or a table
 /// of cross-secret presence groups.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 enum RequiredSetting {
     Bool(bool),
     Groups(RequiredGroups),
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("minProperties" = 1))]
 struct RequiredGroups {
+    /// At least one member of each named group must resolve (0.17+).
     #[serde(
         default,
         deserialize_with = "deserialize_group_names",
         serialize_with = "serialize_group_names",
         skip_serializing_if = "Option::is_none"
     )]
+    #[schemars(with = "Option<GroupNames>")]
     at_least_one: Option<Vec<String>>,
+    /// Exactly one member of each named group must resolve (0.17+).
     #[serde(
         default,
         deserialize_with = "deserialize_group_names",
         serialize_with = "serialize_group_names",
         skip_serializing_if = "Option::is_none"
     )]
+    #[schemars(with = "Option<GroupNames>")]
     exactly_one: Option<Vec<String>>,
 }
 
 /// Serde proxy that keeps the established Rust `Secret` API while presenting
 /// requiredness as one boolean-or-table field in TOML.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[schemars(extend("not" = {"required": ["ref", "refs"]}))]
 struct SecretSerde {
+    /// Human-readable explanation of this secret.
     description: Option<String>,
+    /// Whether this secret is required, or named presence groups (0.17+).
     #[serde(skip_serializing_if = "Option::is_none")]
     required: Option<RequiredSetting>,
+    /// Fallback value when no provider supplies the secret.
     #[serde(skip_serializing_if = "Option::is_none")]
     default: Option<String>,
+    /// Template using ${SECRET_NAME} references; $$ escapes a dollar sign (0.16+).
     #[serde(skip_serializing_if = "Option::is_none")]
     composed: Option<String>,
+    /// Provider aliases, names, or URIs to try in order.
     #[serde(skip_serializing_if = "Option::is_none")]
     providers: Option<Vec<String>>,
+    /// Native coordinates for the secret, replacing convention naming.
     #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
     reference: Option<NativeAddress>,
+    /// Native coordinates per provider alias (0.19+); mutually exclusive with ref.
     #[serde(skip_serializing_if = "Option::is_none")]
     refs: Option<HashMap<String, NativeAddress>>,
+    /// Write the resolved value to a temporary file and expose its path.
     #[serde(skip_serializing_if = "Option::is_none")]
     as_path: Option<bool>,
+    /// Encoding of the stored value (0.19+).
     #[serde(skip_serializing_if = "Option::is_none")]
     encoding: Option<SecretEncoding>,
+    /// Select a logical value from structured provider data (0.19+).
     #[serde(skip_serializing_if = "Option::is_none")]
     extract: Option<SecretExtract>,
+    /// Secret type for validation and generation. OpenPGP and SSH private keys require 0.21+.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    #[schemars(extend("enum" = ["password", "hex", "base64", "uuid", "command", "rsa_private_key", "openpgp_private_key", "ssh_private_key"]))]
     secret_type: Option<String>,
+    /// Generate a missing secret with defaults or type-specific options.
     #[serde(skip_serializing_if = "Option::is_none")]
     generate: Option<GenerateConfig>,
+    /// Whether an interactive caller may prompt for a missing secret.
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt: Option<bool>,
 }
@@ -2065,7 +2118,7 @@ struct SecretSerde {
 /// Text encoding used for a secret's stored representation.
 ///
 /// Available since SecretSpec 0.19.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum SecretEncoding {
     /// RFC 4648 Base64. Writes use padding; reads accept padded or unpadded input.
@@ -2091,7 +2144,7 @@ impl SecretEncoding {
 /// A structured-data format from which one logical secret can be extracted.
 ///
 /// Available since SecretSpec 0.19.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ExtractFormat {
     /// A JSON document selected with an RFC 6901 JSON Pointer.
@@ -2120,7 +2173,7 @@ impl ExtractFormat {
 /// already logical and are not extracted.
 ///
 /// Available since SecretSpec 0.19.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SecretExtract {
     /// The structured-data format of the stored value.
@@ -2172,7 +2225,7 @@ pub(crate) fn validate_json_pointer(pointer: &str) -> Result<(), String> {
 /// Defines the properties of a secret including its documentation,
 /// whether it's required, an optional default value, and optionally
 /// which providers to use for retrieving this secret (in fallback order).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(try_from = "SecretSerde", into = "SecretSerde")]
 pub struct Secret {
     /// Human-readable description of what this secret is used for
@@ -2803,7 +2856,7 @@ pub(crate) fn is_valid_identifier(s: &str) -> bool {
 ///
 /// This configuration is stored in the user's config directory and provides
 /// defaults that apply across all projects.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 #[doc(hidden)]
 pub struct GlobalConfig {
     /// Default settings
@@ -2818,7 +2871,7 @@ pub struct GlobalConfig {
 }
 
 /// Default settings in the global configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 #[doc(hidden)]
 pub struct GlobalDefaults {
     /// Default provider to use when not specified

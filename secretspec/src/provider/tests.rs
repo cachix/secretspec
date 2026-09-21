@@ -1333,6 +1333,19 @@ mod integration_tests {
                     .expect("Should create infisical provider");
                 (provider, None)
             }
+            #[cfg(feature = "setec")]
+            "setec" => {
+                // SETEC_TEST_SERVER is a complete provider URI so live tests
+                // can select a MagicDNS host, port, and optional prefix. The
+                // caller needs get, put, and activate grants for the generated
+                // test namespace.
+                let provider_spec = std::env::var("SETEC_TEST_SERVER").expect(
+                    "Testing the setec provider requires SETEC_TEST_SERVER, for example setec://secrets.example.ts.net",
+                );
+                let provider = Box::<dyn Provider>::try_from(provider_spec.as_str())
+                    .expect("SETEC_TEST_SERVER should be a valid setec provider URI");
+                (provider, None)
+            }
             #[cfg(feature = "akv")]
             // Bare "akv" has no vault name, so route it through a real
             // AKV_TEST_VAULT instead of falling into the generic `_` branch

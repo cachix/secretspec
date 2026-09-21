@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Tailscale Setec can store, retrieve, discover, and delete secrets through a
+  tailnet-authenticated Setec server, including reads pinned to a Setec version
+  (0.21+).
+
 - JSON Schemas for `secretspec.toml` and user `config.toml` provide editor
   autocomplete, hover descriptions, and structural validation. Export schemas
   matching the installed CLI with `secretspec schema --config project` or
@@ -65,6 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache at that pairing would overwrite or delete the secret it caches (0.21+).
 
 ### Fixed
+
+- Setec preserves binary secret values on reads and writes, and discovery
+  handles empty results from servers with no visible secrets (0.21+).
 
 - KeePass KDBX 4.0 databases can be written after creation or editing in
   KeePassXC. Writes upgrade the file format to KDBX 4.1 while preserving

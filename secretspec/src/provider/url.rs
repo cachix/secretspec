@@ -89,6 +89,7 @@ impl ProviderUrl {
         feature = "aac",
         feature = "infisical",
         feature = "openbao",
+        feature = "setec",
         feature = "vault",
         test
     ))]

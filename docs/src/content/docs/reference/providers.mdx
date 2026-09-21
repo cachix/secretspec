@@ -511,6 +511,28 @@ scaleway://                                          # Region from SCW_DEFAULT_R
 **Prerequisites**: Scaleway API secret key (`secret_key` credential or `SCW_SECRET_KEY`), build with `--features scaleway`
 **Storage**: Folder `[{base}/]secretspec/{project}/{profile}`, secret name `{key}`
 
+## Tailscale Setec Provider {/* #tailscale-setec-provider-021 */}
+
+<VersionCompatibility version="0.21" />
+
+**URI**: `setec://HOST[:PORT][?prefix=PATH][&tls=false]` - Uses a Tailscale
+Setec server
+
+```text
+setec://secrets.example.ts.net
+setec://secrets.example.ts.net?prefix=platform
+setec://127.0.0.1:8080?tls=false
+```
+
+**Features**: Read/write/delete, version-pinned reads, project/profile
+isolation, and bounded discovery
+**Authentication**: The caller's Tailscale identity and Setec grants
+**Storage**: `[prefix/]secretspec/{project}/{profile}/{key}`; a native
+`ref.item` names an exact Setec secret and optional `ref.version` selects a
+specific version
+**Prerequisites**: Reachability to the Setec server over the tailnet; build
+with `--features setec` (0.21+)
+
 ## Vault Provider
 
 **URI**: `vault://[namespace@]host[:port][/mount][?options]` - Stores secrets in HashiCorp Vault's KV engine
@@ -862,6 +884,7 @@ $ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | AWSSM | ✅ AWS KMS | Cloud (AWS) | ✅ Yes |
 | AWS Parameter Store (0.18+) | ✅ AWS KMS (`SecureString`) | Cloud (AWS) | ✅ Yes |
 | Scaleway (0.17+) | ✅ Scaleway-managed | Cloud (Scaleway) | ✅ Yes |
+| Tailscale Setec (0.21+) | ✅ Server-managed encryption | Self-hosted Setec server | ✅ Yes, over the tailnet |
 | Vault | ✅ Vault encryption | Vault server | ✅ Yes |
 | OpenBao (0.17+) | ✅ OpenBao encryption | OpenBao server | ✅ Yes |
 | BW (0.18+) | ✅ End-to-end | Cloud (Bitwarden) or self-hosted | ✅ Yes |

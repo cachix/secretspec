@@ -78,6 +78,10 @@ pub enum SecretSpecError {
     #[error("Prompted value for secret '{0}' cannot be empty")]
     PromptValueEmpty(String),
     #[error(
+        "Secret '{0}' would be produced and stored, and this session may not write to a provider"
+    )]
+    ProducedValueWriteRefused(String),
+    #[error(
         "Composed secret '{0}' is derived from other secrets and has no stored value to change"
     )]
     ComposedSecretReadOnly(String),
@@ -95,6 +99,11 @@ pub enum SecretSpecError {
     NoProjectName,
     #[error("Provider operation failed: {0}")]
     ProviderOperationFailed(String),
+    #[error("Provider protocol error: {kind}")]
+    ProviderProtocol {
+        kind: secretspec_ipc::ErrorKind,
+        interaction: Option<secretspec_ipc::InteractionReference>,
+    },
     #[error("User interaction error: {0}")]
     InquireError(#[from] inquire::InquireError),
     #[error("JSON error: {0}")]
@@ -151,6 +160,7 @@ impl SecretSpecError {
             SecretSpecError::RequiredSecretMissing(_) => "required_secret_missing",
             SecretSpecError::PromptUnavailable(_) => "prompt_unavailable",
             SecretSpecError::PromptValueEmpty(_) => "prompt_value_empty",
+            SecretSpecError::ProducedValueWriteRefused(_) => "produced_value_write_refused",
             SecretSpecError::ComposedSecretReadOnly(_) => "composed_secret_read_only",
             SecretSpecError::ExtractedSecretReadOnly(_) => "extracted_secret_read_only",
             SecretSpecError::CompositionFailed(_) => "composition_failed",
@@ -158,6 +168,7 @@ impl SecretSpecError {
             SecretSpecError::ExtendedConfigNotFound(_) => "extended_config_not_found",
             SecretSpecError::NoProjectName => "no_project_name",
             SecretSpecError::ProviderOperationFailed(_) => "provider_operation_failed",
+            SecretSpecError::ProviderProtocol { kind, .. } => kind.as_str(),
             SecretSpecError::InquireError(_) => "inquire",
             SecretSpecError::Json(_) => "json",
             SecretSpecError::InvalidProfile(_) => "invalid_profile",
@@ -168,6 +179,15 @@ impl SecretSpecError {
             SecretSpecError::DecodeFailed { .. } => "decode_failed",
             SecretSpecError::SecretNotText { .. } => "secret_not_text",
             SecretSpecError::ReasonRequired => "reason_required",
+        }
+    }
+
+    /// Opaque pending interaction associated with a provider failure, when
+    /// the provider supplied one (SecretSpec 0.21+).
+    pub fn interaction(&self) -> Option<&secretspec_ipc::InteractionReference> {
+        match self {
+            Self::ProviderProtocol { interaction, .. } => interaction.as_ref(),
+            _ => None,
         }
     }
 }
@@ -288,6 +308,13 @@ mod tests {
             (
                 SecretSpecError::ProviderOperationFailed("nope".into()),
                 "provider_operation_failed",
+            ),
+            (
+                SecretSpecError::ProviderProtocol {
+                    kind: secretspec_ipc::ErrorKind::InteractionRequired,
+                    interaction: None,
+                },
+                "interaction_required",
             ),
             (
                 SecretSpecError::InvalidProfile("ghost".into()),

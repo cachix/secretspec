@@ -15,6 +15,7 @@ use std::io::{IsTerminal, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 mod claude;
 mod completion;
@@ -22,6 +23,109 @@ mod docker;
 mod git;
 
 use git::GitAction;
+
+struct LoginCredentialBroker {
+    app: Arc<Secrets>,
+    alias: String,
+    configured: HashMap<String, crate::config::CredentialSource>,
+    request_lock: Mutex<()>,
+    values: Mutex<HashMap<(String, String, String), crate::SecretBytes>>,
+    stored: Mutex<Vec<(String, String)>>,
+}
+
+impl LoginCredentialBroker {
+    fn new(
+        app: Arc<Secrets>,
+        alias: String,
+        credentials: Vec<(String, crate::config::CredentialSource)>,
+    ) -> Self {
+        Self {
+            app,
+            alias,
+            configured: credentials.into_iter().collect(),
+            request_lock: Mutex::new(()),
+            values: Mutex::new(HashMap::new()),
+            stored: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl crate::provider::external::ProviderCredentialBroker for LoginCredentialBroker {
+    fn get(
+        &self,
+        scheme: &str,
+        request: &secretspec_ipc::protocol::callback::CredentialParams,
+    ) -> crate::Result<Option<crate::SecretBytes>> {
+        let _request = self
+            .request_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let source = self.configured.get(&request.name);
+        let key = (
+            scheme.to_string(),
+            if source.is_some() {
+                String::new()
+            } else {
+                request.scope.clone()
+            },
+            request.name.clone(),
+        );
+        if let Some(value) = self
+            .values
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&key)
+            .cloned()
+        {
+            return Ok(Some(value));
+        }
+        let prompt = match source {
+            Some(source) => format!(
+                "Enter {} for provider '{}' (source: {}):",
+                request.name,
+                self.alias,
+                source.display_provider()
+            ),
+            None => format!(
+                "Enter {} for provider '{}' ({} credential):",
+                request.name, self.alias, scheme
+            ),
+        };
+        let entered = inquire::Password::new(&prompt)
+            .without_confirmation()
+            .prompt()
+            .map_err(|_| {
+                crate::SecretSpecError::ProviderOperationFailed(
+                    "provider credential prompt failed".to_string(),
+                )
+            })?;
+        if entered.is_empty() {
+            return Ok(None);
+        }
+        let value = crate::SecretBytes::from_utf8(entered);
+        let location = match source {
+            Some(source) => self
+                .app
+                .store_provider_credential(source, &request.name, &value)?,
+            None => self.app.store_external_provider_credential(
+                scheme,
+                &request.scope,
+                &request.name,
+                &value,
+            )?,
+        };
+        self.values
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(key, value.clone());
+        self.stored
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push((request.name.clone(), location));
+        Ok(Some(value))
+    }
+}
+
 /// Main CLI structure for the secretspec application.
 ///
 /// This is the entry point for the command-line interface, parsing user commands
@@ -306,6 +410,19 @@ enum Commands {
     Cache {
         #[command(subcommand)]
         action: CacheAction,
+    },
+    /// Serve one `secretspec.resolver/1` session over stdin and stdout (0.21+)
+    ///
+    /// The session is a private child of whoever launched it: it exchanges
+    /// framed IPC on the standard streams, never prompts on them, and exits
+    /// with its parent. A future daemon mode would instead expose a socket
+    /// other local processes can reach, so that mode has to be asked for while
+    /// this one does not.
+    Serve {
+        /// Advertise resolution only, refusing `resolver.set` and
+        /// `resolver.delete` (0.21+)
+        #[arg(long)]
+        read_only: bool,
     },
     /// Show the local audit log of secret access
     Audit {
@@ -1325,12 +1442,36 @@ pub fn main() -> Result<()> {
                         Ok(())
                     }
                     ProviderAction::Login { name } => {
-                        let app = load_secrets(&cli.file, &cli.reason, &caller)?;
+                        let app = Arc::new(load_secrets(&cli.file, &cli.reason, &caller)?);
                         let credentials =
                             app.declared_provider_credentials(&name).into_diagnostic()?;
-                        let provider_reads = crate::provider::spec_provider_reads(
-                            &app.resolve_provider_spec(name.clone()),
-                        );
+                        let resolved = app.resolve_provider_spec(name.clone());
+                        if crate::provider::spec_uses_dynamic_credentials(&resolved)
+                            .into_diagnostic()?
+                        {
+                            let broker = Arc::new(LoginCredentialBroker::new(
+                                app.clone(),
+                                name.clone(),
+                                credentials,
+                            ));
+                            app.initialize_external_provider_with_broker(&name, broker.clone())
+                                .into_diagnostic()?;
+                            let stored = broker
+                                .stored
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            if stored.is_empty() {
+                                println!(
+                                    "Provider alias '{name}' requested no SecretSpec-managed credentials."
+                                );
+                            } else {
+                                for (credential_name, location) in stored.iter() {
+                                    println!("✓ stored {credential_name} in {location}");
+                                }
+                            }
+                            return Ok(());
+                        }
+                        let provider_reads = crate::provider::spec_provider_reads(&resolved);
                         if credentials.is_empty() {
                             println!("Provider alias '{name}' declares no credentials.");
                             return Ok(());
@@ -1681,6 +1822,11 @@ pub fn main() -> Result<()> {
                 Ok(())
             }
         },
+        Commands::Serve { read_only } => {
+            crate::provider::block_on(crate::serve::run_stdio(read_only))
+                .into_diagnostic()
+                .wrap_err("SecretSpec resolver failed")
+        }
         // Show the local audit log
         Commands::Audit {
             project,

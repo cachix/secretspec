@@ -205,7 +205,6 @@ $ secretspec config global provider remove prod_vault  # 0.17+
 ```
 
 ### config provider login
-
 <VersionCompatibility version="0.15" kind="changed">
 
 In
@@ -214,7 +213,13 @@ environment variables.
 
 </VersionCompatibility>
 
-Store the [credentials](/reference/provider-credentials/) a provider alias declares. Prompts (hidden input) for each credential and writes it to its source provider at the exact location resolution reads it back from. Runs in a project, like `set` and `check`.
+Store the [credentials](/reference/provider-credentials/) a provider alias
+declares. Prompts (hidden input) for each credential and writes it to its source
+provider at the exact location resolution reads it back from. For an external
+provider with no mappings (0.21+), starts the endpoint, prompts for the
+URI-specific credentials it requests, and stores them in SecretSpec's
+provider-private operating-system keyring namespace. Runs in a project, like
+`set` and `check`.
 
 
 ```bash
@@ -233,7 +238,9 @@ Enter access_token for provider 'bws' (source: keyring): ****
 Run 'secretspec check --provider bws' to verify authentication.
 ```
 
-A read-only source provider is rejected. An alias that declares no credentials reports that there is nothing to store.
+A read-only source provider is rejected. A built-in alias that declares no
+credentials reports that there is nothing to store. An external alias with no
+mappings may still request credentials dynamically (0.21+).
 
 ### docker configure {/* #docker-configure-020 */}
 
@@ -1024,6 +1031,49 @@ $ secretspec audit --action get -n 5
 # Pipe raw entries to jq
 $ secretspec audit --json | jq 'select(.outcome == "missing")'
 ```
+
+### serve {/* #serve-020 */}
+
+<VersionCompatibility version="0.21" />
+
+`serve` is available starting with SecretSpec 0.21.
+
+
+Run one private Secret Resolution Protocol session over standard input and
+standard output. SDKs launch this command directly and communicate with bounded
+newline-delimited JSON-RPC frames; it is not intended for interactive
+terminal use or as a network listener.
+
+Before initialization, inspection tooling may call `rpc.discover` (0.21+) to
+obtain the resolver's self-contained OpenRPC description. Discovery does not
+load the selected manifest, contact a provider, prompt, or make the resolver
+ready; ordinary SDK clients initialize immediately.
+
+```bash
+$ secretspec serve [--read-only]
+```
+
+**Options:**
+- `--read-only` - Resolve only, never write to a provider (SecretSpec 0.21+)
+
+The client supplies an absolute path or inline manifest plus immutable
+provider, profile, scope, and reason selection during initialization. See the
+[Secret Resolution Protocol](/reference/resolver-protocol/) for lifecycle,
+least-access resolution, file leases, and reconnect rules.
+
+The session also answers `resolver.set` and `resolver.delete` (0.21+), which
+store and remove one declared name where that same session resolves it.
+`--read-only` withholds both, for an operator who wants a consumer to read a
+store it may not change.
+
+Withholding those two methods is not on its own enough to make a session
+read-only, so `--read-only` does more than that. Resolving a name is not always
+a read: a `generate = true` declaration with no stored value is minted *and
+written back*, and a `prompt = true` one is written back after a person answers.
+A `--read-only` session refuses both rather than reaching the store, and the
+resolve fails with `permission_denied`. A provider that produces such a value
+without storing it is unaffected, since nothing is written. SecretSpec's own
+cache is also unaffected: populating a derived copy does not change the secret.
 
 ### completions {/* #completions-020 */}
 

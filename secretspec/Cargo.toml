@@ -64,7 +64,9 @@ aws-sdk-ssm = { workspace = true, optional = true }
 azure_core = { workspace = true, optional = true }
 azure_identity = { workspace = true, optional = true }
 azure_security_keyvault_secrets = { workspace = true, optional = true }
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "process", "sync", "time"] }
+secretspec-ipc.workspace = true
+async-trait.workspace = true
 reqwest = { workspace = true, optional = true }
 rand.workspace = true
 rand_08.workspace = true
@@ -86,7 +88,14 @@ libc.workspace = true
 signal-hook.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, optional = true }
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
 
 [features]
 default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "doppler", "bw", "age", "ejson", "scaleway", "sops", "kubernetes", "cloudflare", "setec"]
@@ -116,7 +125,7 @@ akv = ["dep:azure_core", "dep:azure_identity", "dep:azure_security_keyvault_secr
 # implementation, avoiding a second cryptography dependency.
 aac = ["akv", "dep:reqwest", "azure_core/hmac_rust"]
 age = ["dep:age"]
-ejson = ["dep:wait-timeout", "dep:windows-sys"]
+ejson = ["dep:wait-timeout"]
 sops = []
 kubernetes = ["dep:kube", "dep:k8s-openapi", "dep:base64", "dep:json-patch"]
 

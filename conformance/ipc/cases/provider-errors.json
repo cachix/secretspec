@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "provider.errors",
+  "targets": ["provider-endpoint", "external-adapter"],
+  "timeout_ms": 10000,
+  "actions": [
+    {"kind": "call", "method": "provider.get", "behavior": "interaction_required"},
+    {"kind": "call", "method": "provider.get", "behavior": "permission_denied"},
+    {"kind": "call", "method": "provider.set", "behavior": "conflict"},
+    {"kind": "call", "method": "provider.get", "behavior": "unavailable"},
+    {"kind": "explicit_retry", "automatic": false},
+    {"kind": "shutdown"}
+  ],
+  "required_events": [
+    "initialized",
+    "interaction_required",
+    "permission_denied",
+    "conflict",
+    "unavailable",
+    "not_replayed",
+    "closed"
+  ]
+}

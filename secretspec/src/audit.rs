@@ -142,8 +142,22 @@ pub(crate) struct AuditContext<'a> {
     pub reference: Option<String>,
     pub outcome: AuditOutcome,
     pub error_kind: Option<&'a str>,
+    pub interaction: Option<&'a secretspec_ipc::InteractionReference>,
     pub reason: Option<&'a str>,
     pub caller: Option<&'a CallerContext>,
+    /// Structured caller context supplied by resolver-mode clients (0.21+).
+    /// It is audit attribution only, never identity or authorization input.
+    pub purpose: Option<AuditPurpose<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(crate) struct AuditPurpose<'a> {
+    pub consumer: &'a str,
+    pub operation: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<&'a str>,
 }
 
 /// One serialized audit record (one JSON Lines entry).
@@ -182,11 +196,18 @@ struct AuditEvent<'a> {
     outcome: AuditOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     error_kind: Option<&'a str>,
+    /// Opaque provider interaction correlation, never authorization material
+    /// (SecretSpec 0.21+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interaction: Option<&'a secretspec_ipc::InteractionReference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'a str>,
     /// Caller-asserted software integration metadata (SecretSpec 0.20+).
     #[serde(skip_serializing_if = "Option::is_none")]
     caller: Option<&'a CallerContext>,
+    /// Resolver caller context (SecretSpec 0.21+).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    purpose: Option<AuditPurpose<'a>>,
     actor: &'a Actor,
     /// secretspec version that produced the event.
     version: &'static str,
@@ -412,8 +433,10 @@ impl AuditLogger {
             reference: ctx.reference.as_deref(),
             outcome: ctx.outcome,
             error_kind: ctx.error_kind,
+            interaction: ctx.interaction,
             reason: ctx.reason,
             caller: ctx.caller,
+            purpose: ctx.purpose,
             actor: &self.actor,
             version: env!("CARGO_PKG_VERSION"),
         };
@@ -663,6 +686,7 @@ mod tests {
                 reference: None,
                 outcome: AuditOutcome::Found,
                 error_kind: None,
+                interaction: None,
                 reason: Some("deploy web frontend"),
                 caller: Some(
                     &CallerContext::new("git")
@@ -670,6 +694,12 @@ mod tests {
                         .with_operation("credential_get")
                         .with_resource("github.com"),
                 ),
+                purpose: Some(AuditPurpose {
+                    consumer: "python-sdk",
+                    operation: "resolve",
+                    host: None,
+                    path: Some("/service"),
+                }),
             },
         );
 
@@ -688,6 +718,9 @@ mod tests {
         assert_eq!(event["caller"]["version"], "2.51.0");
         assert_eq!(event["caller"]["operation"], "credential_get");
         assert_eq!(event["caller"]["resource"], "github.com");
+        assert_eq!(event["purpose"]["consumer"], "python-sdk");
+        assert_eq!(event["purpose"]["operation"], "resolve");
+        assert_eq!(event["purpose"]["path"], "/service");
         assert_eq!(event["session_id"], "test-session");
         assert_eq!(event["seq"], 0);
         // Provider credentials (the `:password`) are redacted; the username,
@@ -695,6 +728,44 @@ mod tests {
         assert_eq!(event["provider"], "vault://user@host/kv");
         // The secret value never appears anywhere in the record.
         assert!(!lines[0].contains("s3cr3t"));
+    }
+
+    #[test]
+    fn records_opaque_provider_interaction_correlation() {
+        let sink = CollectSink::default();
+        let logger = AuditLogger::for_test(Box::new(sink.clone()));
+        let interaction = secretspec_ipc::InteractionReference::authorization(
+            "apr_7K3M",
+            Some(1_786_766_405_000),
+        );
+        logger.record(
+            AuditAction::Get,
+            AuditContext {
+                project: "demo",
+                profile: "production",
+                scope: None,
+                key: Some("DATABASE_URL"),
+                keys: &[],
+                command: None,
+                provider_uri: Some("factorseal://default".to_owned()),
+                reference: None,
+                outcome: AuditOutcome::Error,
+                error_kind: Some("interaction_required"),
+                interaction: Some(&interaction),
+                reason: Some("deploy"),
+                caller: None,
+                purpose: None,
+            },
+        );
+
+        let lines = sink.lines.lock().unwrap();
+        let event: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
+        assert_eq!(event["interaction"]["kind"], "authorization");
+        assert_eq!(event["interaction"]["id"], "apr_7K3M");
+        assert_eq!(
+            event["interaction"]["expires_at_unix_ms"],
+            1_786_766_405_000_u64
+        );
     }
 
     #[test]
@@ -716,8 +787,10 @@ mod tests {
                 reference: None,
                 outcome: AuditOutcome::Found,
                 error_kind: None,
+                interaction: None,
                 reason: None,
                 caller: None,
+                purpose: None,
             },
         );
 
@@ -750,8 +823,10 @@ mod tests {
                     reference: None,
                     outcome: AuditOutcome::Written,
                     error_kind: None,
+                    interaction: None,
                     reason: None,
                     caller: None,
+                    purpose: None,
                 },
             );
         }
@@ -909,8 +984,10 @@ mod tests {
                 reference: None,
                 outcome: AuditOutcome::Found,
                 error_kind: None,
+                interaction: None,
                 reason: None,
                 caller: None,
+                purpose: None,
             },
         );
 

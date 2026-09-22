@@ -254,7 +254,7 @@ impl Provider for LastPassProvider {
         })
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 

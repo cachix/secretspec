@@ -344,6 +344,9 @@ fn test_validation_result_structure() {
         with_defaults: Vec::new(),
         resolution: Vec::new(),
         temp_files: Vec::new(),
+        secret_expiries: HashMap::new(),
+        refreshes: HashMap::new(),
+        revisions: HashMap::new(),
     };
     assert_eq!(valid_result.missing_optional.len(), 1);
     assert_eq!(valid_result.with_defaults.len(), 0);
@@ -4415,6 +4418,7 @@ fn operation_scoped_provider_cache_applies_changed_session_context_on_later_reso
     let item = format!("{PROJECT}/default/{SECRET}");
     crate::provider::tests::take_stateful_reason_reads(&item);
     crate::provider::tests::take_stateful_caller_reads(&item);
+    crate::provider::tests::take_stateful_authorization_duration_reads(&item);
     let store = crate::provider::provider_from_spec(
         "statefultest://",
         crate::provider::ProviderCredentials::new(),
@@ -4429,17 +4433,21 @@ fn operation_scoped_provider_cache_applies_changed_session_context_on_later_reso
 
     let spec = stateful_fallback_spec(PROJECT, SECRET, &primary_file)
         .with_reason("first reason")
+        .with_requested_authorization_duration(std::time::Duration::from_secs(8 * 60 * 60))
         .with_caller(
             crate::CallerContext::new("git")
                 .with_operation("credential_get")
                 .with_resource("github.com"),
         );
     spec.validate().unwrap().expect("first resolution succeeds");
-    let spec = spec.with_reason("second reason").with_caller(
-        crate::CallerContext::new("git")
-            .with_operation("credential_store")
-            .with_resource("github.com"),
-    );
+    let spec = spec
+        .with_reason("second reason")
+        .with_requested_authorization_duration(std::time::Duration::from_secs(30 * 60))
+        .with_caller(
+            crate::CallerContext::new("git")
+                .with_operation("credential_store")
+                .with_resource("github.com"),
+        );
     spec.validate()
         .unwrap()
         .expect("second resolution succeeds");
@@ -4464,6 +4472,13 @@ fn operation_scoped_provider_cache_applies_changed_session_context_on_later_reso
                     .with_operation("credential_store")
                     .with_resource("github.com")
             ),
+        ]
+    );
+    assert_eq!(
+        crate::provider::tests::take_stateful_authorization_duration_reads(&item),
+        vec![
+            Some(std::time::Duration::from_secs(8 * 60 * 60)),
+            Some(std::time::Duration::from_secs(30 * 60)),
         ]
     );
 }
@@ -11015,6 +11030,48 @@ fn cached_route_hits_cache_refreshes_after_clear_and_survives_source_loss() {
     );
 }
 
+#[cfg(feature = "cli")]
+#[test]
+fn named_cached_resolution_reports_the_cache_envelopes_expiry() {
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.env");
+    let cache = temp.path().join("cache.env");
+    fs::write(&source, "API_KEY=remote\n").unwrap();
+    let secrets = cached_dotenv_secrets(&[&source], &cache, "8h");
+
+    let first = secrets.resolve_named_owned("API_KEY").unwrap();
+    let crate::secrets::OwnedNamedResolution::Value {
+        expires_at_unix_ms, ..
+    } = first
+    else {
+        panic!("the authoritative read resolves an inline value");
+    };
+    assert_eq!(
+        expires_at_unix_ms, None,
+        "the legacy provider API does not report authoritative read expiry"
+    );
+
+    let (_, stored) = dotenv_values(&cache).into_iter().next().unwrap();
+    let payload = stored
+        .strip_prefix(crate::cache::CACHE_ENVELOPE_MARKER)
+        .unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(payload).unwrap();
+    let expected = envelope["expires_at"].as_u64().unwrap() * 1000;
+
+    let second = secrets.resolve_named_owned("API_KEY").unwrap();
+    let crate::secrets::OwnedNamedResolution::Value {
+        expires_at_unix_ms,
+        refresh_at_unix_ms,
+        ..
+    } = second
+    else {
+        panic!("the cache read resolves an inline value");
+    };
+    assert_eq!(expires_at_unix_ms, None);
+    assert_eq!(refresh_at_unix_ms, Some(expected));
+}
+
 #[test]
 fn inline_cached_uri_reads_refreshes_and_clears_like_a_cached_route() {
     let _env = scrub_resolution_env();
@@ -11872,4 +11929,125 @@ fn a_credential_source_provider_gets_no_profile() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("?env="), "{err}");
+}
+
+fn named_revision(secrets: &Secrets, name: &str) -> (String, Option<secretspec_ipc::Revision>) {
+    match secrets.resolve_named_owned(name).unwrap() {
+        crate::secrets::OwnedNamedResolution::Value {
+            value, revision, ..
+        } => (value, revision),
+        _ => panic!("expected inline value"),
+    }
+}
+
+#[test]
+fn revision_cache_keeps_the_observed_generation_and_invalidates_after_writes() {
+    use crate::SecretBytes;
+    use crate::provider::{Address, Provider, tests::RevisionTestProvider};
+    let _env = scrub_resolution_env();
+    let temp = TempDir::new().unwrap();
+    let cache = temp.path().join("cache.env");
+    let project = "revision-cache-test";
+    let mut aliases = cached_memtest_providers(&cache);
+    aliases.insert("source".into(), ProviderAlias::from("revisiontest://"));
+    let spec = cached_secrets_with(project, aliases);
+    let address = Address::convention(project, "default", "API_KEY");
+    RevisionTestProvider
+        .set(address, &SecretBytes::from_utf8("A"))
+        .unwrap();
+    let retained = named_revision(&spec, "API_KEY");
+    assert!(retained.1.is_some());
+    assert_eq!(retained.0, "A");
+    RevisionTestProvider
+        .set(address, &SecretBytes::from_utf8("B"))
+        .unwrap();
+    // An execution holding A still has A's fingerprint, and cache hits agree.
+    assert_eq!(named_revision(&spec, "API_KEY"), retained);
+    expire_cache_entry(&cache, project, "API_KEY");
+    let rotated = named_revision(&spec, "API_KEY");
+    assert_eq!(rotated.0, "B");
+    assert_ne!(rotated.1, retained.1);
+    assert_eq!(retained.0, "A");
+    assert_eq!(named_revision(&spec, "API_KEY"), rotated);
+    // set does not return generation metadata; never associate B's token with C.
+    spec.set("API_KEY", SecretBytes::from_utf8("C")).unwrap();
+    assert_eq!(named_revision(&spec, "API_KEY"), ("C".into(), None));
+    spec.clear_cache(Some("API_KEY")).unwrap();
+    let updated = named_revision(&spec, "API_KEY");
+    assert!(updated.1.is_some());
+    assert_ne!(updated.1, rotated.1);
+    spec.delete("API_KEY").unwrap();
+    assert!(matches!(
+        spec.resolve_named_owned("API_KEY").unwrap(),
+        crate::secrets::OwnedNamedResolution::Missing { .. }
+    ));
+}
+
+#[test]
+fn revisions_track_fallback_and_projection_but_not_defaults_or_composition() {
+    use crate::SecretBytes;
+    use crate::provider::{Address, Provider, tests::RevisionTestProvider};
+    let _env = scrub_resolution_env();
+    RevisionTestProvider
+        .set(
+            Address::Native(&NativeAddress {
+                item: "revision-document".into(),
+                ..Default::default()
+            }),
+            &SecretBytes::from_utf8(r#"{"a":"one","b":"two"}"#),
+        )
+        .unwrap();
+    RevisionTestProvider
+        .set(
+            Address::Native(&NativeAddress {
+                item: "revision-encoded".into(),
+                ..Default::default()
+            }),
+            &SecretBytes::from_utf8("b25l"),
+        )
+        .unwrap();
+    let manifest = r#"
+[project]
+name = "revision-projection-test"
+revision = "1.0"
+require_reason = false
+[providers]
+missing = "null://"
+versioned = "revisiontest://"
+[profiles.default]
+A = { description = "a", providers = ["missing", "versioned"], ref = { item = "revision-document" }, extract = { format = "json", pointer = "/a" } }
+B = { description = "b", providers = ["versioned"], ref = { item = "revision-document" }, extract = { format = "json", pointer = "/b" } }
+DEFAULT = { description = "default", providers = ["missing"], default = "fallback" }
+COMPOSED = { description = "composed", composed = "${A}:${B}" }
+RAW = { description = "raw", providers = ["versioned"], ref = { item = "revision-encoded" } }
+DECODED = { description = "decoded", providers = ["versioned"], ref = { item = "revision-encoded" }, encoding = "base64" }
+"#;
+    let spec = Secrets::new(
+        parse_spec_from_str(manifest, None).unwrap(),
+        None,
+        None,
+        None,
+    );
+    let a = named_revision(&spec, "A");
+    let b = named_revision(&spec, "B");
+    assert_eq!((&*a.0, &*b.0), ("one", "two"));
+    assert!(a.1.is_some());
+    assert_ne!(a.1, b.1);
+    assert_eq!(named_revision(&spec, "DEFAULT"), ("fallback".into(), None));
+    assert_eq!(named_revision(&spec, "COMPOSED"), ("one:two".into(), None));
+    let raw = named_revision(&spec, "RAW");
+    let decoded = named_revision(&spec, "DECODED");
+    assert_eq!((&*raw.0, &*decoded.0), ("b25l", "one"));
+    assert_ne!(raw.1, decoded.1);
+    let direct = Secrets::new(
+        parse_spec_from_str(
+            &manifest.replace("[\"missing\", \"versioned\"]", "[\"versioned\"]"),
+            None,
+        )
+        .unwrap(),
+        None,
+        None,
+        None,
+    );
+    assert_eq!(named_revision(&direct, "A"), a);
 }

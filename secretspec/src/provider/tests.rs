@@ -56,7 +56,7 @@ impl Provider for MockProvider {
         Ok(self.storage.lock().unwrap().remove(&item).is_some())
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "mock"
     }
 
@@ -116,7 +116,7 @@ impl Provider for CountingProvider {
         Ok(())
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "counting"
     }
 
@@ -198,7 +198,7 @@ impl Provider for MemTestProvider {
         Ok(MEM_STORE.lock().unwrap().remove(&item).is_some())
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -281,7 +281,7 @@ impl Provider for SlowTestProvider {
         MemTestProvider.delete(addr)
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -300,6 +300,7 @@ impl Provider for SlowTestProvider {
 pub(crate) struct StatefulTestProvider {
     snapshot: std::sync::OnceLock<HashMap<String, String>>,
     reason: Mutex<Option<String>>,
+    requested_authorization_duration: Mutex<Option<std::time::Duration>>,
     caller: Mutex<Option<crate::CallerContext>>,
 }
 pub(crate) struct StatefulTestConfig;
@@ -308,6 +309,9 @@ static STATEFUL_REASON_READS: std::sync::LazyLock<Mutex<HashMap<String, Vec<Opti
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 static STATEFUL_CALLER_READS: std::sync::LazyLock<
     Mutex<HashMap<String, Vec<Option<crate::CallerContext>>>>,
+> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static STATEFUL_AUTHORIZATION_DURATION_READS: std::sync::LazyLock<
+    Mutex<HashMap<String, Vec<Option<std::time::Duration>>>>,
 > = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 impl TryFrom<&super::ProviderUrl> for StatefulTestConfig {
@@ -323,6 +327,7 @@ impl StatefulTestProvider {
         Self {
             snapshot: std::sync::OnceLock::new(),
             reason: Mutex::new(None),
+            requested_authorization_duration: Mutex::new(None),
             caller: Mutex::new(None),
         }
     }
@@ -362,6 +367,12 @@ impl Provider for StatefulTestProvider {
             .entry(item.clone())
             .or_default()
             .push(self.caller.lock().unwrap().clone());
+        STATEFUL_AUTHORIZATION_DURATION_READS
+            .lock()
+            .unwrap()
+            .entry(item.clone())
+            .or_default()
+            .push(*self.requested_authorization_duration.lock().unwrap());
         let snapshot = self
             .snapshot
             .get_or_init(|| MEM_STORE.lock().unwrap().clone());
@@ -378,7 +389,7 @@ impl Provider for StatefulTestProvider {
         MemTestProvider.delete(addr)
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -388,6 +399,10 @@ impl Provider for StatefulTestProvider {
 
     fn set_reason(&self, reason: Option<String>) {
         *self.reason.lock().unwrap() = reason;
+    }
+
+    fn set_requested_authorization_duration(&self, duration: Option<std::time::Duration>) {
+        *self.requested_authorization_duration.lock().unwrap() = duration;
     }
 
     fn set_caller(&self, caller: Option<crate::CallerContext>) {
@@ -405,6 +420,16 @@ pub(crate) fn take_stateful_reason_reads(item: &str) -> Vec<Option<String>> {
 
 pub(crate) fn take_stateful_caller_reads(item: &str) -> Vec<Option<crate::CallerContext>> {
     STATEFUL_CALLER_READS
+        .lock()
+        .unwrap()
+        .remove(item)
+        .unwrap_or_default()
+}
+
+pub(crate) fn take_stateful_authorization_duration_reads(
+    item: &str,
+) -> Vec<Option<std::time::Duration>> {
+    STATEFUL_AUTHORIZATION_DURATION_READS
         .lock()
         .unwrap()
         .remove(item)
@@ -470,7 +495,7 @@ impl Provider for FailWriteProvider {
         MemTestProvider.delete(addr)
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -535,7 +560,7 @@ impl Provider for FailDeleteProvider {
         ))
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -619,7 +644,7 @@ impl Provider for ExpiringProvider {
         MemTestProvider.delete(addr)
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -739,7 +764,7 @@ impl Provider for PeakConcurrencyProvider {
         Ok(())
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "peak"
     }
 
@@ -2710,6 +2735,19 @@ fn dotenv_write_read_symmetry() {
 }
 
 #[test]
+fn compiled_provider_cannot_be_shadowed_by_external_discovery() {
+    use super::{ProviderCredentials, ProviderUrl, provider_from_url_with_discovery};
+
+    let directory = TempDir::new().unwrap();
+    let url = ProviderUrl::new(url::Url::from_file_path(directory.path().join(".env")).unwrap());
+    let provider = provider_from_url_with_discovery(&url, ProviderCredentials::new(), |_| {
+        panic!("external discovery must not run for a compiled provider scheme")
+    })
+    .unwrap();
+    assert_eq!(provider.name(), "file");
+}
+
+#[test]
 fn file_write_read_symmetry() {
     use super::file::{FileConfig, FileProvider};
 
@@ -2757,7 +2795,7 @@ impl Provider for DeletingProvider {
         true
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "deleting"
     }
 
@@ -2817,4 +2855,78 @@ fn providers_do_not_support_deletion_unless_they_say_so() {
     // the method cannot silently make destructive behaviour available.
     assert!(!CountingProvider::new(&[]).supports_delete());
     assert!(DeletingProvider.supports_delete());
+}
+
+/// Atomic value/generation storage for resolver revision tests. The generation
+/// is independent of bytes, including when the same bytes are written again.
+static REVISION_STORE: std::sync::LazyLock<Mutex<HashMap<String, crate::ProviderValue>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static REVISION_GENERATION: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) struct RevisionTestProvider;
+impl RevisionTestProvider {
+    fn new(_: MemTestConfig) -> Self {
+        Self
+    }
+}
+crate::register_provider! {
+    struct: RevisionTestProvider,
+    config: MemTestConfig,
+    name: "revisiontest",
+    description: "Versioned in-memory test provider",
+    schemes: ["revisiontest"],
+    examples: ["revisiontest://"],
+    credential_names: [],
+    deletes: true,
+}
+impl Provider for RevisionTestProvider {
+    fn convention_address(
+        &self,
+        project: &str,
+        profile: &str,
+        key: &str,
+    ) -> Result<crate::config::NativeAddress> {
+        MemTestProvider.convention_address(project, profile, key)
+    }
+    fn name(&self) -> &str {
+        Self::PROVIDER_NAME
+    }
+    fn uri(&self) -> String {
+        "revisiontest://".into()
+    }
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
+        self.get_with_metadata(addr).map(|v| v.map(|v| v.value))
+    }
+    fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<crate::ProviderValue>> {
+        Ok(REVISION_STORE
+            .lock()
+            .unwrap()
+            .get(super::flat_item(self, addr)?.as_ref())
+            .cloned())
+    }
+    fn get_many_with_metadata(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, crate::ProviderValue>> {
+        super::get_each_with(requests, |addr| self.get_with_metadata(addr))
+    }
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        let item = super::flat_item(self, addr)?.into_owned();
+        let mut store = REVISION_STORE.lock().unwrap();
+        let generation = REVISION_GENERATION.fetch_add(1, Ordering::SeqCst);
+        let revision =
+            crate::revision::digest("test-generation", &[&item, &generation.to_string()]);
+        store.insert(
+            item,
+            crate::ProviderValue::new(value.clone(), None).with_revision(Some(revision)),
+        );
+        Ok(())
+    }
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        Ok(REVISION_STORE
+            .lock()
+            .unwrap()
+            .remove(super::flat_item(self, addr)?.as_ref())
+            .is_some())
+    }
 }

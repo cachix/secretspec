@@ -308,6 +308,9 @@ works identically with no per-language resolution logic:
 The shared embedded ABI is named `libsecretspec` in SecretSpec 0.20+; it was
 named `secretspec-ffi` through 0.19. Its exported `secretspec_*` symbols and the
 `SECRETSPEC_FFI_LIB` override are unchanged.
+This embedded library is separate from the
+`libsecretspec-resolver` C client and `secretspec-ipc` Rust implementation used for
+out-of-process client and provider communication in 0.21+.
 
 - [Python](https://secretspec.dev/sdk/python) (via a pyo3 extension)
 - [Go](https://secretspec.dev/sdk/go) (via purego, no cgo, over the `libsecretspec` C ABI)
@@ -355,6 +358,7 @@ secretspec run -- command        # Run command with secrets as env vars
 
 # Inspect access
 secretspec audit                 # Show the local audit log of secret access
+secretspec serve        # Private SDK resolver session (0.21+)
 
 # Enable contextual Fish completions for this session (0.20+)
 secretspec completions fish | source

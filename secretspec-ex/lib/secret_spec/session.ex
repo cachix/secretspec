@@ -4,13 +4,14 @@ defmodule SecretSpec.Session do
   alias SecretSpec.{Codec, Error, Secret}
   @default_startup 5_000
   @default_timeout 30_000
+  @default_max_frame_bytes 32 * 1024
   @protocol "secretspec.resolver"
   @version 1
 
   defstruct port: nil,
             executable: nil,
             methods: MapSet.new(),
-            limits: %{max_frame_bytes: Codec.max_frame_bytes(), max_in_flight: 1},
+            limits: %{max_frame_bytes: @default_max_frame_bytes, max_in_flight: 1},
             next_id: 1,
             pending: %{},
             callers: %{},
@@ -72,6 +73,7 @@ defmodule SecretSpec.Session do
       "jsonrpc" => "2.0",
       "id" => id,
       "method" => "rpc.initialize",
+      "_meta" => %{"deadline_unix_ms" => System.system_time(:millisecond) + @default_startup},
       "params" => %{
         "protocol" => @protocol,
         "versions" => [@version],
@@ -367,15 +369,13 @@ defmodule SecretSpec.Session do
   defp initialize_application(options) do
     manifest = Keyword.get(options, :manifest)
 
-    application = %{
+    %{
       "manifest" => manifest_value(manifest),
       "provider" => Keyword.get(options, :provider),
       "profile" => Keyword.get(options, :profile),
       "scope" => Keyword.get(options, :scope),
       "reason" => Keyword.get(options, :reason)
     }
-
-    Enum.reject(application, fn {_k, v} -> is_nil(v) end) |> Map.new()
   end
 
   defp manifest_value(path) when is_binary(path),

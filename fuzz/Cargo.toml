@@ -1,0 +1,36 @@
+[package]
+name = "secretspec-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Keep fuzzing dependencies separate from the workspace's release dependency
+# graph. cargo-fuzz invokes this manifest directly.
+[workspace]
+members = ["."]
+
+[dependencies]
+async-trait = "0.1"
+libfuzzer-sys = "0.4"
+secretspec-core = { package = "secretspec", path = "../secretspec", default-features = false }
+secretspec-ipc = { path = "../secretspec-ipc" }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["io-util", "macros", "rt", "sync", "time"] }
+
+[[bin]]
+name = "resolver_wire"
+path = "fuzz_targets/resolver_wire.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "resolve_apis"
+path = "fuzz_targets/resolve_apis.rs"
+test = false
+doc = false
+bench = false

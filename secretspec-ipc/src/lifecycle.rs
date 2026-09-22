@@ -1,4 +1,5 @@
 use crate::client::{CallbackHandler, Client};
+use crate::connection::{FilesystemAccess, SshOptions};
 use crate::deadline::instant_from_unix_ms;
 use crate::error::{ErrorKind, RpcError};
 use crate::protocol::callback;
@@ -22,7 +23,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -180,7 +181,10 @@ impl ProviderSession {
     }
 
     /// As [`Self::launch`], allowing the endpoint to request only the provider
-    /// credentials it actually needs while initialization is pending (0.21+).
+    /// credentials it actually needs during initialization or a provider
+    /// operation, including `provider.set` (0.21+). The responder supplies the
+    /// value through IPC; it does not require a terminal and may use a GUI,
+    /// credential store, or another caller-owned input mechanism.
     pub async fn launch_with_credential_broker(
         options: LaunchOptions,
         client: Product,
@@ -321,12 +325,37 @@ impl ProviderSession {
     }
 }
 
-/// An initialized `secretspec.resolver/1` client together with the child process
-/// that owns its private transport.
+/// An initialized resolver session over a private authenticated stream (0.21+).
+///
+/// A launched session also owns its transport child. A connected session owns
+/// only the stream; closing it releases this session, not the hosting service.
+/// Reconnecting creates a fresh session and never replays an interrupted call.
 pub struct ResolverSession {
-    child: ChildSession,
+    transport: ResolverTransport,
+    filesystem: FilesystemAccess,
     capabilities: HashSet<String>,
     initialized: ResolverInitializedApplication,
+}
+
+enum ResolverTransport {
+    Child(ChildSession),
+    Connected(Client),
+}
+
+impl ResolverTransport {
+    fn client(&self) -> &Client {
+        match self {
+            Self::Child(child) => child.client(),
+            Self::Connected(client) => client,
+        }
+    }
+
+    async fn close(&self, deadline_unix_ms: u64) -> Result<()> {
+        match self {
+            Self::Child(child) => child.close(deadline_unix_ms).await,
+            Self::Connected(client) => client.close(deadline_unix_ms).await,
+        }
+    }
 }
 
 /// Obtains one secret value from a person on the resolver's behalf (0.21+).
@@ -406,7 +435,7 @@ impl ResolverSession {
         startup_deadline_unix_ms: u64,
         responder: Option<Arc<dyn PromptResponder>>,
     ) -> Result<Self> {
-        application.validate()?;
+        application.validate_for_connection()?;
         let (client_methods, callbacks): (Vec<String>, Option<Arc<dyn CallbackHandler>>) =
             match responder {
                 Some(responder) => (
@@ -430,33 +459,164 @@ impl ResolverSession {
             callbacks,
         )
         .await?;
-        if let Err(error) = initialized.application.validate() {
-            let _ = child
+        Self::from_transport(
+            ResolverTransport::Child(child),
+            initialized,
+            FilesystemAccess::Shared,
+        )
+        .await
+    }
+
+    /// Connect an already authenticated and authorized stream (0.21+).
+    ///
+    /// The caller must authenticate the endpoint and protect both directions
+    /// before calling this method. The server must authorize initialization
+    /// against the authenticated principal. Manifest paths and inline base_dir
+    /// always name locations on the resolver machine.
+    pub async fn connect<R, W>(
+        reader: R,
+        writer: W,
+        client: Product,
+        limits: Limits,
+        application: ResolverInitializeApplication,
+        filesystem: FilesystemAccess,
+        startup_deadline_unix_ms: u64,
+    ) -> Result<Self>
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        Self::connect_with_prompt(
+            reader,
+            writer,
+            client,
+            limits,
+            application,
+            filesystem,
+            startup_deadline_unix_ms,
+            None,
+        )
+        .await
+    }
+
+    /// As [`Self::connect`], supporting prompts on the calling device (0.21+).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn connect_with_prompt<R, W>(
+        reader: R,
+        writer: W,
+        client: Product,
+        limits: Limits,
+        application: ResolverInitializeApplication,
+        filesystem: FilesystemAccess,
+        startup_deadline_unix_ms: u64,
+        responder: Option<Arc<dyn PromptResponder>>,
+    ) -> Result<Self>
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        application.validate_for_connection()?;
+        let (client_methods, callbacks): (Vec<String>, Option<Arc<dyn CallbackHandler>>) =
+            match responder {
+                Some(responder) => (
+                    vec![callback::method::PROMPT.to_string()],
+                    Some(Arc::new(PromptCallbacks { responder })),
+                ),
+                None => (Vec::new(), None),
+            };
+        let initialize = InitializeParams {
+            protocol: RESOLVER_PROTOCOL.to_string(),
+            versions: vec![PROTOCOL_VERSION],
+            client,
+            limits,
+            client_methods,
+            application,
+        };
+        let (client, initialized) = Client::connect_with_callbacks(
+            reader,
+            writer,
+            initialize,
+            startup_deadline_unix_ms,
+            callbacks,
+        )
+        .await?;
+        Self::from_transport(
+            ResolverTransport::Connected(client),
+            initialized,
+            filesystem,
+        )
+        .await
+    }
+
+    /// Launch a resolver over SSH with preconfigured authentication (0.21+).
+    /// Calling this again starts a fresh session; it never resumes old requests.
+    pub async fn launch_ssh(
+        options: SshOptions,
+        client: Product,
+        limits: Limits,
+        application: ResolverInitializeApplication,
+        startup_deadline_unix_ms: u64,
+    ) -> Result<Self> {
+        Self::launch_ssh_with_prompt(
+            options,
+            client,
+            limits,
+            application,
+            startup_deadline_unix_ms,
+            None,
+        )
+        .await
+    }
+
+    /// As [`Self::launch_ssh`], supporting resolver prompts locally (0.21+).
+    pub async fn launch_ssh_with_prompt(
+        options: SshOptions,
+        client: Product,
+        limits: Limits,
+        application: ResolverInitializeApplication,
+        startup_deadline_unix_ms: u64,
+        responder: Option<Arc<dyn PromptResponder>>,
+    ) -> Result<Self> {
+        let mut session = Self::launch_with_prompt(
+            options.launch_options()?,
+            client,
+            limits,
+            application,
+            startup_deadline_unix_ms,
+            responder,
+        )
+        .await?;
+        session.filesystem = options.filesystem;
+        Ok(session)
+    }
+
+    async fn from_transport(
+        transport: ResolverTransport,
+        initialized: InitializeResult<ResolverInitializedApplication>,
+        filesystem: FilesystemAccess,
+    ) -> Result<Self> {
+        if let Err(error) = initialized
+            .application
+            .validate()
+            .and_then(|_| resolver_protocol::validate_capabilities(&initialized.methods))
+        {
+            let _ = transport
                 .close(deadline_unix_ms_after(Duration::from_secs(1)))
                 .await;
             return Err(error);
         }
-        let capabilities: HashSet<_> = initialized.methods.into_iter().collect();
-        if !resolver_protocol::CAPABILITIES
-            .iter()
-            .all(|method| capabilities.contains(*method))
-        {
-            let _ = child
-                .close(deadline_unix_ms_after(Duration::from_secs(1)))
-                .await;
-            return Err(Error::Protocol(
-                "resolution endpoint did not advertise all required methods",
-            ));
-        }
         Ok(Self {
-            child,
-            capabilities,
+            transport,
+            filesystem,
+            capabilities: initialized.methods.into_iter().collect(),
             initialized: initialized.application,
         })
     }
 
+    /// Raw protocol access. The caller must enforce filesystem policy itself;
+    /// prefer the typed methods, which reject remote path resolution (0.21+).
     pub fn raw(&self) -> &Client {
-        self.child.client()
+        self.transport.client()
     }
 
     pub async fn get(
@@ -464,10 +624,25 @@ impl ResolverSession {
         params: &resolver_protocol::GetParams,
         deadline_unix_ms: u64,
     ) -> Result<resolver_protocol::GetResult> {
-        self.child
+        let params = self.filesystem.prepare_get(params)?;
+        let result = self
+            .transport
             .client()
-            .call(resolver_protocol::method::GET, params, deadline_unix_ms)
-            .await
+            .call(
+                resolver_protocol::method::GET,
+                params.as_ref(),
+                deadline_unix_ms,
+            )
+            .await?;
+        if !self.filesystem.accepts(&result) {
+            // A nonconforming peer returned a path despite a Value request.
+            // Closing the session releases any path leases without exposing it.
+            let _ = self.close(deadline_unix_ms).await;
+            return Err(Error::Protocol(
+                "resolver returned a path on a remote filesystem",
+            ));
+        }
+        Ok(result)
     }
 
     pub async fn release(
@@ -475,7 +650,7 @@ impl ResolverSession {
         params: &resolver_protocol::ReleaseParams,
         deadline_unix_ms: u64,
     ) -> Result<resolver_protocol::ReleaseResult> {
-        self.child
+        self.transport
             .client()
             .call(resolver_protocol::method::RELEASE, params, deadline_unix_ms)
             .await
@@ -489,7 +664,7 @@ impl ResolverSession {
         params: &resolver_protocol::SetParams,
         deadline_unix_ms: u64,
     ) -> Result<resolver_protocol::SetResult> {
-        self.child
+        self.transport
             .client()
             .call(resolver_protocol::method::SET, params, deadline_unix_ms)
             .await
@@ -502,7 +677,7 @@ impl ResolverSession {
         params: &resolver_protocol::DeleteParams,
         deadline_unix_ms: u64,
     ) -> Result<resolver_protocol::DeleteResult> {
-        self.child
+        self.transport
             .client()
             .call(resolver_protocol::method::DELETE, params, deadline_unix_ms)
             .await
@@ -523,11 +698,11 @@ impl ResolverSession {
     }
 
     pub fn is_closed(&self) -> bool {
-        self.child.client().is_closed()
+        self.transport.client().is_closed()
     }
 
     pub async fn close(&self, deadline_unix_ms: u64) -> Result<()> {
-        self.child.close(deadline_unix_ms).await
+        self.transport.close(deadline_unix_ms).await
     }
 }
 

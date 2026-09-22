@@ -1,10 +1,11 @@
-//! Child-process launch configuration shared by every transport.
+//! Child-process launch configuration for local endpoints and SSH (0.21+).
 //!
-//! Version 1 endpoints are directly launched children, so both the async
+//! The mandatory version 1 transport directly launches a child, so both the async
 //! [`crate::lifecycle`] transport and the synchronous [`crate::blocking`] one
 //! need the same executable, argument, environment, and capture rules. Keeping
 //! them here means a caller can move between transports without rewriting its
-//! launch configuration, and the trust rules below are stated once.
+//! launch configuration, and the trust rules below are stated once. Connected
+//! resolver streams (0.21+) have no child and do not use this configuration.
 
 use crate::{Error, Result};
 use std::collections::BTreeMap;

@@ -11,7 +11,7 @@
 //!
 //! One call is in flight at a time, which is why no pending map, in-flight
 //! permit, or cancellation arbitration appears here. Requests still carry their
-//! wire deadline, and [`Watchdog`] enforces it locally.
+//! wire deadline, and a watchdog enforces it locally.
 //!
 //! A session opened here advertises no callbacks (0.21+), so the endpoint never
 //! sends one and an inbound request stays as fatal as any other envelope this
@@ -21,6 +21,7 @@
 //! Servicing a callback between writing a request and reading its response
 //! would fit this loop naturally, and is not implemented.
 
+use crate::connection::{FilesystemAccess, SshOptions};
 use crate::deadline::{clamp_unix_ms, duration_until_unix_ms};
 use crate::error::ErrorKind;
 use crate::frame::{FrameDecoder, encode};
@@ -64,6 +65,7 @@ const READ_CHUNK: usize = 8192;
 /// its private transport.
 pub struct ResolverSession {
     transport: Transport,
+    filesystem: FilesystemAccess,
     capabilities: HashSet<String>,
     initialized: InitializedApplication,
 }
@@ -80,7 +82,7 @@ impl ResolverSession {
         application: InitializeApplication,
         startup_deadline_unix_ms: u64,
     ) -> Result<Self> {
-        application.validate()?;
+        application.validate_for_connection()?;
         let initialize = InitializeParams {
             protocol: RESOLVER_PROTOCOL.to_string(),
             versions: vec![PROTOCOL_VERSION],
@@ -107,6 +109,7 @@ impl ResolverSession {
 
         let mut session = Self {
             transport,
+            filesystem: FilesystemAccess::Shared,
             capabilities: initialized.methods.into_iter().collect(),
             initialized: initialized.application,
         };
@@ -114,6 +117,26 @@ impl ResolverSession {
             session.transport.terminate();
             return Err(error);
         }
+        Ok(session)
+    }
+
+    /// Launch a private resolver over SSH (0.21+). Each launch initializes a
+    /// fresh session; interrupted operations are never replayed automatically.
+    pub fn launch_ssh(
+        options: SshOptions,
+        client: Product,
+        limits: Limits,
+        application: InitializeApplication,
+        startup_deadline_unix_ms: u64,
+    ) -> Result<Self> {
+        let mut session = Self::launch(
+            options.launch_options()?,
+            client,
+            limits,
+            application,
+            startup_deadline_unix_ms,
+        )?;
+        session.filesystem = options.filesystem;
         Ok(session)
     }
 
@@ -132,8 +155,19 @@ impl ResolverSession {
 
     /// Resolve one exact declared name on the session's fixed configuration.
     pub fn get(&mut self, params: &GetParams, deadline_unix_ms: u64) -> Result<GetResult> {
-        params.validate()?;
-        self.call(resolver_protocol::method::GET, params, deadline_unix_ms)
+        let params = self.filesystem.prepare_get(params)?;
+        let result = self.call(
+            resolver_protocol::method::GET,
+            params.as_ref(),
+            deadline_unix_ms,
+        )?;
+        if !self.filesystem.accepts(&result) {
+            self.transport.terminate();
+            return Err(Error::Protocol(
+                "resolver returned a path on a remote filesystem",
+            ));
+        }
+        Ok(result)
     }
 
     /// Store one exact declared name on the session's fixed configuration
@@ -142,7 +176,7 @@ impl ResolverSession {
     /// The value lands wherever a [`Self::get`] of the same name would read it
     /// from, so a consumer that stores and then resolves does not have to model
     /// the endpoint's routing. Endpoints advertise `resolver.set` only when they
-    /// accept writes, and [`Self::call`] refuses to send an unadvertised method,
+    /// accept writes, and the session refuses to send an unadvertised method,
     /// so an older or read-only resolver fails here rather than on the wire.
     pub fn set(&mut self, params: &SetParams, deadline_unix_ms: u64) -> Result<SetResult> {
         params.validate()?;

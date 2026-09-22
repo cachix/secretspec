@@ -79,30 +79,9 @@ impl crate::provider::external::ProviderCredentialBroker for LoginCredentialBrok
         {
             return Ok(Some(value));
         }
-        let prompt = match source {
-            Some(source) => format!(
-                "Enter {} for provider '{}' (source: {}):",
-                request.name,
-                self.alias,
-                source.display_provider()
-            ),
-            None => format!(
-                "Enter {} for provider '{}' ({} credential):",
-                request.name, self.alias, scheme
-            ),
-        };
-        let entered = inquire::Password::new(&prompt)
-            .without_confirmation()
-            .prompt()
-            .map_err(|_| {
-                crate::SecretSpecError::ProviderOperationFailed(
-                    "provider credential prompt failed".to_string(),
-                )
-            })?;
-        if entered.is_empty() {
+        let Some(value) = prompt_provider_credential(&self.alias, scheme, request, source)? else {
             return Ok(None);
-        }
-        let value = crate::SecretBytes::from_utf8(entered);
+        };
         let location = match source {
             Some(source) => self
                 .app
@@ -124,6 +103,38 @@ impl crate::provider::external::ProviderCredentialBroker for LoginCredentialBrok
             .push((request.name.clone(), location));
         Ok(Some(value))
     }
+}
+
+fn prompt_provider_credential(
+    alias: &str,
+    scheme: &str,
+    request: &crate::ProviderCredentialRequest,
+    source: Option<&crate::config::CredentialSource>,
+) -> crate::Result<Option<crate::SecretBytes>> {
+    // A direct provider URI may contain credentials. Show its trusted scheme
+    // instead; configured alias names remain useful context for the person.
+    let provider = if alias.contains("://") { scheme } else { alias };
+    let prompt = match source {
+        Some(source) => format!(
+            "Enter {} for provider '{}' (source: {}):",
+            request.name,
+            provider,
+            source.display_provider()
+        ),
+        None => format!(
+            "Enter {} for provider '{}' ({} credential):",
+            request.name, provider, scheme
+        ),
+    };
+    let entered = inquire::Password::new(&prompt)
+        .without_confirmation()
+        .prompt()
+        .map_err(|_| {
+            crate::SecretSpecError::ProviderOperationFailed(
+                "provider credential prompt failed".to_string(),
+            )
+        })?;
+    Ok((!entered.is_empty()).then(|| crate::SecretBytes::from_utf8(entered)))
 }
 
 /// Main CLI structure for the secretspec application.
@@ -1526,6 +1537,7 @@ pub fn main() -> Result<()> {
             if let Some(p) = profile {
                 app.set_profile(p);
             }
+            app.set_provider_credential_prompt(prompt_provider_credential);
             let result = match (value, from_file) {
                 (Some(value), None) => app.set_text(&name, &value),
                 (None, Some(path)) => app.set_with_input(&name, |_| {

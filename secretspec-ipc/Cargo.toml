@@ -34,3 +34,7 @@ jsonschema = { version = "0.48.5", default-features = false }
 proptest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "process", "sync", "time"] }
+
+[[example]]
+name = "ssh_resolver"
+required-features = ["tokio"]

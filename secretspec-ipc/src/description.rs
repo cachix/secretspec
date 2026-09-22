@@ -94,10 +94,10 @@ fn rewrite_refs(value: &mut Value, local_namespace: &str) {
             }
         }
         Value::Object(object) => {
-            if let Some(Value::String(reference)) = object.get_mut("$ref") {
-                if let Some(rewritten) = rewrite_reference(reference, local_namespace) {
-                    *reference = rewritten;
-                }
+            if let Some(Value::String(reference)) = object.get_mut("$ref")
+                && let Some(rewritten) = rewrite_reference(reference, local_namespace)
+            {
+                *reference = rewritten;
             }
             for item in object.values_mut() {
                 rewrite_refs(item, local_namespace);

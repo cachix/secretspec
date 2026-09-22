@@ -1,0 +1,8 @@
+/artifacts/
+/coverage/
+/corpus/*
+/corpus/*/*
+!/corpus/resolver_wire/
+!/corpus/resolver_wire/initialize-and-get
+!/corpus/resolve_apis/
+!/corpus/resolve_apis/report.json

@@ -14,6 +14,12 @@ use std::sync::Arc;
 
 /// Typed northbound handler. Implementations never parse JSON-RPC envelopes or
 /// arbitrate cancellation/terminal races.
+///
+/// For connected streams (0.21+), the embedding host authenticates and
+/// authorizes the transport before dispatch. Its per-session handler must
+/// check initialization against server-owned policy before opening manifests
+/// or providers. Initialization context is not authenticated identity. Each
+/// connection needs isolated configuration and resource ownership.
 #[async_trait]
 pub trait ResolverHandler: Send + Sync + 'static {
     async fn initialize(

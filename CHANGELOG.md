@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - IPC resolution preserves binary secret values through caches and file leases,
   while text protocol fields report explicit UTF-8 errors (0.21+).
 
+- Rust IPC resolver clients can connect through SSH, and async clients can use
+  existing authenticated streams. Remote connections default to inline values
+  so resolver-owned file paths are not mistaken for local files; reconnecting
+  starts a fresh session without repeating interrupted operations.
+
+- `secretspec set` can now prompt for missing required credentials requested by
+  external IPC providers, including in piped and noninteractive calls. Answers
+  are saved to their configured credential source or provider-private system
+  keyring before continuing the write.
+
 - IPC v1 now defines and enforces directional callback limits during
   initialization, ties callbacks to their parent request's deadline and
   lifetime in both Rust and C clients, and consistently ignores unknown but

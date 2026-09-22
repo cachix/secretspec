@@ -630,7 +630,6 @@ pub(crate) fn brokered_credential_address(scheme: &str, scope: &str, name: &str)
     }
 }
 
-#[cfg(any(feature = "cli", test))]
 pub(crate) fn store_brokered_credential(
     scheme: &str,
     scope: &str,

@@ -82,6 +82,12 @@ provider, profile, scope, and access reason, and from then on resolves one
 exact declared name at a time. That bound scope is what makes IPC safe to hand
 to a consumer you would not hand a whole profile.
 
+Rust clients can also reach a resolver through SSH (0.21+), and async Rust
+clients can connect an existing authenticated stream (0.21+). See
+[remote resolver connections](/reference/resolver-protocol/#remote-resolver-connections-021)
+for filesystem restrictions, the remote account trust boundary, and fresh-session
+reconnection. This requires no change to the provider IPC boundary.
+
 Beyond resolution, a session can:
 
 - return a resolver-owned file path under an explicit lease, for a value that
@@ -101,7 +107,7 @@ You have three ways to write the client:
 
 | Client | Language | Notes |
 | --- | --- | --- |
-| `secretspec-ipc` | Rust | Async by default; its `blocking` feature gives a synchronous session for a program with no async runtime |
+| `secretspec-ipc` | Rust | Async by default; `blocking` supports callers without a runtime. Both support SSH (0.21+); async also accepts authenticated streams (0.21+) |
 | `libsecretspec-resolver` | C11 | Portable source plus static and shared libraries, with no Rust in its dependency closure |
 | Your own | Any | Implement the [wire protocol](/reference/ipc-wire/) directly |
 

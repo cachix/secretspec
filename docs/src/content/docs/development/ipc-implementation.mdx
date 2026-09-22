@@ -103,6 +103,7 @@ secretspec-ipc/                  # Full Rust client/server implementation
     description.rs
     frame.rs
     client.rs
+    connection.rs               # SSH options and filesystem policy (0.21+)
     jsonrpc.rs
     lifecycle.rs
     server.rs
@@ -695,14 +696,17 @@ uses `secretspec-ipc`; every supported non-Rust resolver-mode SDK binds
 `secretspec-ipc` is a full independent Rust implementation, not bindings to the
 C library. Keep framing, envelope validation, session transitions, and terminal
 ownership in a runtime-independent state-machine core. An optional default
-`tokio` feature supplies async stdio transports, direct child launch, reader and
+`tokio` feature supplies async stream transports, direct child launch, reader and
 writer tasks, deadlines, cancellation tokens, process watching, and typed
 client/server APIs.
 
 The Rust client exposes generic opaque-JSON calls at the wire layer and typed
-resolution/provider sessions above it. `ResolverSession` and
-`ProviderSession` own child launch, initialization validation, transport,
-advertised methods, and shutdown as one lifecycle object. The server exposes
+resolution/provider sessions above it. `ProviderSession` owns its child launch,
+initialization validation, transport, advertised methods, and shutdown.
+`ResolverSession` can own either a launched child or an authenticated connected
+stream (0.21+); process cleanup belongs only to the launched variant. Both Rust
+resolver clients support SSH launch (0.21+), using the common `SshOptions` and
+`FilesystemAccess` policy. The server exposes
 the reusable handler API described earlier. Both layers use the checked-in
 schemas and fixtures; no
 Rust type definition becomes a second source of truth.

@@ -1,0 +1,9 @@
+I built SecretSpec because my secrets were scattered across dotenv files, shell profiles, password managers, cloud vaults, and CI settings.
+
+SecretSpec lets a project declare the secrets it needs in `secretspec.toml`, then resolves them from the stores you already use. The CLI can check, set, run with, or export secrets across different profiles and providers.
+
+Unlike SOPS, Infisical, direnv, or dotenv tools, SecretSpec does not try to replace your existing stores. It provides one workflow across them.
+
+I maintain the project and would appreciate feedback from other command line users.
+
+https://secretspec.dev/

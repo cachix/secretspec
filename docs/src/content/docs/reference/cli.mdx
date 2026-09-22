@@ -729,6 +729,14 @@ surrounding whitespace trimmed as in earlier versions, so
 every byte. A binary declaration normally uses `as_path = true`; add a
 manifest `encoding` when its provider accepts only text.
 
+In SecretSpec 0.21+, an external IPC provider can request a missing required
+password or other authentication credential during `set`. SecretSpec prompts
+with hidden input, including for piped and noninteractive calls, and stores the
+answer in the alias's configured credential source or its provider-private
+system-keyring namespace. Existing credentials are reused. Optional requests
+do not prompt for provider credentials. If no terminal is available to answer
+the prompt, the credential request fails.
+
 `set` rejects composed secrets because their values are derived and read-only.
 Available since SecretSpec 0.16.
 

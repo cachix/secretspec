@@ -239,6 +239,26 @@ credentials that path actually needs with `client.credential`. The client
 advertises this callback in `client_methods` and may answer it while
 `rpc.initialize` is still active or during a later token refresh.
 
+Credential brokerage itself requires no terminal. The host answers the callback
+over IPC and can obtain the value from its own credential store, GUI, or other
+input mechanism. Rust hosts can install a `CredentialResponder` with
+`ProviderSession::launch_with_credential_broker`; the responder receives
+requests during initialization and provider operations, including `provider.set`.
+The terminal prompt described below is specific to the SecretSpec CLI's
+credential handler.
+
+During `secretspec set` (0.21+), the same callback can request a
+missing provider password during initialization, write preflight, or
+`provider.set` itself. Set `required: true` when the operation needs the
+credential. SecretSpec first looks for an existing value, then prompts with
+hidden input and stores the answer in the alias's configured credential source
+or the provider-private keyring namespace before returning it. Optional
+requests do not trigger a prompt. Piped and noninteractive calls also attempt
+the prompt; if no terminal is available to answer it, the callback fails.
+Empty input returns `missing`, and cancelling the prompt fails the callback. The provider
+continues the original operation after receiving the answer; no write is
+automatically replayed.
+
 ```json
 {
   "jsonrpc": "2.0",

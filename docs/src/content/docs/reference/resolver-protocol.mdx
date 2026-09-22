@@ -42,7 +42,7 @@ are specified.
 
 ## Starting the resolver
 
-The version 1 resolver transport is a directly launched child:
+The mandatory version 1 resolver transport is a directly launched child:
 
 ```text
 secretspec serve
@@ -57,6 +57,11 @@ through a shell. A privileged caller MUST use an absolute executable path and
 must not let a project manifest, flake, repository, or working directory
 select it. An interactive unprivileged SDK may resolve `secretspec` through its
 normal installation mechanism.
+
+The optional SSH connector (0.21+) directly launches the local SSH executable.
+SSH executes a fixed resolver command through the remote account's POSIX-compatible
+shell; the connector quotes the remote executable as a single shell word. This
+is the explicit remote-launch exception to the direct-execution rule.
 
 The caller normally sends `rpc.initialize` immediately and applies a 5-second
 startup timeout by default. Inspection tooling may first call `rpc.discover`
@@ -75,6 +80,80 @@ Resolution may also wait for an independent provider-owned interaction channel
 within the request deadline; when neither that nor a client callback is
 available, the resolver returns `interaction_required`. Neither the resolver nor
 the client automatically replays that request.
+
+### Remote resolver connections (0.21+)
+
+The Rust async `ResolverSession` supports `connect` and `connect_with_prompt`
+over an existing authenticated, authorized reader/writer pair. This carries the
+same version 1 frames, including callbacks and cancellation. The caller owns
+connection establishment; the resulting session owns the supplied stream.
+Closing that session releases its resources without terminating a hosting
+service. A service must instantiate isolated resolver state for each connection.
+This API does not install a daemon, discover an endpoint, or authenticate a raw
+socket. A Unix socket, including one forwarded through SSH, may supply the
+stream after the embedding application establishes endpoint trust.
+
+For SSH, both Rust async and blocking sessions provide `launch_ssh`. The async
+session also provides `launch_ssh_with_prompt`. `SshOptions::new("developer")`
+selects an existing SSH host alias, read-only resolution, and separate
+filesystems. Set `remote_executable` to the resolver executable on that machine;
+privileged integrations must configure trusted absolute executable paths on
+both machines and use `SshOptions.environment` to allowlist the local SSH
+environment. Setting `read_only = false` explicitly enables the ordinary
+resolver's mutation capabilities.
+
+The runnable Rust example accepts only the host, manifest path, and declared
+name. It reports resolution status without printing the secret:
+
+```sh
+# Rust SSH resolver client, SecretSpec 0.21+ on both machines
+cargo run -p secretspec-ipc --example ssh_resolver -- \
+  developer /home/alice/project/secretspec.toml TOKEN
+```
+
+The connector uses noninteractive authentication, requires a known host key,
+disables terminal allocation and forwarding, and sends only protocol data on
+stdin/stdout. Configure keys and enroll the host key separately before using
+it. Host aliases, identity files, ports, and jump hosts use trusted SSH
+configuration. Remote shell startup files must keep stdout free of banners.
+The startup deadline includes SSH connection establishment and initialization;
+choose a budget appropriate for the network. Transport diagnostics remain
+bounded and are not copied into errors because provider stderr may be sensitive.
+See the [OpenSSH command](https://man.openbsd.org/ssh) and
+[configuration](https://man.openbsd.org/ssh_config) manuals for SSH setup.
+
+### Remote filesystem and authority (0.21+)
+
+Manifest paths, inline `base_dir`, relative inheritance, and provider-side paths
+refer to the **resolver machine**. The SDK validates absolute path syntax without
+resolving paths on the client; the resolver validates its native filesystem
+paths. Inline TOML does not upload inherited files or provider configuration.
+
+`FilesystemAccess::Remote` is the SSH default and is explicitly selected for
+an authenticated stream. Typed `get` calls refuse `representation: "path"`
+locally and send `representation: "value"` for `"auto"`. An `as_path` declaration
+therefore returns `representation_mismatch` before resolution; its contents are
+not substituted for a file. An unexpected path response closes the session and
+releases its leases. `FilesystemAccess::Shared` explicitly asserts that the
+caller can access the resolver's absolute paths with the same meaning and
+appropriate permissions; it enables existing path behavior. There is no file
+transfer or client-side materialization in this extension. Raw protocol calls
+bypass the SDK guard and must enforce the same filesystem restrictions themselves.
+
+SSH grants access as the remote OS account. A regular `secretspec serve` process
+has that account's provider and filesystem access; it is **not** a restricted
+project service. Use this connector only when the caller is trusted with that
+account's authority. For a restricted or shared service, the embedding host MUST
+authenticate and authorize the connection before handing it to the dispatcher,
+then validate the requested manifest, inline base directory, provider override,
+profile, scope, and operations against server-owned policy before loading any
+configuration. Client-supplied initialization and purpose fields do not grant
+access. No shared network listener or per-project authentication service is
+provided by this extension.
+
+On a generic connected stream, prompts go back to the client that advertised
+them; that client may present its own UI. Provider-owned approvals remain with
+the provider, including a Factorseal Desktop agent on the developer machine.
 
 ## Session initialization
 
@@ -651,7 +730,7 @@ not serialize `SecretSpecError::to_string()` directly.
 
 ## Reconnect and retry
 
-A child exit or broken pipe fails every in-flight request with a local
+A child exit or broken transport fails every in-flight request with a local
 transport error and invalidates every lease. The client may launch a fresh
 resolver for later work, but it MUST NOT replay the failed request
 automatically. Reads can prompt, generate and persist a secret, refresh a
@@ -665,6 +744,22 @@ fresh session, not by repeating the mutation.
 
 The new process performs initialization from the beginning. Session state,
 request IDs, and lease IDs are never reused.
+
+For remote Rust connections (0.21+), call `connect` on a newly authenticated
+stream or `launch_ssh` again for subsequent work. Each creates a fresh logical
+session, even when it reaches the same persistent host. The SDK never reconnects
+inside an operation or replays it, and callbacks end with their original
+request. No session-resumption token, operation-status query, or retained-result
+capability exists in version 1. SSH keepalives help detect a dead connection;
+request deadlines still bound how long the caller waits. Both machines must
+have sufficiently synchronized clocks for the existing absolute wire deadlines.
+
+For an SSH-launched session, local cleanup owns the SSH child. Graceful protocol
+shutdown asks the remote resolver to release its session and exit, but killing
+the local SSH process cannot guarantee immediate remote process termination
+during a network partition. Remote request deadlines and eventual EOF still
+apply. A persistent host closes only the connection's resolver session on
+`rpc.shutdown`; stopping the host is outside the resolver protocol.
 
 ## SDK integration policy
 

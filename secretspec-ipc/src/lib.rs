@@ -4,6 +4,8 @@
 //! crate is an independent Rust implementation of their wire, client, server,
 //! resolution, and provider state machines.
 
+#[cfg(any(feature = "tokio", feature = "blocking"))]
+pub mod connection;
 pub mod deadline;
 pub mod error;
 pub mod frame;

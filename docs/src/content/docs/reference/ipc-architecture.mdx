@@ -55,11 +55,12 @@ SecretSpec external-provider adapter, the resolver, and Rust provider endpoints
 use the Rust implementation. Both implementations are tested against the same
 language-neutral conformance suite and differential state-machine tests.
 
-The initial transport is a child process over inherited stdin and stdout on
+The mandatory transport is a child process over inherited stdin and stdout on
 Linux, macOS, and Windows. Messages are JSON-RPC 2.0 objects inside bounded
-bounded newline-delimited JSON frames. A later Unix-domain socket or Windows named-pipe
-transport may carry the same messages after separately specifying endpoint
-authentication and discovery.
+newline-delimited JSON frames. Optional Rust resolver connections (0.21+) carry
+the same frames through SSH or an existing authenticated stream. Endpoint
+authentication and discovery for a shared socket or named-pipe service remain
+the responsibility of its embedding host.
 
 ### Why C and Rust implementations?
 
@@ -197,11 +198,21 @@ credentials. Privileged integrations should construct an allowlisted
 environment. Protocol fields must not also be mirrored into environment
 variables.
 
-A persistent service transport is intentionally not version 1. It requires a
-separate specification for owner-only endpoint permissions, peer credentials,
-endpoint selection, stale endpoint cleanup, multi-client fairness, and
-platform-specific identity. Merely finding a socket or pipe is not
-authorization.
+Optional Rust resolver connections (0.21+) separate session ownership from child
+ownership. `ResolverSession::connect` owns a supplied authenticated stream;
+`launch_ssh` owns a local SSH child and launches a private remote resolver. SSH
+uses the remote account's shell for a fixed command with a quoted executable,
+an explicit exception to the local direct-execution rule. Neither mode changes
+disconnect cleanup or permits automatic request replay. See
+[remote resolver connections](/reference/resolver-protocol/#remote-resolver-connections-021).
+
+A built-in persistent service and its endpoint authentication/discovery scheme
+are not provided by version 1. A host supplying connected streams must define
+endpoint permissions, authenticated identity, authorization of initialization,
+stale endpoint cleanup, and multi-client fairness, with isolated resolver state
+per connection. Merely finding a socket or pipe is not authorization. Ordinary
+SSH access grants the remote account's authority; it does not restrict that
+account to the project named during initialization.
 
 ## Principal and delegation decision
 

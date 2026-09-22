@@ -67,6 +67,20 @@ struct Inner {
     writer_task: Mutex<Option<JoinHandle<()>>>,
 }
 
+impl Drop for Inner {
+    fn drop(&mut self) {
+        // Connected sessions have no child whose exit would close the stream.
+        // Do not leave a reader blocked forever when the last client is dropped.
+        // Explicit close remains the graceful, awaited cleanup path.
+        if let Some(task) = self.reader_task.get_mut().take() {
+            task.abort();
+        }
+        if let Some(task) = self.writer_task.get_mut().take() {
+            task.abort();
+        }
+    }
+}
+
 struct PendingRequest {
     sender: oneshot::Sender<Response>,
     deadline_unix_ms: u64,

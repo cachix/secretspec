@@ -22,6 +22,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 struct MemoryProvider {
     values: Mutex<HashMap<String, String>>,
     initialized_credential: Arc<Mutex<Option<String>>>,
+    write_credential: Arc<Mutex<Option<String>>>,
 }
 
 fn key(address: Address) -> String {
@@ -112,10 +113,20 @@ impl ProviderHandler for MemoryProvider {
 
     async fn set(
         &self,
-        _context: RequestContext,
+        context: RequestContext,
         address: Address,
         value: SecretValue,
     ) -> RpcResult<()> {
+        let credential = request_credential(
+            &context,
+            CredentialParams {
+                name: "access_token".into(),
+                scope: "memory://default".into(),
+                required: true,
+            },
+        )
+        .await?;
+        *self.write_credential.lock().unwrap() = credential.map(|value| value.expose().to_string());
         self.values
             .lock()
             .unwrap()
@@ -328,14 +339,16 @@ async fn typed_provider_handler_covers_naming_reads_mutations_and_reflection() {
 }
 
 #[tokio::test]
-async fn provider_can_request_a_credential_during_initialize() {
+async fn provider_can_request_a_credential_during_initialize_and_set() {
     let (client_io, server_io) = tokio::io::duplex(64 * 1024);
     let (client_read, client_write) = tokio::io::split(client_io);
     let (server_read, server_write) = tokio::io::split(server_io);
     let credential = Arc::new(Mutex::new(None));
+    let write_credential = Arc::new(Mutex::new(None));
     let provider = MemoryProvider {
         values: Mutex::new(HashMap::new()),
         initialized_credential: credential.clone(),
+        write_credential: write_credential.clone(),
     };
     let server = tokio::spawn(serve_provider(
         server_read,
@@ -379,6 +392,23 @@ async fn provider_can_request_a_credential_during_initialize() {
 
     assert_eq!(
         credential.lock().unwrap().as_deref(),
+        Some("brokered-token")
+    );
+    assert!(write_credential.lock().unwrap().is_none());
+    let stored: wire::StoredResult = client
+        .call(
+            wire::method::SET,
+            &SetParams {
+                address: address(),
+                value: "secret-to-store".into(),
+            },
+            deadline(),
+        )
+        .await
+        .unwrap();
+    assert!(stored.stored);
+    assert_eq!(
+        write_credential.lock().unwrap().as_deref(),
         Some("brokered-token")
     );
     client.close(deadline()).await.unwrap();

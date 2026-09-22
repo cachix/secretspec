@@ -445,6 +445,46 @@ pub mod resolver {
     impl InitializeApplication {
         pub fn validate(&self) -> Result<()> {
             self.manifest.validate()?;
+            self.validate_options()
+        }
+
+        /// Validate client inputs without interpreting paths on the client's OS
+        /// (0.21+). The resolver still performs its native path validation.
+        #[cfg(any(feature = "tokio", feature = "blocking"))]
+        pub(crate) fn validate_for_connection(&self) -> Result<()> {
+            let path = match &self.manifest {
+                Manifest::Path { path } => path,
+                Manifest::Inline { toml, base_dir } => {
+                    if toml.len() > ABSOLUTE_MAX_FRAME_BYTES {
+                        return Err(Error::Protocol("inline manifest is too large"));
+                    }
+                    base_dir
+                }
+            };
+            validate_nonempty_bytes("path has an invalid byte length", path, 32768)?;
+            let bytes = path.as_bytes();
+            let windows_drive = bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && matches!(bytes[2], b'/' | b'\\');
+            let windows_unc = path.starts_with("\\\\");
+            let absolute = path.starts_with('/') || windows_drive || windows_unc;
+            let normalized = if windows_drive || windows_unc {
+                !path
+                    .split(['/', '\\'])
+                    .any(|part| matches!(part, "." | ".."))
+            } else {
+                !path.split('/').any(|part| matches!(part, "." | ".."))
+            };
+            if !absolute || !normalized || path.contains('\0') {
+                return Err(Error::Protocol(
+                    "manifest path must be absolute and lexically normalized on the resolver machine",
+                ));
+            }
+            self.validate_options()
+        }
+
+        fn validate_options(&self) -> Result<()> {
             validate_optional_bytes(
                 "provider override is too long",
                 self.provider.as_deref(),

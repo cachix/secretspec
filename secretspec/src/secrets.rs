@@ -394,6 +394,7 @@ struct SecretsProviderCredentialBroker {
     profile: String,
     configured: HashMap<String, BrokerCredentialSource>,
     fallback: crate::provider::external::KeyringCredentialBroker,
+    prompt: Option<ProviderCredentialPrompt>,
     cache: Mutex<HashMap<(String, String), Option<SecretBytes>>>,
     audit: Option<Arc<AuditLogger>>,
     reason: Option<String>,
@@ -405,6 +406,7 @@ struct SecretsProviderCredentialBroker {
 impl SecretsProviderCredentialBroker {
     fn record(
         &self,
+        action: AuditAction,
         name: &str,
         provider_uri: String,
         reference: Option<&NativeAddress>,
@@ -422,7 +424,7 @@ impl SecretsProviderCredentialBroker {
         #[cfg(not(feature = "cli"))]
         let purpose: Option<AuditPurpose<'_>> = None;
         logger.record(
-            AuditAction::Get,
+            action,
             AuditContext {
                 project: &self.project,
                 profile: &self.profile,
@@ -486,6 +488,7 @@ impl crate::provider::external::ProviderCredentialBroker for SecretsProviderCred
                 Err(error) => (AuditOutcome::Error, Some(error.kind())),
             };
             self.record(
+                AuditAction::Get,
                 &request.name,
                 configured.provider.uri(),
                 configured.source.reference.as_ref(),
@@ -494,13 +497,14 @@ impl crate::provider::external::ProviderCredentialBroker for SecretsProviderCred
             );
             match fetched? {
                 Some(value) => Some(value),
-                None => {
+                None if self.prompt.is_none() || !request.required => {
                     return Err(credential_missing_error(
                         &request.name,
                         &self.alias,
                         &configured.source.location(&self.project, &request.name),
                     ));
                 }
+                None => None,
             }
         } else {
             let address = crate::provider::external::brokered_credential_address(
@@ -519,6 +523,7 @@ impl crate::provider::external::ProviderCredentialBroker for SecretsProviderCred
                 Err(error) => (AuditOutcome::Error, Some(error.kind())),
             };
             self.record(
+                AuditAction::Get,
                 &request.name,
                 "keyring://".to_string(),
                 Some(&address),
@@ -528,7 +533,80 @@ impl crate::provider::external::ProviderCredentialBroker for SecretsProviderCred
             fetched?
         };
 
-        cache.insert(identity, value.clone());
+        let value = match (value, &self.prompt) {
+            (None, Some(prompt)) if request.required => {
+                let configured = self.configured.get(&request.name);
+                if let Some(entry) = configured {
+                    let result = entry
+                        .provider
+                        .check_writable(entry.source.address(&self.project, &request.name));
+                    if let Err(error) = &result {
+                        self.record(
+                            AuditAction::Set,
+                            &request.name,
+                            entry.provider.uri(),
+                            entry.source.reference.as_ref(),
+                            AuditOutcome::Error,
+                            Some(error.kind()),
+                        );
+                    }
+                    result?;
+                }
+                let value = prompt(
+                    &self.alias,
+                    scheme,
+                    request,
+                    configured.map(|entry| &entry.source),
+                )?
+                .filter(|value| !value.expose_secret().is_empty());
+                if let Some(value) = &value {
+                    let (result, uri, reference) = match configured {
+                        Some(entry) => {
+                            let address = entry.source.address(&self.project, &request.name);
+                            (
+                                entry.provider.set(address, value),
+                                entry.provider.uri(),
+                                entry.source.reference.clone(),
+                            )
+                        }
+                        None => (
+                            crate::provider::external::store_brokered_credential(
+                                scheme,
+                                &request.scope,
+                                &request.name,
+                                value,
+                            )
+                            .map(|_| ()),
+                            "keyring://".to_string(),
+                            Some(crate::provider::external::brokered_credential_address(
+                                scheme,
+                                &request.scope,
+                                &request.name,
+                            )),
+                        ),
+                    };
+                    self.record(
+                        AuditAction::Set,
+                        &request.name,
+                        uri,
+                        reference.as_ref(),
+                        if result.is_ok() {
+                            AuditOutcome::Written
+                        } else {
+                            AuditOutcome::Error
+                        },
+                        result.as_ref().err().map(|error| error.kind()),
+                    );
+                    result?;
+                }
+                value
+            }
+            (value, _) => value,
+        };
+        // An optional miss must not suppress a later required request's prompt.
+        if value.is_some() || self.prompt.is_none() {
+            cache.insert(identity, value.clone());
+        }
         Ok(value)
     }
 }
@@ -2137,6 +2215,9 @@ pub struct Secrets {
     /// Test seam for deterministic run-prompt coverage. Production CLI
     /// instances leave this unset and use the controlling terminal.
     prompt_reader: Option<PromptReader>,
+    /// Installed for CLI `set`, including with redirected streams; other callers
+    /// only look up provider credentials without provisioning them.
+    provider_credential_prompt: Option<ProviderCredentialPrompt>,
     /// Whether generation and prompting may write their progress lines to
     /// stderr. False in resolver mode; see [`Secrets::silence_progress`].
     progress: bool,
@@ -2158,6 +2239,16 @@ pub(crate) struct WriteTarget {
 
 type WriteTargetReporter = Arc<dyn Fn(&WriteTarget) + Send + Sync>;
 type PromptReader = Arc<dyn Fn(&str, &str, Option<&str>) -> Result<SecretBytes> + Send + Sync>;
+type ProviderCredentialPrompt = Arc<
+    dyn Fn(
+            &str,
+            &str,
+            &crate::provider::external::ProviderCredentialRequest,
+            Option<&CredentialSource>,
+        ) -> Result<Option<SecretBytes>>
+        + Send
+        + Sync,
+>;
 
 /// secretspec's own opt-in for marking the current process as an agent. Lets any
 /// harness that the `detect-coding-agent` crate does not recognize identify itself.
@@ -2383,6 +2474,7 @@ impl Secrets {
             external_delete_capability: Mutex::new(HashMap::new()),
             write_target_reporter: None,
             prompt_reader: None,
+            provider_credential_prompt: None,
             progress: true,
             refuse_produced_writes: false,
         }
@@ -2516,6 +2608,7 @@ impl Secrets {
             external_delete_capability: Mutex::new(HashMap::new()),
             write_target_reporter: None,
             prompt_reader: None,
+            provider_credential_prompt: None,
             progress: true,
             refuse_produced_writes: false,
         })
@@ -2549,6 +2642,22 @@ impl Secrets {
         reader: impl Fn(&str, &str, Option<&str>) -> Result<SecretBytes> + Send + Sync + 'static,
     ) {
         self.prompt_reader = Some(Arc::new(reader));
+    }
+
+    #[cfg(any(test, feature = "cli"))]
+    pub(crate) fn set_provider_credential_prompt(
+        &mut self,
+        prompt: impl Fn(
+            &str,
+            &str,
+            &crate::provider::external::ProviderCredentialRequest,
+            Option<&CredentialSource>,
+        ) -> Result<Option<SecretBytes>>
+        + Send
+        + Sync
+        + 'static,
+    ) {
+        self.provider_credential_prompt = Some(Arc::new(prompt));
     }
 
     /// Refuses every resolution that would produce a value and store it in a
@@ -2951,6 +3060,7 @@ impl Secrets {
             profile: profile.to_string(),
             configured,
             fallback: Default::default(),
+            prompt: self.provider_credential_prompt.clone(),
             cache: Mutex::new(HashMap::new()),
             audit: self.audit.clone(),
             reason: self.reason.clone(),
@@ -8072,6 +8182,137 @@ mod external_provider_credential_broker_tests {
     use super::*;
     use crate::provider::external::ProviderCredentialBroker;
 
+    fn prompting_app(dir: &tempfile::TempDir) -> Secrets {
+        let mut config = crate::tests::resolve_test_config(HashMap::new());
+        config.providers = Some(HashMap::from([(
+            "remote".into(),
+            ProviderAlias::leaf(
+                "example://team-a",
+                HashMap::from([(
+                    "password".into(),
+                    CredentialSource::from(format!(
+                        "dotenv://{}",
+                        dir.path().join("credentials.env").display()
+                    )),
+                )]),
+            ),
+        )]));
+        Secrets::new(config, None, None, None)
+    }
+
+    fn password_request(required: bool) -> crate::ProviderCredentialRequest {
+        crate::ProviderCredentialRequest {
+            name: "password".into(),
+            scope: "example://team-a".into(),
+            required,
+        }
+    }
+
+    // Exercise the host broker with a real credential store, independently of
+    // process-wide endpoint registration and an external executable.
+    fn prompting_broker(app: &Secrets, profile: &str) -> SecretsProviderCredentialBroker {
+        let source = app
+            .lookup_provider_alias_entry("remote")
+            .unwrap()
+            .credentials()
+            .unwrap()["password"]
+            .clone();
+        let provider = Arc::from(app.build_source_provider(&source.provider).unwrap());
+        SecretsProviderCredentialBroker {
+            alias: "remote".into(),
+            scheme: "example".into(),
+            project: app.config.project.name.clone(),
+            profile: profile.into(),
+            configured: HashMap::from([(
+                "password".into(),
+                BrokerCredentialSource { source, provider },
+            )]),
+            fallback: Default::default(),
+            prompt: app.provider_credential_prompt.clone(),
+            cache: Mutex::new(HashMap::new()),
+            audit: None,
+            reason: None,
+            caller: None,
+            #[cfg(feature = "cli")]
+            purpose: None,
+        }
+    }
+
+    #[test]
+    fn missing_required_external_credential_is_prompted_stored_and_reused() {
+        let _env = crate::tests::scrub_resolution_env();
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut app = prompting_app(&dir);
+        let prompts = Arc::new(Mutex::new(0));
+        let observed = prompts.clone();
+        app.set_provider_credential_prompt(move |alias, scheme, request, source| {
+            assert_eq!(alias, "remote");
+            assert_eq!(scheme, "example");
+            assert_eq!(request.name, "password");
+            assert!(source.unwrap().provider.starts_with("dotenv://"));
+            *observed.lock().unwrap() += 1;
+            Ok(Some(SecretBytes::from_utf8("entered-password")))
+        });
+        let broker = prompting_broker(&app, "default");
+        // Optional requests do not open a prompt, even with an explicit source.
+        assert!(broker.get("example", &password_request(false)).is_err());
+        assert_eq!(*prompts.lock().unwrap(), 0);
+        for _ in 0..2 {
+            assert_eq!(
+                broker
+                    .get("example", &password_request(true))
+                    .unwrap()
+                    .unwrap()
+                    .expose_secret(),
+                b"entered-password"
+            );
+        }
+        assert_eq!(*prompts.lock().unwrap(), 1);
+        // A new broker in another profile reads the persisted credential.
+        let broker = prompting_broker(&app, "production");
+        assert_eq!(
+            broker
+                .get("example", &password_request(true))
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            b"entered-password"
+        );
+        assert_eq!(*prompts.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn external_credential_declined_or_failed_prompt_does_not_write() {
+        let _env = crate::tests::scrub_resolution_env();
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut app = prompting_app(&dir);
+        app.set_provider_credential_prompt(|_, _, _, _| Ok(None));
+        let broker = prompting_broker(&app, "default");
+        assert!(
+            broker
+                .get("example", &password_request(true))
+                .unwrap()
+                .is_none()
+        );
+        assert!(!dir.path().join("credentials.env").exists());
+        app.set_provider_credential_prompt(|_, _, _, _| {
+            Err(SecretSpecError::ProviderOperationFailed("cancelled".into()))
+        });
+        let broker = prompting_broker(&app, "default");
+        assert!(broker.get("example", &password_request(true)).is_err());
+        assert!(!dir.path().join("credentials.env").exists());
+    }
+
+    #[test]
+    fn external_credential_without_a_prompt_handler_remains_missing() {
+        let _env = crate::tests::scrub_resolution_env();
+        let dir = tempfile::TempDir::new().unwrap();
+        let app = prompting_app(&dir);
+        let broker = prompting_broker(&app, "default");
+        assert!(broker.get("example", &password_request(true)).is_err());
+        assert!(!dir.path().join("credentials.env").exists());
+    }
+
     struct RecordingSource {
         reads: Arc<Mutex<Vec<String>>>,
     }
@@ -8142,6 +8383,7 @@ mod external_provider_credential_broker_tests {
             profile: "production".into(),
             configured,
             fallback: Default::default(),
+            prompt: None,
             cache: Mutex::new(HashMap::new()),
             audit: None,
             reason: None,

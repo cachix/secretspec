@@ -557,7 +557,7 @@ It then releases session resources and responds with an empty result:
 { "jsonrpc": "2.0", "id": 99, "result": {} }
 ```
 
-The client then closes its write pipe. The child SHOULD exit within the
+The client then closes its write stream. For a directly launched endpoint, the child SHOULD exit within the
 remaining shutdown deadline, capped at 5 seconds. After that grace period the
 launcher terminates it with the platform process API and waits for it to exit.
 
@@ -565,6 +565,14 @@ EOF or process exit without `rpc.shutdown` performs the same resource cleanup.
 The server cannot send pending responses after a disconnect, but it must cancel
 their handlers and prevent late handlers from retaining leases or secret
 buffers.
+
+For optional connected Rust resolver sessions (0.21+), shutdown ends only the
+connection's logical session. The embedding service stays alive and must not
+share session-owned resources between clients. An SSH launcher owns its local
+SSH process; terminating it does not guarantee immediate remote process exit
+during a partition. These transports retain the same EOF cleanup and no-replay
+rules; they introduce no session resumption or retained operation results. See
+[remote reconnect behavior](/reference/resolver-protocol/#reconnect-and-retry).
 
 ## Secret handling
 

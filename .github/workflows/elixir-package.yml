@@ -40,8 +40,8 @@ jobs:
         run: |
           mix local.hex --force
           mix local.rebar --force
-        - name: Build SecretSpec CLI executable
-          run: cargo build --release --bin secretspec --features cli
+      - name: Build SecretSpec CLI executable
+        run: cargo build --release --bin secretspec --features cli
       - name: Fetch Elixir dependencies
         working-directory: secretspec-ex
         run: mix deps.get

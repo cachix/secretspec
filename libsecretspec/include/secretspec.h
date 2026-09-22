@@ -90,6 +90,8 @@ char *secretspec_resolve(const char *request_json);
  * and unknown declaration fields are rejected. Its base_dir resolves relative
  * provider paths like Secrets::from_spec_at. project.extends is supported and
  * resolves parent manifests relative to base_dir, like a file-backed Spec.
+ * spec_version 1, sent by 0.20 SDKs, is still accepted; it cannot declare
+ * the project `defaults` table that v2 added.
  */
 char *secretspec_call(const char *request_json);
 

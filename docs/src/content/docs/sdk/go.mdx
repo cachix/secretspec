@@ -71,9 +71,10 @@ resolved, err := secretspec.New().
     Load()
 ```
 
-Inline specification v1 uses `project`, `profiles`, and each profile's
-`secrets` object; optional `providers`, `scopes`, profile `defaults`, and the
-normal secret declaration fields are also supported. Unknown declaration fields
+Inline specification v2 uses `project`, `profiles`, and each profile's
+`secrets` object; optional `providers`, `scopes`, project `defaults` (0.21+),
+profile `defaults`, and the normal secret declaration fields are also
+supported. A 0.21+ library still accepts the v1 documents sent by 0.20 SDKs. Unknown declaration fields
 are rejected. `project.extends` resolves parent manifests relative to `baseDir`.
 The SDK requires the native
 `secretspec_call` capability for inline specs; an older library returns a

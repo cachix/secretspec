@@ -59,14 +59,31 @@ attach a Trusted Publisher to it, so the very first version has to go up with
 a temporary token. Do each of these once; every release after it needs no
 secrets (except Hackage, which has no Trusted Publishing at all yet).
 
-### crates.io — already done
+### crates.io: first `secretspec-ipc` publish pending
+
+`publish.yml` publishes `secretspec-ipc`, `secretspec`, and
+`secretspec-derive` in that order, because `secretspec` has a registry
+dependency on `secretspec-ipc` and `secretspec-derive` on `secretspec`.
 
 `secretspec` and `secretspec-derive` already exist on crates.io and Trusted
-Publishing is already wired up in `publish.yml` (this predates the SDK work
-that added the other languages). Nothing to do, beyond confirming the linked
-GitHub repo is still correct at
-https://crates.io/crates/secretspec/settings if this repo is ever renamed or
-transferred.
+Publishing is already wired up for them. Confirm the linked GitHub repo is
+still correct at https://crates.io/crates/secretspec/settings if this repo is
+ever renamed or transferred.
+
+`secretspec-ipc` is new in 0.21 and does not exist on crates.io yet. Like npm,
+crates.io only accepts a Trusted Publisher for a crate that already exists, so
+its first version goes up by hand. After the release PR merges and before
+pushing the tag, publish it from the merged `main` with a temporary API token
+scoped to `publish-new`:
+
+```bash
+devenv shell cargo publish -p secretspec-ipc --token <temporary token>
+```
+
+Then add a Trusted Publisher at https://crates.io/crates/secretspec-ipc/settings
+(repository `cachix/secretspec`, workflow `publish.yml`) and revoke the token.
+The tag's publish run finds the version already on crates.io, skips it, and
+continues with `secretspec`.
 
 ### PyPI — trusted publishing active, done
 

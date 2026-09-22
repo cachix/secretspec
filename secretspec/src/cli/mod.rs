@@ -29,7 +29,8 @@ struct LoginCredentialBroker {
     alias: String,
     configured: HashMap<String, crate::config::CredentialSource>,
     request_lock: Mutex<()>,
-    values: Mutex<HashMap<(String, String, String), crate::SecretBytes>>,
+    values:
+        Mutex<HashMap<(crate::ProviderCredentialPrincipal, String, String), crate::SecretBytes>>,
     stored: Mutex<Vec<(String, String)>>,
 }
 
@@ -53,7 +54,7 @@ impl LoginCredentialBroker {
 impl crate::provider::external::ProviderCredentialBroker for LoginCredentialBroker {
     fn get(
         &self,
-        scheme: &str,
+        principal: &crate::ProviderCredentialPrincipal,
         request: &secretspec_ipc::protocol::callback::CredentialParams,
     ) -> crate::Result<Option<crate::SecretBytes>> {
         let _request = self
@@ -62,7 +63,7 @@ impl crate::provider::external::ProviderCredentialBroker for LoginCredentialBrok
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let source = self.configured.get(&request.name);
         let key = (
-            scheme.to_string(),
+            principal.clone(),
             if source.is_some() {
                 String::new()
             } else {
@@ -79,7 +80,9 @@ impl crate::provider::external::ProviderCredentialBroker for LoginCredentialBrok
         {
             return Ok(Some(value));
         }
-        let Some(value) = prompt_provider_credential(&self.alias, scheme, request, source)? else {
+        let Some(value) =
+            prompt_provider_credential(&self.alias, principal.scheme(), request, source)?
+        else {
             return Ok(None);
         };
         let location = match source {
@@ -87,7 +90,7 @@ impl crate::provider::external::ProviderCredentialBroker for LoginCredentialBrok
                 .app
                 .store_provider_credential(source, &request.name, &value)?,
             None => self.app.store_external_provider_credential(
-                scheme,
+                principal,
                 &request.scope,
                 &request.name,
                 &value,
@@ -102,6 +105,10 @@ impl crate::provider::external::ProviderCredentialBroker for LoginCredentialBrok
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push((request.name.clone(), location));
         Ok(Some(value))
+    }
+
+    fn interactive(&self) -> bool {
+        true
     }
 }
 

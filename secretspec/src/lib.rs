@@ -119,9 +119,9 @@ pub use native::{
     call_json,
 };
 pub use provider::external::{
-    EndpointSecurity, ExternalProvider, PlatformEndpointSecurity, ProviderCredentialBroker,
-    ProviderCredentialRequest, ProviderDiscovery, ProviderEndpoint, RegistrationScope,
-    set_provider_discovery,
+    BASE_ENDPOINT_ENVIRONMENT, EndpointSecurity, ExternalProvider, PlatformEndpointSecurity,
+    ProviderCredentialBroker, ProviderCredentialPrincipal, ProviderCredentialRequest,
+    ProviderDiscovery, ProviderEndpoint, RegistrationScope, set_provider_discovery,
 };
 pub use provider::{Address, DiscoveryContext, ProducedValuePersistence, Provider, ProviderValue};
 pub use report::{

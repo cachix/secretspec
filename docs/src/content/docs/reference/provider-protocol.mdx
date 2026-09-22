@@ -59,13 +59,27 @@ The public provider claim has the same format on every platform:
 
 ```json
 {
-  "executable": "/absolute/path/to/secretspec-provider-example"
+  "executable": "/absolute/path/to/secretspec-provider-example",
+  "environment": ["EXAMPLE_TOKEN", "EXAMPLE_*"]
 }
 ```
 
 `executable` MUST be absolute. SecretSpec invokes it directly as `<executable>
 provider`, without a shell. The filename supplies the provider scheme. A claim
 must not contain a provider URI, credential, secret address, or secret value.
+
+The endpoint does not inherit the caller's whole environment, which would hand
+it every other provider's tokens. It receives a fixed base set: `PATH`,
+`HOME`, `USER`, `LOGNAME`, `LANG`, `LANGUAGE`, `LC_*`, `TZ`, `TMPDIR`, `XDG_*`,
+`SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY`, `WAYLAND_DISPLAY`, the
+proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, and
+their lowercase forms), `SSL_CERT_FILE`, `SSL_CERT_DIR`, and on Windows
+`SYSTEMROOT`, `SYSTEMDRIVE`, `WINDIR`, `COMSPEC`, `PATHEXT`, `USERPROFILE`,
+`USERNAME`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`, `PROGRAMDATA`,
+`PROGRAMFILES`, `TEMP`, and `TMP`. The optional `environment` list names any
+other variables the endpoint reads for native authentication, as exact names
+or prefixes ending in `*`; a bare `*` is rejected. An endpoint found through
+`PATH` has no claim and receives only the base set.
 The document has no schema version: discovery only establishes the executable,
 while the launched IPC session negotiates the protocol version. Future claim
 fields are additive and older clients ignore fields they do not understand.
@@ -303,7 +317,9 @@ It resolves a name in this order:
 1. a matching `credentials` source on the selected provider alias, fetched
    lazily only after the endpoint requests it;
 2. SecretSpec's provider-private operating-system keyring namespace, keyed by
-   provider scheme, a hash of `scope`, and `name`;
+   provider scheme, a hash of the configured provider URI and `scope`, and
+   `name`. Including the URI keeps two aliases that select different accounts
+   apart even when their endpoint reports the same `scope`;
 3. `missing`.
 
 The endpoint remains free to try its native environment, workload identity,

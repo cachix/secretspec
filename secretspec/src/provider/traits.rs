@@ -527,6 +527,17 @@ pub trait Provider: Send + Sync {
         None
     }
 
+    /// [`Self::physical_store_path`] as known from configuration alone.
+    /// Available since SecretSpec 0.21.
+    ///
+    /// Like [`Self::configured_entry_coordinates`], this must not contact the
+    /// store; planning compares containers before consulting the cache.
+    /// Providers that only learn their path from the store report what they
+    /// already know, or `None`.
+    fn configured_physical_store_path(&self) -> Option<&std::path::Path> {
+        self.physical_store_path()
+    }
+
     /// Records a human-readable reason for the secrets access happening in this
     /// session (e.g. "secretspec run: deploy"), set via [`Secrets::with_reason`].
     ///
@@ -735,7 +746,35 @@ where
     L: Provider + ?Sized,
     R: Provider + ?Sized,
 {
-    match (left.physical_store_path(), right.physical_store_path()) {
+    same_container_at(
+        left,
+        left.physical_store_path(),
+        right,
+        right.physical_store_path(),
+    )
+}
+
+/// [`same_storage_container`] from configuration alone, for planning.
+fn same_configured_storage_container(left: &dyn Provider, right: &dyn Provider) -> bool {
+    same_container_at(
+        left,
+        left.configured_physical_store_path(),
+        right,
+        right.configured_physical_store_path(),
+    )
+}
+
+fn same_container_at<L, R>(
+    left: &L,
+    left_path: Option<&std::path::Path>,
+    right: &R,
+    right_path: Option<&std::path::Path>,
+) -> bool
+where
+    L: Provider + ?Sized,
+    R: Provider + ?Sized,
+{
+    match (left_path, right_path) {
         (Some(left), Some(right)) => same_file::is_same_file(left, right).unwrap_or_else(|_| {
             let left = comparable_missing_file_path(left);
             let right = comparable_missing_file_path(right);
@@ -754,7 +793,7 @@ pub(crate) fn same_configured_entries(
     right: &dyn Provider,
     right_addr: Address<'_>,
 ) -> Result<bool> {
-    if !same_storage_container(left, right) {
+    if !same_configured_storage_container(left, right) {
         return Ok(false);
     }
     Ok(left.configured_entry_coordinates(left_addr)?
@@ -988,6 +1027,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     }
     fn physical_store_path(&self) -> Option<&std::path::Path> {
         (**self).physical_store_path()
+    }
+    fn configured_physical_store_path(&self) -> Option<&std::path::Path> {
+        (**self).configured_physical_store_path()
     }
     fn set_reason(&self, reason: Option<String>) {
         (**self).set_reason(reason);

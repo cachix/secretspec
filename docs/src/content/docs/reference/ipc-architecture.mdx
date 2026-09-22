@@ -192,11 +192,14 @@ platforms:
 - secrets are sent only in framed requests and responses, never in command-line
   arguments.
 
-The launcher owns environment inheritance policy. Interactive SDK use may
-inherit the caller environment because providers currently use ambient
-credentials. Privileged integrations should construct an allowlisted
-environment. Protocol fields must not also be mirrored into environment
-variables.
+The launcher owns environment inheritance policy. SecretSpec starts external
+provider endpoints with an allowlisted environment: a fixed base set plus the
+variables the endpoint's registration declares, so one provider never receives
+another provider's tokens (see
+[discovery and registration](/reference/provider-protocol/#discovery-and-registration)).
+Privileged integrations should construct an allowlisted environment for any
+other endpoint they launch. Protocol fields must not also be mirrored into
+environment variables.
 
 Optional Rust resolver connections (0.21+) separate session ownership from child
 ownership. `ResolverSession::connect` owns a supplied authenticated stream;

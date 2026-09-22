@@ -1,7 +1,7 @@
 use secretspec::SecretBytes;
 use secretspec::{
     Address as CoreAddress, DiscoveryContext, ExternalProvider, Provider, ProviderCredentialBroker,
-    ProviderCredentialRequest, ProviderEndpoint, SecretSpecError,
+    ProviderCredentialPrincipal, ProviderCredentialRequest, ProviderEndpoint, SecretSpecError,
 };
 use secretspec_ipc::lifecycle::{Environment, LaunchOptions, ProviderSession};
 use secretspec_ipc::protocol::provider::{
@@ -759,7 +759,7 @@ struct NoHostCredentials;
 impl ProviderCredentialBroker for NoHostCredentials {
     fn get(
         &self,
-        _scheme: &str,
+        _principal: &ProviderCredentialPrincipal,
         _request: &ProviderCredentialRequest,
     ) -> secretspec::Result<Option<SecretBytes>> {
         Ok(None)
@@ -776,6 +776,7 @@ fn external_provider_with_uri(
             scheme: "memory".into(),
             executable: endpoint.to_path_buf(),
             arguments,
+            environment: Vec::new(),
         },
         uri,
     )
@@ -789,10 +790,10 @@ fn run_adapter_operations(endpoint: &Path) -> Result<Vec<Value>, String> {
     impl ProviderCredentialBroker for ConformanceBroker {
         fn get(
             &self,
-            scheme: &str,
+            principal: &ProviderCredentialPrincipal,
             request: &ProviderCredentialRequest,
         ) -> secretspec::Result<Option<SecretBytes>> {
-            if scheme != "memory"
+            if principal.scheme() != "memory"
                 || request.name != "conformance_token"
                 || request.scope != "memory://conformance"
             {

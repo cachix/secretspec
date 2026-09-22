@@ -389,7 +389,7 @@ struct BrokerCredentialSource {
 /// for the lifetime of the provider operation that owns this broker.
 struct SecretsProviderCredentialBroker {
     alias: String,
-    scheme: String,
+    principal: crate::provider::external::ProviderCredentialPrincipal,
     project: String,
     profile: String,
     configured: HashMap<String, BrokerCredentialSource>,
@@ -448,13 +448,13 @@ impl SecretsProviderCredentialBroker {
 impl crate::provider::external::ProviderCredentialBroker for SecretsProviderCredentialBroker {
     fn get(
         &self,
-        scheme: &str,
+        principal: &crate::provider::external::ProviderCredentialPrincipal,
         request: &secretspec_ipc::protocol::callback::CredentialParams,
     ) -> Result<Option<SecretBytes>> {
-        // The responder supplies the discovered endpoint's scheme, but retain
+        // The responder supplies the discovered endpoint's principal, but retain
         // this check at the authority boundary so a future caller cannot reuse
         // a broker across provider principals.
-        if scheme != self.scheme {
+        if *principal != self.principal {
             return Err(SecretSpecError::ProviderOperationFailed(
                 "external provider credential principal changed".to_string(),
             ));
@@ -508,13 +508,13 @@ impl crate::provider::external::ProviderCredentialBroker for SecretsProviderCred
             }
         } else {
             let address = crate::provider::external::brokered_credential_address(
-                scheme,
+                principal,
                 &request.scope,
                 &request.name,
             );
             let fetched = crate::provider::external::ProviderCredentialBroker::get(
                 &self.fallback,
-                scheme,
+                principal,
                 request,
             );
             let (outcome, error_kind) = match &fetched {
@@ -554,7 +554,7 @@ impl crate::provider::external::ProviderCredentialBroker for SecretsProviderCred
                 }
                 let value = prompt(
                     &self.alias,
-                    scheme,
+                    principal.scheme(),
                     request,
                     configured.map(|entry| &entry.source),
                 )?
@@ -571,7 +571,7 @@ impl crate::provider::external::ProviderCredentialBroker for SecretsProviderCred
                         }
                         None => (
                             crate::provider::external::store_brokered_credential(
-                                scheme,
+                                principal,
                                 &request.scope,
                                 &request.name,
                                 value,
@@ -579,7 +579,7 @@ impl crate::provider::external::ProviderCredentialBroker for SecretsProviderCred
                             .map(|_| ()),
                             "keyring://".to_string(),
                             Some(crate::provider::external::brokered_credential_address(
-                                scheme,
+                                principal,
                                 &request.scope,
                                 &request.name,
                             )),
@@ -608,6 +608,10 @@ impl crate::provider::external::ProviderCredentialBroker for SecretsProviderCred
             cache.insert(identity, value.clone());
         }
         Ok(value)
+    }
+
+    fn interactive(&self) -> bool {
+        self.prompt.is_some()
     }
 }
 type GroupFetch<'a> = (
@@ -3172,12 +3176,14 @@ impl Secrets {
             configured.insert(name, BrokerCredentialSource { source, provider });
         }
 
-        let scheme = crate::provider::provider_url_from_spec(resolved)?
-            .scheme()
-            .to_string();
+        // The same normalized URL the external provider is built from, so the
+        // principal matches the one its credential requests carry.
+        let principal = crate::provider::external::ProviderCredentialPrincipal::from_url(
+            &crate::provider::provider_url_from_spec(resolved)?,
+        );
         Ok(Arc::new(SecretsProviderCredentialBroker {
             alias: alias.to_string(),
-            scheme,
+            principal,
             project: self.config.project.name.clone(),
             profile: profile.to_string(),
             configured,
@@ -3480,15 +3486,16 @@ impl Secrets {
     #[cfg(any(feature = "cli", test))]
     pub(crate) fn store_external_provider_credential(
         &self,
-        scheme: &str,
+        principal: &crate::provider::external::ProviderCredentialPrincipal,
         scope: &str,
         name: &str,
         value: &SecretBytes,
     ) -> Result<String> {
         self.ensure_reason_for(AuditAction::Set, Some(name))?;
         let result =
-            crate::provider::external::store_brokered_credential(scheme, scope, name, value);
-        let address = crate::provider::external::brokered_credential_address(scheme, scope, name);
+            crate::provider::external::store_brokered_credential(principal, scope, name, value);
+        let address =
+            crate::provider::external::brokered_credential_address(principal, scope, name);
         let (outcome, error_kind) = match &result {
             Ok(_) => (AuditOutcome::Written, None),
             Err(error) => (AuditOutcome::Error, Some(error.kind())),
@@ -8355,6 +8362,22 @@ mod external_provider_credential_broker_tests {
         Secrets::new(config, None, None, None)
     }
 
+    fn example_principal() -> crate::ProviderCredentialPrincipal {
+        crate::ProviderCredentialPrincipal::new("example", "example://team-a")
+    }
+
+    #[test]
+    fn a_broker_refuses_a_request_for_another_configured_uri() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = prompting_app(&dir);
+        let broker = prompting_broker(&app, "default");
+        let other = crate::ProviderCredentialPrincipal::new("example", "example://team-b");
+        let error = broker
+            .get(&other, &password_request(false))
+            .expect_err("a broker is bound to one configured provider URI");
+        assert!(error.to_string().contains("principal changed"), "{error}");
+    }
+
     fn password_request(required: bool) -> crate::ProviderCredentialRequest {
         crate::ProviderCredentialRequest {
             name: "password".into(),
@@ -8375,7 +8398,7 @@ mod external_provider_credential_broker_tests {
         let provider = Arc::from(app.build_source_provider(&source.provider).unwrap());
         SecretsProviderCredentialBroker {
             alias: "remote".into(),
-            scheme: "example".into(),
+            principal: example_principal(),
             project: app.config.project.name.clone(),
             profile: profile.into(),
             configured: HashMap::from([(
@@ -8410,12 +8433,16 @@ mod external_provider_credential_broker_tests {
         });
         let broker = prompting_broker(&app, "default");
         // Optional requests do not open a prompt, even with an explicit source.
-        assert!(broker.get("example", &password_request(false)).is_err());
+        assert!(
+            broker
+                .get(&example_principal(), &password_request(false))
+                .is_err()
+        );
         assert_eq!(*prompts.lock().unwrap(), 0);
         for _ in 0..2 {
             assert_eq!(
                 broker
-                    .get("example", &password_request(true))
+                    .get(&example_principal(), &password_request(true))
                     .unwrap()
                     .unwrap()
                     .expose_secret(),
@@ -8427,7 +8454,7 @@ mod external_provider_credential_broker_tests {
         let broker = prompting_broker(&app, "production");
         assert_eq!(
             broker
-                .get("example", &password_request(true))
+                .get(&example_principal(), &password_request(true))
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
@@ -8445,7 +8472,7 @@ mod external_provider_credential_broker_tests {
         let broker = prompting_broker(&app, "default");
         assert!(
             broker
-                .get("example", &password_request(true))
+                .get(&example_principal(), &password_request(true))
                 .unwrap()
                 .is_none()
         );
@@ -8454,7 +8481,11 @@ mod external_provider_credential_broker_tests {
             Err(SecretSpecError::ProviderOperationFailed("cancelled".into()))
         });
         let broker = prompting_broker(&app, "default");
-        assert!(broker.get("example", &password_request(true)).is_err());
+        assert!(
+            broker
+                .get(&example_principal(), &password_request(true))
+                .is_err()
+        );
         assert!(!dir.path().join("credentials.env").exists());
     }
 
@@ -8464,7 +8495,11 @@ mod external_provider_credential_broker_tests {
         let dir = tempfile::TempDir::new().unwrap();
         let app = prompting_app(&dir);
         let broker = prompting_broker(&app, "default");
-        assert!(broker.get("example", &password_request(true)).is_err());
+        assert!(
+            broker
+                .get(&example_principal(), &password_request(true))
+                .is_err()
+        );
         assert!(!dir.path().join("credentials.env").exists());
     }
 
@@ -8533,7 +8568,7 @@ mod external_provider_credential_broker_tests {
             .collect();
         let broker = SecretsProviderCredentialBroker {
             alias: "remote".into(),
-            scheme: "example".into(),
+            principal: example_principal(),
             project: "payments".into(),
             profile: "production".into(),
             configured,
@@ -8552,8 +8587,8 @@ mod external_provider_credential_broker_tests {
             required: true,
         };
 
-        let first = broker.get("example", &request).unwrap().unwrap();
-        let second = broker.get("example", &request).unwrap().unwrap();
+        let first = broker.get(&example_principal(), &request).unwrap().unwrap();
+        let second = broker.get(&example_principal(), &request).unwrap().unwrap();
 
         assert_eq!(first.expose_secret(), b"value-for-token-a");
         assert_eq!(second.expose_secret(), b"value-for-token-a");

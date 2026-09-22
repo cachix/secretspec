@@ -257,6 +257,10 @@ impl Provider for PreflightGuard {
         self.inner.physical_store_path()
     }
 
+    fn configured_physical_store_path(&self) -> Option<&std::path::Path> {
+        self.inner.configured_physical_store_path()
+    }
+
     fn set_reason(&self, reason: Option<String>) {
         self.inner.set_reason(reason);
     }

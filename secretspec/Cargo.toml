@@ -87,6 +87,9 @@ json-patch = { workspace = true, optional = true }
 libc.workspace = true
 signal-hook.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { workspace = true, optional = true }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
@@ -100,7 +103,7 @@ windows-sys = { workspace = true, features = [
 [features]
 default = ["cli", "keyring", "kdbx", "keeper", "gcsm", "awssm", "awsps", "vault", "openbao", "bws", "akv", "aac", "infisical", "doppler", "bw", "age", "ejson", "scaleway", "sops", "kubernetes", "cloudflare", "setec"]
 cli = ["dep:clap_complete", "dep:clap_complete_nushell", "dep:is_executable", "dep:dunce"]
-keyring = ["dep:keyring", "dep:whoami"]
+keyring = ["dep:keyring", "dep:whoami", "dep:security-framework"]
 kdbx = ["dep:keepass"]
 keeper = ["dep:keeper-secrets-manager-core"]
 gcsm = ["dep:google-cloud-secretmanager-v1"]

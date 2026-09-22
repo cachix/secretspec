@@ -50,6 +50,28 @@ $ secretspec run --provider keyring -- npm start
 - **Windows**: Credential Manager
 - **Linux**: Secret Service (GNOME Keyring, KWallet)
 
+### macOS keychain prompts
+
+macOS binds every keychain item to the code signature of the program that
+created it. Builds that are not signed with an Apple Developer ID, which
+includes SecretSpec installed through Nix, Homebrew, or `cargo install`, get a
+new signature with every release. After an upgrade, macOS therefore asks for
+the login keychain password the first time the new build reads each secret.
+Choose **Always Allow**: it grants the new build lasting access, and every
+later run stays silent. **Allow** grants a single read, so the dialog returns on
+the next run.
+
+> **Changed in version 0.21:** After a read approved with **Always Allow**,
+> SecretSpec recreates the item so the new build owns it outright. A read
+> approved with **Allow** prints a warning explaining that the dialog will
+> return and how to stop it. `secretspec set` over an item written by an
+> earlier build asks for the same approval instead of failing with "The
+> specified item already exists in the keychain".
+
+Secrets addressed with [`ref`](#use-existing-secrets) belong to the
+application that created them and are never recreated, so reading one from
+SecretSpec keeps prompting unless that application's item allows it.
+
 ### Linux prerequisites
 
 Linux only - install if missing:

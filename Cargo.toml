@@ -47,6 +47,7 @@ percent-encoding = "2.3"
 wait-timeout = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading"] }
 whoami = "2.0"
+security-framework = "3.7"
 syn = "2.0"
 quote = "1.0"
 proc-macro2 = "1.0"

@@ -10,13 +10,13 @@ defmodule SecretSpecTest do
 
   test "rejects duplicate object keys" do
     body = ~s({"jsonrpc":"2.0","jsonrpc":"2.0"})
-    frame = <<byte_size(body)::32-big, body::binary>>
+    frame = <<body::binary, ?\n>>
     assert {:error, :duplicate_key} = Codec.decode(frame)
   end
 
   test "rejects oversized frames" do
     body = ~s({"value":"x"})
-    frame = <<byte_size(body)::32-big, body::binary>>
+    frame = <<body::binary, ?\n>>
     assert {:error, :frame_too_large} = Codec.decode(frame, 4)
   end
 
@@ -34,13 +34,13 @@ defmodule SecretSpecTest do
     File.write!(endpoint, """
     defmodule FakeEndpoint do
       def run do
-        case IO.binread(:stdio, 4) do
+        case IO.read(:stdio, :line) do
           :eof -> :ok
-          <<size::32-big>> ->
-            request = IO.binread(:stdio, size) |> JSON.decode!()
+          line ->
+            request = line |> String.trim_trailing(<<10>>) |> JSON.decode!()
             response = response(request)
             body = JSON.encode!(response)
-            IO.binwrite(:stdio, <<byte_size(body)::32-big, body::binary>>)
+            IO.binwrite(:stdio, body <> <<10>>)
             run()
         end
       end

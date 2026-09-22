@@ -10,13 +10,26 @@ defmodule SecretSpec.Codec do
     if size < 2 or size > min(max_frame_bytes, @absolute_max) do
       {:error, :frame_too_large}
     else
-      {:ok, <<size::32-big, body::binary>>}
+      {:ok, <<body::binary, ?\n>>}
     end
   end
 
   def decode(frame, max_frame_bytes \\ @absolute_max)
 
-  def decode(<<size::32-big, body::binary>>, max_frame_bytes) when byte_size(body) == size do
+  def decode(frame, max_frame_bytes) when is_binary(frame) do
+    if frame != <<>> and :binary.last(frame) == ?\n do
+      decode_body(binary_part(frame, 0, byte_size(frame) - 1), max_frame_bytes)
+    else
+      {:error, :truncated_frame}
+    end
+  end
+
+  def decode(_, _), do: {:error, :truncated_frame}
+  def max_frame_bytes, do: @absolute_max
+
+  defp decode_body(body, max_frame_bytes) do
+    size = byte_size(body)
+
     cond do
       size < 2 or size > min(max_frame_bytes, @absolute_max) ->
         {:error, :frame_too_large}
@@ -34,9 +47,6 @@ defmodule SecretSpec.Codec do
         end
     end
   end
-
-  def decode(_, _), do: {:error, :truncated_frame}
-  def max_frame_bytes, do: @absolute_max
 
   defp duplicate_and_nesting_check(body) do
     with {:ok, rest, _depth} <- parse_value(skip_ws(body), 0),

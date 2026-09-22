@@ -187,23 +187,23 @@ defmodule SecretSpec.Session do
 
   def handle_info(_message, state), do: {:noreply, state}
 
-  defp handle_data(data, state) when byte_size(data) < 4, do: {:noreply, %{state | buffer: data}}
+  defp handle_data(data, state) do
+    case :binary.match(data, "\n") do
+      :nomatch ->
+        if byte_size(data) > state.limits.max_frame_bytes do
+          fail_all(
+            {:error, %Error{kind: "protocol", message: "frame exceeds negotiated limit"}},
+            state
+          )
+        else
+          {:noreply, %{state | buffer: data}}
+        end
 
-  defp handle_data(<<size::32-big, rest::binary>> = data, state) do
-    cond do
-      size > state.limits.max_frame_bytes ->
-        fail_all(
-          {:error, %Error{kind: "protocol", message: "frame exceeds negotiated limit"}},
-          state
-        )
+      {offset, 1} ->
+        body = binary_part(data, 0, offset)
+        tail = binary_part(data, offset + 1, byte_size(data) - offset - 1)
 
-      byte_size(rest) < size ->
-        {:noreply, %{state | buffer: data}}
-
-      true ->
-        <<body::binary-size(size), tail::binary>> = rest
-
-        case Codec.decode(<<size::32-big, body::binary>>, state.limits.max_frame_bytes) do
+        case Codec.decode(<<body::binary, ?\n>>, state.limits.max_frame_bytes) do
           {:ok, message} ->
             case handle_message(message, state) do
               {:noreply, state} -> handle_data(tail, state)

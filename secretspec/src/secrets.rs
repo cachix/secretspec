@@ -644,7 +644,10 @@ type FallbackReadResult = Result<FallbackRead>;
 
 struct PreparedImport {
     planned: PlannedSecret,
-    target_provider: Box<dyn ProviderTrait>,
+    target_provider: Arc<dyn ProviderTrait>,
+    /// The route's primary provider spec, shared by every entry whose
+    /// `target_provider` is the same instance.
+    target_group: Option<String>,
     source_address: OwnedAddress,
     target_address: OwnedAddress,
     source_value: Option<SecretBytes>,
@@ -810,6 +813,11 @@ impl<'a> ImportPlan<'a> {
             &divergences,
         );
 
+        // Entries routed through the same provider share one instance, so a
+        // provider that reads storage to canonicalize coordinates can answer
+        // every collision check below from one batch.
+        let mut target_providers: HashMap<Option<String>, Arc<dyn ProviderTrait>> = HashMap::new();
+        let mut staged = Vec::new();
         for planned in planned_imports {
             let route = planned
                 .route
@@ -829,79 +837,188 @@ impl<'a> ImportPlan<'a> {
                 &self.secrets.config.project.name,
                 &self.profile,
             )?;
-            let target_provider = self
-                .secrets
-                .write_provider_for_route(route, Some(&self.profile))?;
+            let target_group = route.group_key().map(str::to_string);
+            let target_provider = match target_providers.get(&target_group) {
+                Some(provider) => Arc::clone(provider),
+                None => {
+                    let provider: Arc<dyn ProviderTrait> = Arc::from(
+                        self.secrets
+                            .write_provider_for_route(route, Some(&self.profile))?,
+                    );
+                    target_providers.insert(target_group.clone(), Arc::clone(&provider));
+                    provider
+                }
+            };
+            staged.push(PreparedImport {
+                planned,
+                target_provider,
+                target_group,
+                source_address,
+                target_address,
+                source_value: None,
+                target_value: None,
+                copied: false,
+                source_deleted: false,
+            });
+        }
+        self.entries = staged;
 
-            if self.delete_source
-                && source_provider.same_entries(
-                    source_address.as_address(),
-                    target_provider.as_ref(),
-                    target_address.as_address(),
-                )?
-            {
+        if self.delete_source {
+            let pairs: Vec<(usize, usize)> = (0..self.entries.len()).map(|i| (i, i)).collect();
+            if let Some((index, _)) = self.first_source_target_overlap(&pairs)? {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
                     "refusing to delete '{}' from the import source because source and destination resolve to the same provider entry ({})",
-                    planned.name,
+                    self.entries[index].planned.name,
                     source_provider.uri()
                 )));
             }
+        }
 
-            let source_value = source_provider.get(source_address.as_address())?;
-            let target_value = target_provider.get(target_address.as_address())?;
+        for entry in &mut self.entries {
+            let source_value = source_provider.get(entry.source_address.as_address())?;
+            let target_value = entry
+                .target_provider
+                .get(entry.target_address.as_address())?;
             if let Some(value) = &source_value {
-                Secrets::validate_import_value(&planned, &planned.name, value)?;
+                Secrets::validate_import_value(&entry.planned, &entry.planned.name, value)?;
                 if target_value.is_none() {
-                    target_provider.check_writable(target_address.as_address())?;
+                    entry
+                        .target_provider
+                        .check_writable(entry.target_address.as_address())?;
                 }
                 let target_will_match = target_value
                     .as_ref()
                     .is_none_or(|existing| existing.expose_secret() == value.expose_secret());
                 if self.delete_source && target_will_match {
-                    source_provider.check_deletable(source_address.as_address())?;
+                    source_provider.check_deletable(entry.source_address.as_address())?;
                 }
             }
-
-            self.entries.push(PreparedImport {
-                planned,
-                target_provider,
-                source_address,
-                target_address,
-                source_value,
-                target_value,
-                copied: false,
-                source_deleted: false,
-            });
+            entry.source_value = source_value;
+            entry.target_value = target_value;
         }
         Ok(())
     }
 
+    /// Canonical destination coordinates of the entries at `indexes`,
+    /// resolved in one batch per destination provider.
+    fn target_entry_coordinates(
+        &self,
+        indexes: &HashSet<usize>,
+    ) -> Result<HashMap<usize, NativeAddress>> {
+        let mut sorted: Vec<usize> = indexes.iter().copied().collect();
+        sorted.sort_unstable();
+        let mut groups: BTreeMap<Option<&str>, Vec<usize>> = BTreeMap::new();
+        for index in sorted {
+            groups
+                .entry(self.entries[index].target_group.as_deref())
+                .or_default()
+                .push(index);
+        }
+
+        let mut coordinates = HashMap::new();
+        for indexes in groups.into_values() {
+            let provider = &self.entries[indexes[0]].target_provider;
+            let addresses: Vec<Address<'_>> = indexes
+                .iter()
+                .map(|index| self.entries[*index].target_address.as_address())
+                .collect();
+            let resolved = provider.entry_coordinates_many(&addresses)?;
+            coordinates.extend(indexes.into_iter().zip(resolved));
+        }
+        Ok(coordinates)
+    }
+
+    /// Canonical source coordinates of the entries at `indexes`, resolved in
+    /// one batch.
+    fn source_entry_coordinates(
+        &self,
+        indexes: &HashSet<usize>,
+    ) -> Result<HashMap<usize, NativeAddress>> {
+        let source_provider = self
+            .source_provider
+            .as_ref()
+            .expect("the source provider is prepared first");
+        let mut sorted: Vec<usize> = indexes.iter().copied().collect();
+        sorted.sort_unstable();
+        let addresses: Vec<Address<'_>> = sorted
+            .iter()
+            .map(|index| self.entries[*index].source_address.as_address())
+            .collect();
+        let resolved = source_provider.entry_coordinates_many(&addresses)?;
+        Ok(sorted.into_iter().zip(resolved).collect())
+    }
+
+    /// The first `(source, target)` pair whose source entry is the target's
+    /// destination entry, reading provider storage at most once per provider.
+    fn first_source_target_overlap(
+        &self,
+        pairs: &[(usize, usize)],
+    ) -> Result<Option<(usize, usize)>> {
+        let source_provider = self
+            .source_provider
+            .as_ref()
+            .expect("the source provider is prepared first");
+        // Only pairs in one storage container can name one entry. Deciding
+        // that needs no storage reads, so coordinates are resolved only for
+        // entries that could actually collide.
+        let candidates: Vec<(usize, usize)> = pairs
+            .iter()
+            .copied()
+            .filter(|(_, target)| {
+                same_storage_container(
+                    source_provider.as_ref(),
+                    self.entries[*target].target_provider.as_ref(),
+                )
+            })
+            .collect();
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+        let sources = self.source_entry_coordinates(&candidates.iter().map(|p| p.0).collect())?;
+        let targets = self.target_entry_coordinates(&candidates.iter().map(|p| p.1).collect())?;
+        Ok(candidates
+            .into_iter()
+            .find(|(source, target)| sources[source] == targets[target]))
+    }
+
     fn validate_target_collisions(&self) -> Result<()> {
-        for left_index in 0..self.entries.len() {
-            let left = &self.entries[left_index];
-            for right in &self.entries[left_index + 1..] {
-                if left.target_provider.same_entries(
-                    left.target_address.as_address(),
-                    right.target_provider.as_ref(),
-                    right.target_address.as_address(),
-                )? {
-                    return Err(SecretSpecError::ProviderOperationFailed(format!(
-                        "refusing to import '{}' and '{}' because they resolve to the same destination provider entry ({})",
-                        left.planned.name,
-                        right.planned.name,
-                        left.target_provider.uri()
-                    )));
+        let mut candidates = Vec::new();
+        for left in 0..self.entries.len() {
+            for right in left + 1..self.entries.len() {
+                if same_storage_container(
+                    self.entries[left].target_provider.as_ref(),
+                    self.entries[right].target_provider.as_ref(),
+                ) {
+                    candidates.push((left, right));
                 }
             }
+        }
+        if candidates.is_empty() {
+            return Ok(());
+        }
+        let coordinates = self.target_entry_coordinates(
+            &candidates
+                .iter()
+                .flat_map(|(left, right)| [*left, *right])
+                .collect(),
+        )?;
+        if let Some((left, right)) = candidates
+            .into_iter()
+            .find(|(left, right)| coordinates[left] == coordinates[right])
+        {
+            let (left, right) = (&self.entries[left], &self.entries[right]);
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "refusing to import '{}' and '{}' because they resolve to the same destination provider entry ({})",
+                left.planned.name,
+                right.planned.name,
+                left.target_provider.uri()
+            )));
         }
         Ok(())
     }
 
     fn validate_cleanup_collisions(&self) -> Result<()> {
-        let source_provider = self
-            .source_provider
-            .as_ref()
-            .expect("the source provider is prepared first");
+        let mut pairs = Vec::new();
         for (source_index, source) in self.entries.iter().enumerate() {
             let Some(source_value) = &source.source_value else {
                 continue;
@@ -912,24 +1029,21 @@ impl<'a> ImportPlan<'a> {
             if !source_will_be_deleted {
                 continue;
             }
+            pairs.extend(
+                (0..self.entries.len())
+                    .filter(|target_index| *target_index != source_index)
+                    .map(|target_index| (source_index, target_index)),
+            );
+        }
 
-            for (target_index, target) in self.entries.iter().enumerate() {
-                if source_index == target_index {
-                    continue;
-                }
-                if source_provider.same_entries(
-                    source.source_address.as_address(),
-                    target.target_provider.as_ref(),
-                    target.target_address.as_address(),
-                )? {
-                    return Err(SecretSpecError::ProviderOperationFailed(format!(
-                        "refusing to delete '{}' from the import source because it resolves to the destination provider entry for '{}' ({})",
-                        source.planned.name,
-                        target.planned.name,
-                        target.target_provider.uri()
-                    )));
-                }
-            }
+        if let Some((source, target)) = self.first_source_target_overlap(&pairs)? {
+            let (source, target) = (&self.entries[source], &self.entries[target]);
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "refusing to delete '{}' from the import source because it resolves to the destination provider entry for '{}' ({})",
+                source.planned.name,
+                target.planned.name,
+                target.target_provider.uri()
+            )));
         }
         Ok(())
     }
@@ -2785,6 +2899,13 @@ impl Secrets {
     /// resolution that sets no scope keeps honoring `SECRETSPEC_SCOPE`.
     pub fn set_ignore_ambient_scope(&mut self, ignore: bool) {
         self.ignore_ambient_scope = ignore;
+    }
+
+    /// Suppresses the ambient `SECRETSPEC_PROVIDER` fallback in provider
+    /// resolution, for sessions whose provider was decided ahead of time. An
+    /// explicitly set provider ([`Self::set_provider`]) is still honored.
+    pub(crate) fn set_ignore_ambient_provider(&mut self, ignore: bool) {
+        self.ignore_ambient_provider = ignore;
     }
 
     /// Sets a human-readable reason for this session's secret access.
@@ -5907,7 +6028,7 @@ impl Secrets {
                     return None;
                 }
 
-                let affected_secrets = planned
+                let addressed = planned
                     .iter()
                     .filter_map(|secret| {
                         let literal_address = self
@@ -5926,12 +6047,45 @@ impl Secrets {
                                 profile,
                             )
                             .ok()?;
+                        Some((secret, literal_address, alias_address))
+                    })
+                    .collect::<Vec<_>>();
 
-                        let differs = match source_provider.same_entries(
-                            literal_address.as_address(),
-                            alias_provider.as_ref(),
-                            alias_address.as_address(),
-                        ) {
+                // Resolve both sides in one batch each, so a provider that
+                // reads storage to canonicalize coordinates reads it once per
+                // side rather than once per secret.
+                let literal_addresses: Vec<Address<'_>> = addressed
+                    .iter()
+                    .map(|(_, literal, _)| literal.as_address())
+                    .collect();
+                let alias_addresses: Vec<Address<'_>> = addressed
+                    .iter()
+                    .map(|(_, _, alias)| alias.as_address())
+                    .collect();
+                let batched = source_provider
+                    .entry_coordinates_many(&literal_addresses)
+                    .and_then(|literal| {
+                        Ok((
+                            literal,
+                            alias_provider.entry_coordinates_many(&alias_addresses)?,
+                        ))
+                    });
+
+                let affected_secrets = addressed
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, (secret, literal_address, alias_address))| {
+                        let same = match &batched {
+                            Ok((literal, alias)) => Ok(literal[index] == alias[index]),
+                            // One unresolvable address fails the batch; compare
+                            // each secret alone so the others keep their answer.
+                            Err(_) => source_provider.same_entries(
+                                literal_address.as_address(),
+                                alias_provider.as_ref(),
+                                alias_address.as_address(),
+                            ),
+                        };
+                        let differs = match same {
                             Ok(same) => !same,
                             // An alias address that the provider cannot compare
                             // still represents behavior the literal bypasses.

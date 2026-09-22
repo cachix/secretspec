@@ -183,6 +183,19 @@ pub trait Provider: Send + Sync {
         self.configured_entry_coordinates(addr)
     }
 
+    /// Resolves [`Self::entry_coordinates`] for several addresses at once.
+    /// Available since SecretSpec 0.21.
+    ///
+    /// Collision checks compare every pair of entries, so a provider whose
+    /// `entry_coordinates` reads storage overrides this to read it once for
+    /// the whole batch. The result is in the order of `addrs`.
+    fn entry_coordinates_many(&self, addrs: &[Address<'_>]) -> Result<Vec<NativeAddress>> {
+        addrs
+            .iter()
+            .map(|addr| Ok(self.entry_coordinates(*addr)?.into_owned()))
+            .collect()
+    }
+
     /// Retrieves the secret named by `addr`.
     ///
     /// See [`Address`] for the two naming schemes. A provider that cannot
@@ -899,6 +912,9 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
 
     fn entry_coordinates<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
         (**self).entry_coordinates(addr)
+    }
+    fn entry_coordinates_many(&self, addrs: &[Address<'_>]) -> Result<Vec<NativeAddress>> {
+        (**self).entry_coordinates_many(addrs)
     }
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         (**self).get(addr)

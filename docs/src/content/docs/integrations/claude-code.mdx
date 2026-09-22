@@ -83,7 +83,10 @@ $ secretspec claude login
 
 An exported `SECRETSPEC_FILE`, `SECRETSPEC_PROFILE`, `SECRETSPEC_PROVIDER`, or
 `SECRETSPEC_REASON` is not saved as durable helper configuration. Pass the
-corresponding option explicitly when it should be pinned.
+corresponding option explicitly when it should be pinned. `login`, `logout`,
+and the helper also ignore an exported `SECRETSPEC_PROVIDER`, so they always
+use the same store: the provider pinned by `configure`, or the SecretSpec user
+default when none is pinned.
 
 ## Configure every project
 

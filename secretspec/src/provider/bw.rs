@@ -1044,7 +1044,9 @@ fn find_addressed_item<'a>(
     item_reference: &str,
     require_type: Option<BitwardenItemType>,
 ) -> Result<Option<&'a BitwardenItem>> {
-    if let Some(item) = items.iter().find(|item| item.id == item_reference) {
+    if let Some(id) = item_id_reference(item_reference)
+        && let Some(item) = items.iter().find(|item| item.id.eq_ignore_ascii_case(&id))
+    {
         return Ok(Some(item));
     }
 
@@ -1083,6 +1085,23 @@ fn find_addressed_item<'a>(
                 .join("\n"),
         ))),
     }
+}
+
+/// The canonical Bitwarden item ID an item reference spells, if it is one.
+///
+/// `bw` reports item IDs as lowercase, hyphenated UUIDs, while
+/// [`uuid::Uuid::parse_str`] also accepts uppercase, braced, URN and
+/// unhyphenated spellings. Every spelling of one ID addresses the same item.
+fn item_id_reference(item_reference: &str) -> Option<String> {
+    uuid::Uuid::parse_str(item_reference)
+        .ok()
+        .map(|id| id.hyphenated().to_string())
+}
+
+/// Folds an item reference the way [`find_addressed_item`] compares it, so
+/// two references that select the same item compare equal before it exists.
+fn canonical_item_reference(item_reference: &str) -> String {
+    item_id_reference(item_reference).unwrap_or_else(|| item_reference.to_lowercase())
 }
 
 /// Removes a prefix using the same Unicode-aware lowercasing as Bitwarden
@@ -1622,6 +1641,29 @@ impl BitwardenProvider {
         self.list_items(None)
     }
 
+    /// Canonical coordinates of the entry `addr` selects within `items`.
+    ///
+    /// A title and an ID can address the same existing item, even when the
+    /// selected field is absent, so an existing item is named by its ID. A
+    /// reference with no item yet is folded the way reads and writes match
+    /// it: titles by case, IDs by spelling, and field names by ASCII case,
+    /// as custom fields are matched. Otherwise `API_KEY` and `api_key` would
+    /// compare as two entries while the second write lands on the item the
+    /// first one created.
+    fn entry_coordinates_in(
+        &self,
+        items: &[BitwardenItem],
+        addr: Address<'_>,
+    ) -> Result<crate::config::NativeAddress> {
+        let mut coords = self.configured_entry_coordinates(addr)?.into_owned();
+        coords.item = match find_addressed_item(items, &coords.item, self.resolved_item_type()?)? {
+            Some(item) => item.id.to_ascii_lowercase(),
+            None => canonical_item_reference(&coords.item),
+        };
+        coords.field = coords.field.map(|field| field.to_ascii_lowercase());
+        Ok(coords)
+    }
+
     /// Resolves an item reference against an already listed set of items and
     /// extracts the addressed field.
     ///
@@ -1672,7 +1714,14 @@ impl BitwardenProvider {
         // without a match means "the prefilter missed", not "the secret is
         // absent", and the read re-lists unfiltered. That is the set `set`
         // and `get_many` always use, so every path considers the same items.
-        if uuid::Uuid::parse_str(item_name).is_err() {
+        //
+        // A match in the prefiltered set is conclusive only for an ASCII name.
+        // bw's case-insensitive substring search returns every item whose
+        // folded name equals such a query, so any ambiguity `get_many` would
+        // report is visible here too. Non-ASCII names are exactly where older
+        // CLIs drop candidates, so a lone match there could hide a same-named
+        // sibling that the unfiltered listing reports as ambiguous.
+        if item_id_reference(item_name).is_none() && item_name.is_ascii() {
             let narrowed = self.list_items(Some(item_name))?;
             if let Some(item) =
                 find_addressed_item(&narrowed, item_name, self.resolved_item_type()?)?
@@ -2056,6 +2105,16 @@ impl BitwardenProvider {
                 target_field,
                 super::require_utf8("bw", value)?,
             );
+        }
+
+        // An item ID addresses an existing item. Creating a new item named
+        // after it would leave the addressed item untouched while reads by
+        // that ID keep missing, so refuse instead of writing elsewhere.
+        if let Some(id) = item_id_reference(item_name) {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "no Bitwarden item with id '{id}' is visible in this vault scope; \
+                 check the id, or address the item by name to create it"
+            )));
         }
 
         // No existing item found, create a new one
@@ -2685,15 +2744,26 @@ impl Provider for BitwardenProvider {
         &self,
         addr: Address<'a>,
     ) -> Result<std::borrow::Cow<'a, crate::config::NativeAddress>> {
-        let mut coords = self.configured_entry_coordinates(addr)?.into_owned();
-        // A title and an ID can address the same existing item, even when the
-        // selected field is absent. Use the write path's scoped, unfiltered
-        // lookup so import preflight detects that collision before any writes.
         let items = self.listed_vault()?;
-        if let Some(item) = find_addressed_item(&items, &coords.item, self.resolved_item_type()?)? {
-            coords.item = item.id.clone();
+        Ok(std::borrow::Cow::Owned(
+            self.entry_coordinates_in(&items, addr)?,
+        ))
+    }
+
+    /// Reads the vault once for the whole batch, so an import's pairwise
+    /// collision checks cost one listing rather than one per comparison.
+    fn entry_coordinates_many(
+        &self,
+        addrs: &[Address<'_>],
+    ) -> Result<Vec<crate::config::NativeAddress>> {
+        if addrs.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(std::borrow::Cow::Owned(coords))
+        let items = self.listed_vault()?;
+        addrs
+            .iter()
+            .map(|addr| self.entry_coordinates_in(&items, *addr))
+            .collect()
     }
 
     fn configured_entry_coordinates<'a>(
@@ -6598,6 +6668,175 @@ mod tests {
                     "{item}/{field}"
                 );
             }
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn same_entries_folds_references_the_way_reads_and_writes_match_them() {
+        // Nothing exists yet, so each reference is compared as written. The
+        // write path matches titles and field names case-insensitively and
+        // accepts any UUID spelling, so each pair names one entry.
+        with_clean_env(|| {
+            let fake = FakeBw::new();
+            let provider = BitwardenProvider {
+                cli_binary_path: fake.dir.join("bw"),
+                ..Default::default()
+            };
+            let id = "22222222-2222-2222-2222-222222222222";
+            let upper = id.to_uppercase();
+            for ((left_item, left_field), (right_item, right_field), expected) in [
+                (("API_KEY", "password"), ("api_key", "password"), true),
+                (("Service", "Token"), ("service", "token"), true),
+                ((id, "api_key"), (upper.as_str(), "API_KEY"), true),
+                (("Service", "token"), ("Service", "secret"), false),
+                (("Überblick", "password"), ("überblick", "password"), true),
+            ] {
+                let left = crate::config::NativeAddress {
+                    item: left_item.into(),
+                    field: Some(left_field.into()),
+                    ..Default::default()
+                };
+                let right = crate::config::NativeAddress {
+                    item: right_item.into(),
+                    field: Some(right_field.into()),
+                    ..Default::default()
+                };
+                assert_eq!(
+                    provider
+                        .same_entries(Address::Native(&left), &provider, Address::Native(&right))
+                        .unwrap(),
+                    expected,
+                    "{left_item}/{left_field} vs {right_item}/{right_field}"
+                );
+            }
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn entry_coordinates_many_lists_the_vault_once() {
+        with_clean_env(|| {
+            let fake = FakeBw::new().with_items(json!([
+                { "id": "22222222-2222-2222-2222-222222222222", "name": "Existing", "type": 1 }
+            ]));
+            let provider = BitwardenProvider {
+                cli_binary_path: fake.dir.join("bw"),
+                ..Default::default()
+            };
+            let addresses: Vec<crate::config::NativeAddress> = (0..50)
+                .map(|index| crate::config::NativeAddress {
+                    item: if index == 0 {
+                        "existing".to_string()
+                    } else {
+                        format!("Item {index}")
+                    },
+                    field: Some("password".into()),
+                    ..Default::default()
+                })
+                .collect();
+            let requests: Vec<Address<'_>> = addresses.iter().map(Address::Native).collect();
+
+            let coordinates = provider.entry_coordinates_many(&requests).unwrap();
+            assert_eq!(coordinates.len(), 50);
+            assert_eq!(
+                coordinates[0].item, "22222222-2222-2222-2222-222222222222",
+                "an existing item is named by its ID"
+            );
+            assert_eq!(coordinates[1].item, "item 1");
+
+            let log = fake.invocations();
+            let listings = log
+                .lines()
+                .filter(|line| line.contains("<list> <items>"))
+                .count();
+            assert_eq!(
+                listings, 1,
+                "fifty coordinates must cost one listing: {log}"
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_item_id_matches_in_any_uuid_spelling() {
+        let fake = FakeBw::new().with_items(json!([
+            {"id": "22222222-aaaa-2222-2222-222222222222", "name": "Vault", "type": 1,
+             "login": {"password": "by-id"}}
+        ]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            for spelling in [
+                "22222222-AAAA-2222-2222-222222222222",
+                "{22222222-aaaa-2222-2222-222222222222}",
+                "22222222aaaa22222222222222222222",
+            ] {
+                let value = provider.get_from_password_manager(spelling, None).unwrap();
+                assert_eq!(
+                    value.as_ref().map(|secret| secret.expose_secret()),
+                    Some(b"by-id".as_slice()),
+                    "{spelling}"
+                );
+            }
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn set_refuses_an_item_id_that_matches_no_item_instead_of_creating_one() {
+        let fake = FakeBw::new()
+            .with_items(json!([
+                {"id": "11111111-1111-1111-1111-111111111111", "name": "Other", "type": 1,
+                 "login": {"password": "untouched"}}
+            ]))
+            .with_stateful_vault();
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider
+                .set_to_password_manager(
+                    "22222222-2222-2222-2222-222222222222",
+                    None,
+                    &SecretBytes::from_utf8("value"),
+                )
+                .unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("no Bitwarden item with id '22222222-2222-2222-2222-222222222222'"),
+                "{msg}"
+            );
+            let log = fake.invocations();
+            assert!(!log.contains("<create>"), "{log}");
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn get_does_not_trust_a_lone_prefilter_match_for_a_non_ascii_name() {
+        // The shim's case-sensitive search returns only `überblick`, like an
+        // older CLI that drops a same-named sibling. `get_many` sees both and
+        // reports the ambiguity; `get` must agree rather than pick one.
+        let fake = FakeBw::new().with_items(json!([
+            {"id": "upper", "name": "Überblick", "type": 1, "login": {"password": "a"}},
+            {"id": "lower", "name": "überblick", "type": 1, "login": {"password": "b"}}
+        ]));
+        fake.run(|| {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let err = provider
+                .get_from_password_manager("überblick", None)
+                .unwrap_err();
+            assert!(err.to_string().contains("are named 'überblick'"), "{err}");
+
+            let address = crate::config::NativeAddress {
+                item: "überblick".into(),
+                ..Default::default()
+            };
+            let batch = provider
+                .get_many(&[("KEY", Address::Native(&address))])
+                .unwrap_err();
+            assert!(
+                batch.to_string().contains("are named 'überblick'"),
+                "{batch}"
+            );
         });
     }
 

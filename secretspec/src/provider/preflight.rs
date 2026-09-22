@@ -149,6 +149,10 @@ impl Provider for PreflightGuard {
         self.inner.entry_coordinates(addr)
     }
 
+    fn entry_coordinates_many(&self, addrs: &[Address<'_>]) -> Result<Vec<NativeAddress>> {
+        self.inner.entry_coordinates_many(addrs)
+    }
+
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         self.check()?;
         self.inner.get(addr)

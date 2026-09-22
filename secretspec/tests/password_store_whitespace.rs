@@ -35,6 +35,9 @@ case "${SECRETSPEC_WHITESPACE_TEST_FAILURE:-}:$provider:$operation" in
     read-error:gopass:show|cat-error:gopass:cat)
         printf 'Error: decrypt failed\n' >&2; exit 11 ;;
     cat-error:gopass:show)
+        if [ "$#" -eq 3 ] && [ "$3" = Content-Transfer-Encoding ]; then
+            printf 'Base64'; exit 0
+        fi
         printf 'Error: no password to display, check the body of the entry instead\n' >&2
         exit 11 ;;
     write-error:gopass:cat)
@@ -50,7 +53,15 @@ case "$provider:$operation" in
     pass:show) [ "$#" -eq 1 ]; entry=$1 ;;
     pass:insert) [ "$1" = '-m' ]; [ "$2" = '-f' ]; entry=$3; write=true ;;
     gopass:show)
-        [ "$1" = '-y' ]; [ "$2" = '-o' ]; entry=$3
+        [ "$1" = '-y' ]
+        if [ "$2" = '-o' ]; then
+            entry=$3
+        else
+            # A key lookup; only binary entries carry this header.
+            [ "$#" -eq 3 ]; [ "$3" = Content-Transfer-Encoding ]
+            if [ -f "store/$2.binary" ]; then printf 'Base64'; exit 0; fi
+            printf 'Error: key not found\n' >&2; exit 1
+        fi
         ;;
     gopass:insert) [ "$1" = '-m' ]; [ "$2" = '-f' ]; entry=$3; write=true ;;
     gopass:cat)
@@ -97,11 +108,13 @@ if [ "$write" = true ]; then
     fi
 elif [ -f "$file" ]; then
     if [ "$provider:$operation" = gopass:show ]; then
-        if [ -f "$file.binary" ]; then
+        IFS= read -r password < "$file" || true
+        # Binary entries, and text entries whose first line is empty (such as
+        # one holding only metadata), have no password to display.
+        if [ -f "$file.binary" ] || [ -z "$password" ]; then
             printf 'Error: no password to display, check the body of the entry instead\n' >&2
             exit 11
         fi
-        IFS= read -r password < "$file" || true
         printf '%s' "$password"
     else
         cat "$file"
@@ -125,7 +138,7 @@ fn password_store_whitespace_child() {
     if !failure.is_empty() {
         let spec = Secrets::load().unwrap();
         let error = match failure.as_str() {
-            "read-error" | "cat-error" => spec.resolve_bytes().unwrap_err(),
+            "read-error" | "cat-error" | "no-password" => spec.resolve_bytes().unwrap_err(),
             "write-error" | "unchanged-mismatch" => spec
                 .set(
                     "LEGACY",
@@ -137,12 +150,16 @@ fn password_store_whitespace_child() {
         let expected = match failure.as_str() {
             "write-error" => "permission denied",
             "unchanged-mismatch" => "meaningless write",
+            // A text entry without a password line is an error, as it was
+            // before binary entries existed, never its metadata body.
+            "no-password" => "no password to display",
             _ => "decrypt failed",
         };
         assert!(error.to_string().contains(expected), "{error}");
+        assert!(!error.to_string().contains("existing metadata"), "{error}");
         assert_eq!(
             fs::read("store/secretspec/whitespace/default/LEGACY").unwrap(),
-            b" existing-value \nnotes: existing metadata\n"
+            gopass_legacy_entry(&failure)
         );
         return;
     }
@@ -233,6 +250,16 @@ fn password_store_whitespace_child() {
     }
 }
 
+/// The pre-existing gopass text entry a scenario starts from.
+fn gopass_legacy_entry(failure: &str) -> &'static [u8] {
+    if failure == "no-password" {
+        // Created with `gopass edit`: metadata only, no password line.
+        b"\nnotes: existing metadata\n"
+    } else {
+        b" existing-value \nnotes: existing metadata\n"
+    }
+}
+
 fn check_provider(provider: &str, executable: &str) {
     check_provider_scenario(provider, executable, "");
 }
@@ -260,7 +287,7 @@ fn check_provider_scenario(provider: &str, executable: &str, failure: &str) {
         let store = project.join("store/secretspec/whitespace/default");
         fs::create_dir_all(&store).unwrap();
         let existing: &[u8] = if provider == "gopass://" {
-            b" existing-value \nnotes: existing metadata\n"
+            gopass_legacy_entry(failure)
         } else {
             // `pass insert` stores the password newline-terminated.
             b"existing-value\n"
@@ -315,6 +342,7 @@ fn gopass_failures_remain_errors() {
         "cat-error",
         "write-error",
         "unchanged-mismatch",
+        "no-password",
     ] {
         check_provider_scenario("gopass://", "gopass", failure);
     }

@@ -508,3 +508,60 @@ proptest! {
         prop_assert_eq!(c, rust, "history: {}", String::from_utf8_lossy(&serialized));
     }
 }
+
+// SAFETY: the C API permits concurrent calls on one client. Tests use scoped
+// threads, keeping the client alive until every call and waiter has finished.
+unsafe impl Sync for CClient {}
+
+#[test]
+fn c_client_initializes_and_orders_concurrent_calls_against_rust_server() {
+    let executable = Path::new(env!("CARGO_BIN_EXE_ipc-resolver-session-rust"));
+    let client = CClient::open(executable).expect("C client must accept the real Rust handshake");
+    for _ in 0..32 {
+        let barrier = std::sync::Barrier::new(4);
+        std::thread::scope(|scope| {
+            let mut tasks = Vec::new();
+            for i in 0_usize..4 {
+                let client = &client;
+                let barrier = &barrier;
+                tasks.push(scope.spawn(move || {
+                    let params = serde_json::to_vec(&json!({
+                        "token":i,
+                        "padding":if i.is_multiple_of(2) { "\0".repeat(3500) } else { String::new() },
+                    }))
+                    .unwrap();
+                    let method = b"resolver.get";
+                    let mut result = empty_buffer();
+                    let mut error = empty_buffer();
+                    barrier.wait();
+                    // SAFETY: inputs and the shared client stay live through
+                    // this call; each thread owns distinct output buffers.
+                    let status = unsafe {
+                        secretspec_resolver_client_call(
+                            client.0,
+                            method.as_ptr(),
+                            method.len(),
+                            params.as_ptr(),
+                            params.len(),
+                            deadline_after(Duration::from_secs(5)),
+                            &mut result,
+                            &mut error,
+                        )
+                    };
+                    if status != STATUS_OK {
+                        free_buffer(result);
+                        panic!("{}", take_error(error, status));
+                    }
+                    free_buffer(error);
+                    let result: Value =
+                        serde_json::from_slice(&copy_buffer(result).unwrap()).unwrap();
+                    assert_eq!(result["echo"], i);
+                }));
+            }
+            for task in tasks {
+                task.join().unwrap();
+            }
+        });
+    }
+    client.close().unwrap();
+}

@@ -61,6 +61,7 @@ struct PeerInner {
     /// the shutdown timeout fired.
     writer: mpsc::WeakSender<WriterCommand>,
     calls: Mutex<PeerCalls>,
+    request_order: Mutex<()>,
     next_id: AtomicU64,
     limit: AtomicUsize,
     semaphore: std::sync::RwLock<Arc<Semaphore>>,
@@ -79,6 +80,7 @@ impl Peer {
             inner: Arc::new(PeerInner {
                 writer: writer.downgrade(),
                 calls: Mutex::new(PeerCalls::default()),
+                request_order: Mutex::new(()),
                 next_id: AtomicU64::new(1),
                 limit: AtomicUsize::new(ABSOLUTE_MAX_FRAME_BYTES),
                 semaphore: std::sync::RwLock::new(Arc::new(Semaphore::new(1))),
@@ -140,6 +142,12 @@ impl Peer {
             serde_json::to_value(params).map_err(|_| RpcError::new(ErrorKind::Internal))?;
         let deadline_unix_ms =
             crate::deadline::clamp_unix_ms(crate::deadline::unix_ms_from_instant(context.deadline));
+        let order = tokio::select! {
+            biased;
+            _ = context.cancellation.cancelled() => return Err(RpcError::new(ErrorKind::Cancelled)),
+            order = tokio::time::timeout_at(context.deadline, self.inner.request_order.lock()) =>
+                order.map_err(|_| RpcError::new(ErrorKind::DeadlineExceeded))?,
+        };
         let id = RequestId::new(self.inner.next_id.fetch_add(1, Ordering::Relaxed))
             .map_err(|_| RpcError::new(ErrorKind::Internal))?;
         let request = Request::new(id, method, deadline_unix_ms, params)
@@ -174,12 +182,18 @@ impl Peer {
                 self.inner.calls.lock().await.pending.remove(&id);
                 return Err(RpcError::new(ErrorKind::Cancelled));
             }
+            _ = tokio::time::sleep_until(context.deadline) => {
+                self.inner.calls.lock().await.pending.remove(&id);
+                return Err(RpcError::new(ErrorKind::DeadlineExceeded));
+            }
             queued = writer.send(command) => queued,
         };
         if queued.is_err() {
             self.inner.calls.lock().await.pending.remove(&id);
             return Err(RpcError::new(ErrorKind::Unavailable));
         }
+
+        drop(order);
 
         let response = tokio::select! {
             biased;
@@ -348,22 +362,55 @@ where
     // Replaced with the negotiated permit count during initialization; no
     // application call can be dispatched before that happens.
     let mut semaphore = Arc::new(Semaphore::new(1));
-    let mut shutting_down = false;
+    let mut shutdown_request: Option<(RequestId, Instant)> = None;
+    let mut drained = false;
     // A transport or protocol failure must still cancel in-flight work, join
     // its tasks, and run `handler.shutdown()`. Returning `?` straight out of
     // the loop would skip all of that, so the failure is carried out instead.
     let mut fatal: Option<Error> = None;
 
-    loop {
-        let frame = tokio::select! {
-            _ = disconnected.cancelled() => break,
-            frame = reader.read_frame(active_limit) => match frame {
-                Ok(frame) => frame,
-                Err(error) => {
-                    fatal = Some(error);
-                    break;
+    'session: loop {
+        if shutdown_request.is_some() && tasks.is_empty() {
+            drained = true;
+            break;
+        }
+        // Keep the read future alive while reaping tasks: read_frame may have
+        // consumed part of a frame when a handler finishes.
+        let frame = {
+            let read = reader.read_frame(active_limit);
+            tokio::pin!(read);
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = disconnected.cancelled() => break 'session,
+                    _ = async {
+                        match shutdown_request {
+                            Some((_, deadline)) => tokio::time::sleep_until(deadline).await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        drained = true;
+                        break 'session;
+                    }
+                    joined = tasks.join_next(), if !tasks.is_empty() => {
+                        if joined.is_some_and(|result| result.is_err()) {
+                            fatal = Some(Error::Protocol("application task failed"));
+                            break 'session;
+                        }
+                        if shutdown_request.is_some() && tasks.is_empty() {
+                            drained = true;
+                            break 'session;
+                        }
+                    }
+                    frame = &mut read => match frame {
+                        Ok(frame) => break frame,
+                        Err(error) => {
+                            fatal = Some(error);
+                            break 'session;
+                        }
+                    },
                 }
-            },
+            }
         };
         let Some(frame) = frame else {
             break;
@@ -486,27 +533,22 @@ where
                     continue;
                 }
 
-                if request.method == rpc::SHUTDOWN {
-                    if shutdown(
-                        request,
-                        &inflight,
-                        &mut tasks,
-                        handler.as_ref(),
-                        &writer_tx,
-                        active_limit,
-                    )
-                    .await
-                    .is_err()
-                    {
-                        break;
-                    }
-                    shutting_down = true;
-                    break;
-                }
-
-                if shutting_down {
+                if shutdown_request.is_some() {
                     let response = Response::error(Some(request.id), RpcError::unavailable(None));
                     let _ = commit(&writer_tx, response, active_limit).await;
+                    continue;
+                }
+
+                if request.method == rpc::SHUTDOWN {
+                    if serde_json::from_value::<EmptyParams>(request.params.clone()).is_err() {
+                        let response = Response::error(
+                            Some(request.id),
+                            RpcError::new(ErrorKind::InvalidParams),
+                        );
+                        let _ = commit(&writer_tx, response, active_limit).await;
+                        break;
+                    }
+                    shutdown_request = Some((request.id, request_deadline(&request)));
                     continue;
                 }
 
@@ -584,12 +626,21 @@ where
     // A callback still waiting on a client that is gone would otherwise hold
     // its handler, and therefore its request, until the deadline.
     peer.fail_all().await;
-    if !shutting_down {
-        tasks.abort_all();
+    for cancellation in inflight.lock().await.values() {
+        cancellation.cancel();
     }
+    tasks.abort_all();
     while tasks.join_next().await.is_some() {}
-    if initialized && !shutting_down {
+    if initialized {
+        // Resource cleanup must run even when the drain deadline expired.
         let _ = tokio::time::timeout(config.startup_timeout, handler.shutdown()).await;
+    }
+    if drained && let Some((id, deadline)) = shutdown_request {
+        let _ = tokio::time::timeout_at(
+            deadline,
+            commit(&writer_tx, Response::success(id, json!({})), active_limit),
+        )
+        .await;
     }
     drop(writer_tx);
     if tokio::time::timeout(config.startup_timeout, &mut writer_task)
@@ -1066,44 +1117,6 @@ async fn commit(
 
 fn request_deadline(request: &Request) -> Instant {
     instant_from_unix_ms(request.deadline_unix_ms())
-}
-
-async fn shutdown<H: ApplicationHandler>(
-    request: Request,
-    inflight: &Arc<Mutex<HashMap<RequestId, CancellationToken>>>,
-    tasks: &mut JoinSet<()>,
-    handler: &H,
-    writer: &mpsc::Sender<WriterCommand>,
-    limit: usize,
-) -> Result<()> {
-    let deadline = request_deadline(&request);
-    let _: EmptyParams = match serde_json::from_value(request.params) {
-        Ok(params) => params,
-        Err(_) => {
-            commit(
-                writer,
-                Response::error(Some(request.id), RpcError::new(ErrorKind::InvalidParams)),
-                limit,
-            )
-            .await?;
-            return Err(Error::Protocol("invalid shutdown"));
-        }
-    };
-    for cancellation in inflight.lock().await.values() {
-        cancellation.cancel();
-    }
-    let drain = async {
-        while tasks.join_next().await.is_some() {}
-        handler.shutdown().await;
-    };
-    if tokio::time::timeout_at(deadline, drain).await.is_err() {
-        for cancellation in inflight.lock().await.values() {
-            cancellation.cancel();
-        }
-        tasks.abort_all();
-        while tasks.join_next().await.is_some() {}
-    }
-    commit(writer, Response::success(request.id, json!({})), limit).await
 }
 
 #[cfg(test)]

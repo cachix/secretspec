@@ -239,6 +239,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- IPC clients preserve request ordering under concurrency, and Rust endpoints
+  interoperate with C clients when no optional capabilities are enabled.
+  Server shutdown lets accepted requests and callbacks finish before its
+  deadline, and long-lived sessions release completed request tasks promptly.
+
 - IPC rejects incompatible secret representations before contacting providers,
   keeps blocking write deadlines effective with inherited pipes, and supports C
   resolver clients whose standard streams are closed.

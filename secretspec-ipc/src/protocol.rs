@@ -118,7 +118,7 @@ pub struct InitializeResult<A> {
     pub version: u32,
     pub server: Product,
     pub methods: Vec<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub capabilities: BTreeMap<String, bool>,
     pub limits: Limits,
     pub application: A,

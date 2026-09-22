@@ -53,6 +53,8 @@ struct Inner {
     inbound: StdMutex<InboundCallbacks>,
     pending: StdMutex<HashMap<RequestId, PendingRequest>>,
     abandoned: StdMutex<HashSet<RequestId>>,
+    // Keep ID allocation and writer enqueue in the same order.
+    request_order: Mutex<()>,
     next_id: AtomicU64,
     max_frame_bytes: AtomicUsize,
     max_in_flight: AtomicUsize,
@@ -154,6 +156,7 @@ impl Client {
             inbound: StdMutex::new(InboundCallbacks::default()),
             pending: StdMutex::new(HashMap::new()),
             abandoned: StdMutex::new(HashSet::new()),
+            request_order: Mutex::new(()),
             next_id: AtomicU64::new(2),
             max_frame_bytes: AtomicUsize::new(ABSOLUTE_MAX_FRAME_BYTES),
             max_in_flight: AtomicUsize::new(1),
@@ -327,6 +330,12 @@ impl Client {
         let permit = semaphore
             .try_acquire_owned()
             .map_err(|_| Error::Unavailable)?;
+        let _order = tokio::time::timeout_at(deadline, self.inner.request_order.lock())
+            .await
+            .map_err(|_| Error::DeadlineExceeded)?;
+        if self.inner.state.load(Ordering::Acquire) != READY {
+            return Err(Error::Closed);
+        }
         let id = self.next_id()?;
         let request = Request::new(id, method, deadline_unix_ms, params)?;
         let (sender, receiver) = oneshot::channel();
@@ -378,6 +387,12 @@ impl Client {
     /// Close the protocol session. The process launcher separately enforces
     /// child termination and reaping after this wire shutdown completes.
     pub async fn close(&self, deadline_unix_ms: u64) -> Result<()> {
+        let _order = tokio::time::timeout_at(
+            instant_from_unix_ms(deadline_unix_ms),
+            self.inner.request_order.lock(),
+        )
+        .await
+        .map_err(|_| Error::DeadlineExceeded)?;
         let state =
             self.inner
                 .state

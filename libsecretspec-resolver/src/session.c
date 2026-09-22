@@ -438,12 +438,11 @@ static secretspec_resolver_status start_request(
     handle->request = request;
     (void)atomic_fetch_add(&client->references, 1);
     condition_broadcast(&client->state_changed);
-    mutex_unlock(&client->mutex);
-
+    /* Allocate IDs and enqueue under one lock so concurrent calls cannot
+     * put a higher ID on the wire first. No pipe I/O occurs under this lock. */
     if (!build_request(id, method, method_size, deadline, params, &payload) ||
-        !write_payload(client, payload.data, payload.size)) {
+        !write_payload_locked(client, payload.data, payload.size)) {
         secretspec_resolver_buffer_free(payload);
-        mutex_lock(&client->mutex);
         if (request->running) {
             request->running = false;
             request->status = SECRETSPEC_RESOLVER_IO;
@@ -458,6 +457,7 @@ static secretspec_resolver_status start_request(
         *call = handle;
         return SECRETSPEC_RESOLVER_IO;
     }
+    mutex_unlock(&client->mutex);
     secretspec_resolver_buffer_free(payload);
     *call = handle;
     return SECRETSPEC_RESOLVER_OK;

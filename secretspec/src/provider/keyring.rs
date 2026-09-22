@@ -7,38 +7,18 @@ use serde::{Deserialize, Serialize};
 #[cfg(target_os = "macos")]
 mod macos {
     //! Legacy macOS keychain items are bound to the code signature of the
-    //! build that created them. Ad hoc signed builds (Nix, Homebrew, `cargo
-    //! install`) get a fresh signature on every release, so after an upgrade
-    //! the first read of every item shows a keychain password prompt, and a
-    //! write collides with an item the new build may not touch. Upstream
-    //! confirmed that current macOS offers no way to create an item every
-    //! build may read (apple-native-keyring-store#24) and recommends
-    //! rewriting the item instead. That is what this module does: an item
-    //! that needs a prompt is read once interactively, then recreated so the
-    //! running build owns it and later runs stay silent. Only convention
-    //! entries are taken over; `ref` entries belong to another application.
-    use std::fmt;
-    use std::sync::Mutex;
-
+    //! build that created them. A new ad hoc signed build may need the user's
+    //! approval to read or modify an existing item. A per-query silent lookup
+    //! identifies this case without changing the process-wide interaction
+    //! setting or deleting the item during a read.
     use keyring::{Entry, Error};
-    use security_framework::os::macos::keychain::SecKeychain;
+    use security_framework::item::{ItemClass, ItemSearchOptions, SearchResult};
+    use security_framework::os::macos::keychain::{SecKeychain, SecPreferencesDomain};
 
     /// `errSecInvalidOwnerEdit`: modifying an item another build owns.
     const INVALID_OWNER_EDIT: i32 = -25244;
-    /// `errSecAuthFailed`: the item's access control rejected this build.
-    const AUTH_FAILED: i32 = -25293;
-    /// `errSecDuplicateItem`: a silent write could not see the item it
-    /// collided with, so another build owns it.
+    /// `errSecDuplicateItem`: the write could not see the item it collided with.
     const DUPLICATE_ITEM: i32 = -25299;
-    /// `errSecInteractionNotAllowed`: the operation needed a prompt while
-    /// prompts were disabled.
-    const INTERACTION_NOT_ALLOWED: i32 = -25308;
-    /// `errSecInteractionRequired`: the operation needs a prompt.
-    const INTERACTION_REQUIRED: i32 = -25315;
-
-    /// Prompt suppression is process wide, so silent operations are
-    /// serialised to keep one thread from re-enabling prompts under another.
-    static SILENT: Mutex<()> = Mutex::new(());
 
     fn os_status(err: &Error) -> Option<i32> {
         let inner = match err {
@@ -50,119 +30,62 @@ mod macos {
             .map(|err| err.code())
     }
 
-    /// Whether the operation failed only because it needed to prompt.
-    pub(super) fn needs_prompt(err: &Error) -> bool {
-        matches!(
-            os_status(err),
-            Some(AUTH_FAILED | INTERACTION_NOT_ALLOWED | INTERACTION_REQUIRED)
-        )
-    }
-
-    /// Whether a silent write failed because another build owns the item.
-    fn owned_elsewhere(err: &Error) -> bool {
-        needs_prompt(err) || matches!(os_status(err), Some(DUPLICATE_ITEM | INVALID_OWNER_EDIT))
-    }
-
-    /// Runs `op` with keychain prompts disabled.
-    pub(super) fn silently<T>(op: impl FnOnce() -> keyring::Result<T>) -> keyring::Result<T> {
-        let _serialised = SILENT
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let _prompts_disabled = SecKeychain::disable_user_interaction().ok();
-        op()
-    }
-
-    /// Why an item could not be recreated for the running build.
-    #[derive(Debug)]
-    pub(super) enum RecreateError {
-        /// The old item is untouched; the next run prompts again.
-        Kept(Error),
-        /// The old item was deleted and the new one could not be added.
-        Lost(Error),
-    }
-
-    impl fmt::Display for RecreateError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self {
-                Self::Kept(err) => write!(f, "{err}; the next run prompts again"),
-                Self::Lost(err) => write!(
-                    f,
-                    "{err}; the item was removed, store it again with `secretspec set`"
-                ),
-            }
-        }
-    }
-
-    /// Adds a fresh item holding `secret` after the old one is gone. Adding
-    /// never consults an access control list; it is retried with prompts
-    /// allowed only so a locked keychain cannot lose the value.
-    fn add(entry: &Entry, secret: &[u8]) -> Result<(), RecreateError> {
-        if silently(|| entry.set_secret(secret)).is_ok() {
-            return Ok(());
-        }
-        entry.set_secret(secret).map_err(RecreateError::Lost)
-    }
-
-    /// Recreates `entry` holding `secret` without prompting, so the running
-    /// build alone owns it. macOS refuses the silent delete of an item
-    /// another build owns until the user has chosen "Always Allow" for this
-    /// build in a keychain dialog; "Allow" grants one read and nothing more.
-    /// Deleting with prompts allowed shows a second dialog and is refused
-    /// all the same, so it is never attempted.
-    pub(super) fn recreate(entry: &Entry, secret: &[u8]) -> Result<(), RecreateError> {
-        match silently(|| entry.delete_credential()) {
-            Ok(()) | Err(Error::NoEntry) => add(entry, secret),
-            Err(err) => Err(RecreateError::Kept(err)),
-        }
-    }
-
-    /// Whether macOS refused to let this build change an item another build
-    /// owns, the outcome of choosing "Allow" instead of "Always Allow".
-    pub(super) fn owner_change_refused(err: &Error) -> bool {
-        os_status(err) == Some(INVALID_OWNER_EDIT)
+    /// Whether this build could not update an item it does not yet control.
+    pub(super) fn access_refused(err: &Error) -> bool {
+        matches!(os_status(err), Some(DUPLICATE_ITEM | INVALID_OWNER_EDIT))
     }
 
     /// What to do about a prompt that keeps coming back.
     pub(super) const ALWAYS_ALLOW_HINT: &str =
         "choose \"Always Allow\" in the keychain dialog so this build keeps access";
 
-    /// Reads `entry`, prompting only when macOS insists. A convention entry
-    /// (`owned`) that needed the prompt is then recreated for the running
-    /// build; `service` names the item in the warning when that is refused.
-    pub(super) fn read(entry: &Entry, owned: bool, service: &str) -> keyring::Result<Vec<u8>> {
-        match silently(|| entry.get_secret()) {
-            Ok(secret) => return Ok(secret),
-            Err(err) if needs_prompt(&err) => {}
-            Err(err) => return Err(err),
+    /// A lookup that skips items needing authentication, without changing
+    /// keychain interaction state for any other thread or provider.
+    pub(super) fn read_without_prompt(service: &str, account: &str) -> Option<Vec<u8>> {
+        let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User).ok()?;
+        let mut options = ItemSearchOptions::new();
+        options
+            .keychains(&[keychain])
+            .class(ItemClass::generic_password())
+            .service(service)
+            .account(account)
+            .load_data(true)
+            .skip_authenticated_items(true);
+        match options.search().ok()?.into_iter().next()? {
+            SearchResult::Data(secret) => Some(secret),
+            _ => None,
+        }
+    }
+
+    /// Reads without a dialog if access is already granted. An interactive
+    /// fallback never modifies the item, including entries addressed by `ref`.
+    pub(super) fn read(entry: &Entry, service: &str, account: &str) -> keyring::Result<Vec<u8>> {
+        if let Some(secret) = read_without_prompt(service, account) {
+            return Ok(secret);
         }
         let secret = entry.get_secret()?;
-        if owned {
-            if let Err(err) = recreate(entry, &secret) {
-                eprintln!(
-                    "{} keychain item {} is still owned by an earlier SecretSpec build: {}; {}",
-                    colored::Colorize::yellow("warning:"),
-                    service,
-                    err,
-                    ALWAYS_ALLOW_HINT
-                );
-            }
-        }
+        eprintln!(
+            "{} keychain item {} needed access from this build; if macOS asked whether to allow access, {}",
+            colored::Colorize::yellow("warning:"),
+            service,
+            ALWAYS_ALLOW_HINT
+        );
         Ok(secret)
     }
 
-    /// Writes `entry`, prompting only when macOS insists. A convention entry
-    /// (`owned`) that another build created is recreated when this build may
-    /// already replace it; otherwise, and for a `ref` entry, the write falls
-    /// back to the prompting modify, which succeeds after "Always Allow".
-    pub(super) fn write(entry: &Entry, secret: &[u8], owned: bool) -> keyring::Result<()> {
-        match silently(|| entry.set_secret(secret)) {
+    /// A failed lookup inside the keyring crate can make a write try to add
+    /// a duplicate item. Reading with a dialog grants access before retrying
+    /// the in-place update. The existing item is never deleted.
+    pub(super) fn write(entry: &Entry, secret: &[u8]) -> keyring::Result<()> {
+        match entry.set_secret(secret) {
             Ok(()) => Ok(()),
-            Err(err) if owned && owned_elsewhere(&err) => match recreate(entry, secret) {
-                Ok(()) => Ok(()),
-                Err(RecreateError::Kept(_)) => entry.set_secret(secret),
-                Err(RecreateError::Lost(err)) => Err(err),
-            },
-            Err(err) if needs_prompt(&err) => entry.set_secret(secret),
+            Err(err) if access_refused(&err) => {
+                let _existing = match entry.get_secret() {
+                    Ok(existing) => secrecy::zeroize::Zeroizing::new(existing),
+                    Err(_) => return Err(err),
+                };
+                entry.set_secret(secret)
+            }
             Err(err) => Err(err),
         }
     }
@@ -327,38 +250,30 @@ impl KeyringProvider {
 }
 
 impl KeyringProvider {
-    /// Whether SecretSpec created the entry at `addr` itself. A `ref` entry
-    /// belongs to another application and is never recreated.
-    #[cfg(target_os = "macos")]
-    fn owns_entry(addr: Address<'_>) -> bool {
-        matches!(addr, Address::Convention { .. })
-    }
-
-    /// Reads the entry's bytes. macOS retries a read that needs a prompt and
-    /// takes over convention entries created by another build.
-    fn read_entry(entry: &Entry, addr: Address<'_>, service: &str) -> keyring::Result<Vec<u8>> {
+    /// Reads the entry's bytes. macOS uses a per-query silent lookup before
+    /// allowing an interactive read.
+    fn read_entry(entry: &Entry, service: &str, account: &str) -> keyring::Result<Vec<u8>> {
         #[cfg(target_os = "macos")]
         {
-            macos::read(entry, Self::owns_entry(addr), service)
+            macos::read(entry, service, account)
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = (addr, service);
+            let _ = (service, account);
             entry.get_secret()
         }
     }
 
-    /// Writes the entry's bytes. macOS recreates convention entries created
-    /// by another build instead of failing on them.
-    fn write_entry(entry: &Entry, secret: &[u8], addr: Address<'_>, service: &str) -> Result<()> {
+    /// Writes the entry's bytes. macOS retries an in-place update after an
+    /// interactive read when another build's item hid from the first lookup.
+    fn write_entry(entry: &Entry, secret: &[u8], service: &str) -> Result<()> {
         #[cfg(target_os = "macos")]
         {
-            macos::write(entry, secret, Self::owns_entry(addr)).map_err(|err| {
-                if macos::owner_change_refused(&err) {
+            macos::write(entry, secret).map_err(|err| {
+                if macos::access_refused(&err) {
                     SecretSpecError::ProviderOperationFailed(format!(
-                        "keychain item {service} was written by another SecretSpec build and \
-                         macOS refused to change it: {err}; {}, or delete the item in Keychain \
-                         Access and retry",
+                        "macOS refused to change keychain item {service}: {err}; {}, or review \
+                         the item's access settings in Keychain Access",
                         macos::ALWAYS_ALLOW_HINT
                     ))
                 } else {
@@ -368,7 +283,7 @@ impl KeyringProvider {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = (addr, service);
+            let _ = service;
             Ok(entry.set_secret(secret)?)
         }
     }
@@ -433,7 +348,7 @@ impl Provider for KeyringProvider {
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let (service, username) = self.entry_target(addr)?;
         let entry = Entry::new(&service, &username)?;
-        match Self::read_entry(&entry, addr, &service) {
+        match Self::read_entry(&entry, &service, &username) {
             Ok(secret) => {
                 let secret = SecretBytes::from_vec(secret);
                 #[cfg(windows)]
@@ -457,7 +372,7 @@ impl Provider for KeyringProvider {
         let entry = Entry::new(&service, &username)?;
         #[cfg(windows)]
         let value = &encode_windows_secret(value);
-        Self::write_entry(&entry, value.expose_secret(), addr, &service)?;
+        Self::write_entry(&entry, value.expose_secret(), &service)?;
         Ok(())
     }
 
@@ -739,32 +654,27 @@ mod macos_tests {
             return;
         }
         let (entry, service) = test_entry("own");
-        macos::write(&entry, b"first", true).unwrap();
-        macos::write(&entry, b"second", true).unwrap();
-        assert_eq!(macos::read(&entry, true, &service).unwrap(), b"second");
-        macos::recreate(&entry, b"third").unwrap();
-        assert_eq!(macos::read(&entry, true, &service).unwrap(), b"third");
+        macos::write(&entry, b"first").unwrap();
+        macos::write(&entry, b"second").unwrap();
+        assert_eq!(
+            macos::read_without_prompt(&service, ACCOUNT),
+            Some(b"second".to_vec())
+        );
+        assert_eq!(macos::read(&entry, &service, ACCOUNT).unwrap(), b"second");
         entry.delete_credential().unwrap();
     }
 
-    /// Without a dialog, an item another signer owns can be neither read nor
-    /// replaced, and the refused replacement leaves it intact.
+    /// Skipping authentication leaves an item from another signer intact.
     #[test]
-    fn foreign_item_is_kept_when_silent_takeover_is_refused() {
+    fn foreign_item_is_kept_by_silent_lookup() {
         if !keyring_tests_enabled() {
             eprintln!("skipping: SECRETSPEC_TEST_PROVIDERS does not name keyring");
             return;
         }
-        let (entry, service) = test_entry("foreign");
+        let (_entry, service) = test_entry("foreign");
         create_foreign_item(&service, "theirs");
 
-        let denied = macos::silently(|| entry.get_secret()).unwrap_err();
-        assert!(macos::needs_prompt(&denied), "unexpected error: {denied:?}");
-        let refused = macos::recreate(&entry, b"ours").unwrap_err();
-        assert!(
-            matches!(refused, macos::RecreateError::Kept(_)),
-            "unexpected outcome: {refused:?}"
-        );
+        assert!(macos::read_without_prompt(&service, ACCOUNT).is_none());
 
         let kept = security(&["find-generic-password", "-s", &service, "-a", ACCOUNT, "-w"]);
         assert_eq!(kept.as_deref().map(str::trim), Some("theirs"));

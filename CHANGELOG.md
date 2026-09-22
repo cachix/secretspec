@@ -265,13 +265,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   password on every run after SecretSpec is upgraded. Keychain items are bound
   to the code signature of the build that created them, which changes with
   every release of an ad hoc signed build (Nix, Homebrew, `cargo install`).
-  The first read of each secret by a new build prompts once; approve it with
-  "Always Allow" and SecretSpec recreates the item so the new build owns it and
-  later runs stay silent. Approving with "Allow" now prints a warning that the
-  dialog will return and how to stop it, and `secretspec set` over an item
-  written by an earlier build asks for the same approval instead of failing
-  with "The specified item already exists in the keychain". Secrets addressed
-  with `ref` stay owned by the application that created them (0.21+).
+  The first read of each secret by a new build may prompt once; approve it with
+  "Always Allow" so later runs of that build stay silent. SecretSpec explains
+  how to avoid repeated prompts, leaves items untouched during reads, and
+  retries in-place writes after requesting access when an older build created
+  the item (0.21+).
+
+- macOS keyring reads preserve existing items and their access settings even
+  when approval or a later write fails. Keychain lookups no longer change the
+  prompt setting for other operations in the same process (0.21+).
 
 - KeePass KDBX 4.0 databases can be written after creation or editing in
   KeePassXC. Writes upgrade the file format to KDBX 4.1 while preserving

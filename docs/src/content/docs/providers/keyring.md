@@ -61,16 +61,15 @@ Choose **Always Allow**: it grants the new build lasting access, and every
 later run stays silent. **Allow** grants a single read, so the dialog returns on
 the next run.
 
-> **Changed in version 0.21:** After a read approved with **Always Allow**,
-> SecretSpec recreates the item so the new build owns it outright. A read
-> approved with **Allow** prints a warning explaining that the dialog will
-> return and how to stop it. `secretspec set` over an item written by an
-> earlier build asks for the same approval instead of failing with "The
-> specified item already exists in the keychain".
+> **Changed in version 0.21:** When a read needs keychain approval, SecretSpec
+> explains that **Always Allow** prevents repeated prompts for this build.
+> Reads leave the keychain item intact. `secretspec set` retries an in-place
+> update after asking for access if the first attempt cannot see an item
+> written by an earlier build.
 
 Secrets addressed with [`ref`](#use-existing-secrets) belong to the
-application that created them and are never recreated, so reading one from
-SecretSpec keeps prompting unless that application's item allows it.
+application that created them. Reading one from SecretSpec can prompt until
+you grant this build access with **Always Allow**.
 
 ### Linux prerequisites
 

@@ -32,10 +32,14 @@ typedef struct {
 } secretspec_resolver_slice;
 
 enum {
+    /* Resolve a bare executable name against PATH. On Windows only absolute
+     * PATH entries are searched, never the application or current directory,
+     * and only .exe and .com files resolve; name a script shim by its full
+     * path. */
     SECRETSPEC_RESOLVER_DISCOVER_EXECUTABLE = 1u << 0,
     SECRETSPEC_RESOLVER_INHERIT_ENVIRONMENT = 1u << 1,
     /* Advertise that this client can obtain a secret value from a person, so
-     * the endpoint may ask it to (0.20+). The library adds the capability to
+     * the endpoint may ask it to (0.21+). The library adds the capability to
      * the initialization it sends; do not put client_methods in
      * initialize_params_json yourself.
      *
@@ -70,7 +74,7 @@ typedef enum {
     SECRETSPEC_RESOLVER_REMOTE_ERROR = 5,
     SECRETSPEC_RESOLVER_CANCELLED = 6,
     SECRETSPEC_RESOLVER_DEADLINE_EXCEEDED = 7,
-    /* A call cannot finish until a prompt is answered (0.20+). Take it with
+    /* A call cannot finish until a prompt is answered (0.21+). Take it with
      * secretspec_resolver_prompt_take, answer or decline it, then wait again. Only
      * a session opened with SECRETSPEC_RESOLVER_ANSWER_PROMPTS can see this. */
     SECRETSPEC_RESOLVER_PROMPT_PENDING = 8
@@ -119,7 +123,7 @@ SECRETSPEC_RESOLVER_API secretspec_resolver_status secretspec_resolver_call_wait
 SECRETSPEC_RESOLVER_API void secretspec_resolver_call_cancel(secretspec_resolver_call *call);
 SECRETSPEC_RESOLVER_API void secretspec_resolver_call_free(secretspec_resolver_call *call);
 
-/* Prompts (0.20+).
+/* Prompts (0.21+).
  *
  * The endpoint asks this client for a value only when the session advertised
  * SECRETSPEC_RESOLVER_ANSWER_PROMPTS. There is deliberately no callback: a binding
@@ -157,7 +161,9 @@ SECRETSPEC_RESOLVER_API secretspec_resolver_slice secretspec_resolver_prompt_par
 
 /* Answer with the value a person supplied. It is a secret: the library clears
  * its own copy after writing, and the caller should clear the buffer it owns.
- * An empty value is refused; decline instead. */
+ * An empty value is refused; decline instead. So is an answer too large for
+ * the negotiated frame size: the prompt stays open, so it can still be
+ * declined. */
 SECRETSPEC_RESOLVER_API secretspec_resolver_status secretspec_resolver_prompt_answer(
     secretspec_resolver_prompt *prompt,
     const unsigned char *value,
@@ -172,6 +178,8 @@ SECRETSPEC_RESOLVER_API secretspec_resolver_status secretspec_resolver_prompt_de
 
 SECRETSPEC_RESOLVER_API void secretspec_resolver_prompt_free(secretspec_resolver_prompt *prompt);
 
+/* Close the session. Prompts nobody has taken are declined first, because the
+ * endpoint cannot finish draining its work while it waits on one. */
 SECRETSPEC_RESOLVER_API secretspec_resolver_status secretspec_resolver_client_close(
     secretspec_resolver_client *client,
     uint64_t deadline_unix_ms,

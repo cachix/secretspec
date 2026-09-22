@@ -570,6 +570,116 @@ static int closed_standard_streams_work(const char *peer) {
 }
 #endif
 
+static int open_answering(
+    const char *peer,
+    const char *mode,
+    secretspec_resolver_client **client,
+    secretspec_resolver_buffer *error) {
+    secretspec_resolver_options options;
+    secretspec_resolver_buffer server = {NULL, 0};
+    secretspec_resolver_status status;
+    set_options(&options, peer, mode, client_initialize);
+    options.flags |= SECRETSPEC_RESOLVER_ANSWER_PROMPTS;
+    status = secretspec_resolver_client_open(
+        &options, now_ms() + UINT64_C(5000), client, &server, error);
+    secretspec_resolver_buffer_free(server);
+    return status;
+}
+
+static void close_and_free(secretspec_resolver_client *client) {
+    secretspec_resolver_buffer close_error = {NULL, 0};
+    if (client == NULL) return;
+    (void)secretspec_resolver_client_close(client, now_ms() + UINT64_C(2000), &close_error);
+    secretspec_resolver_buffer_free(close_error);
+    secretspec_resolver_client_free(client);
+}
+
+/* An answer that cannot fit in one negotiated frame is refused before the
+ * prompt is consumed, so the caller can still answer or decline it instead of
+ * leaving the endpoint waiting out the deadline. */
+static int an_oversized_answer_leaves_the_prompt_open(const char *peer) {
+    secretspec_resolver_client *client = NULL;
+    secretspec_resolver_call *call = NULL;
+    secretspec_resolver_prompt *prompt = NULL;
+    secretspec_resolver_buffer error = {NULL, 0};
+    secretspec_resolver_buffer result = {NULL, 0};
+    static const unsigned char params[] = "{}";
+    static const unsigned char answer[] = "short-enough";
+    unsigned char *oversized = NULL;
+    const size_t oversized_size = 5000;
+    int outcome = 0;
+
+    if (open_answering(peer, "--small-frame-prompt", &client, &error) != SECRETSPEC_RESOLVER_OK) goto done;
+    if (secretspec_resolver_call_start(
+            client, (const unsigned char *)"resolver.get", strlen("resolver.get"),
+            params, sizeof(params) - 1, now_ms() + UINT64_C(5000), &call, &error) !=
+        SECRETSPEC_RESOLVER_OK) goto done;
+    if (secretspec_resolver_call_wait(call, &result, &error) != SECRETSPEC_RESOLVER_PROMPT_PENDING) goto done;
+    if (secretspec_resolver_prompt_take(client, &prompt, &error) != SECRETSPEC_RESOLVER_OK ||
+        prompt == NULL) goto done;
+    oversized = (unsigned char *)malloc(oversized_size);
+    if (oversized == NULL) goto done;
+    memset(oversized, 'a', oversized_size);
+    if (secretspec_resolver_prompt_answer(prompt, oversized, oversized_size, &error) !=
+        SECRETSPEC_RESOLVER_INVALID_ARGUMENT) goto done;
+    if (error.data == NULL || strstr((const char *)error.data, "frame size") == NULL) goto done;
+    secretspec_resolver_buffer_free(error);
+    ss_reset(&error);
+    if (secretspec_resolver_prompt_answer(prompt, answer, sizeof(answer) - 1, &error) !=
+        SECRETSPEC_RESOLVER_OK) goto done;
+    secretspec_resolver_prompt_free(prompt);
+    prompt = NULL;
+    if (secretspec_resolver_call_wait(call, &result, &error) != SECRETSPEC_RESOLVER_OK ||
+        result.data == NULL) goto done;
+    outcome = strstr((const char *)result.data, "short-enough") != NULL;
+done:
+    free(oversized);
+    if (prompt != NULL) secretspec_resolver_prompt_free(prompt);
+    if (call != NULL) secretspec_resolver_call_free(call);
+    secretspec_resolver_buffer_free(result);
+    secretspec_resolver_buffer_free(error);
+    close_and_free(client);
+    return outcome;
+}
+
+/* rpc.initialize is the library's own request. A prompt claiming it as parent
+ * is a peer defect, not something to hand to a caller who has no call yet. */
+static int rejects_a_prompt_parented_on_initialize(const char *peer) {
+    secretspec_resolver_client *client = NULL;
+    secretspec_resolver_buffer error = {NULL, 0};
+    secretspec_resolver_status status = open_answering(peer, "--initialize-prompt", &client, &error);
+    secretspec_resolver_buffer_free(error);
+    close_and_free(client);
+    return status == SECRETSPEC_RESOLVER_PROTOCOL;
+}
+
+/* A prompt nobody took must not surface from close as PROMPT_PENDING, which
+ * only call_wait documents, and the endpoint gets a decline rather than
+ * silence. The peer answers shutdown with a malformed result unless it saw
+ * the decline. */
+static int close_declines_untaken_prompts(const char *peer) {
+    secretspec_resolver_client *client = NULL;
+    secretspec_resolver_call *call = NULL;
+    secretspec_resolver_buffer error = {NULL, 0};
+    secretspec_resolver_buffer result = {NULL, 0};
+    static const unsigned char params[] = "{}";
+    secretspec_resolver_status status = SECRETSPEC_RESOLVER_UNAVAILABLE;
+
+    if (open_answering(peer, "--prompt-then-close", &client, &error) != SECRETSPEC_RESOLVER_OK) goto done;
+    if (secretspec_resolver_call_start(
+            client, (const unsigned char *)"resolver.get", strlen("resolver.get"),
+            params, sizeof(params) - 1, now_ms() + UINT64_C(5000), &call, &error) !=
+        SECRETSPEC_RESOLVER_OK) goto done;
+    if (secretspec_resolver_call_wait(call, &result, &error) != SECRETSPEC_RESOLVER_PROMPT_PENDING) goto done;
+    status = secretspec_resolver_client_close(client, now_ms() + UINT64_C(2000), &error);
+done:
+    if (call != NULL) secretspec_resolver_call_free(call);
+    secretspec_resolver_buffer_free(result);
+    secretspec_resolver_buffer_free(error);
+    if (client != NULL) secretspec_resolver_client_free(client);
+    return status == SECRETSPEC_RESOLVER_OK;
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) return EXIT_FAILURE;
 #ifndef _WIN32
@@ -578,6 +688,9 @@ int main(int argc, char **argv) {
     if (!launches_with_a_sorted_environment(argv[1])) return EXIT_FAILURE;
     if (!names_non_protocol_text(argv[1])) return EXIT_FAILURE;
     if (!answers_a_prompt_and_completes_the_call(argv[1])) return EXIT_FAILURE;
+    if (!an_oversized_answer_leaves_the_prompt_open(argv[1])) return EXIT_FAILURE;
+    if (!rejects_a_prompt_parented_on_initialize(argv[1])) return EXIT_FAILURE;
+    if (!close_declines_untaken_prompts(argv[1])) return EXIT_FAILURE;
     if (!an_expired_prompt_does_not_block_later_calls(argv[1])) return EXIT_FAILURE;
     if (!an_answer_cannot_outlive_its_prompt(argv[1])) return EXIT_FAILURE;
     if (!a_prompt_cannot_outlive_its_parent(argv[1])) return EXIT_FAILURE;

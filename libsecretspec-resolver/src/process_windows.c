@@ -34,6 +34,86 @@ static wchar_t *utf8_to_wide(const char *text) {
     return wide;
 }
 
+static bool is_regular_file(const wchar_t *path) {
+    DWORD attributes = GetFileAttributesW(path);
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+static bool is_absolute_directory(const wchar_t *directory, size_t size) {
+    /* `C:\dir` or a UNC `\\server\share`. A relative entry such as `.` would
+     * make the search depend on the working directory. */
+    return (size >= 3 && directory[1] == L':' && (directory[2] == L'\\' || directory[2] == L'/')) ||
+           (size >= 2 && (directory[0] == L'\\' || directory[0] == L'/') &&
+            (directory[1] == L'\\' || directory[1] == L'/'));
+}
+
+/* Join `directory`, `name` and `extension` into a new string. */
+static wchar_t *join_candidate(const wchar_t *directory, size_t directory_size,
+                               const wchar_t *name, const wchar_t *extension) {
+    size_t name_size = wcslen(name);
+    size_t extension_size = extension == NULL ? 0 : wcslen(extension);
+    bool separator = directory_size != 0 &&
+                     directory[directory_size - 1] != L'\\' && directory[directory_size - 1] != L'/';
+    wchar_t *path = (wchar_t *)calloc(directory_size + 1 + name_size + extension_size + 1, sizeof(wchar_t));
+    wchar_t *cursor = path;
+    if (path == NULL) return NULL;
+    memcpy(cursor, directory, directory_size * sizeof(wchar_t));
+    cursor += directory_size;
+    if (separator) *cursor++ = L'\\';
+    memcpy(cursor, name, name_size * sizeof(wchar_t));
+    cursor += name_size;
+    if (extension_size != 0) memcpy(cursor, extension, extension_size * sizeof(wchar_t));
+    return path;
+}
+
+/* Resolve a bare executable name against PATH the way posix_spawnp does on
+ * POSIX: only the directories PATH names, never the application directory or
+ * the current directory, which CreateProcessW would search first when given no
+ * application name. Only native executables resolve. A `.bat` or `.cmd` file
+ * runs through cmd.exe, whose command-line parsing the argument quoting here
+ * cannot make safe, so a script shim must be named explicitly instead. */
+static wchar_t *search_path(const wchar_t *name) {
+    static const wchar_t *const extensions[] = {L".exe", L".com"};
+    const wchar_t *dot = wcsrchr(name, L'.');
+    bool has_extension = dot != NULL && dot != name;
+    wchar_t *path_variable;
+    DWORD size;
+    const wchar_t *entry;
+    wchar_t *found = NULL;
+    /* A name with a directory component is not searched for, as on POSIX. */
+    if (wcspbrk(name, L"\\/:") != NULL) return NULL;
+    if (has_extension && _wcsicmp(dot, L".exe") != 0 && _wcsicmp(dot, L".com") != 0) return NULL;
+    size = GetEnvironmentVariableW(L"PATH", NULL, 0);
+    if (size == 0) return NULL;
+    path_variable = (wchar_t *)calloc(size, sizeof(wchar_t));
+    if (path_variable == NULL) return NULL;
+    if (GetEnvironmentVariableW(L"PATH", path_variable, size) + 1 != size) {
+        free(path_variable);
+        return NULL;
+    }
+    for (entry = path_variable; found == NULL && *entry != L'\0';) {
+        const wchar_t *end = wcschr(entry, L';');
+        size_t entry_size = end == NULL ? wcslen(entry) : (size_t)(end - entry);
+        if (is_absolute_directory(entry, entry_size)) {
+            size_t index;
+            size_t count = has_extension ? 1 : sizeof(extensions) / sizeof(extensions[0]);
+            for (index = 0; found == NULL && index < count; index++) {
+                wchar_t *candidate = join_candidate(entry, entry_size, name,
+                                                    has_extension ? NULL : extensions[index]);
+                if (candidate != NULL && is_regular_file(candidate)) {
+                    found = candidate;
+                } else {
+                    free(candidate);
+                }
+            }
+        }
+        if (end == NULL) break;
+        entry = end + 1;
+    }
+    free(path_variable);
+    return found;
+}
+
 static size_t quoted_size(const wchar_t *argument) {
     size_t size = 2;
     size_t slashes = 0;
@@ -229,8 +309,15 @@ secretspec_resolver_status ss_process_spawn(const ss_launch *launch, ss_process 
         !SetHandleInformation(parent_error, HANDLE_FLAG_INHERIT, 0)) goto failed;
     command_line = build_command_line(launch);
     environment = build_environment(launch);
-    if (!launch->discover) application = utf8_to_wide(launch->executable);
-    if (command_line == NULL || environment == NULL || (!launch->discover && application == NULL)) goto failed;
+    /* Always name the application, so CreateProcessW never runs its own
+     * search, which includes the current directory. */
+    application = utf8_to_wide(launch->executable);
+    if (application != NULL && launch->discover && wcspbrk(application, L"\\/:") == NULL) {
+        wchar_t *resolved = search_path(application);
+        free(application);
+        application = resolved;
+    }
+    if (command_line == NULL || environment == NULL || application == NULL) goto failed;
     ZeroMemory(&startup, sizeof(startup));
     startup.StartupInfo.cb = sizeof(startup);
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;

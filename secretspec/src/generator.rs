@@ -134,7 +134,7 @@ fn generate_rsa(config: &GenerateConfig) -> crate::Result<SecretBytes> {
             SecretSpecError::GenerationFailed(format!("failed to encode RSA key as PEM: {}", e))
         })?;
 
-    Ok(SecretBytes::from_utf8(pem.to_string()))
+    Ok(SecretBytes::from_slice(pem.as_bytes()))
 }
 
 /// Generates a broadly interoperable OpenPGP v4 transferable secret key.
@@ -375,7 +375,7 @@ fn generate_ssh(config: &GenerateConfig) -> crate::Result<SecretBytes> {
     let encoded = key.to_openssh(SshLineEnding::LF).map_err(|error| {
         SecretSpecError::GenerationFailed(format!("failed to encode OpenSSH private key: {error}"))
     })?;
-    Ok(SecretBytes::from_utf8(encoded.to_string()))
+    Ok(SecretBytes::from_slice(encoded.as_bytes()))
 }
 
 fn generate_from_command(config: &GenerateConfig) -> crate::Result<SecretBytes> {

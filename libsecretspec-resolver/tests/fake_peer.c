@@ -36,7 +36,10 @@ typedef enum {
     MODE_LATE_DEADLINE_PROMPT,
     MODE_UNKNOWN_NOTIFICATION,
     MODE_INVALID_NOTIFICATION,
-    MODE_CHECK_ENVIRONMENT
+    MODE_CHECK_ENVIRONMENT,
+    MODE_SMALL_FRAME_PROMPT,
+    MODE_INITIALIZE_PROMPT,
+    MODE_PROMPT_THEN_CLOSE
 } peer_mode;
 
 static uint64_t now_ms(void) {
@@ -174,12 +177,16 @@ static peer_mode parse_mode(int argc, char **argv) {
     if (strcmp(argv[1], "--unknown-notification") == 0) return MODE_UNKNOWN_NOTIFICATION;
     if (strcmp(argv[1], "--invalid-notification") == 0) return MODE_INVALID_NOTIFICATION;
     if (strcmp(argv[1], "--check-environment") == 0) return MODE_CHECK_ENVIRONMENT;
+    if (strcmp(argv[1], "--small-frame-prompt") == 0) return MODE_SMALL_FRAME_PROMPT;
+    if (strcmp(argv[1], "--initialize-prompt") == 0) return MODE_INITIALIZE_PROMPT;
+    if (strcmp(argv[1], "--prompt-then-close") == 0) return MODE_PROMPT_THEN_CLOSE;
     return MODE_NORMAL;
 }
 
 int main(int argc, char **argv) {
     peer_mode mode = parse_mode(argc, argv);
     int expired_prompt_sent = 0;
+    int prompt_declined = 0;
 #ifdef _WIN32
     /* The wire format requires LF; Windows text mode expands it to CRLF. */
     if (_setmode(_fileno(stdin), _O_BINARY) == -1 ||
@@ -220,22 +227,46 @@ int main(int argc, char **argv) {
         method = yyjson_obj_get(root, "method");
         id = yyjson_obj_get(root, "id");
         deadline = yyjson_obj_get(yyjson_obj_get(root, "_meta"), "deadline_unix_ms");
+        if (method == NULL && mode == MODE_PROMPT_THEN_CLOSE) {
+            /* The response to the prompt this peer left pending. Closing must
+             * decline it rather than leave it unanswered. */
+            yyjson_val *error = yyjson_obj_get(root, "error");
+            if (yyjson_equals_str(yyjson_obj_get(yyjson_obj_get(error, "data"), "kind"),
+                                  "interaction_required")) prompt_declined = 1;
+            yyjson_doc_free(document);
+            continue;
+        }
         if (id != NULL && !yyjson_is_uint(deadline)) {
             yyjson_doc_free(document);
             return EXIT_FAILURE;
         }
         if (yyjson_equals_str(method, "rpc.initialize")) {
+            if (mode == MODE_INITIALIZE_PROMPT) {
+                /* A prompt may only belong to an application call. */
+                length = snprintf(response, sizeof(response),
+                    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"client.prompt\","
+                    "\"_meta\":{\"deadline_unix_ms\":%llu,\"parent_request_id\":%llu},"
+                    "\"params\":{\"name\":\"EARLY\",\"profile\":\"default\",\"target_provider\":null}}",
+                    (unsigned long long)yyjson_get_uint(deadline),
+                    (unsigned long long)yyjson_get_uint(id));
+                if (length <= 0 || (size_t)length >= sizeof(response) || !write_frame(response)) {
+                    yyjson_doc_free(document);
+                    return EXIT_FAILURE;
+                }
+            }
             length = snprintf(response, sizeof(response),
                     "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{"
                     "\"protocol\":\"secretspec.resolver\",\"version\":1,"
                     "\"server\":{\"name\":\"fake-peer\",\"version\":\"1\"},"
                     "\"methods\":[\"resolver.get\",\"resolver.release\"],\"capabilities\":{},"
-                    "\"limits\":{\"max_frame_bytes\":32768,\"max_in_flight\":4},"
+                    "\"limits\":{\"max_frame_bytes\":%d,\"max_in_flight\":4},"
                     "\"application\":{}}}",
-                (unsigned long long)yyjson_get_uint(id));
+                (unsigned long long)yyjson_get_uint(id),
+                mode == MODE_SMALL_FRAME_PROMPT ? 4096 : 32768);
         } else if (yyjson_equals_str(method, "rpc.shutdown")) {
+            int bad = mode == MODE_BAD_SHUTDOWN || (mode == MODE_PROMPT_THEN_CLOSE && !prompt_declined);
             length = snprintf(response, sizeof(response),
-                              mode == MODE_BAD_SHUTDOWN
+                              bad
                                   ? "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{\"unexpected\":true}}"
                                   : "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{}}",
                               (unsigned long long)yyjson_get_uint(id));
@@ -257,7 +288,7 @@ int main(int argc, char **argv) {
                 "\"message\":\"dynamic session required\","
                 "\"data\":{\"kind\":\"dynamic_session_required\",\"retryable\":false}}}",
                 (unsigned long long)yyjson_get_uint(id));
-        } else if (mode == MODE_PROMPT) {
+        } else if (mode == MODE_PROMPT || mode == MODE_SMALL_FRAME_PROMPT) {
             /* Ask the client for a value mid-call, then answer the call with
              * whatever came back. The prompt uses this side's own request ID
              * space, which deliberately overlaps the client's. */
@@ -289,6 +320,16 @@ int main(int argc, char **argv) {
             yyjson_doc_free(reply);
             if (length <= 0 || (size_t)length >= sizeof(response) ||
                 !write_frame(response)) return EXIT_FAILURE;
+            continue;
+        } else if (mode == MODE_PROMPT_THEN_CLOSE) {
+            /* Ask, and leave the call waiting on the answer. */
+            length = snprintf(response, sizeof(response),
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"client.prompt\","
+                "\"_meta\":{\"deadline_unix_ms\":%llu,\"parent_request_id\":%llu},"
+                "\"params\":{\"name\":\"UNTAKEN\",\"profile\":\"default\",\"target_provider\":null}}",
+                (unsigned long long)yyjson_get_uint(deadline), (unsigned long long)yyjson_get_uint(id));
+            yyjson_doc_free(document);
+            if (length <= 0 || (size_t)length >= sizeof(response) || !write_frame(response)) return EXIT_FAILURE;
             continue;
         } else if (mode == MODE_EXPIRED_PROMPT && !expired_prompt_sent) {
             /* Leave the first call unanswered after asking a short-lived

@@ -132,6 +132,17 @@ choose providers themselves or through their active profile:
 ```toml title="secretspec.toml"
 [defaults]
 providers = ["developer"]
+
+[profiles.default]
+DATABASE_URL = { description = "Development database URL" }
+API_TOKEN = { description = "Development API token" }
+```
+
+Each developer can define `developer` in their own user configuration:
+
+```toml title="~/.config/secretspec/config.toml"
+[defaults.providers]
+developer = "keyring://"
 ```
 
 | Field | Type | Required | Description |
@@ -144,6 +155,11 @@ The chain may name an alias defined in the project `[providers]` table or only
 in the current user's `[defaults.providers]` table. A secret-level chain wins,
 followed by `[profiles.<name>.defaults].providers`, this project default, and
 finally the user-global default provider.
+
+The project `[defaults].providers` selects a chain; the user
+`[defaults.providers]` table defines alias names. Every developer or CI runner
+using a user-only alias must define it in their own configuration. A project
+`[providers]` entry with the same name takes precedence over that user alias.
 
 ### [profiles.*] Section
 

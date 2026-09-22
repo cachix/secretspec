@@ -239,9 +239,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Reject incompatible IPC secret representations before resolution, enforce blocking
-  write deadlines with inherited pipes, and support C resolver clients with closed
-  standard streams.
+- IPC rejects incompatible secret representations before contacting providers,
+  keeps blocking write deadlines effective with inherited pipes, and supports C
+  resolver clients whose standard streams are closed.
 
 - Setec preserves binary secret values on reads and writes, and discovery
   handles empty results from servers with no visible secrets (0.21+).

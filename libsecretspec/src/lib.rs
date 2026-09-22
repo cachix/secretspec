@@ -80,9 +80,6 @@
 //! the boundary (only the temp-file path does).
 
 use std::ffi::{CStr, CString, c_char};
-
-#[cfg(test)]
-mod tests;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 #[cfg(test)]

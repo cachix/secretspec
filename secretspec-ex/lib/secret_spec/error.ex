@@ -1,10 +1,12 @@
 defmodule SecretSpec.Error do
-  @moduledoc "A SecretSpec resolution or native bridge error."
-
-  defexception [:kind, :message]
+  @moduledoc "A resolver protocol error."
+  defexception [:kind, :message, :data]
 
   @impl true
-  def message(%__MODULE__{kind: kind, message: message}) do
-    "#{message} (kind: #{kind})"
-  end
+  def message(%__MODULE__{kind: kind, message: message}), do: "#{message} (kind: #{kind})"
+
+  def from_response(%{"error" => %{"kind" => kind, "message" => message} = data}),
+    do: %__MODULE__{kind: kind, message: message, data: data}
+
+  def from_response(_), do: %__MODULE__{kind: "protocol", message: "malformed error response"}
 end

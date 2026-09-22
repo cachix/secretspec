@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Replaced the Elixir SDK's embedded native resolver with a pure Elixir `secretspec.resolver/1` IPC client. The 0.21+ package launches `secretspec serve` directly and requires a compatible SecretSpec executable.
 
 - IPC resolution exposes optional non-secret revision tokens for downstream task
   cache invalidation (0.21+). AWS Secrets Manager reports value-bound revisions,
@@ -237,9 +238,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under profile `prd` names the same secret as `doppler://myapp/prd`, and a
   cache at that pairing would overwrite or delete the secret it caches (0.21+).
 
-- **Elixir SDK (0.21+)** (`secretspec-ex`) resolves SecretSpec declarations from
-  Elixir through a Rustler binding, with precompiled NIF archives for supported
-  Linux, macOS, and Windows targets.
+- **Elixir SDK (0.21+)** (`secretspec-ex`) is now a pure Elixir client for `secretspec.resolver/1`. It launches `secretspec serve` directly and requires a compatible SecretSpec executable instead of shipping native code or NIF archives.
 
 ### Fixed
 

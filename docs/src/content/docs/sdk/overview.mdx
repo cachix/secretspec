@@ -43,8 +43,7 @@ that core rather than a reimplementation:
   and falls back to loading the same C ABI at runtime through `ext-ffi`.
 - **JVM (0.20+)** loads the same C ABI with JNA from a runtime-specific
   native asset in the Jar package.
-- **Elixir (0.21+)** uses a Rustler NIF and RustlerPrecompiled archives to call
-  the shared resolver directly from the BEAM.
+- **Elixir (0.21+)** uses a pure Elixir client for `secretspec.resolver/1` and launches `secretspec serve` directly.
 
 Because resolution happens in one place, every provider, chain, profile, and
 generator works the same in every language, and a new provider added to the core
@@ -134,8 +133,7 @@ no runtime library path to set:
 - **JVM** ships the `cdylib` as runtime-specific native assets in one
   Jar package and loads the matching asset through JNA; glibc/musl Linux,
   Intel/Arm macOS, and x64/Arm64 Windows assets are included.
-- **Elixir (0.21+)** ships RustlerPrecompiled NIF archives for Linux x64/Arm64,
-  macOS Apple silicon, and Windows x64.
+- **Elixir (0.21+)** is architecture-independent and requires a compatible `secretspec` executable.
 
 Because the resolver is linked or embedded directly, the SDKs do not depend on a
 separately installed `cdylib` or an `LD_LIBRARY_PATH`/`SECRETSPEC_FFI_LIB`

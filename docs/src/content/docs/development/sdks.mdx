@@ -73,12 +73,11 @@ platform and publishes on a version tag:
 | Swift (0.18+) | SwiftPM source package + XCFramework release asset | `swift-package.yml` |
 | PHP | Composer package (source) + prebuilt extension binaries and `libsecretspec` release assets | `php-ext.yml`, `ffi-build.yml` |
 | Haskell | `secretspec` on Hackage (source) | `haskell-build.yml` |
-| Elixir (0.21+) | `secretspec` on Hex.pm + Rustler NIF release assets | `elixir-package.yml` |
+| Elixir (0.21+) | `secretspec` on Hex.pm, using `secretspec serve` | `elixir-package.yml` |
 
 <VersionCompatibility version="0.21" />
 
-The Elixir SDK is scheduled for SecretSpec 0.21. Its package and workflow are
-available for integration testing while that release is prepared.
+The Elixir SDK is available from SecretSpec 0.21 and uses the shared resolver IPC protocol.
 
 ## Platform support
 

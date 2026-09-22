@@ -6,7 +6,7 @@ defmodule SecretSpec.MixProject do
   def project do
     [
       app: :secretspec,
-      version: "0.20.0",
+      version: "0.21.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       description: "Elixir SDK for SecretSpec",
@@ -20,23 +20,18 @@ defmodule SecretSpec.MixProject do
   end
 
   def application do
-    [extra_applications: [:logger]]
+    [mod: {SecretSpec.Application, []}, extra_applications: [:logger]]
   end
 
   defp package do
     [
-      files: ["lib", "checksum-*.exs", "mix.exs", "README.md"],
+      files: ["lib", "mix.exs", "README.md"],
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url}
     ]
   end
 
   defp deps do
-    [
-      {:jason, "~> 1.4"},
-      {:rustler_precompiled, "~> 0.9.0"},
-      {:ex_doc, "~> 0.40.3", only: :dev, runtime: false},
-      {:rustler, ">= 0.0.0", optional: true}
-    ]
+    [{:ex_doc, "~> 0.40.3", only: :dev, runtime: false}]
   end
 end

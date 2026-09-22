@@ -321,7 +321,7 @@ out-of-process client and provider communication in 0.21+.
 - [C# (0.16+)](https://secretspec.dev/sdk/csharp) (P/Invoke with native assets in the NuGet package)
 - [Swift (0.18+)](https://secretspec.dev/sdk/swift) (SwiftPM XCFramework for macOS Intel and Apple silicon)
 - [JVM languages (0.20+)](https://secretspec.dev/sdk/jvm) (via JNA with native assets in the JAR)
-- [Elixir (0.21+)](https://secretspec.dev/sdk/elixir) (Rustler binding with precompiled NIFs)
+- [Elixir (0.21+)](https://secretspec.dev/sdk/elixir) (pure Elixir IPC client)
 
 ```python
 from secretspec import SecretSpec

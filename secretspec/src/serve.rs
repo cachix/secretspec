@@ -177,6 +177,17 @@ impl ResolverHandler for ResolverHandlerImpl {
     async fn get(&self, context: RequestContext, params: GetParams) -> RpcResult<GetResult> {
         let state = self.state().await?;
         let name = params.name;
+        if let Some(as_path) = state
+            .secrets
+            .ipc_secret_as_path(&name)
+            .map_err(map_resolver_error)?
+            && matches!(
+                (as_path, params.representation),
+                (true, Representation::Value) | (false, Representation::Path)
+            )
+        {
+            return Err(RpcError::new(ErrorKind::RepresentationMismatch));
+        }
         let purpose = Self::audit_purpose(params.purpose);
         let secrets = state.secrets.clone();
         // A `prompt = true` declaration with no stored value can only be
@@ -1092,6 +1103,62 @@ secrets = ["OTHER"]
             operation: "store".into(),
             host: None,
             path: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn representation_mismatch_does_not_generate_or_store_secrets() {
+        for (as_path, representation) in
+            [(true, Representation::Value), (false, Representation::Path)]
+        {
+            let directory = tempfile::tempdir().unwrap();
+            let manifest = directory.path().join("secretspec.toml");
+            let dotenv = directory.path().join(".env");
+            std::fs::write(
+                &manifest,
+                format!(
+                    r#"
+[project]
+name = "ipc-test"
+revision = "1.0"
+require_reason = false
+[profiles.default]
+TOKEN = {{ description = "generated", type = "password", generate = true, as_path = {as_path} }}
+"#
+                ),
+            )
+            .unwrap();
+            let handler = initialized_handler(&manifest, &dotenv, None, false).await;
+            let error = handler
+                .get(
+                    request(2),
+                    GetParams {
+                        name: "TOKEN".into(),
+                        representation,
+                        purpose: test_purpose(),
+                    },
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.data.kind, ErrorKind::RepresentationMismatch);
+            assert!(
+                !dotenv.exists(),
+                "rejected request persisted a generated secret"
+            );
+            // The same declaration still resolves and generates on an accepted request.
+            handler
+                .get(
+                    request(3),
+                    GetParams {
+                        name: "TOKEN".into(),
+                        representation: Representation::Auto,
+                        purpose: test_purpose(),
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(dotenv.exists());
+            handler.shutdown().await;
         }
     }
 

@@ -6456,6 +6456,22 @@ impl Secrets {
         })
     }
 
+    /// Inspect the scoped declaration without resolving providers or values.
+    #[cfg(feature = "cli")]
+    pub(crate) fn ipc_secret_as_path(&self, name: &str) -> Result<Option<bool>> {
+        let profile = self.resolve_profile_name(None);
+        if !Surface::Scoped
+            .names(self, &profile)?
+            .iter()
+            .any(|item| item == name)
+        {
+            return Ok(None);
+        }
+        Ok(self
+            .resolve_secret_config(name, Some(&profile))
+            .map(|secret| secret.as_path.unwrap_or(false)))
+    }
+
     /// Resolver-mode write of one declared name (0.21+).
     ///
     /// The value goes where a resolver read of the same name would look for it,

@@ -13,6 +13,9 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 static const char client_initialize[] =
@@ -547,8 +550,31 @@ failed:
     return 1;
 }
 
+#ifndef _WIN32
+static int closed_standard_streams_work(const char *peer) {
+    /* Isolate descriptor changes, exercising every combination of closed streams. */
+    for (unsigned mask = 1; mask < 8; mask++) {
+        pid_t pid = fork();
+        int status;
+        if (pid < 0) return 0;
+        if (pid == 0) {
+            for (int fd = 0; fd <= 2; fd++) {
+                if (mask & (1u << fd)) close(fd);
+            }
+            _exit(notification_semantics_are_consistent(peer) ? 0 : 1);
+        }
+        if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+            return 0;
+    }
+    return 1;
+}
+#endif
+
 int main(int argc, char **argv) {
     if (argc != 2) return EXIT_FAILURE;
+#ifndef _WIN32
+    if (!closed_standard_streams_work(argv[1])) return EXIT_FAILURE;
+#endif
     if (!launches_with_a_sorted_environment(argv[1])) return EXIT_FAILURE;
     if (!names_non_protocol_text(argv[1])) return EXIT_FAILURE;
     if (!answers_a_prompt_and_completes_the_call(argv[1])) return EXIT_FAILURE;

@@ -47,12 +47,21 @@ static bool set_nonblocking(int descriptor) {
 
 static bool make_pipe(int descriptors[2]) {
     if (pipe(descriptors) != 0) return false;
-    if (!set_cloexec(descriptors[0]) || !set_cloexec(descriptors[1])) {
-        close(descriptors[0]);
-        close(descriptors[1]);
-        return false;
+    for (size_t index = 0; index < 2; index++) {
+        if (descriptors[index] <= STDERR_FILENO) {
+            int moved = fcntl(descriptors[index], F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+            if (moved < 0) goto failed;
+            close_fd(&descriptors[index]);
+            descriptors[index] = moved;
+        } else if (!set_cloexec(descriptors[index])) {
+            goto failed;
+        }
     }
     return true;
+failed:
+    close_fd(&descriptors[0]);
+    close_fd(&descriptors[1]);
+    return false;
 }
 
 static size_t env_key_size(const char *entry) {

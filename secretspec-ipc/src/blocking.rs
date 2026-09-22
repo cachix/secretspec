@@ -326,13 +326,13 @@ impl Transport {
 
         let watchdog = Watchdog::arm(&self.child, remaining);
         let outcome = self.attempt(request, id, deadline);
-        let read_timed_out = self.closed && matches!(&outcome, Err(Error::DeadlineExceeded));
+        let io_timed_out = self.closed && matches!(&outcome, Err(Error::DeadlineExceeded));
         // A watchdog that fired killed the transport, so every failure it
         // produced downstream is really the deadline. A response that won the
         // race is still valid and is reported as success; the session is dead
         // either way and `close` reaps it.
         let watchdog_fired = watchdog.disarm();
-        if read_timed_out && !watchdog_fired {
+        if io_timed_out && !watchdog_fired {
             self.stdin = None;
             self.kill_and_reap();
         }
@@ -347,7 +347,7 @@ impl Transport {
 
     fn attempt(&mut self, request: Request, id: RequestId, deadline: Instant) -> Result<Value> {
         let limit = self.max_frame_bytes;
-        self.write_envelope(&Envelope::Request(request), limit)?;
+        self.write_envelope(&Envelope::Request(request), limit, deadline)?;
         let response = self.read_response(deadline)?;
         if response.id() != Some(id) {
             // Strictly one call is in flight, so any other terminal ID is a
@@ -358,17 +358,42 @@ impl Transport {
         response_value(response)
     }
 
-    fn write_envelope(&mut self, envelope: &Envelope, limit: usize) -> Result<()> {
+    fn write_envelope(
+        &mut self,
+        envelope: &Envelope,
+        limit: usize,
+        deadline: Instant,
+    ) -> Result<()> {
         let payload = Zeroizing::new(envelope.to_vec()?);
         let frame = Zeroizing::new(encode(&payload, limit)?);
-        let Some(stdin) = self.stdin.as_mut() else {
+        let Some(mut stdin) = self.stdin.take() else {
             return Err(Error::Closed);
         };
-        if let Err(error) = stdin.write_all(&frame).and_then(|()| stdin.flush()) {
-            self.closed = true;
-            return Err(Error::Io(error));
+        // Hand ownership back only when the write completes. A descendant may
+        // keep the pipe open after the direct child dies, so killing that child
+        // cannot be the caller's only way out of a blocking write.
+        let (sender, receiver) = sync_channel(1);
+        std::thread::spawn(move || {
+            let result = stdin.write_all(&frame).and_then(|()| stdin.flush());
+            let _ = sender.send((stdin, result));
+        });
+        match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok((stdin, result)) => {
+                self.stdin = Some(stdin);
+                if let Err(error) = result {
+                    self.closed = true;
+                    return Err(Error::Io(error));
+                }
+                Ok(())
+            }
+            Err(error) => {
+                self.closed = true;
+                Err(match error {
+                    RecvTimeoutError::Timeout => Error::DeadlineExceeded,
+                    RecvTimeoutError::Disconnected => Error::Closed,
+                })
+            }
         }
-        Ok(())
     }
 
     fn read_response(&mut self, deadline: Instant) -> Result<Response> {
@@ -480,9 +505,6 @@ impl Transport {
 
 impl Drop for Transport {
     fn drop(&mut self) {
-        if self.stdin.is_none() && self.closed {
-            return;
-        }
         self.terminate();
     }
 }
@@ -532,8 +554,8 @@ fn send_stdout_event(sender: &SyncSender<StdoutEvent>, event: StdoutEvent) {
 ///
 /// Stdout is read on a dedicated thread and the caller's channel receive has
 /// its own timeout, so an inherited pipe cannot strand the caller. The
-/// watchdog remains necessary for writes, which can also block when a peer
-/// stops consuming input, and to end the direct child once either side stalls.
+/// watchdog ends the direct child once either side stalls. Writes likewise
+/// use a deadline-bounded handoff independent of child termination.
 struct Watchdog {
     finished: Arc<(Mutex<bool>, Condvar)>,
     fired: Arc<AtomicBool>,
@@ -631,4 +653,36 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inherited_stdin_does_not_block_write_deadline() {
+        let options = LaunchOptions {
+            executable: "sh".into(),
+            arguments: vec!["-c".into(), "(sleep 4) <&0 & printf ready; wait".into()],
+            environment: Environment::Inherit(Default::default()),
+            allow_path_discovery: true,
+            max_stderr_bytes: 0,
+        };
+        let mut transport = Transport::spawn(&options).unwrap();
+        // The shell signals only after a descendant has inherited stdin.
+        assert!(matches!(
+            transport.stdout.recv_timeout(Duration::from_secs(2)),
+            Ok(StdoutEvent::Chunk(_))
+        ));
+        let started = Instant::now();
+        let result = transport.exchange(
+            rpc::INITIALIZE,
+            json!({"padding": "x".repeat(512 * 1024)}),
+            crate::deadline_unix_ms_after(Duration::from_millis(150)),
+        );
+        assert!(matches!(result, Err(Error::DeadlineExceeded)), "{result:?}");
+        assert!(transport.closed);
+        drop(transport);
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 }

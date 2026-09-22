@@ -117,9 +117,10 @@ defmodule SecretSpec.Session do
   end
 
   def handle_call({:release, lease_id}, from, state) do
-    with {:ok, state, _} <-
-           request(state, "resolver.release", %{"lease_id" => lease_id}, from, @default_timeout),
-         do: {:noreply, state}
+    case request(state, "resolver.release", %{"lease_id" => lease_id}, from, @default_timeout) do
+      {:ok, state, _} -> {:noreply, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
   end
 
   def handle_call(:close, _from, %{status: :closed} = state), do: {:reply, :ok, state}
@@ -148,11 +149,12 @@ defmodule SecretSpec.Session do
         if timer, do: Process.cancel_timer(timer)
         send_cancel(state, id)
 
-        GenServer.reply(
+        reply_if_present(
           from,
           {:error, %Error{kind: "deadline_exceeded", message: "request deadline exceeded"}}
         )
 
+        state = remove_caller(state, id)
         {:noreply, %{state | pending: pending}}
     end
   end
@@ -255,6 +257,8 @@ defmodule SecretSpec.Session do
         reply = decode_result(result)
         GenServer.reply(from, reply)
 
+        state = remove_caller(state, id)
+
         if state.status == :closing do
           Port.close(state.port)
           {:stop, :normal, %{state | pending: pending, status: :closed}}
@@ -266,9 +270,14 @@ defmodule SecretSpec.Session do
 
   defp handle_message(%{"id" => id, "error" => error}, state) do
     case Map.pop(state.pending, id) do
+      {{:initialize, nil, timer}, pending} ->
+        if timer, do: Process.cancel_timer(timer)
+        fail_all({:error, Error.from_response(%{"error" => error})}, %{state | pending: pending})
+
       {{_kind, from, timer}, pending} ->
         if(timer, do: Process.cancel_timer(timer))
-        GenServer.reply(from, {:error, Error.from_response(%{"error" => error})})
+        reply_if_present(from, {:error, Error.from_response(%{"error" => error})})
+        state = remove_caller(state, id)
         {:noreply, %{state | pending: pending}}
 
       {nil, _} ->
@@ -334,6 +343,20 @@ defmodule SecretSpec.Session do
     end
   end
 
+  defp remove_caller(state, id) do
+    case Enum.find(state.callers, fn {_ref, caller_id} -> caller_id == id end) do
+      {ref, _id} ->
+        Process.demonitor(ref, [:flush])
+        %{state | callers: Map.delete(state.callers, ref)}
+
+      nil ->
+        state
+    end
+  end
+
+  defp reply_if_present(nil, _reply), do: :ok
+  defp reply_if_present(from, reply), do: GenServer.reply(from, reply)
+
   defp send_message(state, message) do
     case Codec.encode(message, state.limits.max_frame_bytes) do
       {:ok, frame} ->
@@ -360,10 +383,12 @@ defmodule SecretSpec.Session do
 
       {_id, {_kind, from, timer}} ->
         if timer, do: Process.cancel_timer(timer)
-        GenServer.reply(from, reply)
+        reply_if_present(from, reply)
     end)
 
-    {:stop, :normal, %{state | pending: %{}}}
+    Enum.each(state.waiters, fn {from, _request} -> reply_if_present(from, reply) end)
+    Enum.each(state.callers, fn {ref, _id} -> Process.demonitor(ref, [:flush]) end)
+    {:stop, :normal, %{state | pending: %{}, callers: %{}, waiters: []}}
   end
 
   defp initialize_application(options) do

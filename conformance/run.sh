@@ -106,7 +106,7 @@ run_elixir() { (
   mix local.hex --force
   mix local.rebar --force
   mix deps.get
-  mix test test/conformance_test.exs
+    mix test
 ); }
 
 run "Python"  python run_python

@@ -8,6 +8,18 @@ defmodule SecretSpecTest do
     assert {:ok, %{"jsonrpc" => "2.0", "id" => 1}} = Codec.decode(frame)
   end
 
+  test "decodes structured RPC errors" do
+    response = %{
+      "error" => %{
+        "message" => "permission denied",
+        "data" => %{"kind" => "permission"}
+      }
+    }
+
+    assert %Error{kind: "permission", message: "permission denied"} =
+             Error.from_response(response)
+  end
+
   test "rejects duplicate object keys" do
     body = ~s({"jsonrpc":"2.0","jsonrpc":"2.0"})
     frame = <<body::binary, ?\n>>

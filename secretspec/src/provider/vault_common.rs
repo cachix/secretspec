@@ -576,7 +576,7 @@ impl KvProvider {
 
     /// The shared HTTP client.
     fn http(&self) -> &reqwest::Client {
-        self.http.get_or_init(reqwest::Client::new)
+        self.http.get_or_init(super::http::default_client)
     }
 
     /// Authenticates for the logical operation that owns the returned session.

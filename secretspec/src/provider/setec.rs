@@ -106,8 +106,16 @@ impl TryFrom<&ProviderUrl> for SetecConfig {
             }
         }
 
+        // An IPv6 host arrives bracketed; the brackets belong to the
+        // authority, which adds them back.
+        let host = url.host().expect("host validated above");
+        let host = host
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .map(str::to_string)
+            .unwrap_or(host);
         Ok(Self {
-            host: url.host().expect("host validated above"),
+            host,
             port: url.port(),
             prefix,
             tls,
@@ -184,7 +192,7 @@ impl SetecProvider {
         if let Some(client) = self.client.get() {
             return Ok(client);
         }
-        let client = reqwest::Client::builder()
+        let client = super::http::client_builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| reach_error("building the HTTP client", error))?;
@@ -237,6 +245,20 @@ impl SetecProvider {
         Req: Serialize + ?Sized,
         Resp: DeserializeOwned,
     {
+        let (status, body) = self.send(path, request, action).await?;
+        Self::answer(status, &body, action)
+    }
+
+    /// Sends one request and returns its status and body unjudged.
+    async fn send<Req>(
+        &self,
+        path: &str,
+        request: &Req,
+        action: &str,
+    ) -> Result<(reqwest::StatusCode, Vec<u8>)>
+    where
+        Req: Serialize + ?Sized,
+    {
         let response = self
             .client()?
             .post(format!("{}{path}", self.server_url()))
@@ -249,12 +271,23 @@ impl SetecProvider {
         let body = response
             .bytes()
             .await
-            .map_err(|error| reach_error(action, error))?;
+            .map_err(|error| reach_error(action, error))?
+            .to_vec();
+        Ok((status, body))
+    }
+
+    /// Interprets a response: 404 is `None`, 200 is its JSON body, and any
+    /// other status is an error quoting the body.
+    fn answer<Resp: DeserializeOwned>(
+        status: reqwest::StatusCode,
+        body: &[u8],
+        action: &str,
+    ) -> Result<Option<Resp>> {
         if status == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
         if status != reqwest::StatusCode::OK {
-            let detail = String::from_utf8_lossy(&body);
+            let detail = String::from_utf8_lossy(body);
             let detail = detail.trim().chars().take(512).collect::<String>();
             let suffix = if detail.is_empty() {
                 String::new()
@@ -266,7 +299,7 @@ impl SetecProvider {
                 status.as_u16()
             )));
         }
-        serde_json::from_slice(&body).map(Some).map_err(|error| {
+        serde_json::from_slice(body).map(Some).map_err(|error| {
             operation_error(format!(
                 "Setec returned invalid JSON while {action}: {error}"
             ))
@@ -326,14 +359,15 @@ impl SetecProvider {
     }
 
     async fn delete_async(&self, name: &str) -> Result<bool> {
-        let info: Option<SecretInfo> = self
-            .post(
-                "/api/info",
-                &NameRequest { name },
-                &format!("checking secret '{name}' before deletion"),
-            )
+        let action = format!("checking secret '{name}' before deletion");
+        let (status, body) = self
+            .send("/api/info", &NameRequest { name }, &action)
             .await?;
-        if info.is_none() {
+        // Setec grants `info` and `delete` separately. A caller allowed to
+        // delete but not to inspect lets the delete answer for existence.
+        if status != reqwest::StatusCode::FORBIDDEN
+            && Self::answer::<SecretInfo>(status, &body, &action)?.is_none()
+        {
             return Ok(false);
         }
         let deleted: Option<serde_json::Value> = self
@@ -776,6 +810,56 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn delete_without_the_info_grant_lets_delete_answer() {
+        let (endpoint, server) =
+            response_server(vec![("403 Forbidden", "access denied"), ("200 OK", "{}")]);
+        assert!(
+            provider(endpoint)
+                .delete(Address::convention("app", "prod", "KEY"))
+                .unwrap()
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests[1].line, "POST /api/delete HTTP/1.1");
+
+        let (endpoint, server) = response_server(vec![
+            ("403 Forbidden", "access denied"),
+            ("404 Not Found", "not found"),
+        ]);
+        assert!(
+            !provider(endpoint)
+                .delete(Address::convention("app", "prod", "MISSING"))
+                .unwrap()
+        );
+        assert_eq!(server.join().unwrap().len(), 2);
+
+        let (endpoint, server) = response_server(vec![("500 Internal Server Error", "boom")]);
+        let error = provider(endpoint)
+            .delete(Address::convention("app", "prod", "KEY"))
+            .unwrap_err();
+        assert!(error.to_string().contains("HTTP 500"), "{error}");
+        assert_eq!(
+            server.join().unwrap().len(),
+            1,
+            "no delete after a failed probe"
+        );
+    }
+
+    #[test]
+    fn ipv6_hosts_are_bracketed_once() {
+        let provider = SetecProvider::new(config("setec://[::1]:8080"));
+        assert_eq!(provider.config.host, "::1");
+        assert_eq!(provider.server_url(), "https://[::1]:8080");
+        assert_eq!(provider.uri(), "setec://[::1]:8080");
+        assert_eq!(config(&provider.uri()), provider.config);
+    }
+
+    #[test]
+    fn http_client_bounds_request_time() {
+        let provider = SetecProvider::new(config("setec://host"));
+        crate::provider::http::assert_bounded(provider.client().unwrap());
     }
 
     #[test]

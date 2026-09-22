@@ -326,7 +326,7 @@ impl InfisicalProvider {
 
     /// The shared HTTP client.
     fn http(&self) -> &reqwest::Client {
-        self.http.get_or_init(reqwest::Client::new)
+        self.http.get_or_init(super::http::default_client)
     }
 
     /// The profile this session resolves under, if [`Provider::set_profile`] has
@@ -520,7 +520,7 @@ impl InfisicalProvider {
         });
 
         // Keep the authentication connection out of the pool used for secret reads.
-        let auth_client = reqwest::Client::new();
+        let auth_client = super::http::default_client();
         let response = auth_client
             .post(&url)
             .json(&body)

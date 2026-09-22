@@ -2728,6 +2728,7 @@ impl Secrets {
         })
     }
 
+    #[cfg(any(feature = "cli", test))]
     pub(crate) fn load_config(config: Config, config_dir: PathBuf) -> Result<Self> {
         let spec = Spec::from_config_document(config)?;
         Self::from_spec_at(spec, config_dir)

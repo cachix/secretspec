@@ -191,6 +191,7 @@ const DEFAULT_SUFFIX: &str = "vault.azure.net";
 impl AkvConfig {
     /// Builds Key Vault configuration from a full vault DNS host that the
     /// caller has already validated.
+    #[cfg(any(feature = "aac", test))]
     pub(crate) fn from_validated_vault_host(vault_host: String, auth: AuthMethod) -> Self {
         Self {
             vault_url: format!("https://{vault_host}/"),
@@ -408,6 +409,7 @@ impl AkvProvider {
 
     /// Creates a provider that reuses a credential resolved by another Azure
     /// provider.
+    #[cfg(any(feature = "aac", test))]
     pub(crate) fn with_token_credential(
         config: AkvConfig,
         credential: Arc<dyn TokenCredential>,

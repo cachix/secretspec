@@ -12,12 +12,26 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Environment {
     /// Inherit the caller environment and apply these overrides.
     Inherit(BTreeMap<OsString, OsString>),
     /// Clear the environment and install exactly these entries.
     Replace(BTreeMap<OsString, OsString>),
+}
+
+// Environment entries often carry provider tokens, so only names are shown.
+impl std::fmt::Debug for Environment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (variant, entries) = match self {
+            Self::Inherit(entries) => ("Inherit", entries),
+            Self::Replace(entries) => ("Replace", entries),
+        };
+        formatter
+            .debug_tuple(variant)
+            .field(&entries.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +81,18 @@ mod tests {
         assert!(options("secretspec", false).validate().is_err());
         assert!(options("secretspec", true).validate().is_ok());
         assert!(options("", true).validate().is_err());
+    }
+
+    #[test]
+    fn debug_shows_environment_names_but_not_values() {
+        let mut options = options("secretspec", true);
+        options.environment = Environment::Replace(BTreeMap::from([(
+            OsString::from("VAULT_TOKEN"),
+            OsString::from("hunter2"),
+        )]));
+        let debug = format!("{options:?}");
+        assert!(debug.contains("VAULT_TOKEN"), "{debug}");
+        assert!(!debug.contains("hunter2"), "{debug}");
     }
 
     #[test]

@@ -361,10 +361,9 @@ impl Client {
                 cancellation: CancellationToken::new(),
             },
         );
-        if let Err(error) = self.queue_request(request, deadline).await {
-            remove_pending(&self.inner, id);
-            return Err(error);
-        }
+        let registration = PendingRegistration::new(&self.inner, id);
+        self.queue_request(request, deadline).await?;
+        registration.queued();
         Ok(Call {
             id,
             deadline,
@@ -527,15 +526,9 @@ impl Client {
                 cancellation: CancellationToken::new(),
             },
         );
-        let payload = match Envelope::Request(request).to_vec() {
-            Ok(payload) => Zeroizing::new(payload),
-            Err(error) => {
-                remove_pending(&self.inner, id);
-                return Err(error);
-            }
-        };
+        let registration = PendingRegistration::new(&self.inner, id);
+        let payload = Zeroizing::new(Envelope::Request(request).to_vec()?);
         if payload.len() > limit {
-            remove_pending(&self.inner, id);
             return Err(Error::Protocol("request exceeds the active frame limit"));
         }
         match tokio::time::timeout_at(
@@ -546,15 +539,9 @@ impl Client {
         )
         .await
         {
-            Ok(Ok(())) => {}
-            Ok(Err(_)) => {
-                remove_pending(&self.inner, id);
-                return Err(Error::Closed);
-            }
-            Err(_) => {
-                remove_pending(&self.inner, id);
-                return Err(Error::DeadlineExceeded);
-            }
+            Ok(Ok(())) => registration.queued(),
+            Ok(Err(_)) => return Err(Error::Closed),
+            Err(_) => return Err(Error::DeadlineExceeded),
         }
         match tokio::time::timeout_at(deadline, receiver).await {
             Ok(Ok(response)) => Ok(response),
@@ -800,9 +787,17 @@ fn fail_session(inner: &Arc<Inner>) {
 }
 
 fn abandon_request(inner: &Arc<Inner>, id: RequestId) {
-    // Mark first, then remove from pending. The response reader removes the
-    // marker if it wins the race while the pending sender still exists.
+    // Mark while holding the pending table. The reader takes a response's
+    // pending entry before it looks for a marker, so either it already took
+    // the entry (the request is terminal and needs no marker) or it will find
+    // the marker. Marking a terminal request would leave a stale marker that
+    // counts toward the bound below and eventually fails a healthy session.
     let overflow = {
+        let mut pending = lock_unpoisoned(&inner.pending);
+        let Some(entry) = pending.remove(&id) else {
+            return;
+        };
+        entry.cancellation.cancel();
         let mut abandoned = lock_unpoisoned(&inner.abandoned);
         if abandoned.len() >= MAX_ABANDONED_REQUESTS {
             true
@@ -811,7 +806,6 @@ fn abandon_request(inner: &Arc<Inner>, id: RequestId) {
             false
         }
     };
-    remove_pending(inner, id);
     if overflow {
         // A peer that never terminates cancelled/timed-out requests cannot
         // grow client memory without bound. Close and reconnect instead.
@@ -822,6 +816,37 @@ fn abandon_request(inner: &Arc<Inner>, id: RequestId) {
 fn cancel_parent_callbacks(inner: &Arc<Inner>, id: RequestId) {
     if let Some(pending) = lock_unpoisoned(&inner.pending).get(&id) {
         pending.cancellation.cancel();
+    }
+}
+
+/// A pending entry for a request whose frame is not queued yet. A caller that
+/// drops `start` while the writer applies backpressure, or any early return,
+/// removes the entry here: the request never reaches the peer, so no response
+/// would ever clear it.
+struct PendingRegistration<'a> {
+    inner: &'a Arc<Inner>,
+    id: Option<RequestId>,
+}
+
+impl<'a> PendingRegistration<'a> {
+    fn new(inner: &'a Arc<Inner>, id: RequestId) -> Self {
+        Self {
+            inner,
+            id: Some(id),
+        }
+    }
+
+    /// The frame is queued; its response now owns the entry.
+    fn queued(mut self) {
+        self.id = None;
+    }
+}
+
+impl Drop for PendingRegistration<'_> {
+    fn drop(&mut self) {
+        if let Some(id) = self.id {
+            remove_pending(self.inner, id);
+        }
     }
 }
 
@@ -850,4 +875,100 @@ fn lock_unpoisoned<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frame::read_frame;
+    use crate::protocol::Product;
+
+    /// A peer that completes initialization and then never reads again, so
+    /// the writer blocks and the queue fills.
+    async fn stalled_session() -> (Client, JoinHandle<()>) {
+        let (client_io, mut peer_io) = tokio::io::duplex(64);
+        let peer = tokio::spawn(async move {
+            let request = read_frame(&mut peer_io, ABSOLUTE_MAX_FRAME_BYTES)
+                .await
+                .unwrap()
+                .unwrap();
+            let id = serde_json::from_slice::<Value>(&request).unwrap()["id"].clone();
+            let response = serde_json::to_vec(&json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocol": "secretspec.resolver",
+                    "version": 1,
+                    "server": {"name": "stalled", "version": "1"},
+                    "methods": ["resolver.get"],
+                    "capabilities": {},
+                    "limits": {"max_frame_bytes": 4096, "max_in_flight": 1},
+                    "application": {}
+                }
+            }))
+            .unwrap();
+            write_frame(&mut peer_io, &response, ABSOLUTE_MAX_FRAME_BYTES)
+                .await
+                .unwrap();
+            std::future::pending::<()>().await;
+        });
+        let (client_read, client_write) = tokio::io::split(client_io);
+        let initialize = InitializeParams {
+            protocol: "secretspec.resolver".into(),
+            versions: vec![1],
+            client: Product {
+                name: "test".into(),
+                version: "1".into(),
+            },
+            limits: Limits {
+                max_frame_bytes: 4096,
+                max_in_flight: 1,
+            },
+            client_methods: Vec::new(),
+            application: json!({}),
+        };
+        let (client, _) = Client::connect::<_, _, _, Value>(
+            client_read,
+            client_write,
+            initialize,
+            crate::deadline_unix_ms_after(Duration::from_secs(300)),
+        )
+        .await
+        .unwrap();
+        (client, peer)
+    }
+
+    #[tokio::test]
+    async fn a_start_dropped_under_backpressure_leaves_no_pending_request() {
+        let (client, peer) = stalled_session().await;
+        let deadline = crate::deadline_unix_ms_after(Duration::from_secs(300));
+        let params = json!({"padding": "x".repeat(3000)});
+        // Two abandoned calls and their cancellations fill the writer queue
+        // behind a frame the stalled peer never reads.
+        for _ in 0..2 {
+            let call = client
+                .start("resolver.get", &params, deadline)
+                .await
+                .unwrap();
+            drop(call);
+        }
+        let blocked = client.start("resolver.get", &params, deadline);
+        tokio::select! {
+            biased;
+            _ = blocked => panic!("the writer queue should be full"),
+            _ = std::future::ready(()) => {}
+        }
+        assert!(lock_unpoisoned(&client.inner.pending).is_empty());
+        peer.abort();
+    }
+
+    #[tokio::test]
+    async fn abandoning_an_answered_request_leaves_no_marker() {
+        let (client, peer) = stalled_session().await;
+        // The reader already delivered this request's response and removed
+        // its entry by the time the local deadline fires.
+        abandon_request(&client.inner, RequestId::new(99).unwrap());
+        assert!(lock_unpoisoned(&client.inner.abandoned).is_empty());
+        peer.abort();
+    }
 }

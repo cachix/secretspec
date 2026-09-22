@@ -646,7 +646,8 @@ impl Watchdog {
 /// so draining continues either way.
 fn drain_stderr(mut stderr: ChildStderr, max_stderr_bytes: usize) {
     std::thread::spawn(move || {
-        let mut retained = Zeroizing::new(Vec::with_capacity(max_stderr_bytes.min(READ_CHUNK)));
+        // Allocated once at the bound: growing would free unwiped copies.
+        let mut retained = Zeroizing::new(Vec::with_capacity(max_stderr_bytes));
         let mut buffer = Zeroizing::new(vec![0_u8; READ_CHUNK]);
         loop {
             let read = match stderr.read(&mut buffer) {

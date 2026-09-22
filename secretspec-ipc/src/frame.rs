@@ -4,10 +4,20 @@ use zeroize::Zeroizing;
 
 /// Incremental bounded NDJSON decoder. A frame is one non-empty UTF-8 JSON
 /// object followed by LF; the limit applies to JSON bytes, not the delimiter.
-#[derive(Debug)]
 pub struct FrameDecoder {
     limit: usize,
     payload: Zeroizing<Vec<u8>>,
+}
+
+// A partial frame is secret-bearing protocol data, so only its shape is shown.
+impl std::fmt::Debug for FrameDecoder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FrameDecoder")
+            .field("limit", &self.limit)
+            .field("buffered", &self.payload.len())
+            .finish()
+    }
 }
 
 impl FrameDecoder {
@@ -49,10 +59,27 @@ impl FrameDecoder {
                 if self.payload.len() >= self.limit {
                     return Err(Error::Protocol("frame exceeds the active limit"));
                 }
+                self.reserve_one();
                 self.payload.push(byte);
             }
         }
         Ok(frames)
+    }
+
+    /// Grow into a fresh zeroizing allocation instead of letting `Vec`
+    /// reallocate, which would free the old copy of the payload unwiped.
+    fn reserve_one(&mut self) {
+        if self.payload.len() < self.payload.capacity() {
+            return;
+        }
+        let capacity = self
+            .payload
+            .capacity()
+            .saturating_mul(2)
+            .clamp(256.min(self.limit), self.limit);
+        let mut grown = Zeroizing::new(Vec::with_capacity(capacity));
+        grown.extend_from_slice(&self.payload);
+        self.payload = grown;
     }
 
     pub fn finish_eof(&self) -> Result<()> {
@@ -99,6 +126,10 @@ fn validate_payload(payload: &[u8], limit: usize) -> Result<()> {
 #[cfg(feature = "tokio")]
 pub(crate) struct AsyncFrameReader<R> {
     reader: tokio::io::BufReader<R>,
+    // Kept across calls so `read_frame` is cancel safe: bytes of a partial
+    // frame are consumed from the buffer before its delimiter arrives, and a
+    // `select!` that drops the read future must not lose them.
+    decoder: Option<FrameDecoder>,
 }
 
 #[cfg(feature = "tokio")]
@@ -109,12 +140,20 @@ where
     pub(crate) fn new(reader: R) -> Self {
         Self {
             reader: tokio::io::BufReader::new(reader),
+            decoder: None,
         }
     }
 
+    /// Cancel safe: dropping the returned future before it completes keeps any
+    /// partially read frame for the next call.
     pub(crate) async fn read_frame(&mut self, limit: usize) -> Result<Option<Zeroizing<Vec<u8>>>> {
         use tokio::io::AsyncBufReadExt;
-        let mut decoder = FrameDecoder::new(limit)?;
+        match &mut self.decoder {
+            Some(decoder) if decoder.payload.is_empty() => decoder.set_limit(limit)?,
+            Some(_) => {}
+            None => self.decoder = Some(FrameDecoder::new(limit)?),
+        }
+        let decoder = self.decoder.as_mut().expect("decoder initialized above");
         loop {
             let (consumed, mut frames) = {
                 let available = self.reader.fill_buf().await?;
@@ -201,6 +240,45 @@ mod tests {
     fn rejects_a_missing_delimiter_at_the_bound() {
         let mut decoder = FrameDecoder::new(4).unwrap();
         assert!(decoder.push(b"12345").is_err());
+    }
+
+    #[test]
+    fn decoder_debug_hides_the_buffered_payload() {
+        let mut decoder = FrameDecoder::new(1024).unwrap();
+        decoder.push(b"{\"value\":\"hunter2").unwrap();
+        let debug = format!("{decoder:?}");
+        assert!(!debug.contains("hunter2"), "{debug}");
+        assert!(debug.contains("buffered"), "{debug}");
+    }
+
+    #[test]
+    fn decoder_grows_to_the_limit_without_exceeding_it() {
+        let mut decoder = FrameDecoder::new(1000).unwrap();
+        let payload = vec![b'a'; 1000];
+        decoder.push(&payload).unwrap();
+        assert!(decoder.payload.capacity() <= 1000);
+        assert!(decoder.push(b"a").is_err());
+        let frames = decoder.push(b"").unwrap();
+        assert!(frames.is_empty());
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn async_reader_keeps_a_partial_frame_when_the_read_is_cancelled() {
+        use tokio::io::AsyncWriteExt;
+        let (mut writer, reader) = tokio::io::duplex(64);
+        let mut reader = AsyncFrameReader::new(reader);
+        writer.write_all(b"{\"a\":").await.unwrap();
+        // The biased read consumes the available half frame, then pends and
+        // loses the race, which drops its future mid-frame.
+        tokio::select! {
+            biased;
+            _ = reader.read_frame(1024) => panic!("half a frame must not complete"),
+            _ = std::future::ready(()) => {}
+        }
+        writer.write_all(b"1}\n").await.unwrap();
+        let frame = reader.read_frame(1024).await.unwrap().unwrap();
+        assert_eq!(&*frame, b"{\"a\":1}");
     }
 
     #[cfg(feature = "tokio")]

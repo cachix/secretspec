@@ -85,7 +85,41 @@ pub struct Meta {
     pub parent_request_id: Option<RequestId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+// Params and results carry secret values (`resolver.set`, `provider.get`), so
+// `Debug` for the JSON-RPC envelopes shows only routing fields.
+impl std::fmt::Debug for Request {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Request")
+            .field("id", &self.id)
+            .field("method", &self.method)
+            .field("meta", &self.meta)
+            .field("params", &crate::protocol::Redacted)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for Notification {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Notification")
+            .field("method", &self.method)
+            .field("params", &crate::protocol::Redacted)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for SuccessResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SuccessResponse")
+            .field("id", &self.id)
+            .field("result", &crate::protocol::Redacted)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
     pub jsonrpc: Version,
@@ -127,7 +161,7 @@ impl Request {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Notification {
     pub jsonrpc: Version,
@@ -147,7 +181,7 @@ impl Notification {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SuccessResponse {
     pub jsonrpc: Version,
@@ -450,6 +484,19 @@ mod tests {
         ] {
             let (_, kind) = Envelope::parse_classified(payload).unwrap_err();
             assert_eq!(kind, ErrorKind::InvalidRequest, "{payload:?}");
+        }
+    }
+
+    #[test]
+    fn debug_hides_params_and_results() {
+        for payload in [
+            br#"{"jsonrpc":"2.0","id":1,"method":"resolver.set","_meta":{"deadline_unix_ms":1},"params":{"value":"hunter2"}}"#
+                .as_slice(),
+            br#"{"jsonrpc":"2.0","id":1,"result":{"value":"hunter2"}}"#.as_slice(),
+            br#"{"jsonrpc":"2.0","method":"x.note","params":{"value":"hunter2"}}"#.as_slice(),
+        ] {
+            let debug = format!("{:?}", Envelope::parse(payload).unwrap());
+            assert!(!debug.contains("hunter2"), "{debug}");
         }
     }
 

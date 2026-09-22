@@ -73,7 +73,7 @@ export interface CallerContext {
 
 export class Builder {
   withPath(path: string): this;
-  /** Resolve strict inline-spec v2 at `baseDir` (0.20+). */
+  /** Resolve strict inline-spec v2 at `baseDir` (SecretSpec 0.21+). */
   withInlineSpec(spec: Record<string, unknown>, baseDir: string): this;
   withProvider(provider: string): this;
   withProfile(profile: string): this;

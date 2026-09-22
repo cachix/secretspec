@@ -202,7 +202,7 @@ builder = Builder Nothing Nothing Nothing Nothing Nothing Nothing False Nothing
 withPath :: Text -> Builder -> Builder
 withPath v b = b { bPath = Just v, bInline = Nothing }
 
--- | Resolve strict inline-spec v2 at its logical base directory (0.20+).
+-- | Resolve strict inline-spec v2 at its logical base directory (SecretSpec 0.21+).
 -- The static linker requires @secretspec_call@, so an older native archive
 -- fails at link time instead of falling back to a filesystem manifest.
 withInlineSpec :: Value -> Text -> Builder -> Builder

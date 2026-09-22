@@ -693,6 +693,12 @@ static void fail_all(
     ss_process_interrupt_io(client->process);
 }
 
+static secretspec_resolver_status answer_prompt(
+    ss_prompt *prompt,
+    const unsigned char *value,
+    size_t value_size,
+    secretspec_resolver_buffer *error);
+
 /* Accept one inbound request as a prompt.
  *
  * Returns false for anything this session must not accept: a request at all
@@ -763,6 +769,21 @@ static bool accept_prompt(secretspec_resolver_client *client, yyjson_val *root) 
         return false;
     }
     client->last_callback_id = id;
+    if (client->closing) {
+        secretspec_resolver_buffer ignored = {NULL, 0};
+        secretspec_resolver_status status;
+        /* Close has already detached the pending list. Decline this prompt
+         * directly so its parent can finish before shutdown completes. */
+        mutex_unlock(&client->mutex);
+        status = answer_prompt(prompt, NULL, 0, &ignored);
+        secretspec_resolver_buffer_free(ignored);
+        secretspec_resolver_buffer_free(prompt->params);
+        ss_secure_clear(prompt, sizeof(*prompt));
+        free(prompt);
+        return status == SECRETSPEC_RESOLVER_OK ||
+               status == SECRETSPEC_RESOLVER_CANCELLED ||
+               status == SECRETSPEC_RESOLVER_DEADLINE_EXCEEDED;
+    }
     prompt->next = client->prompts;
     client->prompts = prompt;
     client->prompt_count++;

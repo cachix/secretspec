@@ -211,7 +211,7 @@ class Builder {
   }
 
   withPath(p) { this._inline = null; if (p != null) this._request.path = p; return this; }
-  /** Resolve inline-spec v2 at baseDir (SecretSpec 0.20+). */
+  /** Resolve inline-spec v2 at baseDir (SecretSpec 0.21+). */
   withInlineSpec(spec, baseDir) {
     delete this._request.path;
     this._inline = { spec, baseDir };

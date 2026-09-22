@@ -680,6 +680,28 @@ done:
     return status == SECRETSPEC_RESOLVER_OK;
 }
 
+/* The peer waits until rpc.shutdown to send a prompt for an earlier call.
+ * That guarantees the prompt arrives after close has drained its snapshot. */
+static int close_declines_prompts_arriving_during_shutdown(const char *peer) {
+    secretspec_resolver_client *client = NULL;
+    secretspec_resolver_call *call = NULL;
+    secretspec_resolver_buffer error = {NULL, 0};
+    static const unsigned char params[] = "{}";
+    secretspec_resolver_status status = SECRETSPEC_RESOLVER_UNAVAILABLE;
+
+    if (open_answering(peer, "--prompt-during-close", &client, &error) != SECRETSPEC_RESOLVER_OK) goto done;
+    if (secretspec_resolver_call_start(
+            client, (const unsigned char *)"resolver.get", strlen("resolver.get"),
+            params, sizeof(params) - 1, now_ms() + UINT64_C(5000), &call, &error) !=
+        SECRETSPEC_RESOLVER_OK) goto done;
+    status = secretspec_resolver_client_close(client, now_ms() + UINT64_C(2000), &error);
+done:
+    if (call != NULL) secretspec_resolver_call_free(call);
+    secretspec_resolver_buffer_free(error);
+    if (client != NULL) secretspec_resolver_client_free(client);
+    return status == SECRETSPEC_RESOLVER_OK;
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) return EXIT_FAILURE;
 #ifndef _WIN32
@@ -691,6 +713,7 @@ int main(int argc, char **argv) {
     if (!an_oversized_answer_leaves_the_prompt_open(argv[1])) return EXIT_FAILURE;
     if (!rejects_a_prompt_parented_on_initialize(argv[1])) return EXIT_FAILURE;
     if (!close_declines_untaken_prompts(argv[1])) return EXIT_FAILURE;
+    if (!close_declines_prompts_arriving_during_shutdown(argv[1])) return EXIT_FAILURE;
     if (!an_expired_prompt_does_not_block_later_calls(argv[1])) return EXIT_FAILURE;
     if (!an_answer_cannot_outlive_its_prompt(argv[1])) return EXIT_FAILURE;
     if (!a_prompt_cannot_outlive_its_parent(argv[1])) return EXIT_FAILURE;

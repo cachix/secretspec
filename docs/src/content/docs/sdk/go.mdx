@@ -54,7 +54,8 @@ satisfies `require_reason`. Do not put credentials or secret values in it.
 Applications that own their declarations in code can resolve a strict JSON
 inline specification without creating a temporary `secretspec.toml` file. Pass
 the wire document to `WithInlineSpec`; `baseDir` resolves relative provider
-paths just as a manifest's directory would.
+paths just as a manifest's directory would. The current SDK sends inline
+schema v2, which requires SecretSpec 0.21+.
 
 ```go
 spec := map[string]any{
@@ -71,14 +72,15 @@ resolved, err := secretspec.New().
     Load()
 ```
 
-Inline specification v2 uses `project`, `profiles`, and each profile's
-`secrets` object; optional `providers`, `scopes`, project `defaults` (0.21+),
+Inline specification v2 (SecretSpec 0.21+) uses `project`, `profiles`, and each
+profile's `secrets` object; optional `providers`, `scopes`, project `defaults`,
 profile `defaults`, and the normal secret declaration fields are also
-supported. A 0.21+ library still accepts the v1 documents sent by 0.20 SDKs. Unknown declaration fields
-are rejected. `project.extends` resolves parent manifests relative to `baseDir`.
-The SDK requires the native
-`secretspec_call` capability for inline specs; an older library returns a
-capability error rather than falling back to a filesystem search.
+supported. A 0.21+ library still accepts the v1 documents sent by 0.20 SDKs.
+Unknown declaration fields are rejected. `project.extends` resolves parent
+manifests relative to `baseDir`.
+The SDK requires the native `secretspec_call` capability for inline specs; an
+older library returns a capability error rather than falling back to a
+filesystem search.
 
 ## Scopes {/* #scopes-017 */}
 

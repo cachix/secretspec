@@ -67,7 +67,7 @@ char *secretspec_resolve(const char *request_json);
  * at load time, rather than risk an old library ignoring an unknown field and
  * searching for a filesystem manifest.
  *
- * Request v1:
+ * Request v1 with inline spec v2 (SecretSpec 0.21+):
  * {
  *   "request_version": 1,
  *   "operation": "resolve",
@@ -86,7 +86,7 @@ char *secretspec_resolve(const char *request_json);
  * }
  *
  * source.kind is exactly one of "search", "path" (with path), or "inline".
- * Inline spec v2 is strict JSON: profile declarations use a `secrets` object,
+ * Inline spec v2 (SecretSpec 0.21+) is strict JSON: profile declarations use a `secrets` object,
  * and unknown declaration fields are rejected. Its base_dir resolves relative
  * provider paths like Secrets::from_spec_at. project.extends is supported and
  * resolves parent manifests relative to base_dir, like a file-backed Spec.

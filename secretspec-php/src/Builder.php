@@ -36,7 +36,7 @@ final class Builder
         return $this->set('path', $path);
     }
 
-    /** Resolve strict inline-spec v2 at its logical base directory (0.20+). */
+    /** Resolve strict inline-spec v2 at its logical base directory (SecretSpec 0.21+). */
     public function withInlineSpec(array $spec, string $baseDir): self
     {
         unset($this->request['path']);

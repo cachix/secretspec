@@ -2909,6 +2909,7 @@ impl Secrets {
     /// Suppresses the ambient `SECRETSPEC_PROVIDER` fallback in provider
     /// resolution, for sessions whose provider was decided ahead of time. An
     /// explicitly set provider ([`Self::set_provider`]) is still honored.
+    #[cfg(feature = "cli")]
     pub(crate) fn set_ignore_ambient_provider(&mut self, ignore: bool) {
         self.ignore_ambient_provider = ignore;
     }

@@ -34,11 +34,15 @@ void ss_secure_clear(void *pointer, size_t size) {
 }
 
 /* yyjson's free hook passes no size, so each block records its own in a
- * header. The header is as wide as max_align_t so the block keeps malloc's
- * alignment guarantee. */
+ * header. Keep the payload aligned as malloc would return it. MSVC's C
+ * headers do not provide max_align_t, and its malloc uses 16-byte alignment. */
 typedef union {
     size_t size;
+#ifdef _MSC_VER
+    __declspec(align(16)) unsigned char align;
+#else
     max_align_t align;
+#endif
 } ss_block_header;
 
 static void *ss_zeroing_malloc(void *context, size_t size) {

@@ -712,8 +712,14 @@ int main(int argc, char **argv) {
     if (!answers_a_prompt_and_completes_the_call(argv[1])) return EXIT_FAILURE;
     if (!an_oversized_answer_leaves_the_prompt_open(argv[1])) return EXIT_FAILURE;
     if (!rejects_a_prompt_parented_on_initialize(argv[1])) return EXIT_FAILURE;
-    if (!close_declines_untaken_prompts(argv[1])) return EXIT_FAILURE;
-    if (!close_declines_prompts_arriving_during_shutdown(argv[1])) return EXIT_FAILURE;
+    if (!close_declines_untaken_prompts(argv[1])) {
+        fputs("close did not decline an untaken prompt\n", stderr);
+        return EXIT_FAILURE;
+    }
+    if (!close_declines_prompts_arriving_during_shutdown(argv[1])) {
+        fputs("close did not decline a prompt arriving during shutdown\n", stderr);
+        return EXIT_FAILURE;
+    }
     if (!an_expired_prompt_does_not_block_later_calls(argv[1])) return EXIT_FAILURE;
     if (!an_answer_cannot_outlive_its_prompt(argv[1])) return EXIT_FAILURE;
     if (!a_prompt_cannot_outlive_its_parent(argv[1])) return EXIT_FAILURE;

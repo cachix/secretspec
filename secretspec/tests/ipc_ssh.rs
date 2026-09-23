@@ -44,10 +44,22 @@ fn fixture() -> (tempfile::TempDir, SshOptions, InitializeApplication) {
     symlink(env!("CARGO_BIN_EXE_secretspec"), &remote).unwrap();
     let ssh = directory.path().join("ssh");
     let log = directory.path().join("arguments");
-    std::fs::write(&ssh, format!(
+    let script = directory.path().join("ssh.sh");
+    std::fs::write(&script, format!(
         "#!/bin/sh\nfor argument do printf '%s\\n' \"$argument\"; done > '{}'\nfor argument do command=$argument; done\nexec sh -c \"$command\"\n",
         log.display()
     )).unwrap();
+    // Tests in this binary spawn processes concurrently. A child forked while
+    // this process holds a writable descriptor for the fake `ssh` inherits it
+    // until its exec, and executing the file meanwhile fails with ETXTBSY.
+    // Let `cp` create the executable, so no writable descriptor for it is ever
+    // open in this process.
+    let status = std::process::Command::new("cp")
+        .arg(&script)
+        .arg(&ssh)
+        .status()
+        .unwrap();
+    assert!(status.success(), "cp failed: {status}");
     std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
     let dotenv = directory.path().join("values.env");
     std::fs::write(&dotenv, "TOKEN=remote-value\nCERT=certificate\n").unwrap();

@@ -1295,11 +1295,11 @@ mod tests {
     use std::net::{SocketAddr, TcpListener, TcpStream};
     use std::sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     };
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use url::Url;
 
     const PROJECT: &str = "7e2f1a4c-0000-0000-0000-000000000000";
@@ -1340,67 +1340,75 @@ mod tests {
         Some(request_line.trim_end().to_string())
     }
 
+    struct RecordingServer {
+        endpoint: SocketAddr,
+        stop: Arc<AtomicBool>,
+        server: thread::JoinHandle<Vec<(usize, String)>>,
+    }
+
+    impl RecordingServer {
+        /// Stops accepting, waits for the connection workers, and returns each
+        /// recorded request with the connection that carried it.
+        fn finish(self) -> Vec<(usize, String)> {
+            self.stop.store(true, Ordering::Release);
+            // The accept loop blocks; one more connection wakes it to see the flag.
+            TcpStream::connect(self.endpoint).unwrap();
+            self.server.join().unwrap()
+        }
+    }
+
     /// Keeps responses alive and records the accepted connection for each request.
-    fn connection_recording_server() -> (SocketAddr, thread::JoinHandle<Vec<(usize, String)>>) {
+    ///
+    /// The accept loop blocks until `RecordingServer::finish`, so a missing
+    /// request fails the caller's assertions instead of hanging the test.
+    fn connection_recording_server() -> RecordingServer {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
         let endpoint = listener.local_addr().unwrap();
         let (sender, receiver) = mpsc::channel();
         let request_count = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::clone(&stop);
         let server = thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(5);
             let mut workers = Vec::new();
-            let mut next_connection_id = 0;
 
-            while request_count.load(Ordering::Acquire) < 2 && Instant::now() < deadline {
-                match listener.accept() {
-                    Ok((stream, _)) => {
-                        let connection_id = next_connection_id;
-                        next_connection_id += 1;
-                        stream
-                            .set_read_timeout(Some(Duration::from_secs(5)))
-                            .unwrap();
-                        let sender = sender.clone();
-                        let request_count = Arc::clone(&request_count);
-                        workers.push(thread::spawn(move || {
-                            let mut reader = BufReader::new(stream.try_clone().unwrap());
-                            let mut writer = stream;
-                            loop {
-                                let Some(request) = read_request(&mut reader) else {
-                                    break;
-                                };
-                                let seen = request_count.fetch_add(1, Ordering::AcqRel) + 1;
-                                sender.send((connection_id, request.clone())).unwrap();
-
-                                let body = if request
-                                    .starts_with("POST /api/v1/auth/universal-auth/login ")
-                                {
-                                    r#"{"accessToken":"test-token"}"#
-                                } else if request
-                                    .starts_with("GET /api/v4/secrets/DATABASE_HOST?")
-                                {
-                                    r#"{"secret":{"secretKey":"DATABASE_HOST","secretValue":"db.internal","secretValueHidden":false}}"#
-                                } else {
-                                    r#"{"message":"unexpected request"}"#
-                                };
-                                write!(
-                                    writer,
-                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
-                                    body.len()
-                                )
-                                .unwrap();
-                                writer.flush().unwrap();
-                                if seen >= 2 {
-                                    break;
-                                }
-                            }
-                        }));
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(error) => panic!("accept failed: {error}"),
+            for (connection_id, stream) in listener.incoming().enumerate() {
+                if stopped.load(Ordering::Acquire) {
+                    break;
                 }
+                let stream = stream.unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let sender = sender.clone();
+                let request_count = Arc::clone(&request_count);
+                workers.push(thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut writer = stream;
+                    while let Some(request) = read_request(&mut reader) {
+                        let seen = request_count.fetch_add(1, Ordering::AcqRel) + 1;
+                        sender.send((connection_id, request.clone())).unwrap();
+
+                        let body = if request
+                            .starts_with("POST /api/v1/auth/universal-auth/login ")
+                        {
+                            r#"{"accessToken":"test-token"}"#
+                        } else if request.starts_with("GET /api/v4/secrets/DATABASE_HOST?") {
+                            r#"{"secret":{"secretKey":"DATABASE_HOST","secretValue":"db.internal","secretValueHidden":false}}"#
+                        } else {
+                            r#"{"message":"unexpected request"}"#
+                        };
+                        write!(
+                            writer,
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .unwrap();
+                        writer.flush().unwrap();
+                        if seen >= 2 {
+                            break;
+                        }
+                    }
+                }));
             }
 
             for worker in workers {
@@ -1409,14 +1417,19 @@ mod tests {
             drop(sender);
             receiver.into_iter().collect()
         });
-        (endpoint, server)
+        RecordingServer {
+            endpoint,
+            stop,
+            server,
+        }
     }
 
     #[test]
     fn universal_auth_and_secret_read_use_distinct_tcp_connections() {
-        let (endpoint, server) = connection_recording_server();
+        let server = connection_recording_server();
         let mut provider = provider(&format!(
-            "infisical://{endpoint}/{PROJECT}?tls=false&env=development"
+            "infisical://{}/{PROJECT}?tls=false&env=development",
+            server.endpoint
         ));
         provider.with_credentials(ProviderCredentials::from([
             (
@@ -1439,7 +1452,7 @@ mod tests {
             .expect("the fixture must return DATABASE_HOST");
         assert_eq!(value.expose_secret(), b"db.internal");
 
-        let requests = server.join().unwrap();
+        let requests = server.finish();
         assert_eq!(requests.len(), 2, "{requests:#?}");
         assert!(
             requests[0]

@@ -17,6 +17,8 @@
 #include <io.h>
 #include <windows.h>
 #else
+#include <errno.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
@@ -43,13 +45,6 @@ typedef enum {
     MODE_PROMPT_DURING_CLOSE
 } peer_mode;
 
-static uint64_t now_ms(void) {
-    struct timespec time;
-    if (timespec_get(&time, TIME_UTC) != TIME_UTC) return 0;
-    return (uint64_t)time.tv_sec * UINT64_C(1000) +
-           (uint64_t)time.tv_nsec / UINT64_C(1000000);
-}
-
 static void pause_for_backpressure(void) {
 #ifdef _WIN32
     Sleep(10000);
@@ -59,15 +54,45 @@ static void pause_for_backpressure(void) {
 #endif
 }
 
-static void pause_milliseconds(uint64_t milliseconds) {
+/* Hold whatever this process inherited until the process named by
+ * SECRETSPEC_FAKE_PEER_HOLD_UNTIL_EXIT_OF exits. The regression test names
+ * itself, so a descendant keeps the pipes open for as long as anything could
+ * be waiting on them, then goes away with the test instead of lingering. */
+static void hold_until_watched_process_exits(void) {
+    const char *text = getenv("SECRETSPEC_FAKE_PEER_HOLD_UNTIL_EXIT_OF");
+    char *end = NULL;
+    unsigned long pid;
+    if (text == NULL || *text == '\0') {
+        pause_for_backpressure();
+        return;
+    }
+    pid = strtoul(text, &end, 10);
+    if (end == NULL || *end != '\0' || pid == 0) {
+        pause_for_backpressure();
+        return;
+    }
 #ifdef _WIN32
-    Sleep(milliseconds > MAXDWORD ? MAXDWORD : (DWORD)milliseconds);
+    {
+        HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)pid);
+        if (process == NULL) return;
+        (void)WaitForSingleObject(process, INFINITE);
+        CloseHandle(process);
+    }
 #else
-    struct timespec delay;
-    delay.tv_sec = (time_t)(milliseconds / UINT64_C(1000));
-    delay.tv_nsec = (long)((milliseconds % UINT64_C(1000)) * UINT64_C(1000000));
-    (void)nanosleep(&delay, NULL);
+    /* A process that is not this one's child has no handle to wait on, so
+     * check for it periodically. The interval only decides how soon this
+     * helper notices the exit; nothing in the test waits on it. */
+    {
+        struct timespec interval = {0, 50000000L};
+        while (kill((pid_t)pid, 0) == 0 || errno == EPERM) (void)nanosleep(&interval, NULL);
+    }
 #endif
+}
+
+/* Discard input until the client closes its end, then return. */
+static void drain_stdin(void) {
+    while (fgetc(stdin) != EOF) {
+    }
 }
 
 #ifdef _WIN32
@@ -154,8 +179,7 @@ static int start_pipe_holder(const char *executable) {
     (void)executable;
     if (child < 0) return 0;
     if (child == 0) {
-        struct timespec delay = {5, 0};
-        (void)nanosleep(&delay, NULL);
+        hold_until_watched_process_exits();
         _exit(EXIT_SUCCESS);
     }
     return 1;
@@ -192,6 +216,7 @@ int main(int argc, char **argv) {
     uint64_t pending_call_id = 0;
     uint64_t pending_call_deadline = 0;
     uint64_t pending_shutdown_id = 0;
+    uint64_t unanswered_parent_id = 0;
 #ifdef _WIN32
     /* The wire format requires LF; Windows text mode expands it to CRLF. */
     if (_setmode(_fileno(stdin), _O_BINARY) == -1 ||
@@ -200,15 +225,24 @@ int main(int argc, char **argv) {
     }
 #endif
     if (mode == MODE_HOLD_PIPES) {
-        pause_for_backpressure();
+        hold_until_watched_process_exits();
         return EXIT_SUCCESS;
     }
     if (mode == MODE_BANNER_ON_STDOUT) {
         /* The endpoint bug this diagnostic exists for: a banner on the stream
-         * reserved for frames, before a single frame is written. */
+         * reserved for frames, before a single frame is written. It is
+         * written once rpc.initialize has arrived: the client registers that
+         * request before sending it, so the banner then always fails that
+         * request. A banner read before the request exists would close the
+         * session with nothing to report it on. Then stay up until the client
+         * lets go, so the client alone decides when the session ends. */
+        unsigned char *initialize = NULL;
+        size_t initialize_size = 0;
+        if (!read_frame(&initialize, &initialize_size)) return EXIT_FAILURE;
+        free(initialize);
         (void)fputs("secretspec-provider-example starting\n", stdout);
         (void)fflush(stdout);
-        pause_for_backpressure();
+        drain_stdin();
         return EXIT_SUCCESS;
     }
     if (mode == MODE_CHECK_ENVIRONMENT && !expected_environment_is_present()) {
@@ -372,33 +406,38 @@ int main(int argc, char **argv) {
             if (length <= 0 || (size_t)length >= sizeof(response) || !write_frame(response)) return EXIT_FAILURE;
             continue;
         } else if (mode == MODE_EXPIRED_PROMPT && !expired_prompt_sent) {
-            /* Leave the first call unanswered after asking a short-lived
-             * question. Later calls still receive normal responses, which
-             * exposes a stale prompt that was not removed at its deadline. */
+            /* Leave the first call unanswered after asking a question that
+             * expires before it does. The test picks that deadline through
+             * the call's params, so it knows exactly when it has passed.
+             * Later calls still receive normal responses, which exposes a
+             * stale prompt that was not removed at its deadline. */
+            yyjson_val *prompt_deadline =
+                yyjson_obj_get(yyjson_obj_get(root, "params"), "prompt_deadline_unix_ms");
             expired_prompt_sent = 1;
             length = snprintf(response, sizeof(response),
                 "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"client.prompt\","
                 "\"_meta\":{\"deadline_unix_ms\":%llu,\"parent_request_id\":%llu},\"params\":{\"name\":\"STALE_SECRET\","
                 "\"profile\":\"default\",\"target_provider\":null}}",
-                (unsigned long long)(now_ms() + UINT64_C(100)), (unsigned long long)yyjson_get_uint(id));
+                (unsigned long long)(yyjson_is_uint(prompt_deadline)
+                                         ? yyjson_get_uint(prompt_deadline)
+                                         : yyjson_get_uint(deadline)),
+                (unsigned long long)yyjson_get_uint(id));
             yyjson_doc_free(document);
             if (length <= 0 || (size_t)length >= sizeof(response) ||
                 !write_frame(response)) return EXIT_FAILURE;
             continue;
         } else if (mode == MODE_PARENT_TERMINAL_PROMPT && !expired_prompt_sent) {
-            uint64_t call_id = yyjson_get_uint(id);
+            /* Ask, and hold the call open until the client makes another
+             * one. That next call is the client's signal that it has taken
+             * the prompt, so the parent can finish without a race. */
+            unanswered_parent_id = yyjson_get_uint(id);
             expired_prompt_sent = 1;
             length = snprintf(response, sizeof(response),
                 "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"client.prompt\","
                 "\"_meta\":{\"deadline_unix_ms\":%llu,\"parent_request_id\":%llu},"
                 "\"params\":{\"name\":\"LATE_SECRET\",\"profile\":\"default\",\"target_provider\":null}}",
-                (unsigned long long)yyjson_get_uint(deadline), (unsigned long long)call_id);
+                (unsigned long long)yyjson_get_uint(deadline), (unsigned long long)unanswered_parent_id);
             yyjson_doc_free(document);
-            if (length <= 0 || (size_t)length >= sizeof(response) || !write_frame(response)) return EXIT_FAILURE;
-            pause_milliseconds(UINT64_C(100));
-            length = snprintf(response, sizeof(response),
-                "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{\"terminal\":true}}",
-                (unsigned long long)call_id);
             if (length <= 0 || (size_t)length >= sizeof(response) || !write_frame(response)) return EXIT_FAILURE;
             continue;
         } else if (mode == MODE_LATE_DEADLINE_PROMPT && !expired_prompt_sent) {
@@ -425,6 +464,19 @@ int main(int argc, char **argv) {
             if (!write_frame("{\"jsonrpc\":\"2.0\",\"method\":\"future.notice\",\"params\":{},\"extra\":true}")) return EXIT_FAILURE;
             continue;
         } else {
+            if (unanswered_parent_id != 0) {
+                /* Finish the prompt's parent before answering this call. */
+                char terminal[128];
+                int terminal_length = snprintf(terminal, sizeof(terminal),
+                    "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{\"terminal\":true}}",
+                    (unsigned long long)unanswered_parent_id);
+                unanswered_parent_id = 0;
+                if (terminal_length <= 0 || (size_t)terminal_length >= sizeof(terminal) ||
+                    !write_frame(terminal)) {
+                    yyjson_doc_free(document);
+                    return EXIT_FAILURE;
+                }
+            }
             length = snprintf(response, sizeof(response),
                               "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"result\":{\"echo\":true}}",
                               (unsigned long long)yyjson_get_uint(id));

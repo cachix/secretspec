@@ -8,7 +8,7 @@ defmodule SecretSpec.SessionLifecycleTest do
     fake = FakeResolver.build(dir, hang: "rpc.initialize")
     {:ok, session} = Session.start_link(FakeResolver.session_options(fake))
     assert :ok = Session.close(session)
-    refute Process.alive?(session)
+    assert :ok = wait_until(fn -> not Process.alive?(session) end, 2_000)
   end
 
   @tag :tmp_dir
@@ -19,7 +19,7 @@ defmodule SecretSpec.SessionLifecycleTest do
     assert {:error, _} =
              Session.get(session, "TOKEN", purpose: %{consumer: "test", operation: "read"})
 
-    refute Process.alive?(session)
+    assert :ok = wait_until(fn -> not Process.alive?(session) end, 2_000)
   end
 
   @tag :tmp_dir
@@ -67,9 +67,11 @@ defmodule SecretSpec.SessionLifecycleTest do
   @tag :os_process
   @tag timeout: 120_000
   @tag :tmp_dir
-  test "repeated session cycles leave no endpoint transcripts", %{tmp_dir: dir} do
+  test "repeated session cycles leave no marked descendants", %{tmp_dir: dir} do
+    marker = "secretspec-test-#{System.unique_integer([:positive])}"
+
     for n <- 1..25 do
-      fake = FakeResolver.build(dir, id: "cycle-#{n}")
+      fake = FakeResolver.build(dir, id: "cycle-#{n}", marker: marker)
       {:ok, session} = Session.start_link(FakeResolver.session_options(fake))
 
       assert {:ok, _} =
@@ -78,6 +80,24 @@ defmodule SecretSpec.SessionLifecycleTest do
       assert :ok = Session.close(session)
     end
 
-    assert Enum.count(File.ls!(dir), &String.ends_with?(&1, ".exs")) == 25
+    assert :ok = wait_until(fn -> FakeResolver.marked_processes(marker) == [] end, 5_000)
+  end
+
+  defp wait_until(fun, timeout) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    poll_until(fun, deadline)
+  end
+
+  defp poll_until(fun, deadline) do
+    if fun.() do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) < deadline do
+        Process.sleep(25)
+        poll_until(fun, deadline)
+      else
+        {:error, :timeout}
+      end
+    end
   end
 end

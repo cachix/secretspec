@@ -43,10 +43,10 @@ defmodule SecretSpec.CodecTest do
   end
 
   test "accepts nesting depth 64 and rejects depth 65" do
-    accepted = String.duplicate("[", 63) <> "0" <> String.duplicate("]", 63)
-    rejected = String.duplicate("[", 65) <> "0" <> String.duplicate("]", 64)
+    accepted = String.duplicate("[", 64) <> "0" <> String.duplicate("]", 64)
+    rejected = String.duplicate("[", 65) <> "0" <> String.duplicate("]", 65)
     assert {:ok, _} = Codec.decode(accepted <> "\n")
-    assert {:error, :invalid_json} = Codec.decode(rejected <> "\n")
+    assert {:error, :nesting_too_deep} = Codec.decode(rejected <> "\n")
   end
 
   test "decodes structured and fallback errors" do

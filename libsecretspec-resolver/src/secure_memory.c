@@ -35,11 +35,11 @@ void ss_secure_clear(void *pointer, size_t size) {
 
 /* yyjson's free hook passes no size, so each block records its own in a
  * header. Keep the payload aligned as malloc would return it. MSVC's C
- * headers do not provide max_align_t, and its malloc uses 16-byte alignment. */
+ * headers do not provide max_align_t, so use a 16-byte stride there. */
 typedef union {
     size_t size;
 #ifdef _MSC_VER
-    __declspec(align(16)) unsigned char align;
+    unsigned char padding[16];
 #else
     max_align_t align;
 #endif

@@ -63,10 +63,8 @@ fn required_events(case: &Value) -> BTreeSet<&str> {
 
 #[tokio::test]
 async fn checked_in_resolver_case_runs_against_the_real_cli() {
-    let case: Value = serde_json::from_str(include_str!(
-        "../../conformance/ipc/cases/resolver-leases.json"
-    ))
-    .unwrap();
+    let case: Value =
+        serde_json::from_str(include_str!("fixtures/ipc/resolver-leases.json")).unwrap();
     assert_eq!(case["schema_version"], 1);
     assert_eq!(case["id"], "resolver.path-leases");
     assert!(
@@ -392,10 +390,8 @@ async fn checked_in_prompt_case_runs_against_the_real_cli() {
         }
     }
 
-    let case: Value = serde_json::from_str(include_str!(
-        "../../conformance/ipc/cases/resolver-prompt.json"
-    ))
-    .unwrap();
+    let case: Value =
+        serde_json::from_str(include_str!("fixtures/ipc/resolver-prompt.json")).unwrap();
     assert_eq!(case["schema_version"], 1);
     assert_eq!(case["id"], "resolver.prompt");
     let actions = case["actions"].as_array().unwrap();

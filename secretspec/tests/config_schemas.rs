@@ -1,12 +1,36 @@
+// The schemas are produced by `secretspec schema`, so these tests exercise the
+// generated output directly. The copies the documentation site publishes are
+// compared against it when the tests run inside the repository.
+#![cfg(feature = "cli")]
+
 use secretspec::__private::Config;
 use serde_json::{Value, json};
 use std::path::Path;
+use std::process::Command;
+
+/// Runs `secretspec schema --config KIND` and returns its stdout.
+fn generate(kind: &str) -> String {
+    let directory = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_secretspec"))
+        .current_dir(directory.path())
+        .args(["schema", "--config", kind])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
 
 fn schema(name: &str) -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../docs/public/schema")
-        .join(format!("{name}.schema.json"));
-    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    let kind = match name {
+        "secretspec" => "project",
+        "config" => "global",
+        _ => panic!("unknown schema {name}"),
+    };
+    serde_json::from_str(&generate(kind)).unwrap()
 }
 
 fn validate(schema: &Value, document: &Value) {
@@ -87,11 +111,12 @@ fn config_schemas_cover_user_syntax_and_share_provider_definitions() {
     );
 }
 
-#[cfg(feature = "cli")]
 #[test]
 fn config_schemas_cli_matches_published_files_without_loading_configuration() {
-    use std::process::Command;
-
+    // `cargo package` always adds Cargo.toml.orig. The documentation site's
+    // copies exist only in the repository checkout, not in the published crate.
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let in_repository = !manifest_dir.join("Cargo.toml.orig").exists();
     let directory = tempfile::tempdir().unwrap();
     // Neither a broken nearby manifest nor an explicit nonexistent path should
     // matter when exporting the configuration format itself.
@@ -108,14 +133,17 @@ fn config_schemas_cli_matches_published_files_without_loading_configuration() {
             String::from_utf8_lossy(&output.stderr)
         );
         let generated = String::from_utf8(output.stdout).unwrap();
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../docs/public/schema")
-            .join(format!("{filename}.schema.json"));
-        assert_eq!(
-            generated,
-            std::fs::read_to_string(path).unwrap(),
-            "regenerate with secretspec schema --config {kind} --output docs/public/schema/{filename}.schema.json"
-        );
+        assert_eq!(generated, generate(kind));
+        if in_repository {
+            let path = manifest_dir
+                .join("../docs/public/schema")
+                .join(format!("{filename}.schema.json"));
+            assert_eq!(
+                generated,
+                std::fs::read_to_string(path).unwrap(),
+                "regenerate with secretspec schema --config {kind} --output docs/public/schema/{filename}.schema.json"
+            );
+        }
 
         let path = directory.path().join(format!("{filename}.json"));
         let output = Command::new(env!("CARGO_BIN_EXE_secretspec"))

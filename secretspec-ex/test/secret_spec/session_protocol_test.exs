@@ -72,6 +72,16 @@ defmodule SecretSpec.SessionProtocolTest do
   end
 
   @tag :tmp_dir
+  test "handles two complete frames in one port write", %{tmp_dir: dir} do
+    {session, _fake} = start(dir, coalesced: true)
+
+    assert {:ok, %Secret{value: "secret"}} =
+             Session.get(session, "TOKEN", purpose: %{consumer: "test", operation: "read"})
+
+    assert :ok = Session.close(session)
+  end
+
+  @tag :tmp_dir
   test "negotiated limits and methods are accepted", %{tmp_dir: dir} do
     init = %{
       "protocol" => "secretspec.resolver",

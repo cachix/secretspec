@@ -456,9 +456,36 @@ fn check_file_security(path: &Path, scope: RegistrationScope, executable: bool) 
     Ok(())
 }
 
+/// The parts of an ancestor's metadata that the Unix directory walk inspects.
+#[cfg(unix)]
+struct AncestorStat {
+    is_dir: bool,
+    mode: u32,
+    uid: u32,
+}
+
 #[cfg(unix)]
 fn check_parent_security(path: &Path, scope: RegistrationScope) -> Result<()> {
-    use std::os::unix::fs::MetadataExt;
+    check_unix_parent_security_with(path, scope, |ancestor| {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::symlink_metadata(ancestor)?;
+        Ok(AncestorStat {
+            is_dir: metadata.is_dir(),
+            mode: metadata.mode(),
+            uid: metadata.uid(),
+        })
+    })
+}
+
+#[cfg(unix)]
+fn check_unix_parent_security_with<F>(
+    path: &Path,
+    scope: RegistrationScope,
+    mut stat: F,
+) -> Result<()>
+where
+    F: FnMut(&Path) -> std::io::Result<AncestorStat>,
+{
     // Every directory above the endpoint, not just the immediate parent: one
     // writable ancestor lets an attacker swap a component for a symlink to any
     // executable that already satisfies the checks below it.
@@ -470,19 +497,18 @@ fn check_parent_security(path: &Path, scope: RegistrationScope) -> Result<()> {
     let resolved = std::fs::canonicalize(path).map_err(discovery_io)?;
     let mut checked_any = false;
     for ancestor in resolved.ancestors().skip(1) {
-        let metadata = std::fs::symlink_metadata(ancestor).map_err(discovery_io)?;
-        if !metadata.is_dir() {
+        let metadata = stat(ancestor).map_err(discovery_io)?;
+        if !metadata.is_dir {
             return Err(discovery_error(
                 "provider endpoint path component is not a directory",
             ));
         }
-        let mode = metadata.mode();
-        if mode & 0o022 != 0 && mode & STICKY_BIT == 0 {
+        if metadata.mode & 0o022 != 0 && metadata.mode & STICKY_BIT == 0 {
             return Err(discovery_error(
                 "provider endpoint directory is group- or world-writable",
             ));
         }
-        if !owner_is_trusted(metadata.uid(), scope) {
+        if !owner_is_trusted(metadata.uid, scope) {
             return Err(discovery_error(
                 "provider endpoint directory ownership is outside the trust domain",
             ));
@@ -2172,10 +2198,19 @@ mod tests {
             user_directory: Some(registration_dir),
             ..ProviderDiscovery::default()
         };
-        assert!(discovery.resolve("example").unwrap().is_some());
+        assert!(
+            discovery
+                .resolve_with_security("example", &TrustedAboveTree::new(directory.path()))
+                .unwrap()
+                .is_some()
+        );
 
         std::fs::set_permissions(&registration, std::fs::Permissions::from_mode(0o622)).unwrap();
-        assert!(discovery.resolve("example").is_err());
+        assert!(
+            discovery
+                .resolve_with_security("example", &TrustedAboveTree::new(directory.path()))
+                .is_err()
+        );
     }
 
     /// Builds a discoverable registration whose endpoint lives at `executable`.
@@ -2200,6 +2235,75 @@ mod tests {
             user_directory: Some(registration_dir),
             ..ProviderDiscovery::default()
         }
+    }
+
+    /// The platform policy, except that directories above `root` are treated
+    /// as root-owned and closed. Those belong to the host rather than the test:
+    /// in the Nix build sandbox `/` is owned by the overflow uid, so walking
+    /// the real chain would reject every endpoint before reaching the
+    /// permissions a test sets up.
+    #[cfg(unix)]
+    struct TrustedAboveTree(PathBuf);
+
+    #[cfg(unix)]
+    impl TrustedAboveTree {
+        fn new(root: &Path) -> Self {
+            Self(root.canonicalize().unwrap())
+        }
+
+        fn check_parents(&self, path: &Path, scope: RegistrationScope) -> Result<()> {
+            check_unix_parent_security_with(path, scope, |ancestor| {
+                use std::os::unix::fs::MetadataExt;
+                if !ancestor.starts_with(&self.0) {
+                    return Ok(AncestorStat {
+                        is_dir: true,
+                        mode: 0o755,
+                        uid: 0,
+                    });
+                }
+                let metadata = std::fs::symlink_metadata(ancestor)?;
+                Ok(AncestorStat {
+                    is_dir: metadata.is_dir(),
+                    mode: metadata.mode(),
+                    uid: metadata.uid(),
+                })
+            })
+        }
+    }
+
+    #[cfg(unix)]
+    impl EndpointSecurity for TrustedAboveTree {
+        fn check_registration(&self, path: &Path, scope: RegistrationScope) -> Result<()> {
+            check_file_security(path, scope, false)?;
+            self.check_parents(path, scope)
+        }
+        fn check_executable(&self, path: &Path, scope: RegistrationScope) -> Result<()> {
+            check_file_security(path, scope, true)?;
+            self.check_parents(path, scope)
+        }
+        fn privileged(&self) -> bool {
+            false
+        }
+    }
+
+    /// The real walk still reaches directories above the test tree.
+    #[cfg(unix)]
+    #[test]
+    fn unix_walk_checks_ancestors_through_the_filesystem_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("bin").join("endpoint");
+        owner_only_executable(&executable);
+        let mut checked = Vec::new();
+        check_unix_parent_security_with(&executable, RegistrationScope::User, |ancestor| {
+            checked.push(ancestor.to_path_buf());
+            Ok(AncestorStat {
+                is_dir: true,
+                mode: 0o755,
+                uid: 0,
+            })
+        })
+        .unwrap();
+        assert_eq!(checked.last().map(PathBuf::as_path), Some(Path::new("/")));
     }
 
     #[cfg(unix)]
@@ -2227,11 +2331,19 @@ mod tests {
         let discovery = registration_for(directory.path(), &executable);
 
         std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(discovery.resolve("example").unwrap().is_some());
+        assert!(
+            discovery
+                .resolve_with_security("example", &TrustedAboveTree::new(directory.path()))
+                .unwrap()
+                .is_some()
+        );
 
         // Only the ancestor changes; the parent and the executable stay tight.
         std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o777)).unwrap();
-        let error = discovery.resolve("example").unwrap_err().to_string();
+        let error = discovery
+            .resolve_with_security("example", &TrustedAboveTree::new(directory.path()))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("group- or world-writable"), "{error}");
     }
 
@@ -2251,7 +2363,12 @@ mod tests {
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
         let discovery = registration_for(directory.path(), &executable);
         std::fs::set_permissions(&sticky, std::fs::Permissions::from_mode(0o1777)).unwrap();
-        assert!(discovery.resolve("example").unwrap().is_some());
+        assert!(
+            discovery
+                .resolve_with_security("example", &TrustedAboveTree::new(directory.path()))
+                .unwrap()
+                .is_some()
+        );
     }
 
     /// A symlinked component is validated as the chain it resolves to, so a
@@ -2276,11 +2393,19 @@ mod tests {
         let linked = directory.path().join("linked");
         std::os::unix::fs::symlink(&real, &linked).unwrap();
         let discovery = registration_for(directory.path(), &linked.join("bin").join("endpoint"));
-        assert!(discovery.resolve("example").unwrap().is_some());
+        assert!(
+            discovery
+                .resolve_with_security("example", &TrustedAboveTree::new(directory.path()))
+                .unwrap()
+                .is_some()
+        );
 
         // Loosening the resolved target is caught through the link.
         std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o777)).unwrap();
-        let error = discovery.resolve("example").unwrap_err().to_string();
+        let error = discovery
+            .resolve_with_security("example", &TrustedAboveTree::new(directory.path()))
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("group- or world-writable"), "{error}");
     }
 

@@ -1299,7 +1299,7 @@ mod tests {
         mpsc,
     };
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use url::Url;
 
     const PROJECT: &str = "7e2f1a4c-0000-0000-0000-000000000000";
@@ -1341,66 +1341,59 @@ mod tests {
     }
 
     /// Keeps responses alive and records the accepted connection for each request.
+    ///
+    /// The accept loop blocks. Once the second request is answered, the worker
+    /// that served it connects once more to wake the loop, which then stops.
     fn connection_recording_server() -> (SocketAddr, thread::JoinHandle<Vec<(usize, String)>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
         let endpoint = listener.local_addr().unwrap();
         let (sender, receiver) = mpsc::channel();
         let request_count = Arc::new(AtomicUsize::new(0));
         let server = thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(5);
             let mut workers = Vec::new();
-            let mut next_connection_id = 0;
 
-            while request_count.load(Ordering::Acquire) < 2 && Instant::now() < deadline {
-                match listener.accept() {
-                    Ok((stream, _)) => {
-                        let connection_id = next_connection_id;
-                        next_connection_id += 1;
-                        stream
-                            .set_read_timeout(Some(Duration::from_secs(5)))
-                            .unwrap();
-                        let sender = sender.clone();
-                        let request_count = Arc::clone(&request_count);
-                        workers.push(thread::spawn(move || {
-                            let mut reader = BufReader::new(stream.try_clone().unwrap());
-                            let mut writer = stream;
-                            loop {
-                                let Some(request) = read_request(&mut reader) else {
-                                    break;
-                                };
-                                let seen = request_count.fetch_add(1, Ordering::AcqRel) + 1;
-                                sender.send((connection_id, request.clone())).unwrap();
-
-                                let body = if request
-                                    .starts_with("POST /api/v1/auth/universal-auth/login ")
-                                {
-                                    r#"{"accessToken":"test-token"}"#
-                                } else if request
-                                    .starts_with("GET /api/v4/secrets/DATABASE_HOST?")
-                                {
-                                    r#"{"secret":{"secretKey":"DATABASE_HOST","secretValue":"db.internal","secretValueHidden":false}}"#
-                                } else {
-                                    r#"{"message":"unexpected request"}"#
-                                };
-                                write!(
-                                    writer,
-                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
-                                    body.len()
-                                )
-                                .unwrap();
-                                writer.flush().unwrap();
-                                if seen >= 2 {
-                                    break;
-                                }
-                            }
-                        }));
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(error) => panic!("accept failed: {error}"),
+            for (connection_id, stream) in listener.incoming().enumerate() {
+                if request_count.load(Ordering::Acquire) >= 2 {
+                    break;
                 }
+                let stream = stream.unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let sender = sender.clone();
+                let request_count = Arc::clone(&request_count);
+                workers.push(thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut writer = stream;
+                    while let Some(request) = read_request(&mut reader) {
+                        let seen = request_count.fetch_add(1, Ordering::AcqRel) + 1;
+                        sender.send((connection_id, request.clone())).unwrap();
+
+                        let body = if request
+                            .starts_with("POST /api/v1/auth/universal-auth/login ")
+                        {
+                            r#"{"accessToken":"test-token"}"#
+                        } else if request.starts_with("GET /api/v4/secrets/DATABASE_HOST?") {
+                            r#"{"secret":{"secretKey":"DATABASE_HOST","secretValue":"db.internal","secretValueHidden":false}}"#
+                        } else {
+                            r#"{"message":"unexpected request"}"#
+                        };
+                        write!(
+                            writer,
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .unwrap();
+                        writer.flush().unwrap();
+                        if seen >= 2 {
+                            if seen == 2 {
+                                // Wake the accept loop so it sees the count.
+                                TcpStream::connect(endpoint).unwrap();
+                            }
+                            break;
+                        }
+                    }
+                }));
             }
 
             for worker in workers {

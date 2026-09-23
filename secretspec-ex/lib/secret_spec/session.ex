@@ -765,23 +765,42 @@ defmodule SecretSpec.Session do
   defp decode_result(%{"released" => released}) when is_integer(released), do: :ok
   defp decode_result(%{} = result) when map_size(result) == 0, do: :ok
 
-  defp decode_result(%{"status" => "resolved"} = result),
-    do:
-      {:ok,
-       struct(Secret, %{
-         representation: result["representation"],
-         value: result["value"],
-         path: result["path"],
-         lease_id: result["path_lease_id"] || result["lease_id"],
-         source: result["source"],
-         source_provider: result["source_provider"],
-         revision: result["revision"],
-         expires_at: result["expires_at_unix_ms"],
-         refresh_at: result["refresh_at_unix_ms"]
-       })}
+  defp decode_result(
+         %{"status" => "resolved", "representation" => "value", "value" => value} = result
+       )
+       when is_binary(value) do
+    {:ok, resolved_secret(result, value: value)}
+  end
 
-  defp decode_result(result),
-    do: {:error, %Error{kind: "protocol", message: "invalid resolver result: #{inspect(result)}"}}
+  defp decode_result(
+         %{"status" => "resolved", "representation" => "path", "path" => path} = result
+       )
+       when is_binary(path) do
+    lease_id = result["path_lease_id"] || result["lease_id"]
+
+    if is_binary(lease_id) do
+      {:ok, resolved_secret(result, path: path, lease_id: lease_id)}
+    else
+      {:error, %Error{kind: "protocol", message: "invalid resolver result: missing path lease"}}
+    end
+  end
+
+  defp decode_result(_result),
+    do: {:error, %Error{kind: "protocol", message: "invalid resolver result"}}
+
+  defp resolved_secret(result, fields) do
+    struct(
+      Secret,
+      Map.merge(Map.new(fields), %{
+        representation: result["representation"],
+        source: result["source"],
+        source_provider: result["source_provider"],
+        revision: result["revision"],
+        expires_at: result["expires_at_unix_ms"],
+        refresh_at: result["refresh_at_unix_ms"]
+      })
+    )
+  end
 
   defp prompt_response(id, value) when is_binary(value) and byte_size(value) > 0,
     do: %{"jsonrpc" => "2.0", "id" => id, "result" => %{"value" => value}}
@@ -868,6 +887,7 @@ defmodule SecretSpec.Session do
     case :erlang.port_info(port, :os_pid) do
       {:os_pid, pid} -> terminate_process(pid, groups, grouped)
       nil -> :ok
+      :undefined -> :ok
     end
 
     try do

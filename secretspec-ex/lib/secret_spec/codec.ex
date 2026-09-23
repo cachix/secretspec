@@ -1,7 +1,7 @@
 defmodule SecretSpec.Codec do
   @moduledoc false
-  @absolute_max 8 * 1024 * 1024
-  @max_depth 64
+  @absolute_max 1_048_576
+  @max_depth 65
 
   def encode(message, max_frame_bytes \\ @absolute_max) do
     body = JSON.encode!(message)

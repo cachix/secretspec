@@ -1503,33 +1503,39 @@ secretspec_resolver_status secretspec_resolver_client_open(
         return SECRETSPEC_RESOLVER_UNAVAILABLE;
     }
     client->writer_started = true;
-    if (!thread_start(&client->reader_thread, reader_main, client)) {
-        yyjson_doc_free(initialize_document);
-        cleanup_process(client, ss_now_unix_ms());
-        client_destroy(client);
-        ss_set_error(error, "unavailable", "reader worker failed");
-        return SECRETSPEC_RESOLVER_UNAVAILABLE;
-    }
-    client->reader_started = true;
-    if (!thread_start(&client->stderr_thread, stderr_main, client)) {
-        yyjson_doc_free(initialize_document);
-        cleanup_process(client, ss_now_unix_ms());
-        client_destroy(client);
-        ss_set_error(error, "unavailable", "stderr worker failed");
-        return SECRETSPEC_RESOLVER_UNAVAILABLE;
-    }
-    client->stderr_started = true;
-    if (!thread_start(&client->deadline_thread, deadline_main, client)) {
-        yyjson_doc_free(initialize_document);
-        cleanup_process(client, ss_now_unix_ms());
-        client_destroy(client);
-        ss_set_error(error, "unavailable", "deadline worker failed");
-        return SECRETSPEC_RESOLVER_UNAVAILABLE;
-    }
-    client->deadline_started = true;
 
+    /* Register rpc.initialize before the reader starts. Anything the peer
+     * writes first, such as a banner on the frame stream, then fails a pending
+     * request that carries the reason, instead of closing a session nobody is
+     * waiting on and leaving open to report a bare UNAVAILABLE. */
     status = start_request(client, "rpc.initialize", strlen("rpc.initialize"),
                            initialize_root, deadline_unix_ms, false, &initialize_call);
+    if (status == SECRETSPEC_RESOLVER_OK) {
+        const char *worker_failure = NULL;
+        if (!thread_start(&client->reader_thread, reader_main, client)) {
+            worker_failure = "reader worker failed";
+        } else {
+            client->reader_started = true;
+            if (!thread_start(&client->stderr_thread, stderr_main, client)) {
+                worker_failure = "stderr worker failed";
+            } else {
+                client->stderr_started = true;
+                if (!thread_start(&client->deadline_thread, deadline_main, client)) {
+                    worker_failure = "deadline worker failed";
+                } else {
+                    client->deadline_started = true;
+                }
+            }
+        }
+        if (worker_failure != NULL) {
+            yyjson_doc_free(initialize_document);
+            cleanup_process(client, ss_now_unix_ms());
+            secretspec_resolver_call_free(initialize_call);
+            client_destroy(client);
+            ss_set_error(error, "unavailable", worker_failure);
+            return SECRETSPEC_RESOLVER_UNAVAILABLE;
+        }
+    }
     if (status == SECRETSPEC_RESOLVER_OK) {
         status = wait_call(initialize_call, &initialize_result, error);
     }

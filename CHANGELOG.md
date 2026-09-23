@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The published `secretspec` crate includes every fixture its tests need, so
   its test suite runs from the crates.io source without the repository.
+- The C resolver client reports why opening a session failed when the endpoint
+  writes non-protocol text before its first response, instead of sometimes
+  returning `UNAVAILABLE` without an error message.
 
 ## [0.21.0] - 2026-09-22
 

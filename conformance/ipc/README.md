@@ -100,6 +100,11 @@ handling:
 cargo test -p secretspec --test ipc_resolver
 ```
 
+Those tests read copies in `secretspec/tests/fixtures/ipc/` so the published
+`secretspec` crate can run them without this directory. After changing a
+resolver case here, copy it over; `cargo test -p secretspec-ipc-conformance`
+fails while a copy differs from its canonical case.
+
 `cases/` is canonical test data rather than executable expectations hidden in
 one language. The property tests additionally:
 

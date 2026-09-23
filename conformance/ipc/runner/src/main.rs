@@ -297,4 +297,33 @@ mod tests {
         assert!(!load_cases(&case_root()).unwrap().is_empty());
         check_schema_assets().unwrap();
     }
+
+    /// The `secretspec` crate runs its resolver cases from copies inside the
+    /// crate so its published source can run its own tests. `cases/` stays
+    /// canonical; the copies must match it byte for byte.
+    #[test]
+    fn secretspec_crate_case_copies_match_canonical_cases() {
+        let copies =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../secretspec/tests/fixtures/ipc");
+        let mut names = std::fs::read_dir(&copies)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert!(!names.is_empty(), "{} has no case copies", copies.display());
+        for name in names {
+            let copy = std::fs::read(copies.join(&name)).unwrap();
+            let canonical = std::fs::read(case_root().join(&name)).unwrap_or_else(|error| {
+                panic!(
+                    "{} has no canonical case in cases/: {error}",
+                    name.display()
+                )
+            });
+            assert!(
+                copy == canonical,
+                "secretspec/tests/fixtures/ipc/{0} differs from conformance/ipc/cases/{0}; copy the canonical case over it",
+                name.display()
+            );
+        }
+    }
 }

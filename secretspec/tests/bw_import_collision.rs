@@ -8,7 +8,7 @@ use std::process::{Command, Output};
 /// Installs the fake `bw` with a stateful vault holding `items`.
 fn install_vault(project: &Path, items: &serde_json::Value) {
     let shim = project.join("bw");
-    fs::write(&shim, include_str!("../../tests/fixtures/bw-shim.sh")).unwrap();
+    fs::write(&shim, include_str!("fixtures/bw-shim.sh")).unwrap();
     fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
     fs::write(project.join("items.json"), items.to_string()).unwrap();
     fs::write(project.join("stateful"), "").unwrap();

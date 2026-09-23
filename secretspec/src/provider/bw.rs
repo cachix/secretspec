@@ -4523,7 +4523,7 @@ mod tests {
     // Fake-`bw` CLI harness: the pure helpers above cover the code that runs
     // without a CLI; these cover the code that spawns `bw` at all. The fake
     // is a shell script installed into a per-test directory that is put first
-    // on PATH (see tests/fixtures/bw-shim.sh). Unit tests must never run the
+    // on PATH (see secretspec/tests/fixtures/bw-shim.sh). Unit tests must never run the
     // developer's real `bw`, which would answer with — and write to — a real
     // vault; the fake answers fixture files instead and records every
     // invocation so tests can assert what was asked for.
@@ -4547,7 +4547,7 @@ mod tests {
     /// A disposable fake `bw` CLI for one test.
     ///
     /// The directory holds the shim script (installed from
-    /// `tests/fixtures/bw-shim.sh`), fixture JSON files the script answers
+    /// `secretspec/tests/fixtures/bw-shim.sh`), fixture JSON files the script answers
     /// with, and `invocations.log` recording every call. [`FakeBw::run`] puts
     /// the directory first on PATH for the duration of `body` and isolates
     /// `BITWARDENCLI_APPDATA_DIR`, mirroring the vaultwarden harness, so
@@ -4592,7 +4592,7 @@ mod tests {
             std::fs::create_dir_all(&dir).expect("create fake bw directory");
             let script = include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../tests/fixtures/bw-shim.sh"
+                "/tests/fixtures/bw-shim.sh"
             ));
             std::fs::write(dir.join("bw"), script).expect("install fake bw script");
             #[cfg(unix)]

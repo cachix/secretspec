@@ -693,6 +693,28 @@ static void fail_all(
     ss_process_interrupt_io(client->process);
 }
 
+#ifdef SECRETSPEC_RESOLVER_TESTING
+/* Test builds only. When set, client_open waits once the reader runs until the
+ * session has closed, so a test can make the reader act on the peer's first
+ * output before open does anything else, without depending on scheduling. */
+static bool test_hold_open_until_closed;
+
+void ss_test_hold_open_until_closed(bool enabled);
+void ss_test_hold_open_until_closed(bool enabled) { test_hold_open_until_closed = enabled; }
+
+static void test_hold_open(secretspec_resolver_client *client) {
+    if (!test_hold_open_until_closed) return;
+    mutex_lock(&client->mutex);
+    while (!client->closed) {
+        (void)condition_wait_until(&client->state_changed, &client->mutex,
+                                   ss_now_unix_ms() + SS_MAX_DEADLINE_HORIZON_MS);
+    }
+    mutex_unlock(&client->mutex);
+}
+#else
+#define test_hold_open(client) ((void)(client))
+#endif
+
 static secretspec_resolver_status answer_prompt(
     ss_prompt *prompt,
     const unsigned char *value,
@@ -1516,6 +1538,7 @@ secretspec_resolver_status secretspec_resolver_client_open(
             worker_failure = "reader worker failed";
         } else {
             client->reader_started = true;
+            test_hold_open(client);
             if (!thread_start(&client->stderr_thread, stderr_main, client)) {
                 worker_failure = "stderr worker failed";
             } else {

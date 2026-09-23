@@ -230,16 +230,11 @@ int main(int argc, char **argv) {
     }
     if (mode == MODE_BANNER_ON_STDOUT) {
         /* The endpoint bug this diagnostic exists for: a banner on the stream
-         * reserved for frames, before a single frame is written. It is
-         * written once rpc.initialize has arrived: the client registers that
-         * request before sending it, so the banner then always fails that
-         * request. A banner read before the request exists would close the
-         * session with nothing to report it on. Then stay up until the client
-         * lets go, so the client alone decides when the session ends. */
-        unsigned char *initialize = NULL;
-        size_t initialize_size = 0;
-        if (!read_frame(&initialize, &initialize_size)) return EXIT_FAILURE;
-        free(initialize);
+         * reserved for frames, written at startup before the client has sent
+         * anything. The client may read it before or after it registers
+         * rpc.initialize; open_order forces the earlier case. Then stay up
+         * until the client lets go, so the client alone decides when the
+         * session ends. */
         (void)fputs("secretspec-provider-example starting\n", stdout);
         (void)fflush(stdout);
         drain_stdin();

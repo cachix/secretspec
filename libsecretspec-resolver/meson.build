@@ -120,3 +120,14 @@ regressions_test = executable(
   dependencies: threads,
 )
 test('secretspec_resolver_regressions', regressions_test, args: [fake_peer.full_path()])
+
+# Links its own copy of the sources built with the test-only open hook, so the
+# installed library never carries it.
+open_order_test = executable(
+  'secretspec_resolver_open_order',
+  ['tests/open_order.c', sources],
+  include_directories: inc,
+  dependencies: [threads, yyjson],
+  c_args: common_c_args + ['-DSECRETSPEC_RESOLVER_TESTING'],
+)
+test('secretspec_resolver_open_order', open_order_test, args: [fake_peer.full_path()])

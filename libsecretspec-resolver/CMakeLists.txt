@@ -138,6 +138,16 @@ if(SECRETSPEC_RESOLVER_BUILD_TESTS)
   target_link_libraries(secretspec_resolver_regressions PRIVATE secretspec_resolver_static)
   add_test(NAME secretspec_resolver_regressions
            COMMAND secretspec_resolver_regressions $<TARGET_FILE:secretspec_resolver_fake_peer>)
+  # Links its own copy of the sources built with the test-only open hook, so
+  # the installed library never carries it.
+  add_executable(secretspec_resolver_open_order
+                 tests/open_order.c ${SECRETSPEC_RESOLVER_SOURCES})
+  target_include_directories(secretspec_resolver_open_order PRIVATE include src)
+  target_link_libraries(secretspec_resolver_open_order PRIVATE Threads::Threads yyjson::yyjson)
+  target_compile_definitions(secretspec_resolver_open_order PRIVATE
+      SECRETSPEC_RESOLVER_BUILDING SECRETSPEC_RESOLVER_TESTING)
+  add_test(NAME secretspec_resolver_open_order
+           COMMAND secretspec_resolver_open_order $<TARGET_FILE:secretspec_resolver_fake_peer>)
 
   foreach(test_target IN ITEMS
       secretspec_resolver_smoke
@@ -145,7 +155,8 @@ if(SECRETSPEC_RESOLVER_BUILD_TESTS)
       secretspec_resolver_fake_peer
       secretspec_resolver_session
       secretspec_resolver_backpressure
-      secretspec_resolver_regressions)
+      secretspec_resolver_regressions
+      secretspec_resolver_open_order)
     set_target_properties(${test_target} PROPERTIES
         C_STANDARD 11
         C_STANDARD_REQUIRED YES

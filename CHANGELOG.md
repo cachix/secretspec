@@ -261,6 +261,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Setec preserves binary secret values on reads and writes, and discovery
   handles empty results from servers with no visible secrets (0.21+).
 
+- On macOS, the keyring provider no longer prompts for the login keychain
+  password on every run after SecretSpec is upgraded. Keychain items are bound
+  to the code signature of the build that created them, which changes with
+  every release of an ad hoc signed build (Nix, Homebrew, `cargo install`).
+  The first read of each secret by a new build may prompt once; approve it with
+  "Always Allow" so later runs of that build stay silent. SecretSpec explains
+  how to avoid repeated prompts, leaves items untouched during reads, and
+  retries in-place writes after requesting access when an older build created
+  the item (0.21+).
+
+- macOS keyring reads preserve existing items and their access settings even
+  when approval or a later write fails. Keychain lookups no longer change the
+  prompt setting for other operations in the same process (0.21+).
+
 - KeePass KDBX 4.0 databases can be written after creation or editing in
   KeePassXC. Writes upgrade the file format to KDBX 4.1 while preserving
   encryption and key-derivation settings (0.21+).

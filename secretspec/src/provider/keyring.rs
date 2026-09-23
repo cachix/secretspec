@@ -4,6 +4,93 @@ use crate::{Result, SecretSpecError};
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 
+#[cfg(target_os = "macos")]
+mod macos {
+    //! Legacy macOS keychain items are bound to the code signature of the
+    //! build that created them. A new ad hoc signed build may need the user's
+    //! approval to read or modify an existing item. A per-query silent lookup
+    //! identifies this case without changing the process-wide interaction
+    //! setting or deleting the item during a read.
+    use keyring::{Entry, Error};
+    use security_framework::item::{ItemClass, ItemSearchOptions, SearchResult};
+    use security_framework::os::macos::keychain::{SecKeychain, SecPreferencesDomain};
+
+    /// `errSecInvalidOwnerEdit`: modifying an item another build owns.
+    const INVALID_OWNER_EDIT: i32 = -25244;
+    /// `errSecDuplicateItem`: the write could not see the item it collided with.
+    const DUPLICATE_ITEM: i32 = -25299;
+
+    fn os_status(err: &Error) -> Option<i32> {
+        let inner = match err {
+            Error::PlatformFailure(inner) | Error::NoStorageAccess(inner) => inner,
+            _ => return None,
+        };
+        inner
+            .downcast_ref::<security_framework::base::Error>()
+            .map(|err| err.code())
+    }
+
+    /// Whether this build could not update an item it does not yet control.
+    pub(super) fn access_refused(err: &Error) -> bool {
+        matches!(os_status(err), Some(DUPLICATE_ITEM | INVALID_OWNER_EDIT))
+    }
+
+    /// What to do about a prompt that keeps coming back.
+    pub(super) const ALWAYS_ALLOW_HINT: &str =
+        "choose \"Always Allow\" in the keychain dialog so this build keeps access";
+
+    /// A lookup that skips items needing authentication, without changing
+    /// keychain interaction state for any other thread or provider.
+    pub(super) fn read_without_prompt(service: &str, account: &str) -> Option<Vec<u8>> {
+        let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User).ok()?;
+        let mut options = ItemSearchOptions::new();
+        options
+            .keychains(&[keychain])
+            .class(ItemClass::generic_password())
+            .service(service)
+            .account(account)
+            .load_data(true)
+            .skip_authenticated_items(true);
+        match options.search().ok()?.into_iter().next()? {
+            SearchResult::Data(secret) => Some(secret),
+            _ => None,
+        }
+    }
+
+    /// Reads without a dialog if access is already granted. An interactive
+    /// fallback never modifies the item, including entries addressed by `ref`.
+    pub(super) fn read(entry: &Entry, service: &str, account: &str) -> keyring::Result<Vec<u8>> {
+        if let Some(secret) = read_without_prompt(service, account) {
+            return Ok(secret);
+        }
+        let secret = entry.get_secret()?;
+        eprintln!(
+            "{} keychain item {} needed access from this build; if macOS asked whether to allow access, {}",
+            colored::Colorize::yellow("warning:"),
+            service,
+            ALWAYS_ALLOW_HINT
+        );
+        Ok(secret)
+    }
+
+    /// A failed lookup inside the keyring crate can make a write try to add
+    /// a duplicate item. Reading with a dialog grants access before retrying
+    /// the in-place update. The existing item is never deleted.
+    pub(super) fn write(entry: &Entry, secret: &[u8]) -> keyring::Result<()> {
+        match entry.set_secret(secret) {
+            Ok(()) => Ok(()),
+            Err(err) if access_refused(&err) => {
+                let _existing = match entry.get_secret() {
+                    Ok(existing) => secrecy::zeroize::Zeroizing::new(existing),
+                    Err(_) => return Err(err),
+                };
+                entry.set_secret(secret)
+            }
+            Err(err) => Err(err),
+        }
+    }
+}
+
 // An unpaired UTF-16 low surrogate cannot begin a legacy Windows password.
 // Keep the discriminator in the same blob so overwrites are atomic.
 #[cfg(any(windows, test))]
@@ -162,6 +249,46 @@ impl KeyringProvider {
     }
 }
 
+impl KeyringProvider {
+    /// Reads the entry's bytes. macOS uses a per-query silent lookup before
+    /// allowing an interactive read.
+    fn read_entry(entry: &Entry, service: &str, account: &str) -> keyring::Result<Vec<u8>> {
+        #[cfg(target_os = "macos")]
+        {
+            macos::read(entry, service, account)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (service, account);
+            entry.get_secret()
+        }
+    }
+
+    /// Writes the entry's bytes. macOS retries an in-place update after an
+    /// interactive read when another build's item hid from the first lookup.
+    fn write_entry(entry: &Entry, secret: &[u8], service: &str) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        {
+            macos::write(entry, secret).map_err(|err| {
+                if macos::access_refused(&err) {
+                    SecretSpecError::ProviderOperationFailed(format!(
+                        "macOS refused to change keychain item {service}: {err}; {}, or review \
+                         the item's access settings in Keychain Access",
+                        macos::ALWAYS_ALLOW_HINT
+                    ))
+                } else {
+                    err.into()
+                }
+            })
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = service;
+            Ok(entry.set_secret(secret)?)
+        }
+    }
+}
+
 impl Provider for KeyringProvider {
     /// Convention entries use the folder-prefix format string as the service
     /// name, `secretspec/{project}/{profile}/{key}` by default; the account
@@ -221,7 +348,7 @@ impl Provider for KeyringProvider {
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let (service, username) = self.entry_target(addr)?;
         let entry = Entry::new(&service, &username)?;
-        match entry.get_secret() {
+        match Self::read_entry(&entry, &service, &username) {
             Ok(secret) => {
                 let secret = SecretBytes::from_vec(secret);
                 #[cfg(windows)]
@@ -245,7 +372,7 @@ impl Provider for KeyringProvider {
         let entry = Entry::new(&service, &username)?;
         #[cfg(windows)]
         let value = &encode_windows_secret(value);
-        entry.set_secret(value.expose_secret())?;
+        Self::write_entry(&entry, value.expose_secret(), &service)?;
         Ok(())
     }
 
@@ -453,5 +580,104 @@ mod tests {
         };
         let err = p.entry_target(Address::Native(&addr)).unwrap_err();
         assert!(err.to_string().contains("`version`"), "{err}");
+    }
+}
+
+/// Keychain tests need a real keychain. Enable them with
+/// `SECRETSPEC_TEST_PROVIDERS=keyring`. None of them shows a dialog.
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use super::macos;
+    use keyring::Entry;
+    use std::process::Command;
+
+    fn keyring_tests_enabled() -> bool {
+        std::env::var("SECRETSPEC_TEST_PROVIDERS")
+            .map(|list| list.split(',').any(|name| name.trim() == "keyring"))
+            .unwrap_or(false)
+    }
+
+    const ACCOUNT: &str = "secretspec-test";
+
+    fn test_entry(name: &str) -> (Entry, String) {
+        let service = format!("secretspec-test/{}/{name}", std::process::id());
+        (Entry::new(&service, ACCOUNT).unwrap(), service)
+    }
+
+    /// The keychain the keyring crate writes to, named explicitly because
+    /// `security` does not always resolve the default keychain the same way.
+    fn default_keychain() -> String {
+        let output = Command::new("/usr/bin/security")
+            .args(["default-keychain", "-d", "user"])
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .trim()
+            .trim_matches('"')
+            .to_string()
+    }
+
+    /// Runs `security` against the default keychain and returns its stdout.
+    fn security(args: &[&str]) -> Option<String> {
+        let output = Command::new("/usr/bin/security")
+            .args(args)
+            .arg(default_keychain())
+            .output()
+            .unwrap();
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8(output.stdout).unwrap())
+    }
+
+    /// Creates the entry's item through Apple's `security` tool, so this
+    /// test binary is in neither its access control list nor its partition
+    /// list, exactly like an item written by an earlier SecretSpec build.
+    fn create_foreign_item(service: &str, value: &str) {
+        security(&[
+            "add-generic-password",
+            "-s",
+            service,
+            "-a",
+            ACCOUNT,
+            "-w",
+            value,
+        ])
+        .unwrap();
+    }
+
+    #[test]
+    fn own_items_round_trip_without_prompting() {
+        if !keyring_tests_enabled() {
+            eprintln!("skipping: SECRETSPEC_TEST_PROVIDERS does not name keyring");
+            return;
+        }
+        let (entry, service) = test_entry("own");
+        macos::write(&entry, b"first").unwrap();
+        macos::write(&entry, b"second").unwrap();
+        assert_eq!(
+            macos::read_without_prompt(&service, ACCOUNT),
+            Some(b"second".to_vec())
+        );
+        assert_eq!(macos::read(&entry, &service, ACCOUNT).unwrap(), b"second");
+        entry.delete_credential().unwrap();
+    }
+
+    /// Skipping authentication leaves an item from another signer intact.
+    #[test]
+    fn foreign_item_is_kept_by_silent_lookup() {
+        if !keyring_tests_enabled() {
+            eprintln!("skipping: SECRETSPEC_TEST_PROVIDERS does not name keyring");
+            return;
+        }
+        let (_entry, service) = test_entry("foreign");
+        create_foreign_item(&service, "theirs");
+
+        assert!(macos::read_without_prompt(&service, ACCOUNT).is_none());
+
+        let kept = security(&["find-generic-password", "-s", &service, "-a", ACCOUNT, "-w"]);
+        assert_eq!(kept.as_deref().map(str::trim), Some("theirs"));
+        security(&["delete-generic-password", "-s", &service, "-a", ACCOUNT]).unwrap();
     }
 }

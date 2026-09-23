@@ -870,8 +870,6 @@ defmodule SecretSpec.Session do
     end
   end
 
-  defp validate_prompt_params(_), do: {:error, :invalid_prompt_params}
-
   defp process_groups_for_port(port) do
     case :erlang.port_info(port, :os_pid) do
       {:os_pid, root} ->

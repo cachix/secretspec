@@ -105,7 +105,7 @@ defmodule SecretSpec.Test.FakeResolver do
                   if request["method"] == "rpc.initialize" do
                     File.write!(config[:ready], "ready")
                     if config[:coalesced] do
-                      emit_coalesced.([response.(request), %{"jsonrpc" => "2.0", "method" => "resolver.ready", "params" => %{}}])
+                        emit_coalesced.([response.(request), if(config[:coalesced_fatal], do: %{"jsonrpc" => "2.0", "method" => "resolver.ready"}, else: %{"jsonrpc" => "2.0", "method" => "resolver.ready", "params" => %{}})])
                     else
                       emit.(response.(request))
                     end

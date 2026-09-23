@@ -702,32 +702,56 @@ done:
     return status == SECRETSPEC_RESOLVER_OK;
 }
 
-int main(int argc, char **argv) {
-    if (argc != 2) return EXIT_FAILURE;
+typedef struct {
+    const char *name;
+    int (*run)(const char *peer);
+} regression_check;
+
+static const regression_check checks[] = {
 #ifndef _WIN32
-    if (!closed_standard_streams_work(argv[1])) return EXIT_FAILURE;
+    {"closed_standard_streams_work", closed_standard_streams_work},
 #endif
-    if (!launches_with_a_sorted_environment(argv[1])) return EXIT_FAILURE;
-    if (!names_non_protocol_text(argv[1])) return EXIT_FAILURE;
-    if (!answers_a_prompt_and_completes_the_call(argv[1])) return EXIT_FAILURE;
-    if (!an_oversized_answer_leaves_the_prompt_open(argv[1])) return EXIT_FAILURE;
-    if (!rejects_a_prompt_parented_on_initialize(argv[1])) return EXIT_FAILURE;
-    if (!close_declines_untaken_prompts(argv[1])) {
-        fputs("close did not decline an untaken prompt\n", stderr);
+    {"launches_with_a_sorted_environment", launches_with_a_sorted_environment},
+    {"names_non_protocol_text", names_non_protocol_text},
+    {"answers_a_prompt_and_completes_the_call", answers_a_prompt_and_completes_the_call},
+    {"an_oversized_answer_leaves_the_prompt_open", an_oversized_answer_leaves_the_prompt_open},
+    {"rejects_a_prompt_parented_on_initialize", rejects_a_prompt_parented_on_initialize},
+    {"close_declines_untaken_prompts", close_declines_untaken_prompts},
+    {"close_declines_prompts_arriving_during_shutdown", close_declines_prompts_arriving_during_shutdown},
+    {"an_expired_prompt_does_not_block_later_calls", an_expired_prompt_does_not_block_later_calls},
+    {"an_answer_cannot_outlive_its_prompt", an_answer_cannot_outlive_its_prompt},
+    {"a_prompt_cannot_outlive_its_parent", a_prompt_cannot_outlive_its_parent},
+    {"rejects_a_callback_deadline_after_its_parent", rejects_a_callback_deadline_after_its_parent},
+    {"notification_semantics_are_consistent", notification_semantics_are_consistent},
+    {"a_future_error_kind_does_not_kill_the_session", a_future_error_kind_does_not_kill_the_session},
+    {"rejects_bad_shutdown", rejects_bad_shutdown},
+    {"freed_calls_expire", freed_calls_expire},
+    {"descendant_pipes_do_not_block_close", descendant_pipes_do_not_block_close},
+};
+
+/* Every check runs and names itself on stderr, so a failure says which
+ * regression it was, and a hang shows the check it stopped in. */
+int main(int argc, char **argv) {
+    const size_t count = sizeof(checks) / sizeof(checks[0]);
+    size_t index;
+    size_t failed = 0;
+    if (argc != 2) {
+        fputs("usage: secretspec_resolver_regressions <fake peer executable>\n", stderr);
         return EXIT_FAILURE;
     }
-    if (!close_declines_prompts_arriving_during_shutdown(argv[1])) {
-        fputs("close did not decline a prompt arriving during shutdown\n", stderr);
+    for (index = 0; index < count; index++) {
+        fprintf(stderr, "check %s\n", checks[index].name);
+        (void)fflush(stderr);
+        if (!checks[index].run(argv[1])) {
+            fprintf(stderr, "FAILED %s\n", checks[index].name);
+            (void)fflush(stderr);
+            failed++;
+        }
+    }
+    if (failed != 0) {
+        fprintf(stderr, "%lu of %lu regression checks failed\n",
+                (unsigned long)failed, (unsigned long)count);
         return EXIT_FAILURE;
     }
-    if (!an_expired_prompt_does_not_block_later_calls(argv[1])) return EXIT_FAILURE;
-    if (!an_answer_cannot_outlive_its_prompt(argv[1])) return EXIT_FAILURE;
-    if (!a_prompt_cannot_outlive_its_parent(argv[1])) return EXIT_FAILURE;
-    if (!rejects_a_callback_deadline_after_its_parent(argv[1])) return EXIT_FAILURE;
-    if (!notification_semantics_are_consistent(argv[1])) return EXIT_FAILURE;
-    if (!a_future_error_kind_does_not_kill_the_session(argv[1])) return EXIT_FAILURE;
-    if (!rejects_bad_shutdown(argv[1])) return EXIT_FAILURE;
-    if (!freed_calls_expire(argv[1])) return EXIT_FAILURE;
-    if (!descendant_pipes_do_not_block_close(argv[1])) return EXIT_FAILURE;
     return EXIT_SUCCESS;
 }

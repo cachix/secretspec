@@ -47,7 +47,7 @@ returns `*Error` (with a stable `.Kind`).
 Use `WithInlineSpec(spec, baseDir)` to resolve a strict JSON declaration held
 in application code. `baseDir` resolves relative provider paths, and an older
 native library fails with a capability error rather than searching for a
-filesystem manifest. The inline v1 document uses `project`, `profiles`, and a
+filesystem manifest. The inline v2 document uses `project`, `profiles`, and a
 `secrets` object in each profile. `project.extends` resolves parent manifests
 relative to the supplied logical base directory.
 

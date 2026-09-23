@@ -37,7 +37,14 @@ static bool thread_start(ss_thread *thread, ss_thread_function function, void *c
     return *thread != NULL;
 }
 static void thread_interrupt(ss_thread thread) { (void)CancelSynchronousIo(thread); }
-static void thread_join(ss_thread thread) { WaitForSingleObject(thread, INFINITE); CloseHandle(thread); }
+/* CancelSynchronousIo only cancels a read already in progress. A worker that
+ * was between reads when it was interrupted would then block in its next read
+ * for as long as a descendant holds the pipe open, so keep cancelling until
+ * the worker has observed the closed session and returned. */
+static void thread_join(ss_thread thread) {
+    while (WaitForSingleObject(thread, 50) == WAIT_TIMEOUT) (void)CancelSynchronousIo(thread);
+    CloseHandle(thread);
+}
 #define SS_THREAD_RETURN DWORD WINAPI
 #define SS_THREAD_END return 0
 #else
@@ -113,6 +120,10 @@ struct ss_request {
     bool abandoned;
     bool waiter;
     bool cancel_sent;
+    /* False for the library's own rpc.initialize and rpc.shutdown. Those
+     * are never a prompt's parent, and waiting on them never hands a prompt
+     * back to a caller that did not start them. */
+    bool application;
     ss_request *next;
 };
 
@@ -353,7 +364,7 @@ static bool build_request(
     uint64_t deadline,
     yyjson_val *params,
     secretspec_resolver_buffer *payload) {
-    yyjson_mut_doc *document = yyjson_mut_doc_new(NULL);
+    yyjson_mut_doc *document = yyjson_mut_doc_new(&ss_zeroing_alc);
     yyjson_mut_val *root;
     yyjson_mut_val *meta;
     yyjson_mut_val *copied;
@@ -375,12 +386,12 @@ static bool build_request(
         return false;
     }
     yyjson_mut_doc_set_root(document, root);
-    json = yyjson_mut_write(document, YYJSON_WRITE_NOFLAG, &size);
+    json = yyjson_mut_write_opts(document, YYJSON_WRITE_NOFLAG, &ss_zeroing_alc, &size, NULL);
     yyjson_mut_doc_free(document);
     if (json == NULL) return false;
     outcome = ss_buffer_copy(payload, (const unsigned char *)json, size);
     ss_secure_clear(json, size);
-    free(json);
+    ss_zeroing_free(json);
     return outcome;
 }
 
@@ -430,6 +441,7 @@ static secretspec_resolver_status start_request(
         mutex_unlock(&client->mutex);
         return SECRETSPEC_RESOLVER_UNAVAILABLE;
     }
+    request->application = application;
     request->next = client->requests;
     client->requests = request;
     client->in_flight++;
@@ -681,6 +693,12 @@ static void fail_all(
     ss_process_interrupt_io(client->process);
 }
 
+static secretspec_resolver_status answer_prompt(
+    ss_prompt *prompt,
+    const unsigned char *value,
+    size_t value_size,
+    secretspec_resolver_buffer *error);
+
 /* Accept one inbound request as a prompt.
  *
  * Returns false for anything this session must not accept: a request at all
@@ -725,7 +743,8 @@ static bool accept_prompt(secretspec_resolver_client *client, yyjson_val *root) 
     mutex_lock(&client->mutex);
     {
         ss_request *parent_request = find_request(client, prompt->parent_request_id);
-        if (parent_request == NULL || !parent_request->running || parent_request->cancel_sent ||
+        if (parent_request == NULL || !parent_request->application ||
+            !parent_request->running || parent_request->cancel_sent ||
             deadline_unix_ms > parent_request->deadline_unix_ms) {
             mutex_unlock(&client->mutex);
             secretspec_resolver_buffer_free(prompt->params);
@@ -750,6 +769,21 @@ static bool accept_prompt(secretspec_resolver_client *client, yyjson_val *root) 
         return false;
     }
     client->last_callback_id = id;
+    if (client->closing) {
+        secretspec_resolver_buffer ignored = {NULL, 0};
+        secretspec_resolver_status status;
+        /* Close has already detached the pending list. Decline this prompt
+         * directly so its parent can finish before shutdown completes. */
+        mutex_unlock(&client->mutex);
+        status = answer_prompt(prompt, NULL, 0, &ignored);
+        secretspec_resolver_buffer_free(ignored);
+        secretspec_resolver_buffer_free(prompt->params);
+        ss_secure_clear(prompt, sizeof(*prompt));
+        free(prompt);
+        return status == SECRETSPEC_RESOLVER_OK ||
+               status == SECRETSPEC_RESOLVER_CANCELLED ||
+               status == SECRETSPEC_RESOLVER_DEADLINE_EXCEEDED;
+    }
     prompt->next = client->prompts;
     client->prompts = prompt;
     client->prompt_count++;
@@ -1065,7 +1099,7 @@ static bool limits_valid(yyjson_val *limits, size_t *frame, size_t *in_flight) {
  * The offer is a small validated object, so it is rewritten as text and parsed
  * back rather than threading a mutable document through the request path. */
 static bool offer_with_prompt_capability(yyjson_val *offer, yyjson_doc **out) {
-    yyjson_mut_doc *document = yyjson_mut_doc_new(NULL);
+    yyjson_mut_doc *document = yyjson_mut_doc_new(&ss_zeroing_alc);
     yyjson_mut_val *root;
     yyjson_mut_val *capabilities;
     char *json = NULL;
@@ -1079,12 +1113,12 @@ static bool offer_with_prompt_capability(yyjson_val *offer, yyjson_doc **out) {
         yyjson_mut_arr_add_str(document, capabilities, "client.prompt") &&
         yyjson_mut_obj_add_val(document, root, "client_methods", capabilities)) {
         yyjson_mut_doc_set_root(document, root);
-        json = yyjson_mut_write(document, YYJSON_WRITE_NOFLAG, &size);
+        json = yyjson_mut_write_opts(document, YYJSON_WRITE_NOFLAG, &ss_zeroing_alc, &size, NULL);
     }
     yyjson_mut_doc_free(document);
     if (json == NULL) return false;
     built = ss_json_validate((const unsigned char *)json, size, out);
-    free(json);
+    ss_zeroing_free(json);
     return built;
 }
 
@@ -1222,7 +1256,7 @@ static secretspec_resolver_status wait_call(
          * waiter slot is released first: the caller answers and then waits
          * again on the same call. */
         prompts_expire(client, ss_now_unix_ms());
-        if (client->prompts != NULL) {
+        if (request->application && client->prompts != NULL) {
             request->waiter = false;
             mutex_unlock(&client->mutex);
             return SECRETSPEC_RESOLVER_PROMPT_PENDING;
@@ -1690,14 +1724,48 @@ secretspec_resolver_slice secretspec_resolver_prompt_params(const secretspec_res
     return slice;
 }
 
+/* Whether a prompt can still take its one response. Must be called with
+ * client->mutex held. A prompt that can no longer be answered is marked
+ * answered, so freeing it does not try to decline it again. */
+static secretspec_resolver_status prompt_answerable_locked(
+    ss_prompt *prompt,
+    secretspec_resolver_buffer *error) {
+    secretspec_resolver_client *client = prompt->client;
+    ss_request *parent;
+    if (prompt->answered) {
+        ss_set_error(error, "invalid_argument", "prompt was already answered");
+        return SECRETSPEC_RESOLVER_INVALID_ARGUMENT;
+    }
+    if (client->closed) {
+        prompt->answered = true;
+        ss_set_error(error, "unavailable", "session closed");
+        return SECRETSPEC_RESOLVER_UNAVAILABLE;
+    }
+    parent = find_request(client, prompt->parent_request_id);
+    if (parent == NULL || !parent->running || parent->cancel_sent ||
+        prompt->deadline_unix_ms > parent->deadline_unix_ms) {
+        prompt->answered = true;
+        ss_set_error(error, "cancelled", "prompt parent is no longer active");
+        return SECRETSPEC_RESOLVER_CANCELLED;
+    }
+    if (prompt->deadline_unix_ms <= ss_now_unix_ms()) {
+        prompt->answered = true;
+        ss_set_error(error, "deadline_exceeded", "prompt deadline exceeded");
+        return SECRETSPEC_RESOLVER_DEADLINE_EXCEEDED;
+    }
+    return SECRETSPEC_RESOLVER_OK;
+}
+
 /* Write one terminal response for a prompt. `value` is the answer, or NULL to
- * decline with interaction_required. Marks the prompt answered first so a
- * second call cannot put two responses on the wire for one request. */
+ * decline with interaction_required. The prompt is marked answered under the
+ * same lock that queues the response, so a second call cannot put two
+ * responses on the wire for one request. */
 static secretspec_resolver_status answer_prompt(
     ss_prompt *prompt,
     const unsigned char *value,
     size_t value_size,
     secretspec_resolver_buffer *error) {
+    secretspec_resolver_status status;
     secretspec_resolver_client *client;
     yyjson_mut_doc *document;
     yyjson_mut_val *root;
@@ -1712,34 +1780,11 @@ static secretspec_resolver_status answer_prompt(
     ss_buffer_reset(error);
     client = prompt->client;
     mutex_lock(&client->mutex);
-    if (prompt->answered) {
-        mutex_unlock(&client->mutex);
-        ss_set_error(error, "invalid_argument", "prompt was already answered");
-        return SECRETSPEC_RESOLVER_INVALID_ARGUMENT;
-    }
-    prompt->answered = true;
-    if (client->closed) {
-        mutex_unlock(&client->mutex);
-        ss_set_error(error, "unavailable", "session closed");
-        return SECRETSPEC_RESOLVER_UNAVAILABLE;
-    }
-    {
-        ss_request *parent = find_request(client, prompt->parent_request_id);
-        if (parent == NULL || !parent->running || parent->cancel_sent ||
-            prompt->deadline_unix_ms > parent->deadline_unix_ms) {
-            mutex_unlock(&client->mutex);
-            ss_set_error(error, "cancelled", "prompt parent is no longer active");
-            return SECRETSPEC_RESOLVER_CANCELLED;
-        }
-    }
-    if (prompt->deadline_unix_ms <= ss_now_unix_ms()) {
-        mutex_unlock(&client->mutex);
-        ss_set_error(error, "deadline_exceeded", "prompt deadline exceeded");
-        return SECRETSPEC_RESOLVER_DEADLINE_EXCEEDED;
-    }
+    status = prompt_answerable_locked(prompt, error);
     mutex_unlock(&client->mutex);
+    if (status != SECRETSPEC_RESOLVER_OK) return status;
 
-    document = yyjson_mut_doc_new(NULL);
+    document = yyjson_mut_doc_new(&ss_zeroing_alc);
     if (document == NULL) {
         ss_set_error(error, "unavailable", "allocation failed");
         return SECRETSPEC_RESOLVER_UNAVAILABLE;
@@ -1766,7 +1811,7 @@ static secretspec_resolver_status answer_prompt(
     }
     if (written) {
         yyjson_mut_doc_set_root(document, root);
-        json = yyjson_mut_write(document, YYJSON_WRITE_NOFLAG, &size);
+        json = yyjson_mut_write_opts(document, YYJSON_WRITE_NOFLAG, &ss_zeroing_alc, &size, NULL);
     }
     yyjson_mut_doc_free(document);
     if (json == NULL) {
@@ -1774,24 +1819,28 @@ static secretspec_resolver_status answer_prompt(
         return SECRETSPEC_RESOLVER_UNAVAILABLE;
     }
     /* Recheck after serialization and queue under the same lock. The reader
-     * cannot make the parent terminal between this check and the enqueue. */
+     * cannot make the parent terminal between this check and the enqueue, and
+     * a concurrent answer cannot put a second response on the wire. */
     mutex_lock(&client->mutex);
-    {
-        ss_request *parent = find_request(client, prompt->parent_request_id);
-        if (parent == NULL || !parent->running || parent->cancel_sent ||
-            prompt->deadline_unix_ms > parent->deadline_unix_ms) {
-            mutex_unlock(&client->mutex);
-            ss_secure_clear(json, size);
-            free(json);
-            ss_set_error(error, "cancelled", "prompt parent is no longer active");
-            return SECRETSPEC_RESOLVER_CANCELLED;
-        }
+    status = prompt_answerable_locked(prompt, error);
+    if (status == SECRETSPEC_RESOLVER_OK && size > client->max_frame_bytes) {
+        /* Refused before the prompt is consumed, like an empty answer, so the
+         * caller can still decline instead of leaving the endpoint waiting. */
+        mutex_unlock(&client->mutex);
+        ss_zeroing_free(json);
+        ss_set_error(error, "invalid_argument",
+                     "prompt answer exceeds the negotiated frame size");
+        return SECRETSPEC_RESOLVER_INVALID_ARGUMENT;
     }
+    if (status != SECRETSPEC_RESOLVER_OK) {
+        mutex_unlock(&client->mutex);
+        ss_zeroing_free(json);
+        return status;
+    }
+    prompt->answered = true;
     written = write_payload_locked(client, (const unsigned char *)json, size);
     mutex_unlock(&client->mutex);
-    /* The answer is a secret, so this copy goes before the pointer does. */
-    ss_secure_clear(json, size);
-    free(json);
+    ss_zeroing_free(json);
     if (!written) {
         ss_set_error(error, "io", "failed to write the prompt answer");
         return SECRETSPEC_RESOLVER_IO;
@@ -1846,6 +1895,7 @@ secretspec_resolver_status secretspec_resolver_client_close(
     static const unsigned char params[] = "{}";
     yyjson_doc *document = NULL;
     secretspec_resolver_call *shutdown_call = NULL;
+    ss_prompt *pending;
     secretspec_resolver_buffer result = {NULL, 0};
     secretspec_resolver_status status = SECRETSPEC_RESOLVER_OK;
     ss_buffer_reset(error);
@@ -1864,7 +1914,22 @@ secretspec_resolver_status secretspec_resolver_client_close(
         return SECRETSPEC_RESOLVER_OK;
     }
     client->closing = true;
+    /* Nobody will take a prompt once the session is closing, and an endpoint
+     * waiting on one could not finish the work shutdown drains. */
+    pending = client->prompts;
+    client->prompts = NULL;
+    client->prompt_count = 0;
     mutex_unlock(&client->mutex);
+    while (pending != NULL) {
+        ss_prompt *next = pending->next;
+        secretspec_resolver_buffer ignored = {NULL, 0};
+        (void)answer_prompt(pending, NULL, 0, &ignored);
+        secretspec_resolver_buffer_free(ignored);
+        secretspec_resolver_buffer_free(pending->params);
+        ss_secure_clear(pending, sizeof(*pending));
+        free(pending);
+        pending = next;
+    }
     if (!ss_json_validate(params, sizeof(params) - 1, &document)) {
         status = SECRETSPEC_RESOLVER_PROTOCOL;
     } else {

@@ -44,6 +44,11 @@ pub struct ProviderEndpoint {
     /// providers always receive the fixed `provider` argument.
     #[serde(default)]
     pub arguments: Vec<String>,
+    /// Parent environment variables the endpoint may read, beyond the base
+    /// set every endpoint receives (see [`BASE_ENDPOINT_ENVIRONMENT`]). An
+    /// entry is an exact name or a prefix ending in `*`, such as `VAULT_*`.
+    #[serde(default)]
+    pub environment: Vec<String>,
 }
 
 /// Public discovery claim written by an installed provider.
@@ -55,6 +60,105 @@ pub struct ProviderEndpoint {
 #[derive(Deserialize)]
 struct ProviderClaim {
     executable: PathBuf,
+    #[serde(default)]
+    environment: Vec<String>,
+}
+
+/// Parent environment variables every endpoint receives: what a process
+/// needs to find programs, locale, temporary and user directories, proxies,
+/// certificate stores, and desktop or agent sessions for native
+/// authentication. Anything else, including other providers' tokens, reaches
+/// an endpoint only when its registration names it. Entries ending in `*`
+/// are prefixes.
+pub const BASE_ENDPOINT_ENVIRONMENT: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "LANGUAGE",
+    "LC_*",
+    "TZ",
+    "TMPDIR",
+    "XDG_*",
+    "SSH_AUTH_SOCK",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    // Windows
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "USERPROFILE",
+    "USERNAME",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "TEMP",
+    "TMP",
+];
+
+fn validate_environment_pattern(pattern: &str) -> Result<()> {
+    let name = pattern.strip_suffix('*').unwrap_or(pattern);
+    if name.is_empty()
+        || name
+            .chars()
+            .any(|c| c == '=' || c == '*' || c == '\0' || c.is_whitespace())
+    {
+        return Err(discovery_error(
+            "provider environment entries must be variable names or name prefixes ending in '*'",
+        ));
+    }
+    Ok(())
+}
+
+fn environment_name_matches(pattern: &str, name: &str) -> bool {
+    // Windows environment names are case-insensitive.
+    let (pattern, name) = if cfg!(windows) {
+        (pattern.to_ascii_uppercase(), name.to_ascii_uppercase())
+    } else {
+        (pattern.to_string(), name.to_string())
+    };
+    match pattern.strip_suffix('*') {
+        Some(prefix) => name.starts_with(prefix),
+        None => name == pattern,
+    }
+}
+
+/// Filters `parent` down to [`BASE_ENDPOINT_ENVIRONMENT`] plus the
+/// endpoint's own declared `extra` entries.
+pub(crate) fn endpoint_environment(
+    parent: impl IntoIterator<Item = (OsString, OsString)>,
+    extra: &[String],
+) -> BTreeMap<OsString, OsString> {
+    parent
+        .into_iter()
+        .filter(|(name, _)| {
+            let Some(name) = name.to_str() else {
+                return false;
+            };
+            BASE_ENDPOINT_ENVIRONMENT
+                .iter()
+                .copied()
+                .chain(extra.iter().map(String::as_str))
+                .any(|pattern| environment_name_matches(pattern, name))
+        })
+        .collect()
 }
 
 /// Explicit inputs to external-provider discovery.
@@ -174,6 +278,7 @@ impl ProviderDiscovery {
                 scheme: scheme.to_string(),
                 executable: path,
                 arguments: vec!["provider".to_string()],
+                environment: Vec::new(),
             },
             scheme,
             RegistrationScope::Path,
@@ -260,6 +365,7 @@ fn load_registration(
             scheme: scheme.to_string(),
             executable: claim.executable,
             arguments: vec!["provider".to_string()],
+            environment: claim.environment,
         },
         scheme,
         scope,
@@ -279,6 +385,9 @@ fn validate_endpoint(
         ));
     }
     validate_scheme(&endpoint.scheme)?;
+    for pattern in &endpoint.environment {
+        validate_environment_pattern(pattern)?;
+    }
     if !endpoint.executable.is_absolute() {
         return Err(discovery_error("provider executable must be absolute"));
     }
@@ -572,14 +681,64 @@ fn discovery_error(message: &str) -> SecretSpecError {
     SecretSpecError::ProviderOperationFailed(message.to_string())
 }
 
+/// The host-selected provider instance a credential request belongs to
+/// (0.21+).
+///
+/// Both parts come from SecretSpec, never from the endpoint: the discovered
+/// scheme and the configured provider URI, which cannot carry a password. Two
+/// aliases of one scheme that select different accounts or stores are
+/// therefore distinct principals even when their endpoint reports the same
+/// `scope`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProviderCredentialPrincipal {
+    scheme: String,
+    uri: String,
+}
+
+impl ProviderCredentialPrincipal {
+    pub fn new(scheme: impl Into<String>, uri: impl Into<String>) -> Self {
+        Self {
+            scheme: scheme.into(),
+            uri: uri.into(),
+        }
+    }
+
+    /// The discovered provider scheme.
+    pub fn scheme(&self) -> &str {
+        &self.scheme
+    }
+
+    /// The configured provider URI, as SecretSpec normalized it.
+    pub fn uri(&self) -> &str {
+        &self.uri
+    }
+
+    pub(crate) fn from_url(url: &ProviderUrl) -> Self {
+        Self::new(url.scheme(), url.to_string())
+    }
+}
+
 /// Resolves credentials requested by one already-discovered external provider.
 ///
-/// The selected scheme is supplied separately from the endpoint-controlled
-/// request and MUST be part of the backing-store namespace. Implementations
-/// return `None` for an ordinary miss and must never place a value in an error.
+/// The host-selected principal is supplied separately from the
+/// endpoint-controlled request and MUST be part of the backing-store
+/// namespace. Implementations return `None` for an ordinary miss and must
+/// never place a value in an error. A broker must not call back into the
+/// provider instance that requested the credential: that instance is still
+/// starting and is waiting for this answer.
 pub trait ProviderCredentialBroker: Send + Sync + 'static {
-    fn get(&self, scheme: &str, request: &ProviderCredentialRequest)
-    -> Result<Option<SecretBytes>>;
+    fn get(
+        &self,
+        principal: &ProviderCredentialPrincipal,
+        request: &ProviderCredentialRequest,
+    ) -> Result<Option<SecretBytes>>;
+
+    /// Whether answering may wait for a person. Requests to an endpoint using
+    /// an interactive broker get the longest deadline the protocol allows, so
+    /// a prompt is not cut off by the machine startup or operation budget.
+    fn interactive(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Default)]
@@ -588,7 +747,7 @@ pub(crate) struct KeyringCredentialBroker;
 impl ProviderCredentialBroker for KeyringCredentialBroker {
     fn get(
         &self,
-        scheme: &str,
+        principal: &ProviderCredentialPrincipal,
         request: &ProviderCredentialRequest,
     ) -> Result<Option<SecretBytes>> {
         #[cfg(feature = "keyring")]
@@ -596,7 +755,7 @@ impl ProviderCredentialBroker for KeyringCredentialBroker {
             use crate::provider::keyring::{KeyringConfig, KeyringProvider};
 
             let provider = KeyringProvider::new(KeyringConfig::default());
-            let address = brokered_credential_address(scheme, &request.scope, &request.name);
+            let address = brokered_credential_address(principal, &request.scope, &request.name);
             match provider.get(Address::Native(&address)) {
                 // An optional broker lookup must not prevent the endpoint from
                 // using its native environment, agent, or workload identity merely
@@ -607,31 +766,46 @@ impl ProviderCredentialBroker for KeyringCredentialBroker {
         }
         #[cfg(not(feature = "keyring"))]
         {
-            let _ = (scheme, request);
+            let _ = (principal, request);
             Ok(None)
         }
     }
 }
 
 /// Stable, provider-private keyring address for a dynamically requested
-/// credential. Hashing the endpoint-controlled scope prevents separators or
-/// platform keyring limits from collapsing two namespaces; the scheme and
-/// semantic name remain visible for diagnostics and keyring UIs.
-pub(crate) fn brokered_credential_address(scheme: &str, scope: &str, name: &str) -> NativeAddress {
-    let digest = Sha256::digest(scope.as_bytes());
-    let mut scope_hash = String::with_capacity(digest.len() * 2);
+/// credential. The hash covers the host-selected provider URI and the
+/// endpoint-controlled scope, so aliases selecting different accounts never
+/// share a slot even when their endpoint reports one scope. Length-prefixing
+/// each part keeps separators from collapsing two namespaces, and hashing
+/// keeps the name within platform keyring limits; the scheme and semantic
+/// name remain visible for diagnostics and keyring UIs.
+pub(crate) fn brokered_credential_address(
+    principal: &ProviderCredentialPrincipal,
+    scope: &str,
+    name: &str,
+) -> NativeAddress {
+    let mut hasher = Sha256::new();
+    for part in [principal.uri(), scope] {
+        hasher.update((part.len() as u64).to_be_bytes());
+        hasher.update(part.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let mut namespace = String::with_capacity(digest.len() * 2);
     use std::fmt::Write as _;
     for byte in digest {
-        let _ = write!(scope_hash, "{byte:02x}");
+        let _ = write!(namespace, "{byte:02x}");
     }
     NativeAddress {
-        item: format!("secretspec/provider-credentials/{scheme}/{scope_hash}/{name}"),
+        item: format!(
+            "secretspec/provider-credentials/{}/{namespace}/{name}",
+            principal.scheme()
+        ),
         ..NativeAddress::default()
     }
 }
 
 pub(crate) fn store_brokered_credential(
-    scheme: &str,
+    principal: &ProviderCredentialPrincipal,
     scope: &str,
     name: &str,
     value: &SecretBytes,
@@ -641,13 +815,13 @@ pub(crate) fn store_brokered_credential(
         use crate::provider::keyring::{KeyringConfig, KeyringProvider};
 
         let provider = KeyringProvider::new(KeyringConfig::default());
-        let address = brokered_credential_address(scheme, scope, name);
+        let address = brokered_credential_address(principal, scope, name);
         provider.set(Address::Native(&address), value)?;
         Ok(format!("keyring at {}", address.render()))
     }
     #[cfg(not(feature = "keyring"))]
     {
-        let _ = (scheme, scope, name, value);
+        let _ = (principal, scope, name, value);
         Err(SecretSpecError::ProviderOperationFailed(
             "this SecretSpec build has no system-keyring support".into(),
         ))
@@ -655,7 +829,7 @@ pub(crate) fn store_brokered_credential(
 }
 
 struct ExternalCredentialResponder {
-    scheme: String,
+    principal: ProviderCredentialPrincipal,
     explicit: ProviderCredentials,
     broker: Arc<dyn ProviderCredentialBroker>,
     names: Mutex<HashSet<(String, String)>>,
@@ -685,8 +859,8 @@ impl CredentialResponder for ExternalCredentialResponder {
             Some(value) => Some(value),
             None => {
                 let broker = self.broker.clone();
-                let scheme = self.scheme.clone();
-                let result = tokio::task::spawn_blocking(move || broker.get(&scheme, &request))
+                let principal = self.principal.clone();
+                let result = tokio::task::spawn_blocking(move || broker.get(&principal, &request))
                     .await
                     .map_err(|_| RpcError::new(RpcErrorKind::OperationFailed))?;
                 match result {
@@ -727,12 +901,22 @@ struct ExternalState {
     /// call supplies an acceptable value.
     base_dir_error: Option<String>,
     session: Option<Arc<ProviderSession>>,
+    /// Bumped whenever initialization inputs change, so a startup that ran
+    /// without this lock can tell its snapshot went stale.
+    generation: u64,
 }
 
 impl ExternalState {
     /// The configuration rejection that must block session startup, if any.
     fn configuration_error(&self) -> Option<&str> {
         self.base_dir_error.as_deref()
+    }
+
+    /// Records a change to initialization inputs and detaches the session
+    /// that was initialized with the previous ones.
+    fn invalidate(&mut self) -> Option<Arc<ProviderSession>> {
+        self.generation = self.generation.wrapping_add(1);
+        self.session.take()
     }
 }
 
@@ -746,6 +930,9 @@ pub struct ExternalProvider {
     scheme: String,
     configured_uri: String,
     state: Mutex<ExternalState>,
+    /// Serializes endpoint startup. Held instead of `state` while an endpoint
+    /// initializes, because initialization may wait on a credential prompt.
+    launch: Mutex<()>,
     metadata: OnceLock<wire::Metadata>,
 }
 
@@ -787,7 +974,9 @@ impl ExternalProvider {
                 requested_authorization_duration: None,
                 base_dir_error: None,
                 session: None,
+                generation: 0,
             }),
+            launch: Mutex::new(()),
             metadata: OnceLock::new(),
         }
     }
@@ -809,7 +998,7 @@ impl ExternalProvider {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .take();
-            state.session.take()
+            state.invalidate()
         };
         if let Some(session) = session {
             close_live_session(session);
@@ -821,19 +1010,69 @@ impl ExternalProvider {
         self.ensure_session().map(|_| ())
     }
 
+    /// The absolute deadline for a request that may trigger credential
+    /// callbacks. An interactive broker may wait for a person, so it gets the
+    /// longest horizon the protocol allows instead of a machine budget.
+    fn request_deadline(&self, interactive: bool, budget: Duration) -> u64 {
+        deadline_unix_ms_after(if interactive {
+            secretspec_ipc::deadline::MAX_DEADLINE_HORIZON
+        } else {
+            budget
+        })
+    }
+
     fn ensure_session(&self) -> Result<Arc<ProviderSession>> {
-        let mut state = self.state();
-        if let Some(message) = state.configuration_error() {
-            return Err(discovery_error(message));
+        if let Some(session) = self.live_session()? {
+            return Ok(session);
         }
-        if let Some(session) = &state.session {
-            if !session.is_closed() {
-                return Ok(session.clone());
+        // Serialize startup under a dedicated lock so `state` stays free while
+        // the endpoint initializes: initialization may wait on a credential
+        // prompt, and setters or other accessors must not block behind it.
+        let _launch = self
+            .launch
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        loop {
+            // Another caller may have finished starting the endpoint while
+            // this one waited for the launch lock.
+            if let Some(session) = self.live_session()? {
+                return Ok(session);
             }
-            if let Some(stale) = state.session.take() {
-                close_live_session(stale);
+            if let Some(session) = self.launch_session()? {
+                return Ok(session);
             }
+            // Initialization inputs changed while the endpoint started, so
+            // the session it produced was closed. Start again with the new
+            // inputs.
         }
+    }
+
+    /// The current usable session, detaching one that has closed.
+    fn live_session(&self) -> Result<Option<Arc<ProviderSession>>> {
+        let stale = {
+            let mut state = self.state();
+            if let Some(message) = state.configuration_error() {
+                return Err(discovery_error(message));
+            }
+            match &state.session {
+                Some(session) if !session.is_closed() => return Ok(Some(session.clone())),
+                Some(_) => state.session.take(),
+                None => None,
+            }
+        };
+        if let Some(stale) = stale {
+            close_live_session(stale);
+        }
+        Ok(None)
+    }
+
+    /// Starts one endpoint from a snapshot of the initialization inputs.
+    /// Returns `None` when those inputs changed during startup.
+    fn launch_session(&self) -> Result<Option<Arc<ProviderSession>>> {
+        let state = self.state();
+        let generation = state.generation;
+        let interactive = state.credential_broker.interactive();
+        let credential_error = state.credential_error.clone();
         let application = InitializeApplication {
             scheme: self.scheme.clone(),
             uri: self.configured_uri.clone(),
@@ -851,19 +1090,14 @@ impl ExternalProvider {
             },
         };
         let responder = Arc::new(ExternalCredentialResponder {
-            scheme: self.scheme.clone(),
+            principal: ProviderCredentialPrincipal::new(&self.scheme, &self.configured_uri),
             explicit: state.credentials.clone(),
             broker: state.credential_broker.clone(),
             names: Mutex::new(HashSet::new()),
-            broker_error: state.credential_error.clone(),
+            broker_error: credential_error.clone(),
         });
-        let launch = LaunchOptions {
-            executable: self.endpoint.executable.clone(),
-            arguments: self.endpoint.arguments.iter().map(OsString::from).collect(),
-            environment: Environment::Inherit(BTreeMap::new()),
-            allow_path_discovery: false,
-            max_stderr_bytes: 64 * 1024,
-        };
+        drop(state);
+        let launch = self.launch_options(std::env::vars_os());
         let launched = super::block_on(ProviderSession::launch_with_credential_broker(
             launch,
             Product {
@@ -875,14 +1109,13 @@ impl ExternalProvider {
                 max_in_flight: 16,
             },
             application,
-            deadline_unix_ms_after(STARTUP_TIMEOUT),
+            self.request_deadline(interactive, STARTUP_TIMEOUT),
             Some(responder.clone()),
         ));
         let session = match launched {
             Ok(session) => session,
             Err(error) => {
-                if let Some(message) = state
-                    .credential_error
+                if let Some(message) = credential_error
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .take()
@@ -895,23 +1128,47 @@ impl ExternalProvider {
         // An endpoint may deliberately catch a failed optional lookup and use
         // native authentication instead. Do not let that handled failure leak
         // into a later operation on the healthy session.
-        state
-            .credential_error
+        credential_error
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
-        if let Some(existing) = self.metadata.get() {
-            if existing != session.metadata() {
-                let _ =
-                    super::block_on(session.close(deadline_unix_ms_after(Duration::from_secs(1))));
-                return Err(discovery_error("provider metadata changed after reconnect"));
-            }
-        } else {
-            let _ = self.metadata.set(session.metadata().clone());
-        }
         let session = Arc::new(session);
-        state.session = Some(session.clone());
-        Ok(session)
+        {
+            let mut state = self.state();
+            if state.generation == generation {
+                if let Some(existing) = self.metadata.get() {
+                    if existing != session.metadata() {
+                        drop(state);
+                        close_live_session(session);
+                        return Err(discovery_error("provider metadata changed after reconnect"));
+                    }
+                } else {
+                    let _ = self.metadata.set(session.metadata().clone());
+                }
+                state.session = Some(session.clone());
+                return Ok(Some(session));
+            }
+        }
+        close_live_session(session);
+        Ok(None)
+    }
+
+    /// Launch options for this endpoint, with the child environment filtered
+    /// from `parent` so other providers' tokens never reach it.
+    fn launch_options(
+        &self,
+        parent: impl IntoIterator<Item = (OsString, OsString)>,
+    ) -> LaunchOptions {
+        LaunchOptions {
+            executable: self.endpoint.executable.clone(),
+            arguments: self.endpoint.arguments.iter().map(OsString::from).collect(),
+            environment: Environment::Replace(endpoint_environment(
+                parent,
+                &self.endpoint.environment,
+            )),
+            allow_path_discovery: false,
+            max_stderr_bytes: 64 * 1024,
+        }
     }
 
     /// Endpoint-reported metadata, starting the session if it has not run yet.
@@ -944,9 +1201,13 @@ impl ExternalProvider {
         M: wire::method::Method,
     {
         let session = self.require(M::NAME)?;
-        let result = super::block_on(
-            session.execute::<M>(params, deadline_unix_ms_after(OPERATION_TIMEOUT)),
-        );
+        // Endpoints may request a credential again mid-operation, for example
+        // to refresh a token, so an interactive broker widens this deadline too.
+        let interactive = self.state().credential_broker.interactive();
+        let result = super::block_on(session.execute::<M>(
+            params,
+            self.request_deadline(interactive, OPERATION_TIMEOUT),
+        ));
         if result.is_err() && session.is_closed() {
             let stale = {
                 let mut state = self.state();
@@ -1065,6 +1326,29 @@ impl Provider for ExternalProvider {
 
     fn resolve_coords<'a>(&self, addr: Address<'a>) -> Result<std::borrow::Cow<'a, NativeAddress>> {
         self.resolve_remote(addr).map(std::borrow::Cow::Owned)
+    }
+
+    /// Planning compares entries before any cache hit and must not start the
+    /// endpoint (which may prompt for credentials). A native address is
+    /// already the endpoint's coordinates. A convention address is compiled
+    /// only by the endpoint, so without contacting it the address is
+    /// identified by its logical coordinates under a marker no native `item`
+    /// can contain.
+    fn configured_entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<std::borrow::Cow<'a, NativeAddress>> {
+        Ok(match addr {
+            Address::Native(native) => std::borrow::Cow::Borrowed(native),
+            Address::Convention {
+                project,
+                profile,
+                key,
+            } => std::borrow::Cow::Owned(NativeAddress {
+                item: format!("\0convention\0{project}\0{profile}\0{key}"),
+                ..NativeAddress::default()
+            }),
+        })
     }
 
     fn entry_coordinates<'a>(
@@ -1312,6 +1596,15 @@ impl Provider for ExternalProvider {
             .unwrap_or_else(|| self.storage_identity())
     }
 
+    /// Known only from the endpoint, so planning sees it once a session has
+    /// reported it and otherwise compares configured identities.
+    fn configured_physical_store_path(&self) -> Option<&Path> {
+        self.metadata
+            .get()
+            .and_then(|metadata| metadata.physical_store_path.as_deref())
+            .map(Path::new)
+    }
+
     fn physical_store_path(&self) -> Option<&Path> {
         self.endpoint_metadata()
             .and_then(|metadata| metadata.physical_store_path.as_deref())
@@ -1325,7 +1618,7 @@ impl Provider for ExternalProvider {
                 return;
             }
             state.reason = reason;
-            state.session.take()
+            state.invalidate()
         };
         if let Some(session) = session {
             close_live_session(session);
@@ -1339,7 +1632,7 @@ impl Provider for ExternalProvider {
                 return;
             }
             state.requested_authorization_duration = duration;
-            state.session.take()
+            state.invalidate()
         };
         if let Some(session) = session {
             close_live_session(session);
@@ -1353,7 +1646,7 @@ impl Provider for ExternalProvider {
                 return;
             }
             state.project = Some(project.to_string());
-            state.session.take()
+            state.invalidate()
         };
         if let Some(session) = session {
             close_live_session(session);
@@ -1367,7 +1660,7 @@ impl Provider for ExternalProvider {
                 return;
             }
             state.profile = Some(profile.to_string());
-            state.session.take()
+            state.invalidate()
         };
         if let Some(session) = session {
             close_live_session(session);
@@ -1398,7 +1691,7 @@ impl Provider for ExternalProvider {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .take();
-            state.session.take()
+            state.invalidate()
         };
         if let Some(session) = session {
             close_live_session(session);
@@ -1447,7 +1740,33 @@ impl Drop for ExternalProvider {
 }
 
 fn close_live_session(session: Arc<ProviderSession>) {
-    let _ = super::block_on(session.close(deadline_unix_ms_after(Duration::from_secs(2))));
+    run_to_completion_or_detach(async move {
+        let _ = session
+            .close(deadline_unix_ms_after(Duration::from_secs(2)))
+            .await;
+    });
+}
+
+/// Runs cleanup that must never panic, including from `Drop`.
+///
+/// `block_on` enters `block_in_place`, which panics on a current-thread
+/// runtime, and a panic in `Drop` while unwinding aborts the process. There
+/// the cleanup moves to a helper thread instead of blocking the only runtime
+/// worker; elsewhere it completes before returning.
+fn run_to_completion_or_detach<F>(cleanup: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let current_thread = tokio::runtime::Handle::try_current().is_ok_and(|handle| {
+        handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::CurrentThread
+    });
+    if current_thread {
+        // The helper thread has no ambient runtime, so `block_on` uses the
+        // shared provider runtime there.
+        std::thread::spawn(move || super::block_on(cleanup));
+    } else {
+        super::block_on(cleanup);
+    }
 }
 
 fn to_wire_address(address: Address<'_>) -> wire::Address {
@@ -1518,6 +1837,7 @@ mod tests {
             scheme: "example".into(),
             executable,
             arguments: vec![argument.into()],
+            environment: Vec::new(),
         }
     }
 
@@ -1813,6 +2133,7 @@ mod tests {
                     scheme: "example".into(),
                     executable,
                     arguments: Vec::new(),
+                    environment: Vec::new(),
                 },
             )]),
             ..ProviderDiscovery::default()
@@ -2053,5 +2374,257 @@ mod tests {
             !checked.contains(&linked),
             "unresolved link spelling was checked: {checked:?}"
         );
+    }
+
+    fn vars(names: &[&str]) -> Vec<(OsString, OsString)> {
+        names
+            .iter()
+            .map(|name| (OsString::from(name), OsString::from("value")))
+            .collect()
+    }
+
+    fn names(environment: &BTreeMap<OsString, OsString>) -> Vec<&str> {
+        environment
+            .keys()
+            .map(|name| name.to_str().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn endpoint_environment_keeps_the_base_set_and_declared_entries_only() {
+        let parent = vars(&[
+            "PATH",
+            "LC_ALL",
+            "XDG_RUNTIME_DIR",
+            "VAULT_TOKEN",
+            "VAULT_ADDR",
+            "OP_SERVICE_ACCOUNT_TOKEN",
+            "EXAMPLE_TOKEN",
+            "EXAMPLE_TOKENIZER",
+        ]);
+        let base = endpoint_environment(parent.clone(), &[]);
+        assert_eq!(names(&base), ["LC_ALL", "PATH", "XDG_RUNTIME_DIR"]);
+
+        let declared = endpoint_environment(parent, &["EXAMPLE_TOKEN".into(), "VAULT_*".into()]);
+        assert_eq!(
+            names(&declared),
+            [
+                "EXAMPLE_TOKEN",
+                "LC_ALL",
+                "PATH",
+                "VAULT_ADDR",
+                "VAULT_TOKEN",
+                "XDG_RUNTIME_DIR"
+            ]
+        );
+    }
+
+    #[test]
+    fn launch_options_replace_the_parent_environment() {
+        let directory = tempfile::tempdir().unwrap();
+        let provider = ExternalProvider::from_url(
+            endpoint(directory.path(), "endpoint", "provider"),
+            &ProviderUrl::new(url::Url::parse("example://team-a").unwrap()),
+        );
+        let options = provider.launch_options(vars(&["PATH", "VAULT_TOKEN"]));
+        match options.environment {
+            Environment::Replace(environment) => assert_eq!(names(&environment), ["PATH"]),
+            Environment::Inherit(_) => panic!("endpoints must not inherit the environment"),
+        }
+    }
+
+    #[test]
+    fn registration_environment_entries_are_validated() {
+        for valid in ["VAULT_TOKEN", "VAULT_*"] {
+            validate_environment_pattern(valid).unwrap();
+        }
+        for invalid in ["", "*", "A=B", "A*B", "A B", "A\0"] {
+            assert!(
+                validate_environment_pattern(invalid).is_err(),
+                "{invalid:?} was accepted"
+            );
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("endpoint");
+        std::fs::write(&executable, "endpoint").unwrap();
+        let registration_dir = directory.path().join("providers.d");
+        std::fs::create_dir(&registration_dir).unwrap();
+        let discovery = ProviderDiscovery {
+            user_directory: Some(registration_dir.clone()),
+            ..ProviderDiscovery::default()
+        };
+        let register = |environment: serde_json::Value| {
+            std::fs::write(
+                registration_dir.join("example.secretspec.json"),
+                serde_json::json!({ "executable": executable, "environment": environment })
+                    .to_string(),
+            )
+            .unwrap();
+        };
+        register(serde_json::json!(["VAULT_*"]));
+        let endpoint = discovery
+            .resolve_with_security("example", &AllowAll)
+            .unwrap()
+            .unwrap();
+        assert_eq!(endpoint.environment, ["VAULT_*"]);
+
+        register(serde_json::json!(["*"]));
+        assert!(
+            discovery
+                .resolve_with_security("example", &AllowAll)
+                .is_err()
+        );
+    }
+
+    /// The child really starts with the filtered environment: a variable the
+    /// test process has but the base set excludes never reaches it.
+    #[cfg(unix)]
+    #[test]
+    fn a_launched_endpoint_does_not_see_undeclared_parent_variables() {
+        use std::os::unix::fs::PermissionsExt;
+        // Cargo sets both for the test process. One is excluded; the other is
+        // declared by the endpoint and must pass through.
+        let (Some(_), Some(_)) = (
+            std::env::var_os("CARGO_MANIFEST_DIR"),
+            std::env::var_os("CARGO_PKG_NAME"),
+        ) else {
+            return;
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("environment");
+        let executable = directory.path().join("endpoint");
+        std::fs::write(
+            &executable,
+            format!("#!/bin/sh\nexport -p > '{}'\n", output.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut provider = ExternalProvider::from_url(
+            ProviderEndpoint {
+                scheme: "example".into(),
+                executable,
+                arguments: vec!["provider".into()],
+                environment: vec!["CARGO_PKG_*".into()],
+            },
+            &ProviderUrl::new(url::Url::parse("example://team-a").unwrap()),
+        );
+        provider.with_credential_broker(Arc::new(NoCredentials));
+        assert!(
+            provider.initialize().is_err(),
+            "the script is not an endpoint"
+        );
+
+        let exported = std::fs::read_to_string(&output).unwrap();
+        let exported: HashSet<&str> = exported
+            .lines()
+            .filter_map(|line| {
+                line.strip_prefix("export ")
+                    .or_else(|| line.strip_prefix("declare -x "))
+            })
+            .map(|rest| rest.split('=').next().unwrap())
+            .collect();
+        assert!(exported.contains("CARGO_PKG_NAME"), "{exported:?}");
+        assert!(!exported.contains("CARGO_MANIFEST_DIR"), "{exported:?}");
+    }
+
+    struct NoCredentials;
+    impl ProviderCredentialBroker for NoCredentials {
+        fn get(
+            &self,
+            _: &ProviderCredentialPrincipal,
+            _: &ProviderCredentialRequest,
+        ) -> Result<Option<SecretBytes>> {
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn brokered_credentials_are_scoped_by_the_configured_uri() {
+        let team_a = ProviderCredentialPrincipal::new("example", "example://team-a");
+        let team_b = ProviderCredentialPrincipal::new("example", "example://team-b");
+        let address = |principal: &ProviderCredentialPrincipal, scope: &str| {
+            brokered_credential_address(principal, scope, "token").item
+        };
+        // An endpoint reporting one constant scope for every account.
+        assert_ne!(address(&team_a, ""), address(&team_b, ""));
+        assert_eq!(address(&team_a, ""), address(&team_a, ""));
+        assert_ne!(address(&team_a, "one"), address(&team_a, "two"));
+        // Moving bytes between the URI and scope cannot alias a slot.
+        assert_ne!(
+            address(&ProviderCredentialPrincipal::new("example", "ab"), "c"),
+            address(&ProviderCredentialPrincipal::new("example", "a"), "bc"),
+        );
+        let item = address(&team_a, "");
+        assert!(
+            item.starts_with("secretspec/provider-credentials/example/")
+                && item.ends_with("/token"),
+            "{item}"
+        );
+    }
+
+    /// Cache planning compares configured entries before any cache hit and
+    /// must not start the endpoint, which may prompt for credentials.
+    #[cfg(unix)]
+    #[test]
+    fn configured_entry_comparison_never_launches_the_endpoint() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("launched");
+        let executable = directory.path().join("endpoint");
+        std::fs::write(
+            &executable,
+            format!("#!/bin/sh\n: > '{}'\n", marker.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let provider = ExternalProvider::from_url(
+            ProviderEndpoint {
+                scheme: "example".into(),
+                executable,
+                arguments: vec!["provider".into()],
+                environment: Vec::new(),
+            },
+            &ProviderUrl::new(url::Url::parse("example://team-a").unwrap()),
+        );
+        let convention = |key| Address::Convention {
+            project: "app",
+            profile: "default",
+            key,
+        };
+        let native = NativeAddress {
+            item: "db".into(),
+            ..NativeAddress::default()
+        };
+        let same = |left: Address<'_>, right: Address<'_>| {
+            crate::provider::same_configured_entries(&provider, left, &provider, right).unwrap()
+        };
+
+        assert!(same(convention("DB"), convention("DB")));
+        assert!(!same(convention("DB"), convention("API")));
+        assert!(same(Address::Native(&native), Address::Native(&native)));
+        assert!(!marker.exists(), "planning started the endpoint");
+    }
+
+    /// `Drop` closes a live session with this helper. On a current-thread
+    /// runtime `block_in_place` would panic, aborting a process that is
+    /// already unwinding.
+    #[tokio::test(flavor = "current_thread")]
+    async fn session_cleanup_does_not_block_in_place_on_a_current_thread_runtime() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        run_to_completion_or_detach(async move {
+            sender.send(()).unwrap();
+        });
+        receiver.recv().unwrap();
+    }
+
+    #[test]
+    fn session_cleanup_completes_before_returning_outside_a_runtime() {
+        let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = completed.clone();
+        run_to_completion_or_detach(async move {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        assert!(completed.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

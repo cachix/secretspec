@@ -19,6 +19,11 @@ use std::path::PathBuf;
 pub const NATIVE_CALL_REQUEST_VERSION: u32 = 1;
 /// The version of the JSON inline-declaration document understood by this library.
 pub const INLINE_SPEC_SCHEMA_VERSION: u32 = 2;
+/// The oldest inline-declaration document version this library still accepts.
+///
+/// Version 2 only added the optional project `defaults` table, so a version 1
+/// document sent by an older SDK is resolved unchanged.
+pub const MIN_INLINE_SPEC_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -466,12 +471,18 @@ fn dispatch(request_json: &str) -> serde_json::Value {
             base_dir,
             spec,
         } => {
-            if version != INLINE_SPEC_SCHEMA_VERSION {
+            if !(MIN_INLINE_SPEC_SCHEMA_VERSION..=INLINE_SPEC_SCHEMA_VERSION).contains(&version) {
                 return error_envelope(
                     "unsupported_spec_version",
                     format!(
-                        "unsupported inline spec_version {version}; expected {INLINE_SPEC_SCHEMA_VERSION}"
+                        "unsupported inline spec_version {version}; expected {MIN_INLINE_SPEC_SCHEMA_VERSION} through {INLINE_SPEC_SCHEMA_VERSION}"
                     ),
+                );
+            }
+            if version < 2 && spec.defaults.is_some() {
+                return error_envelope(
+                    "invalid_request",
+                    "inline spec field `defaults` requires spec_version 2",
                 );
             }
             let base_dir = PathBuf::from(base_dir);
@@ -571,5 +582,96 @@ mod tests {
         assert_eq!(options.algorithm.as_deref(), Some("rsa"));
         assert_eq!(options.bits, Some(4096));
         assert_eq!(options.comment.as_deref(), Some("deploy@example.com"));
+    }
+
+    fn inline_request(spec_version: u32, dir: &std::path::Path, spec: serde_json::Value) -> String {
+        serde_json::json!({
+            "request_version": 1,
+            "operation": "resolve",
+            "source": {
+                "kind": "inline",
+                "spec_version": spec_version,
+                "base_dir": dir,
+                "spec": spec,
+            },
+            "options": { "reason": "inline spec version test" }
+        })
+        .to_string()
+    }
+
+    fn call(request: &str) -> serde_json::Value {
+        serde_json::from_str(&call_json(request)).unwrap()
+    }
+
+    #[test]
+    fn inline_spec_version_1_from_older_sdks_still_resolves() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("inline.env"), "TOKEN=from-v1\n").unwrap();
+        let response = call(&inline_request(
+            1,
+            dir.path(),
+            serde_json::json!({
+                "project": { "name": "inline-v1" },
+                "providers": { "local": "dotenv://inline.env" },
+                "profiles": { "default": { "secrets": {
+                    "TOKEN": { "description": "token", "providers": ["local"] }
+                }}}
+            }),
+        ));
+        assert_eq!(response["ok"], true, "envelope: {response}");
+        assert_eq!(response["response"]["secrets"]["TOKEN"]["value"], "from-v1");
+    }
+
+    #[test]
+    fn inline_spec_version_2_resolves_project_defaults() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("inline.env"), "TOKEN=from-v2\n").unwrap();
+        let response = call(&inline_request(
+            2,
+            dir.path(),
+            serde_json::json!({
+                "project": { "name": "inline-v2" },
+                "defaults": { "providers": ["local"] },
+                "providers": { "local": "dotenv://inline.env" },
+                "profiles": { "default": { "secrets": {
+                    "TOKEN": { "description": "token" }
+                }}}
+            }),
+        ));
+        assert_eq!(response["ok"], true, "envelope: {response}");
+        assert_eq!(response["response"]["secrets"]["TOKEN"]["value"], "from-v2");
+    }
+
+    #[test]
+    fn inline_spec_version_1_rejects_project_defaults() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let response = call(&inline_request(
+            1,
+            dir.path(),
+            serde_json::json!({
+                "project": { "name": "inline-v1" },
+                "defaults": { "providers": ["env"] },
+                "profiles": {}
+            }),
+        ));
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["kind"], "invalid_request");
+    }
+
+    #[test]
+    fn inline_spec_versions_outside_the_supported_range_are_rejected() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for version in [0, INLINE_SPEC_SCHEMA_VERSION + 1] {
+            let response = call(&inline_request(
+                version,
+                dir.path(),
+                serde_json::json!({ "project": { "name": "inline" }, "profiles": {} }),
+            ));
+            assert_eq!(response["ok"], false, "version {version}");
+            assert_eq!(
+                response["error"]["kind"], "unsupported_spec_version",
+                "version {version}"
+            );
+        }
     }
 }

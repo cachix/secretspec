@@ -85,7 +85,14 @@ add_library(secretspec_resolver_static STATIC
     $<TARGET_OBJECTS:secretspec_resolver_objects>)
 add_library(secretspec_resolver_shared SHARED
     ${SECRETSPEC_RESOLVER_SHARED_OBJECTS})
-set_target_properties(secretspec_resolver_static PROPERTIES OUTPUT_NAME secretspec-resolver)
+# MSVC names both the static archive and the DLL import library
+# secretspec-resolver.lib, so one would overwrite the other in the build and
+# install directories. Other toolchains give them distinct suffixes.
+if(MSVC)
+  set_target_properties(secretspec_resolver_static PROPERTIES OUTPUT_NAME secretspec-resolver-static)
+else()
+  set_target_properties(secretspec_resolver_static PROPERTIES OUTPUT_NAME secretspec-resolver)
+endif()
 set_target_properties(secretspec_resolver_shared PROPERTIES
     OUTPUT_NAME secretspec-resolver
     VERSION ${PROJECT_VERSION}

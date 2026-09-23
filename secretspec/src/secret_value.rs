@@ -1,6 +1,7 @@
 //! Secret byte storage for SecretSpec's provider and resolution APIs.
 
 use crate::{Result, SecretSpecError};
+use secrecy::zeroize::Zeroizing;
 use secrecy::{ExposeSecret, SecretSlice};
 use std::fmt;
 
@@ -14,7 +15,14 @@ pub struct SecretBytes(SecretSlice<u8>);
 impl SecretBytes {
     /// Moves an owned byte buffer into zeroizing secret storage.
     pub fn from_vec(value: Vec<u8>) -> Self {
-        Self(value.into())
+        if value.len() == value.capacity() {
+            return Self(value.into());
+        }
+        // Shrinking to a boxed slice may reallocate and free the old block
+        // without wiping it, so copy into an exact allocation and wipe the
+        // original, spare capacity included.
+        let value = Zeroizing::new(value);
+        Self(value.as_slice().to_vec().into())
     }
 
     /// Copies bytes into zeroizing secret storage.
@@ -162,6 +170,19 @@ mod tests {
         assert_eq!(value.clone(), value);
         assert_eq!(format!("{value:?}"), "SecretBytes([REDACTED])");
         assert!(value.try_as_utf8().is_err());
+    }
+
+    #[test]
+    fn from_vec_keeps_bytes_of_a_buffer_with_spare_capacity() {
+        let mut spare = Vec::with_capacity(64);
+        spare.extend_from_slice(b"-----BEGIN KEY-----\n");
+        assert!(spare.capacity() > spare.len());
+        let value = SecretBytes::from_vec(spare);
+        assert_eq!(value.expose_secret(), b"-----BEGIN KEY-----\n");
+        assert_eq!(
+            SecretBytes::from_vec(Vec::with_capacity(8)).expose_secret(),
+            b""
+        );
     }
 
     #[test]

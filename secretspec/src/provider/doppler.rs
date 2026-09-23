@@ -368,14 +368,16 @@ const RETRY_ATTEMPTS: u32 = 3;
 
 /// The longest `retry-after` this provider waits out. Doppler's rate-limit
 /// buckets reset per minute, so a suggested wait can approach that; stalling a
-/// `secretspec run` for most of a minute is worse than reporting the limit, and
-/// a wait past this is reported instead.
+/// `secretspec run` for most of a minute is worse than reporting the limit, so a
+/// longer suggestion is shortened to this and the attempt budget bounds the
+/// total wait.
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(10);
 
 /// The wait before an attempt is repeated, or `None` when its answer stands.
 ///
 /// Doppler answers a rate limit with 429 and a `retry-after` header holding a
-/// suggested wait in seconds; that wait is honored up to [`MAX_RETRY_DELAY`].
+/// suggested wait in seconds; that wait is honored, capped at
+/// [`MAX_RETRY_DELAY`].
 /// A 5xx is transient by definition and is retried after a short backoff, as
 /// is a 429 without a usable header. Nothing else is retried: a 4xx is
 /// Doppler's final word on the request, and a redirect is refused outright by
@@ -396,11 +398,29 @@ fn retry_delay(status: StatusCode, retry_after: Option<&str>, attempt: u32) -> O
         .and_then(|seconds| seconds.trim().parse::<u64>().ok())
         .map(Duration::from_secs);
     match suggested {
-        Some(wait) if wait > MAX_RETRY_DELAY => None,
-        Some(wait) => Some(wait),
+        Some(wait) => Some(wait.min(MAX_RETRY_DELAY)),
         None => Some(Duration::from_millis(250) * 2u32.pow(attempt - 1)),
     }
 }
+
+/// Waits out a retry delay. Tests assert the delay through [`retry_delay`] and
+/// skip the wait, so a retry test never depends on the clock.
+#[cfg(not(test))]
+fn retry_pause(wait: Duration) {
+    std::thread::sleep(wait);
+}
+
+#[cfg(test)]
+fn retry_pause(wait: Duration) {
+    RETRY_PAUSES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(wait);
+}
+
+/// Every wait a test's retries would have taken, across all tests.
+#[cfg(test)]
+static RETRY_PAUSES: std::sync::Mutex<Vec<Duration>> = std::sync::Mutex::new(Vec::new());
 
 /// Appends Doppler's own words to a refusal, when the body carried any.
 ///
@@ -1092,7 +1112,7 @@ impl DopplerProvider {
         let https_only = true;
         #[cfg(test)]
         let https_only = !self.allow_insecure_loopback;
-        let client = reqwest::Client::builder()
+        let client = super::http::client_builder()
             .redirect(reqwest::redirect::Policy::none())
             .https_only(https_only)
             .build()
@@ -1285,7 +1305,7 @@ impl DopplerProvider {
                 .and_then(|value| value.to_str().ok());
             match retry_delay(response.status(), retry_after, attempt) {
                 Some(wait) => {
-                    std::thread::sleep(wait);
+                    retry_pause(wait);
                     attempt += 1;
                 }
                 None => return Ok(response),
@@ -3411,7 +3431,7 @@ mod tests {
     }
 
     /// Only a rate limit or a server error is retried, a suggested wait is
-    /// honored up to the cap and refused beyond it, and attempts run out.
+    /// honored up to the cap and shortened beyond it, and attempts run out.
     #[test]
     fn retry_policy_follows_dopplers_rate_limit_contract() {
         let limited = StatusCode::TOO_MANY_REQUESTS;
@@ -3431,8 +3451,13 @@ mod tests {
         );
         assert_eq!(
             retry_delay(limited, Some("60"), 1),
+            Some(MAX_RETRY_DELAY),
+            "a wait past the cap is shortened to it rather than given up on"
+        );
+        assert_eq!(
+            retry_delay(limited, Some("60"), RETRY_ATTEMPTS),
             None,
-            "a wait past the cap is reported rather than sat out"
+            "a long wait never extends the attempt budget"
         );
         assert_eq!(
             retry_delay(limited, Some("0"), RETRY_ATTEMPTS),
@@ -3453,6 +3478,12 @@ mod tests {
         }
     }
 
+    /// A stalled connection must fail the request rather than hang it.
+    #[test]
+    fn http_client_bounds_request_time() {
+        crate::provider::http::assert_bounded(provider("doppler://myapp").http().unwrap());
+    }
+
     /// A rate-limited read waits out Doppler's suggested `retry-after` and
     /// then asks again, so a single 429 does not fail a profile.
     #[test]
@@ -3461,22 +3492,24 @@ mod tests {
             (
                 "429 Too Many Requests",
                 r#"{"messages":["Too many requests"],"success":false}"#.to_string(),
-                Some(("Retry-After", "1".to_string())),
+                Some(("Retry-After", "7".to_string())),
             ),
             ("200 OK", single_read("k", "k").to_string(), None),
         ]);
         let p = fixture_provider("doppler://myapp/prd", endpoint);
 
-        let started = std::time::Instant::now();
         let value = p
             .get(Address::convention("unused", "prd", "API_KEY"))
             .unwrap()
             .expect("the retry read the value");
         assert_eq!(value.expose_secret(), b"k");
+        // No other test suggests this wait, so its presence is this retry's.
         assert!(
-            started.elapsed() >= Duration::from_secs(1),
-            "the suggested wait was honored: {:?}",
-            started.elapsed()
+            RETRY_PAUSES
+                .lock()
+                .unwrap()
+                .contains(&Duration::from_secs(7)),
+            "the suggested wait was honored"
         );
 
         let recorded = server.join().unwrap();

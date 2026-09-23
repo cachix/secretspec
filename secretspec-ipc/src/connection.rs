@@ -105,6 +105,12 @@ impl SshOptions {
         );
         let mut arguments: Vec<_> = [
             "-T",
+            // OpenSSH 8.7 made -N, -n, and -f settable from ssh_config as
+            // SessionType, StdinNull, and ForkAfterAuthentication, so they are
+            // pinned below. Older clients reject those keywords; they also
+            // cannot read them from ssh_config, so ignoring them there is safe.
+            // IgnoreUnknown (OpenSSH 6.3+) only covers options after it.
+            "-oIgnoreUnknown=SessionType,StdinNull,ForkAfterAuthentication",
             "-oBatchMode=yes",
             "-oStrictHostKeyChecking=yes",
             "-oClearAllForwardings=yes",
@@ -164,6 +170,31 @@ mod tests {
         let mut options = SshOptions::new("developer");
         options.remote_executable = "resolver\ncommand".into();
         assert!(options.launch_options().is_err());
+    }
+
+    #[test]
+    fn ssh_tolerates_clients_older_than_openssh_8_7() {
+        let arguments: Vec<String> = SshOptions::new("developer")
+            .launch_options()
+            .unwrap()
+            .arguments
+            .iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        let position = |argument: &str| {
+            arguments
+                .iter()
+                .position(|candidate| candidate == argument)
+                .unwrap_or_else(|| panic!("{argument} missing from {arguments:?}"))
+        };
+        let ignore = position("-oIgnoreUnknown=SessionType,StdinNull,ForkAfterAuthentication");
+        for newer in [
+            "-oSessionType=default",
+            "-oStdinNull=no",
+            "-oForkAfterAuthentication=no",
+        ] {
+            assert!(ignore < position(newer), "{newer} precedes IgnoreUnknown");
+        }
     }
 
     #[test]

@@ -68,6 +68,10 @@ meson compile -C build
 meson test -C build
 ```
 
+With MSVC, the CMake build names the static archive
+`secretspec-resolver-static.lib`, because `secretspec-resolver.lib` is the
+import library of the DLL.
+
 The client launches an exact executable without a shell, owns its child and
 joinable workers, negotiates limits before application traffic, multiplexes
 bounded calls, and performs deadline/cancellation/shutdown handling. Input

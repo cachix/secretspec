@@ -70,7 +70,7 @@ bool ss_json_validate(const unsigned char *json, size_t size, yyjson_doc **docum
     yyjson_val *root;
     if (document == NULL || json == NULL || size == 0) return false;
     *document = NULL;
-    parsed = yyjson_read_opts((char *)json, size, YYJSON_READ_NOFLAG, NULL, &error);
+    parsed = yyjson_read_opts((char *)json, size, YYJSON_READ_NOFLAG, &ss_zeroing_alc, &error);
     if (parsed == NULL) return false;
     root = yyjson_doc_get_root(parsed);
     if (!yyjson_is_obj(root) || !ss_json_tree_valid(root, 0)) {
@@ -114,10 +114,10 @@ bool ss_json_write_value(yyjson_val *value, secretspec_resolver_buffer *buffer) 
     char *json;
     bool copied;
     if (value == NULL || buffer == NULL) return false;
-    json = yyjson_val_write_opts((yyjson_val *)value, YYJSON_WRITE_NOFLAG, NULL, &size, &error);
+    json = yyjson_val_write_opts((yyjson_val *)value, YYJSON_WRITE_NOFLAG, &ss_zeroing_alc, &size, &error);
     if (json == NULL) return false;
     copied = ss_buffer_copy(buffer, (const unsigned char *)json, size);
     ss_secure_clear(json, size);
-    free(json);
+    ss_zeroing_free(json);
     return copied;
 }

@@ -114,11 +114,14 @@ pub use config::{
     ProviderCache, RequireReason, SecretEncoding, SecretExtract,
 };
 pub use error::{Result, SecretSpecError};
-pub use native::{INLINE_SPEC_SCHEMA_VERSION, NATIVE_CALL_REQUEST_VERSION, call_json};
+pub use native::{
+    INLINE_SPEC_SCHEMA_VERSION, MIN_INLINE_SPEC_SCHEMA_VERSION, NATIVE_CALL_REQUEST_VERSION,
+    call_json,
+};
 pub use provider::external::{
-    EndpointSecurity, ExternalProvider, PlatformEndpointSecurity, ProviderCredentialBroker,
-    ProviderCredentialRequest, ProviderDiscovery, ProviderEndpoint, RegistrationScope,
-    set_provider_discovery,
+    BASE_ENDPOINT_ENVIRONMENT, EndpointSecurity, ExternalProvider, PlatformEndpointSecurity,
+    ProviderCredentialBroker, ProviderCredentialPrincipal, ProviderCredentialRequest,
+    ProviderDiscovery, ProviderEndpoint, RegistrationScope, set_provider_discovery,
 };
 pub use provider::{Address, DiscoveryContext, ProducedValuePersistence, Provider, ProviderValue};
 pub use report::{

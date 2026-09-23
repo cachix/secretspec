@@ -149,6 +149,10 @@ impl Provider for PreflightGuard {
         self.inner.entry_coordinates(addr)
     }
 
+    fn entry_coordinates_many(&self, addrs: &[Address<'_>]) -> Result<Vec<NativeAddress>> {
+        self.inner.entry_coordinates_many(addrs)
+    }
+
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         self.check()?;
         self.inner.get(addr)
@@ -251,6 +255,10 @@ impl Provider for PreflightGuard {
 
     fn physical_store_path(&self) -> Option<&std::path::Path> {
         self.inner.physical_store_path()
+    }
+
+    fn configured_physical_store_path(&self) -> Option<&std::path::Path> {
+        self.inner.configured_physical_store_path()
     }
 
     fn set_reason(&self, reason: Option<String>) {

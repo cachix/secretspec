@@ -241,7 +241,7 @@ impl ScalewayProvider {
         })?;
         token.set_sensitive(true);
         headers.insert("X-Auth-Token", token);
-        reqwest::Client::builder()
+        super::http::client_builder()
             .default_headers(headers)
             .build()
             .map_err(|e| {

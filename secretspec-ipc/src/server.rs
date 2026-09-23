@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -71,7 +71,11 @@ struct PeerInner {
 #[derive(Debug, Default)]
 struct PeerCalls {
     pending: HashMap<RequestId, oneshot::Sender<Response>>,
-    abandoned: HashSet<RequestId>,
+    // Callbacks this side gave up on that the client has not answered yet.
+    // Each keeps its in-flight permit until that answer, because the client
+    // counts the callback as active until it responds and would reject a
+    // replacement sent into a slot it still considers occupied.
+    abandoned: HashMap<RequestId, OwnedSemaphorePermit>,
 }
 
 impl Peer {
@@ -135,7 +139,7 @@ impl Peer {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
-        let _permit = semaphore
+        let permit = semaphore
             .try_acquire_owned()
             .map_err(|_| RpcError::unavailable(None))?;
         let params =
@@ -198,7 +202,7 @@ impl Peer {
         let response = tokio::select! {
             biased;
             _ = context.cancellation.cancelled() => {
-                self.abandon_call(id).await;
+                self.abandon_call(id, permit).await;
                 return Err(RpcError::new(ErrorKind::Cancelled));
             }
             response = tokio::time::timeout_at(context.deadline, receiver) => response,
@@ -209,7 +213,7 @@ impl Peer {
             Ok(Ok(Response::Error(response))) => Err(response.error),
             Ok(Err(_)) => Err(RpcError::new(ErrorKind::Unavailable)),
             Err(_) => {
-                self.abandon_call(id).await;
+                self.abandon_call(id, permit).await;
                 Err(RpcError::new(ErrorKind::DeadlineExceeded))
             }
         }
@@ -228,18 +232,18 @@ impl Peer {
                 let _ = sender.send(response);
                 true
             }
-            None => calls.abandoned.remove(&id),
+            None => calls.abandoned.remove(&id).is_some(),
         }
     }
 
-    async fn abandon_call(&self, id: RequestId) {
-        // Record first, then remove from pending. `deliver` removes the marker
-        // when a response wins the race while the sender is still present.
+    async fn abandon_call(&self, id: RequestId, permit: OwnedSemaphorePermit) {
+        // Both tables change under one lock. If `deliver` already took the
+        // sender, the callback is terminal and its permit is released now;
+        // otherwise the marker keeps it until the client's answer arrives.
         let mut calls = self.inner.calls.lock().await;
-        if calls.abandoned.len() < MAX_ABANDONED_CALLBACKS {
-            calls.abandoned.insert(id);
+        if calls.pending.remove(&id).is_some() && calls.abandoned.len() < MAX_ABANDONED_CALLBACKS {
+            calls.abandoned.insert(id, permit);
         }
-        calls.pending.remove(&id);
     }
 
     async fn fail_all(&self) {
@@ -1343,6 +1347,54 @@ mod tests {
             assert!(!peer.deliver(terminal).await, "duplicates remain invalid");
         }
         assert!(peer.inner.calls.lock().await.abandoned.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_abandoned_callback_keeps_its_slot_until_the_client_answers() {
+        let (writer_tx, mut writer_rx) = mpsc::channel::<WriterCommand>(4);
+        let peer = Peer::new(&writer_tx);
+        peer.inner
+            .capabilities
+            .write()
+            .unwrap()
+            .insert("client.prompt".to_string());
+        let context = |deadline| RequestContext {
+            request_id: RequestId::new(10).unwrap(),
+            deadline,
+            cancellation: CancellationToken::new(),
+            peer: peer.clone(),
+        };
+
+        let error = peer
+            .call::<_, Value>("client.prompt", &json!({}), &context(Instant::now()))
+            .await
+            .unwrap_err();
+        assert_eq!(error.data.kind, ErrorKind::DeadlineExceeded);
+        let _request = writer_rx.recv().await.unwrap();
+
+        // The client still counts callback 1 as active, so the single slot
+        // stays taken rather than letting a second callback violate its limit.
+        let error = peer
+            .call::<_, Value>(
+                "client.prompt",
+                &json!({}),
+                &context(Instant::now() + Duration::from_secs(300)),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.data.kind, ErrorKind::Unavailable);
+
+        let terminal = Response::error(
+            Some(RequestId::new(1).unwrap()),
+            RpcError::new(ErrorKind::DeadlineExceeded),
+        );
+        assert!(peer.deliver(terminal).await);
+        let error = peer
+            .call::<_, Value>("client.prompt", &json!({}), &context(Instant::now()))
+            .await
+            .unwrap_err();
+        assert_eq!(error.data.kind, ErrorKind::DeadlineExceeded);
+        let _request = writer_rx.recv().await.unwrap();
     }
 
     #[tokio::test]

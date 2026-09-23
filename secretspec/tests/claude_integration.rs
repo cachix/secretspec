@@ -271,6 +271,95 @@ fn embedded_login_credential_and_logout_use_the_configured_provider() {
 }
 
 #[test]
+fn login_and_logout_ignore_an_ambient_provider_over_the_pinned_one() {
+    let fixture = Fixture::new();
+    let pinned_store = fixture.root.join("pinned.env");
+    let pinned = format!("dotenv://{}", pinned_store.display());
+    let ambient_store = fixture.root.join("ambient.env");
+    let ambient = format!("dotenv://{}", ambient_store.display());
+
+    let output = fixture.embedded_configure(&pinned);
+    assert_success("pinned Claude configure", &output);
+    let mut login = fixture.command();
+    login.env("SECRETSPEC_PROVIDER", &ambient);
+    let output = command_with_stdin(login, &["claude", "login"], b"pinned-token\n");
+    assert_success("Claude login with an ambient provider", &output);
+    assert!(
+        !ambient_store.exists(),
+        "login must not write to the ambient SECRETSPEC_PROVIDER store"
+    );
+    let output = fixture.credential();
+    assert_success("Claude credential after ambient login", &output);
+    assert_eq!(output.stdout, b"pinned-token\n");
+
+    let output = fixture
+        .command()
+        .env("SECRETSPEC_PROVIDER", &ambient)
+        .args(["claude", "logout"])
+        .output()
+        .unwrap();
+    assert_success("Claude logout with an ambient provider", &output);
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("Removed stored"),
+        "logout must remove the credential from the pinned store"
+    );
+}
+
+#[test]
+fn unpinned_login_and_helper_use_the_user_default_not_the_ambient_provider() {
+    let fixture = Fixture::new();
+    let output = fixture
+        .command()
+        .args(["claude", "configure"])
+        .output()
+        .unwrap();
+    assert_success("unpinned Claude configure", &output);
+    // The user config lives next to the state file configure just wrote.
+    let config_dir = fixture.state_path().parent().unwrap().to_path_buf();
+    let default_store = fixture.root.join("default.env");
+    fs::write(
+        config_dir.join("config.toml"),
+        format!(
+            "[defaults]\nprovider = 'dotenv://{}'\n",
+            default_store.display()
+        ),
+    )
+    .unwrap();
+    let ambient_store = fixture.root.join("ambient.env");
+
+    let mut login = fixture.command();
+    login.env(
+        "SECRETSPEC_PROVIDER",
+        format!("dotenv://{}", ambient_store.display()),
+    );
+    let output = command_with_stdin(login, &["claude", "login"], b"default-token\n");
+    assert_success("unpinned Claude login with an ambient provider", &output);
+    assert!(!ambient_store.exists());
+    let output = fixture.credential();
+    assert_success("unpinned Claude credential", &output);
+    assert_eq!(output.stdout, b"default-token\n");
+
+    // The helper ignores the variable too, so a shell that exports it still
+    // reads the credential login stored.
+    let output = fixture
+        .command()
+        .env(
+            "SECRETSPEC_PROVIDER",
+            format!("dotenv://{}", ambient_store.display()),
+        )
+        .args([
+            "claude",
+            "credential",
+            "--configuration",
+            &fixture.helper_id(),
+        ])
+        .output()
+        .unwrap();
+    assert_success("Claude credential with an ambient provider", &output);
+    assert_eq!(output.stdout, b"default-token\n");
+}
+
+#[test]
 fn configure_refuses_to_replace_an_unmanaged_helper() {
     let fixture = Fixture::new();
     let mut settings = read_json(&fixture.settings);

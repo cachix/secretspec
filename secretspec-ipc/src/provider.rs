@@ -17,8 +17,17 @@ use zeroize::Zeroizing;
 
 /// Owned value passed across the endpoint-author boundary. Its backing bytes
 /// are cleared on drop independently of the JSON frame buffer.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SecretValue(Zeroizing<String>);
+
+impl std::fmt::Debug for SecretValue {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("SecretValue")
+            .field(&crate::protocol::Redacted)
+            .finish()
+    }
+}
 
 impl SecretValue {
     pub fn new(value: String) -> Self {

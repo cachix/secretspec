@@ -110,7 +110,33 @@ impl GoPassProvider {
     fn command(&self) -> Command {
         Command::new("gopass")
     }
+
+    /// Whether `entry` is a binary entry written by `gopass cat`, which marks
+    /// its body with `Content-Transfer-Encoding: Base64`.
+    ///
+    /// A failed lookup means the entry has no such key, so it is not one.
+    fn is_binary_entry(&self, entry: &str) -> crate::Result<bool> {
+        let output = self
+            .command()
+            .args(["show", "-y"])
+            .arg(entry)
+            .arg(BINARY_ENTRY_HEADER)
+            .output()
+            .map_err(|e| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to execute 'gopass' command: {}. Is gopass installed?",
+                    e
+                ))
+            })?;
+        Ok(output.status.success()
+            && String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .eq_ignore_ascii_case("base64"))
+    }
 }
+
+/// The key `gopass cat` sets on the binary entries it writes.
+const BINARY_ENTRY_HEADER: &str = "Content-Transfer-Encoding";
 
 impl Provider for GoPassProvider {
     /// Convention entries live under the folder-prefix format string,
@@ -157,9 +183,13 @@ impl Provider for GoPassProvider {
 
         // Keep the established password-only semantics for existing text
         // entries. Native binary entries written by `cat` have no password
-        // line, so gopass directs us to their body instead.
+        // line, so gopass directs us to their body instead. Only an entry that
+        // carries the Base64 header `cat` writes is read that way: for any
+        // other entry, such as one holding only YAML metadata, `cat` prints
+        // the whole entry, which is not a secret value.
         let lossless = output.status.code() == Some(11)
-            && String::from_utf8_lossy(&output.stderr).contains("no password to display");
+            && String::from_utf8_lossy(&output.stderr).contains("no password to display")
+            && self.is_binary_entry(&entry_name)?;
         if lossless {
             output = self
                 .command()

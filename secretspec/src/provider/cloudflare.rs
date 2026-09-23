@@ -353,7 +353,7 @@ impl CloudflareProvider {
     }
 
     fn client(&self) -> Result<reqwest::Client> {
-        reqwest::Client::builder()
+        super::http::client_builder()
             .default_headers(self.auth_headers()?)
             // Account-secret values must remain confined to Cloudflare's fixed
             // API origin. In particular, never replay a PATCH/POST body after

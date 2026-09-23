@@ -92,8 +92,9 @@ satisfies `require_reason`. Do not put credentials or secret values in it.
 <VersionCompatibility version="0.20" />
 
 Use `try builder.withInlineSpec(spec, baseDir: ...)` with an `Encodable`
-declaration to resolve strict inline-spec v1 JSON. The base directory resolves
-relative provider paths; an older XCFramework fails to link the versioned call.
+declaration to resolve strict inline-spec v2 JSON (SecretSpec 0.21+). The base
+directory resolves relative provider paths; an older XCFramework fails to link
+the versioned call.
 
 ## Scopes
 

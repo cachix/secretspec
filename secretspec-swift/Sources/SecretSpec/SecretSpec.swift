@@ -110,7 +110,7 @@ public struct SecretSpecBuilder: Sendable {
         return copy
     }
 
-    /// Resolves strict inline-spec v1 at `baseDir` (SecretSpec 0.20+).
+    /// Resolves strict inline-spec v2 at `baseDir` (SecretSpec 0.21+).
     ///
     /// The declaration is encoded once into the dedicated native wire format.
     /// An older native library reports a capability error rather than searching

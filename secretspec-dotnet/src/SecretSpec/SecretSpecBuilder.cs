@@ -20,7 +20,7 @@ public sealed class SecretSpecBuilder
         return this;
     }
 
-    /// <summary>Resolve strict inline-spec v1 at <paramref name="baseDir"/> (SecretSpec 0.20+).</summary>
+    /// <summary>Resolve strict inline-spec v2 at <paramref name="baseDir"/> (SecretSpec 0.21+).</summary>
     public SecretSpecBuilder WithInlineSpec(JsonElement spec, string baseDir)
     {
         if (spec.ValueKind == JsonValueKind.Undefined)
@@ -34,8 +34,8 @@ public sealed class SecretSpecBuilder
     }
 
     /// <summary>
-    /// Resolve a pre-serialized strict inline-spec v1 at <paramref name="baseDir"/>
-    /// (SecretSpec 0.20+).
+    /// Resolve a pre-serialized strict inline-spec v2 at <paramref name="baseDir"/>
+    /// (SecretSpec 0.21+).
     /// </summary>
     public SecretSpecBuilder WithInlineSpec(string specJson, string baseDir)
     {
@@ -44,8 +44,8 @@ public sealed class SecretSpecBuilder
     }
 
     /// <summary>
-    /// Resolve strict inline-spec v1 using source-generated JSON metadata
-    /// (SecretSpec 0.20+).
+    /// Resolve strict inline-spec v2 using source-generated JSON metadata
+    /// (SecretSpec 0.21+).
     /// </summary>
     public SecretSpecBuilder WithInlineSpec<T>(T spec, string baseDir, JsonTypeInfo<T> jsonTypeInfo)
         => WithInlineSpec(JsonSerializer.SerializeToElement(spec, jsonTypeInfo), baseDir);

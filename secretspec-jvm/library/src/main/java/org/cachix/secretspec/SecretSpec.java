@@ -62,8 +62,9 @@ public class SecretSpec {
         }
 
         /**
-         * Limits resolution to a named manifest scope (SecretSpec 0.21+).
-         * @param inlineSpec the strict inline-spec v1 declarations (JSON content)
+         * Resolves a strict inline declaration at {@code baseDir} instead of
+         * searching for a filesystem manifest (SecretSpec 0.21+).
+         * @param inlineSpec the strict inline-spec v2 declarations (JSON content)
          * @param baseDir the directory used to resolve relative provider paths
          * @return the fluent builder
          */

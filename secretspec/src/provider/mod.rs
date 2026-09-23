@@ -90,8 +90,20 @@ mod credentials;
 #[allow(unused_imports, unused_macros)]
 mod disabled;
 mod factory;
+#[cfg(any(
+    feature = "aac",
+    feature = "cloudflare",
+    feature = "doppler",
+    feature = "infisical",
+    feature = "openbao",
+    feature = "scaleway",
+    feature = "setec",
+    feature = "vault"
+))]
+mod http;
 #[macro_use]
 pub mod macros;
+#[cfg(any(feature = "awssm", feature = "infisical", feature = "scaleway", test))]
 mod path;
 mod preflight;
 mod registry;

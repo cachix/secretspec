@@ -7,6 +7,16 @@ pub const RESOLVER_PROTOCOL: &str = "secretspec.resolver";
 pub const PROVIDER_PROTOCOL: &str = "secretspec.provider";
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// Stands in for a secret in `Debug` output, so logging a protocol message
+/// never prints the value it carries.
+pub(crate) struct Redacted;
+
+impl std::fmt::Debug for Redacted {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("<redacted>")
+    }
+}
+
 pub mod rpc {
     /// Return this endpoint's OpenRPC description without initializing
     /// application state (0.21+).
@@ -219,9 +229,18 @@ pub mod callback {
 
     /// The answer carries a secret and is treated exactly like a resolved
     /// value: never logged, and dropped as soon as it is copied.
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct PromptResult {
         pub value: String,
+    }
+
+    impl std::fmt::Debug for PromptResult {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("PromptResult")
+                .field("value", &super::Redacted)
+                .finish()
+        }
     }
 
     impl PromptResult {
@@ -267,11 +286,23 @@ pub mod callback {
     /// A broker lookup is either a secret value or an ordinary miss. Missing
     /// is not a transport failure: the endpoint may try another authentication
     /// mechanism or return its own actionable authentication error.
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
     pub enum CredentialResult {
         Found { value: String },
         Missing,
+    }
+
+    impl std::fmt::Debug for CredentialResult {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Found { .. } => formatter
+                    .debug_struct("Found")
+                    .field("value", &super::Redacted)
+                    .finish(),
+                Self::Missing => formatter.write_str("Missing"),
+            }
+        }
     }
 
     impl CredentialResult {
@@ -662,7 +693,23 @@ pub mod resolver {
         Missing,
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    impl std::fmt::Debug for ResolvedValueResult {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("ResolvedValueResult")
+                .field("status", &self.status)
+                .field("representation", &self.representation)
+                .field("value", &super::Redacted)
+                .field("source", &self.source)
+                .field("source_provider", &self.source_provider)
+                .field("expires_at_unix_ms", &self.expires_at_unix_ms)
+                .field("revision", &self.revision)
+                .field("refresh_at_unix_ms", &self.refresh_at_unix_ms)
+                .finish()
+        }
+    }
+
+    #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct ResolvedValueResult {
         pub status: ResolvedStatus,
         pub representation: ValueRepresentation,
@@ -727,12 +774,23 @@ pub mod resolver {
         Path(ResolvedPathResult),
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct SetParams {
         pub name: String,
         pub value: String,
         pub purpose: Purpose,
+    }
+
+    impl std::fmt::Debug for SetParams {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("SetParams")
+                .field("name", &self.name)
+                .field("value", &super::Redacted)
+                .field("purpose", &self.purpose)
+                .finish()
+        }
     }
 
     impl SetParams {
@@ -1197,7 +1255,7 @@ pub mod provider {
         pub coordinates: Coordinates,
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(tag = "status", rename_all = "snake_case")]
     pub enum GetResult {
         Found {
@@ -1208,6 +1266,24 @@ pub mod provider {
             revision: Option<crate::Revision>,
         },
         Missing,
+    }
+
+    impl std::fmt::Debug for GetResult {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Found {
+                    value: _,
+                    expires_at_unix_ms,
+                    revision,
+                } => formatter
+                    .debug_struct("Found")
+                    .field("value", &super::Redacted)
+                    .field("expires_at_unix_ms", expires_at_unix_ms)
+                    .field("revision", revision)
+                    .finish(),
+                Self::Missing => formatter.write_str("Missing"),
+            }
+        }
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1328,11 +1404,21 @@ pub mod provider {
         pub exists: bool,
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct SetParams {
         pub address: Address,
         pub value: String,
+    }
+
+    impl std::fmt::Debug for SetParams {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("SetParams")
+                .field("address", &self.address)
+                .field("value", &super::Redacted)
+                .finish()
+        }
     }
 
     impl SetParams {
@@ -1341,12 +1427,23 @@ pub mod provider {
         }
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct SetExpiringParams {
         pub address: Address,
         pub value: String,
         pub ttl_ms: u64,
+    }
+
+    impl std::fmt::Debug for SetExpiringParams {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("SetExpiringParams")
+                .field("address", &self.address)
+                .field("value", &super::Redacted)
+                .field("ttl_ms", &self.ttl_ms)
+                .finish()
+        }
     }
 
     impl SetExpiringParams {
@@ -1469,6 +1566,82 @@ pub mod provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_never_prints_secret_values() {
+        const SECRET: &str = "hunter2";
+        let address = provider::Address::Convention {
+            project: "app".into(),
+            profile: "default".into(),
+            key: "TOKEN".into(),
+        };
+        let value = resolver::ResolvedValueResult {
+            status: resolver::ResolvedStatus::Resolved,
+            representation: resolver::ValueRepresentation::Value,
+            value: SECRET.into(),
+            source: resolver::Source::Provider,
+            source_provider: None,
+            expires_at_unix_ms: None,
+            revision: None,
+            refresh_at_unix_ms: None,
+        };
+        let rendered = [
+            format!(
+                "{:?}",
+                callback::PromptResult {
+                    value: SECRET.into()
+                }
+            ),
+            format!(
+                "{:?}",
+                callback::CredentialResult::Found {
+                    value: SECRET.into()
+                }
+            ),
+            format!("{:?}", resolver::GetResult::Value(value)),
+            format!(
+                "{:?}",
+                resolver::SetParams {
+                    name: "TOKEN".into(),
+                    value: SECRET.into(),
+                    purpose: resolver::Purpose {
+                        consumer: "test".into(),
+                        operation: "store".into(),
+                        host: None,
+                        path: None,
+                    },
+                }
+            ),
+            format!(
+                "{:?}",
+                provider::GetResult::Found {
+                    value: SECRET.into(),
+                    expires_at_unix_ms: None,
+                    revision: None,
+                }
+            ),
+            format!(
+                "{:?}",
+                provider::SetParams {
+                    address: address.clone(),
+                    value: SECRET.into(),
+                }
+            ),
+            format!(
+                "{:?}",
+                provider::SetExpiringParams {
+                    address,
+                    value: SECRET.into(),
+                    ttl_ms: 1,
+                }
+            ),
+            format!("{:?}", crate::provider::SecretValue::new(SECRET.into())),
+        ];
+        for debug in rendered {
+            assert!(!debug.contains(SECRET), "{debug}");
+            assert!(debug.contains("<redacted>"), "{debug}");
+        }
+    }
 
     #[test]
     fn limit_selection_never_increases_an_offer() {

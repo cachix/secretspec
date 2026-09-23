@@ -1,5 +1,7 @@
 #include "internal.h"
 
+#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -30,6 +32,63 @@ void ss_secure_clear(void *pointer, size_t size) {
     volatile unsigned char *bytes = (volatile unsigned char *)pointer;
     while (size-- != 0) *bytes++ = 0;
 }
+
+/* yyjson's free hook passes no size, so each block records its own in a
+ * header. Keep the payload aligned as malloc would return it. MSVC's C
+ * headers do not provide max_align_t, so use a 16-byte stride there. */
+typedef union {
+    size_t size;
+#ifdef _MSC_VER
+    unsigned char padding[16];
+#else
+    max_align_t align;
+#endif
+} ss_block_header;
+
+static void *ss_zeroing_malloc(void *context, size_t size) {
+    ss_block_header *header;
+    (void)context;
+    if (size > SIZE_MAX - sizeof(*header)) return NULL;
+    header = (ss_block_header *)malloc(sizeof(*header) + size);
+    if (header == NULL) return NULL;
+    header->size = size;
+    return header + 1;
+}
+
+void ss_zeroing_free(void *pointer) {
+    ss_block_header *header;
+    if (pointer == NULL) return;
+    header = (ss_block_header *)pointer - 1;
+    ss_secure_clear(pointer, header->size);
+    free(header);
+}
+
+static void ss_zeroing_free_hook(void *context, void *pointer) {
+    (void)context;
+    ss_zeroing_free(pointer);
+}
+
+/* Never delegate to realloc: it may move the block and release the old copy
+ * without wiping it. */
+static void *ss_zeroing_realloc(void *context, void *pointer, size_t old_size, size_t size) {
+    void *moved;
+    size_t kept;
+    (void)old_size;
+    if (pointer == NULL) return ss_zeroing_malloc(context, size);
+    moved = ss_zeroing_malloc(context, size);
+    if (moved == NULL) return NULL;
+    kept = ((ss_block_header *)pointer - 1)->size;
+    memcpy(moved, pointer, kept < size ? kept : size);
+    ss_zeroing_free(pointer);
+    return moved;
+}
+
+const yyjson_alc ss_zeroing_alc = {
+    ss_zeroing_malloc,
+    ss_zeroing_realloc,
+    ss_zeroing_free_hook,
+    NULL,
+};
 
 void ss_buffer_reset(secretspec_resolver_buffer *buffer) {
     if (buffer != NULL) {

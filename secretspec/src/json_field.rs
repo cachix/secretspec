@@ -32,6 +32,7 @@ pub(crate) fn render(value: &serde_json::Value) -> SecretString {
 /// This is deliberately not the same policy as [`render`]: an `extract` pointer
 /// names one location and reports what is there, while a provider `field` is a
 /// lookup that can come up empty.
+#[cfg(any(feature = "awssm", feature = "scaleway", test))]
 pub(crate) fn render_field(value: &serde_json::Value) -> Option<SecretString> {
     match value {
         serde_json::Value::Null => None,

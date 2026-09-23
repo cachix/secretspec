@@ -709,7 +709,9 @@ impl ResolverSession {
 impl Drop for ChildSession {
     fn drop(&mut self) {
         // Emergency best effort only; the explicit async close path reaps and
-        // joins every worker. Never block a foreign/runtime destructor.
+        // joins every worker. Never block a foreign/runtime destructor. When
+        // the lock is contended, the monitor drops the last child handle once
+        // cancelled, and `kill_on_drop` kills the child then.
         self.monitor_cancel.cancel();
         if let Ok(mut child) = self.child.try_lock() {
             let _ = child.start_kill();
@@ -748,7 +750,10 @@ where
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(false);
+        // The last owner of the child kills it: a launch future dropped
+        // mid-initialization, an early error return, or a session dropped
+        // while the monitor held the lock. A reaped child is not signalled.
+        .kill_on_drop(true);
     match &options.environment {
         Environment::Inherit(overrides) => {
             command.envs(overrides);
@@ -774,7 +779,8 @@ where
 
     let stderr_limit = options.max_stderr_bytes;
     let stderr_task = tokio::spawn(async move {
-        let mut retained = Zeroizing::new(Vec::with_capacity(stderr_limit.min(4096)));
+        // Allocated once at the bound: growing would free unwiped copies.
+        let mut retained = Zeroizing::new(Vec::with_capacity(stderr_limit));
         let mut buffer = Zeroizing::new(vec![0_u8; 4096]);
         loop {
             let read: usize = stderr.read(&mut buffer).await.unwrap_or_default();
@@ -915,6 +921,84 @@ mod tests {
         async fn shutdown(&self) {
             self.entered.notify_one();
             self.release.notified().await;
+        }
+    }
+
+    /// A caller that abandons a launch (a `select!` or an outer timeout) must
+    /// not leave the endpoint running.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_dropped_launch_kills_its_child() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("pid");
+        let options = LaunchOptions {
+            executable: "/bin/sh".into(),
+            arguments: vec![
+                "-c".into(),
+                // Never answers initialize, so the launch stays pending.
+                "echo $$ > \"$0\"; exec cat > /dev/null".into(),
+                pid_file.clone().into(),
+            ],
+            environment: Environment::Inherit(Default::default()),
+            allow_path_discovery: false,
+            max_stderr_bytes: 4096,
+        };
+        let initialize = InitializeParams {
+            protocol: RESOLVER_PROTOCOL.to_string(),
+            versions: vec![PROTOCOL_VERSION],
+            client: Product {
+                name: "drop-test".to_string(),
+                version: "1".to_string(),
+            },
+            limits: Limits {
+                max_frame_bytes: 32 * 1024,
+                max_in_flight: 4,
+            },
+            client_methods: Vec::new(),
+            application: json!({}),
+        };
+        let launch = spawn::<Value, Value>(
+            options,
+            initialize,
+            deadline_unix_ms_after(Duration::from_secs(300)),
+        );
+        // Boxed so `drop` below destroys the future itself, not a pinned borrow.
+        let mut launch = Box::pin(launch);
+        let started = async {
+            loop {
+                if let Ok(pid) = std::fs::read_to_string(&pid_file)
+                    && let Some(pid) = pid.strip_suffix('\n')
+                {
+                    return pid.to_string();
+                }
+                tokio::task::yield_now().await;
+            }
+        };
+        let pid = tokio::select! {
+            biased;
+            _ = &mut launch => panic!("an endpoint that never answers cannot initialize"),
+            pid = started => pid,
+        };
+        drop(launch);
+
+        // SIGKILL leaves the process a zombie until the runtime reaps it, so
+        // either state proves it no longer runs.
+        let stat = format!("/proc/{pid}/stat");
+        loop {
+            match std::fs::read_to_string(&stat) {
+                Err(_) => break,
+                Ok(stat)
+                    if stat
+                        .rsplit_once(')')
+                        .unwrap()
+                        .1
+                        .trim_start()
+                        .starts_with('Z') =>
+                {
+                    break;
+                }
+                Ok(_) => tokio::task::yield_now().await,
+            }
         }
     }
 

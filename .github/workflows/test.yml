@@ -191,7 +191,7 @@ jobs:
     - name: Check each provider feature standalone
       run: |
         set -euo pipefail
-        for feature in cli keyring keeper gcsm awssm vault openbao infisical doppler bws akv aac ejson sops bw kubernetes cloudflare; do
+        for feature in cli keyring kdbx keeper gcsm awssm awsps vault openbao infisical doppler bws akv aac age ejson sops bw kubernetes cloudflare scaleway setec; do
           echo "::group::$feature"
           cargo check --package secretspec --no-default-features --features "$feature"
           echo "::endgroup::"

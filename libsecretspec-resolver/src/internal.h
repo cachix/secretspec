@@ -51,6 +51,12 @@ void ss_process_free(ss_process *process);
 
 uint64_t ss_now_unix_ms(void);
 void ss_secure_clear(void *pointer, size_t size);
+/* yyjson allocator that wipes every block, including one a reallocation
+ * leaves behind, before returning it to the system. Documents and serialized
+ * text that may carry secret values are allocated through it; text written
+ * with it is released with ss_zeroing_free. */
+extern const yyjson_alc ss_zeroing_alc;
+void ss_zeroing_free(void *pointer);
 void ss_buffer_reset(secretspec_resolver_buffer *buffer);
 bool ss_buffer_copy(secretspec_resolver_buffer *buffer, const unsigned char *data, size_t size);
 void ss_set_error(secretspec_resolver_buffer *error, const char *kind, const char *message);

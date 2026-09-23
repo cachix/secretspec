@@ -7,224 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Cached values are written in cache envelope v4 so binary values survive
+  caching (0.21+). Entries written by earlier releases stay readable, but
+  SecretSpec 0.20 and earlier cannot read v4 entries: they warn, read the
+  authoritative provider instead, and never replace or clear those entries.
+  Do not share one cache store between 0.20 and 0.21.
+
+- Command generators store their output exactly, including a trailing newline
+  (0.21+). A generator such as `command = "openssl rand -hex 32"` now produces
+  a value ending in `\n`; use `printf`, `tr -d '\n'`, or an equivalent to omit
+  it. Previously generated values are unaffected. Output that is empty or only
+  Unicode whitespace is still rejected.
+
+- `secretspec get` writes the exact value without a trailing newline when
+  stdout is a pipe or file; a terminal still gets one (0.21+). `$(...)`
+  substitution is unaffected.
+
+- The Rust API is byte-native (0.21+). `Secrets::set` takes `SecretBytes`:
+  replace `set(name, Some(value))` with `set_text(name, &value)` and
+  `set(name, None)` with `prompt_and_set(name)`. The `Provider` trait's `get`,
+  `set`, and `get_many` use `SecretBytes`, `Provider::name` returns `&str`, and
+  `generator::generate` returns bytes.
+
 ### Added
 
-- IPC resolution exposes optional non-secret revision tokens for downstream task
-  cache invalidation (0.21+). AWS Secrets Manager reports value-bound revisions,
-  preserved through SecretSpec caches and field extraction.
+- Versioned local IPC (0.21+). `secretspec serve` runs a private stdio
+  resolver that answers the Secret Resolution Protocol, and out-of-tree
+  provider endpoints can be installed and discovered as trusted external
+  providers. Highlights:
+  - Independent clients: the Rust `secretspec-ipc` crate (async, plus a
+    `blocking` feature that needs no async runtime, and SSH or existing
+    authenticated streams for remote connections) and the pure C
+    `libsecretspec-resolver`. Both enforce the same framing limits, request
+    deadlines (clamped to 300 seconds), and error kinds, and report an endpoint
+    that writes non-protocol text to stdout by name.
+  - Exact-name resolution with inline values or resolver-owned file leases,
+    binary values, secret expiry (`expires_at_unix_ms`) kept separate from
+    cache freshness (`refresh_at_unix_ms`), and optional value-bound revision
+    tokens for downstream cache invalidation.
+  - Optional `resolver.set` and `resolver.delete` methods store or remove a
+    declared secret on the route the session reads from, bounded by the active
+    scope. `secretspec serve --read-only` advertises resolution only and
+    refuses any resolution that would write, including generation and
+    prompting.
+  - `prompt = true` declarations resolve through a `client.prompt` callback to
+    the launching process when it says it can answer; headless clients are
+    never asked. The C client exposes this without callbacks through
+    `SECRETSPEC_RESOLVER_ANSWER_PROMPTS`.
+  - External providers request URI-specific credentials at runtime.
+    `config provider login` and `secretspec set` prompt for missing ones and
+    store answers in the configured credential source or a system keyring
+    namespace private to the provider URI. Endpoints receive only a base
+    environment plus the variables their discovery claim declares in
+    `environment`, never other providers' tokens.
+  - Endpoints answer `rpc.discover` with a self-contained OpenRPC description.
+    Sessions carry declared project context, an optional requested
+    authorization lifetime, and opaque interaction references that are kept in
+    the audit log for approval surfaces.
+  - Provider discovery and lease files are isolated with Unix permissions and
+    Windows ACLs.
 
-- IPC resolution preserves binary secret values through caches and file leases,
-  while text protocol fields report explicit UTF-8 errors (0.21+).
+  Building `libsecretspec-resolver` from source needs a system yyjson
+  (pkg-config for Meson, `find_package(yyjson CONFIG)` for CMake); static
+  consumers add `-lyyjson`, which `secretspec-resolver.pc` records as
+  `Requires.private`.
 
-- Rust IPC resolver clients can connect through SSH, and async clients can use
-  existing authenticated streams. Remote connections default to inline values
-  so resolver-owned file paths are not mistaken for local files; reconnecting
-  starts a fresh session without repeating interrupted operations.
-
-- `secretspec set` can now prompt for missing required credentials requested by
-  external IPC providers, including in piped and noninteractive calls. Answers
-  are saved to their configured credential source or provider-private system
-  keyring before continuing the write.
-
-- IPC v1 now defines and enforces directional callback limits during
-  initialization, ties callbacks to their parent request's deadline and
-  lifetime in both Rust and C clients, and consistently ignores unknown but
-  structurally valid notifications. Initialization-state failures have
-  deterministic errors and connection closure, while the provider conformance
-  runner can use transport-only third-party endpoint profiles and report
-  provider-specific cases as not applicable.
-
-- IPC endpoints now answer side-effect-free `rpc.discover` requests before or
-  after initialization, returning a self-contained OpenRPC description with
-  endpoint metadata and embedded JSON Schemas for offline inspection tooling.
-
-- Windows external-provider discovery now distinguishes directory creation
-  rights from file mutation rights, allowing endpoints below standard protected
-  volume roots while continuing to reject replaceable path components.
-
-- External providers now request URI-specific credentials from SecretSpec at
-  runtime instead of declaring names in their installation claim or receiving
-  every configured credential during initialization. Provider aliases no
-  longer need a `credentials` table: `config provider login` discovers requested
-  names and stores them in a provider-private system-keyring namespace, while
-  configured sources remain lazy, explicit overrides.
-
-- Provider failures now preserve opaque interaction references in SecretSpec's
-  local audit log, allowing CLI and GUI approval surfaces to correlate an
-  actionable request without treating its ID as authorization material.
-
-- `libsecretspec-resolver` now links yyjson from the system instead of building
-  a vendored copy. Building it from source needs yyjson installed, discovered
-  through pkg-config for Meson or through `find_package(yyjson CONFIG)` for
-  CMake, and consumers of the static archive must add `-lyyjson` to their link
-  line. Its `secretspec-resolver.pc` records this as `Requires.private`. The
-  shared library still exports only its own `secretspec_resolver_*` symbols.
-
-- IPC sessions now use bounded newline-delimited JSON, monotonic request IDs,
-  and `_meta` request metadata. They distinguish methods from capabilities,
-  accept forward-compatible result fields, correlate callbacks with their
-  parent requests, tolerate notification races, and drain accepted work during
-  graceful shutdown.
-
-- External provider sessions now carry one structured declared project context
-  for consistent approval and audit displays, including native addresses.
-  `interaction_required` errors can include an opaque authorization reference
-  so a provider-owned CLI or notification can identify the pending decision
-  without exposing remediation text or treating project metadata as identity.
-- IPC subprocess sessions now reap children after startup timeouts, preserve a
-  buffered shutdown response when an endpoint exits immediately, and remain
-  usable after the terminal response from an expired callback arrives. Callback
-  requests now honor negotiated concurrency, reject reused IDs for the whole
-  session, and expire unanswered prompts at their deadline; watchdog-killed
-  blocking sessions report themselves closed. Resolver-mode ephemeral
-  generation also stays silent on stderr.
-
-- `secretspec serve --read-only` now refuses any resolution that would write to
-  a provider, instead of only withholding the store and remove methods.
-  Resolving is not always a read: a `generate = true` declaration with no stored
-  value is minted and written back, and a `prompt = true` one is written back
-  after a person answers, so a read could still reach the store through a
-  session that advertised no way to write. Both are now refused with
-  `permission_denied`. Producing a value the provider does not store is
-  unaffected, and so is SecretSpec's own cache.
-
-- IPC clients now decode an error kind or a resolved-value `source` they do not
-  recognize instead of failing the session. Both are closed for senders and open
-  for receivers, so a later protocol revision can name a new failure or a new
-  value origin without breaking a deployed peer. An unrecognized error is
-  reported as a failure and never as a success, and a code the client does know
-  must still arrive with the kind that belongs to it.
-
-- An IPC endpoint that writes a banner, warning, or stack trace to the stream
-  reserved for protocol frames is now reported as having written non-protocol
-  text, instead of as an oversized frame. Both the Rust and C clients report it,
-  and neither echoes the bytes. This is the most common integration failure when
-  bringing up a new endpoint, and the old message pointed at a frame-size
-  problem that did not exist.
-
-- Rust SDK and resolver IPC callers can request a default authorization
-  lifetime for provider approval surfaces. The request is forwarded as
-  untrusted application context; the provider and approving user retain control
-  of the actual grant lifetime.
-
-- `secretspec-ipc` gained a `blocking` feature with a synchronous
-  `secretspec.resolver/1` session, so a program with no async runtime can talk to
-  `secretspec serve` without acquiring one. It speaks the same wire
-  protocol as the async client and passes the same fake-peer conformance cases,
-  and it pulls in no dependencies beyond the crate's existing serde, serde_json,
-  thiserror, and zeroize. Deadlines are enforced by terminating the child, since
-  a blocking pipe read cannot be interrupted.
-
-- `libsecretspec-resolver` can answer prompts, so a C consumer is no longer headless
-  for a `prompt = true` declaration. It takes no callback: the ABI hands no
-  function pointer to a foreign runtime, so a session opened with
-  `SECRETSPEC_RESOLVER_ANSWER_PROMPTS` reports `SECRETSPEC_RESOLVER_PROMPT_PENDING` from a
-  waiting call, and the caller takes the prompt, answers or declines it, and
-  waits again. The library adds the advertised capability itself, so a consumer
-  cannot claim one this build could not answer.
-
-- A declaration with `prompt = true` can now be resolved over IPC. The resolver
-  has no terminal of its own, so it asks the process that launched it, using the
-  new `client.prompt` callback, and that process reads the value from a person
-  and answers on the same session. A client says whether it can answer during
-  initialization; one that cannot is never asked, so a headless consumer gets
-  its answer immediately instead of waiting out a deadline. The answer is
-  persisted exactly as a terminal prompt would persist it.
-
-- `secretspec serve` no longer writes its generation and prompt confirmations to
-  stderr. Those lines name which secrets a session provisioned, and a resolver's
-  stderr belongs to whatever launched it.
-
-- Provider reads can now report when the secret itself expires. Resolver
-  results keep that bound in `expires_at_unix_ms` and expose SecretSpec cache
-  freshness separately as `refresh_at_unix_ms`, preserving the earliest known
-  bounds through cached and composed results.
-- The Secret Resolution Protocol gained the optional `resolver.set` and
-  `resolver.delete` methods, so a consumer such as `cargo login` can store or
-  remove one declared secret where the same session resolves it, rather than
-  shelling out to `secretspec set` with a manifest of its own. The value lands
-  on the route the session reads from, an active scope bounds a write exactly as
-  it bounds a read, and removal stays idempotent. Both are advertised as
-  capabilities, so a client can tell an endpoint that is older or read-only
-  apart from one that refused a particular write, and `secretspec serve
-  --read-only` advertises resolution only.
-
-- SecretSpec 0.21+ adds versioned local IPC: a private stdio resolver,
-  trusted out-of-tree provider endpoints, independent Rust and pure-C clients,
-  exact-name resolution with resolver-owned file leases, and shared
-  schema/OpenRPC/conformance contracts, including executable common-case
-  drivers for both clients, the Rust provider endpoint and external adapter,
-  plus the real resolver process. Provider IPC preserves structured error kinds,
-  never uses protocol streams for prompts, and isolates endpoint state by URI
-  and reason; discovery precedence and non-replay are covered by executable
-  tests. IPC deadlines live once on the request envelope, endpoints advertise
-  their supported application methods, Rust exposes owned typed sessions and
-  endpoint helpers, and the C client includes a synchronous call convenience
-  API alongside cancellable call handles. The embedded C ABI is now named `libsecretspec`,
-  with `libsecretspec.so`/`.dylib`/`.dll`, `libsecretspec.a`, and
-  `libsecretspec.pc` as its public artifacts; runtime SDK loaders continue to
-  recognize the pre-0.20 `secretspec-ffi` filenames.
-
-- SecretSpec 0.21+ IPC enforces Windows ACL isolation for provider discovery
-  and resolver lease files, bounds cancellation and child-process cleanup by
-  request deadlines, and validates the same protocol constraints in its Rust
-  and C clients. Request deadlines are clamped to 300 seconds in the future by
-  both clients, so a peer cannot hold an in-flight slot indefinitely; a
-  provider endpoint that ignores shutdown is now always reaped rather than
-  left behind; and a transport failure still cancels in-flight work and runs
-  session cleanup. Correcting a rejected base directory or credential set
-  recovers an external provider instead of disabling it permanently, and a
-  rejected credential set no longer replaces the accepted one.
-
-- Both IPC clients now report a deadline that has already passed as
-  `deadline_exceeded` rather than the C client calling it an invalid argument,
-  so the same mistake has the same kind in either implementation and there is
-  no cliff at the current instant. Nothing is written and the session stays
-  usable, exactly as when a deadline elapses in flight.
-
-- SecretSpec 0.21+ IPC now preserves terminal responses that race a callback
-  deadline or child-process exit, and always gives a killed startup process a
-  fresh reaping budget. Windows provider discovery validates every executable
-  ancestor, the C launcher emits the sorted environment block required by
-  Windows, and prompt answers reject invalid UTF-8 before consuming the prompt.
-
-- Tailscale Setec can store, retrieve, discover, and delete secrets through a
-  tailnet-authenticated Setec server, including reads pinned to a Setec version
-  (0.21+).
-
-- JSON Schemas for `secretspec.toml` and user `config.toml` provide editor
-  autocomplete, hover descriptions, and structural validation. Export schemas
-  matching the installed CLI with `secretspec schema --config project` or
-  `secretspec schema --config global` (0.21+).
-
-- Secret values can flow through providers, fallback chains, imports, and the
-  cache as arbitrary bytes. `Secrets::set` and `secretspec set --from-file`
-  accept exact byte input, `as_path` preserves it byte-for-byte, the file and
-  systemd credential providers read binary values natively, and AWS Secrets
-  Manager supports `SecretBinary`; text-only consumers now return explicit
-  UTF-8 errors that name the affected secret (0.21+). Provider credentials
-  also retain their bytes through resolution, Unix CLI environments, and HTTP
-  headers. SDK and JSON interfaces
-  validate text only when required, and unusable explicit credentials,
-  including empty values, never silently select an environment fallback with
-  another identity.
-
-- Claude Code can retrieve Anthropic API and LLM gateway credentials from any
-  SecretSpec provider through its native `apiKeyHelper`. `secretspec claude
-  configure` and `unconfigure` safely manage repository or user settings,
-  including worktrees and `CLAUDE_CONFIG_DIR`, without replacing unrelated
-  helpers. `login` and `logout` manage credentials isolated by settings scope
-  and API resource; custom manifests remain available through `--file` (0.21+).
-
-- Bitwarden Password Manager references accept an exact item UUID in 0.21+ for
-  reads and writes, so one of several same-named items can be addressed without
-  renaming it.
-
-- OpenPGP and OpenSSH private keys can be generated entirely in Rust (0.21+).
-  OpenPGP generation uses an explicit User ID and signing, encryption, or
-  combined capability profiles; Ed25519/Curve25519 is the default, with
-  configurable RSA available for compatibility. OpenSSH generation likewise
-  defaults to Ed25519 and supports configurable RSA keys and comments.
+- **Tailscale Setec provider** (`setec://`, 0.21+): store, retrieve, discover,
+  and delete secrets, including binary values, through a tailnet-authenticated
+  Setec server, with reads pinned to a Setec version.
 
 - **Doppler provider** (`doppler://PROJECT[/CONFIG]`, 0.21+): read, write, and
   delete secrets over Doppler's REST API, authenticated with `DOPPLER_TOKEN` or
@@ -239,27 +91,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a rate-limited or failed request is retried after Doppler's suggested wait.
   A `restricted` secret Doppler will not serve to a personal or CLI token is
   reported as the refusal it is, and is not deleted either. Projects and configs
-  must already exist.
+  must already exist. A cached alias whose cache and source name the same
+  Doppler secret under the active profile is refused.
 
-- Cache planning refuses a cached provider alias whose cache entry and
-  authoritative entry are one physical secret under the active profile, which
-  comparing store identities alone cannot see: an unpinned `doppler://myapp`
-  under profile `prd` names the same secret as `doppler://myapp/prd`, and a
-  cache at that pairing would overwrite or delete the secret it caches (0.21+).
+- Secret values are byte-native (0.21+). Values flow through providers,
+  fallback chains, imports, and the cache as arbitrary bytes.
+  `secretspec set --from-file` accepts exact byte input, `as_path` preserves it
+  byte-for-byte, and Rust callers can use `resolve_bytes()` and
+  `resolve_named_bytes()`. The file, systemd credential, environment, keyring,
+  Google Secret Manager, Kubernetes, and Scaleway providers preserve binary
+  values, and AWS Secrets Manager supports `SecretBinary`. `run` passes
+  non-UTF-8 values on Unix and rejects NULs before starting the child. Text-only
+  consumers (SDK text responses, exports, SOPS, LastPass) return explicit UTF-8
+  errors that name the affected secret. Provider credentials retain their bytes,
+  and unusable explicit credentials, including empty values, never silently
+  select an environment fallback with another identity.
+
+- JSON Schemas for `secretspec.toml` and user `config.toml` provide editor
+  autocomplete, hover descriptions, and structural validation. Export schemas
+  matching the installed CLI with `secretspec schema --config project` or
+  `secretspec schema --config global` (0.21+).
+
+- Projects can select a default provider chain with `[defaults].providers`
+  (0.21+). Secret and profile provider chains retain precedence, and the
+  project default can name a user-global alias whose `ref` template expands
+  `{project}`, `{profile}`, and `{key}` for the active project. Native SDK
+  inline declarations expose the same setting through inline schema v2; v1
+  declarations remain accepted.
+
+- Claude Code can retrieve Anthropic API and LLM gateway credentials from any
+  SecretSpec provider through its native `apiKeyHelper`. `secretspec claude
+  configure` and `unconfigure` safely manage repository or user settings,
+  including worktrees and `CLAUDE_CONFIG_DIR`, without replacing unrelated
+  helpers. `login` and `logout` manage credentials isolated by settings scope
+  and API resource; custom manifests remain available through `--file` (0.21+).
+
+- Bitwarden Password Manager references accept an exact item UUID for reads and
+  writes, so one of several same-named items can be addressed without renaming
+  it (0.21+). Imports that would target one item field twice are rejected
+  before writing.
+
+- OpenPGP and OpenSSH private keys can be generated with `type =
+  "openpgp_private_key"` (with an explicit `generate.user_id`) and `type =
+  "ssh_private_key"` (0.21+). OpenPGP keys use signing, encryption, or combined
+  capability profiles; both default to Ed25519/Curve25519, with configurable
+  RSA available for compatibility.
+
+- The JVM SDK supports inline secret declarations through `withInlineSpec`
+  (0.21+).
 
 ### Fixed
 
-- IPC clients preserve request ordering under concurrency, and Rust endpoints
-  interoperate with C clients when no optional capabilities are enabled.
-  Server shutdown lets accepted requests and callbacks finish before its
-  deadline, and long-lived sessions release completed request tasks promptly.
-
-- IPC rejects incompatible secret representations before contacting providers,
-  keeps blocking write deadlines effective with inherited pipes, and supports C
-  resolver clients whose standard streams are closed.
-
-- Setec preserves binary secret values on reads and writes, and discovery
-  handles empty results from servers with no visible secrets (0.21+).
+- HTTP providers (Vault, OpenBao, Infisical, Cloudflare, Scaleway, Azure App
+  Configuration, Doppler, and Setec) now use a 10 second connect timeout and a
+  60 second request timeout, so a stalled connection fails instead of hanging
+  `run` or `check`. Vault and OpenBao retries on timeout now take effect.
 
 - On macOS, the keyring provider no longer prompts for the login keychain
   password on every run after SecretSpec is upgraded. Keychain items are bound
@@ -277,25 +163,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - KeePass KDBX 4.0 databases can be written after creation or editing in
   KeePassXC. Writes upgrade the file format to KDBX 4.1 while preserving
-  encryption and key-derivation settings (0.21+).
+  encryption and key-derivation settings.
 
 - Bitwarden Password Manager resolves a batch of secrets with a single `bw
-  list items` instead of one listing per secret (0.21+). Single reads whose
+  list items` instead of one listing per secret. Single reads whose
   `bw list items --search` prefilter returns only similarly named items now
   fall back to the full listing, so they find the same items as batch reads
   and writes.
-
-- Cache overlap checks no longer read provider storage before consulting cached
-  values, avoiding redundant Bitwarden vault listings during planning.
-
-- Command generation rejects Unicode-whitespace-only output while preserving
-  accepted secrets byte-for-byte, including binary output and surrounding whitespace.
-
-- LastPass rejects NUL-containing values before writing instead of silently
-  truncating them; use a manifest encoding such as base64 to store these values.
-  Typed Rust loads record conversion and prompting failures as failed reads in
-  the audit log, and `secretspec set --from-file` records a failed read of its
-  input as a failed set (0.21+).
 
 - pass, gopass, and LastPass preserve whitespace and multiline secrets across
   generation and subsequent reads. pass entries are stored newline terminated
@@ -307,36 +181,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still return only their trimmed first line until they are written again.
   LastPass's CLI newline handling no longer changes stored values.
 
-- Windows keyring passwords written by earlier releases remain readable.
-  Text retains its native password format, while binary values use a distinct
-  storage format so they cannot be confused with legacy passwords.
-
-- Scoped composition errors hide out-of-scope dependency names when their
-  values contain non-UTF-8 bytes.
-
-- Imports preserve binary values with or without `as_path`, including encoded
-  values whose decoded bytes are not UTF-8. Invalid stored encodings still fail
-  before destination writes or source cleanup. Inline validation retains bytes,
-  `get` writes exact values without adding a newline when stdout is a pipe or
-  file (a terminal still gets one), and `run` passes non-UTF-8
-  values on Unix while rejecting NULs before starting the child. Rust callers
-  can use `resolve_bytes()` and `resolve_named_bytes()` for binary values;
-  text SDK responses and exports continue to validate UTF-8 (0.21+). Environment
-  reads, keyring, Google Secret Manager, Kubernetes Secrets, and Scaleway now
-  preserve binary values. SOPS credentials preserve non-UTF-8 bytes in Unix
-  subprocess environments, SOPS refuses a non-UTF-8 secret value before
-  running any `sops` command, and command generators retain exact stdout bytes,
-  including whitespace and final newlines, while still rejecting output that
-  is empty or only whitespace.
-
-- `secretspec set --from-file` validates and displays the write destination
-  before reading input. Piped input without `--from-file` is still read as
-  trimmed text, and non-UTF-8 piped input is rejected with a message pointing
-  to `--from-file -`.
-
-- Bitwarden imports reject secrets targeting the same item field through a
-  title and a UUID before writing, preventing imported values from overwriting
-  each other.
+- LastPass rejects NUL-containing values before writing instead of silently
+  truncating them; use a manifest encoding such as base64 to store these values.
 
 ## [0.20.0] - 2026-08-31
 
@@ -413,12 +259,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Projects can select a default provider chain in 0.21+ with
-  `[defaults].providers`. Secret and profile provider chains retain precedence,
-  and the project default can name a user-global alias whose `ref` template
-  expands `{project}`, `{profile}`, and `{key}` for the active project. Native
-  SDK inline declarations expose the same setting through inline schema v2.
-
 - The age provider supports deleting secrets in 0.20+: `secretspec delete`,
   `secretspec import --delete-source`, and cache invalidation now work with it,
   so an age-encrypted file can serve as the local store of a cached provider
@@ -454,7 +294,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   [#383]: https://github.com/cachix/secretspec/issues/383
 
-- `extract` supports INI documents in SecretSpec 0.21+, selecting an
+- `extract` supports INI documents in SecretSpec 0.20+, selecting an
   unsectioned key with `/key` or a named-section key with `/section/key`.
 
 - Rust SDK (0.20+): **`SecretSpecBuilder::prompt_missing`** lets the typed loader
@@ -494,6 +334,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the URI, environment, process arguments, or a local key file. Batch
   resolution decrypts each file once, and the initial provider is intentionally
   read-only.
+
 - **Azure App Configuration provider** (`aac://`, 0.20+): select direct
   values and Azure Key Vault references by label, prefix, and tags, with Entra
   ID or connection-string authentication and guarded writes, deletion, and

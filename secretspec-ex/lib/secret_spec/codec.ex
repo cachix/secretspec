@@ -38,15 +38,28 @@ defmodule SecretSpec.Codec do
         {:error, :invalid_utf8}
 
       true ->
-        with :ok <- duplicate_and_nesting_check(body),
+        with :ok <- reject_cr(body),
+             :ok <- duplicate_and_nesting_check(body),
              {:ok, value} <- JSON.decode(body) do
           {:ok, value}
         else
-          {:error, reason} when reason in [:duplicate_key, :nesting_too_deep] -> {:error, reason}
-          _ -> {:error, :invalid_json}
+          {:error, reason} when reason in [:duplicate_key, :nesting_too_deep, :carriage_return] ->
+            {:error, reason}
+
+          _ ->
+            {:error, :invalid_json}
         end
     end
   end
+
+  defp reject_cr(body), do: reject_cr(body, false)
+
+  defp reject_cr(<<?\\, _char, rest::binary>>, true), do: reject_cr(rest, true)
+  defp reject_cr(<<?\r, _rest::binary>>, _in_string), do: {:error, :carriage_return}
+  defp reject_cr(<<?", rest::binary>>, true), do: reject_cr(rest, false)
+  defp reject_cr(<<?", rest::binary>>, false), do: reject_cr(rest, true)
+  defp reject_cr(<<_char, rest::binary>>, in_string), do: reject_cr(rest, in_string)
+  defp reject_cr(<<>>, _in_string), do: :ok
 
   defp duplicate_and_nesting_check(body) do
     with {:ok, rest, _depth} <- parse_value(skip_ws(body), 0),

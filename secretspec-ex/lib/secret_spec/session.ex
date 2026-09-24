@@ -5,8 +5,11 @@ defmodule SecretSpec.Session do
   @default_startup 5_000
   @default_timeout 30_000
   @max_request_timeout 300_000
-  @default_max_frame_bytes 32 * 1024
   @absolute_max_frame_bytes 1_048_576
+  @min_frame_bytes 4_096
+  @max_in_flight 32
+  @default_max_frame_bytes @absolute_max_frame_bytes
+  @default_max_in_flight 16
   @protocol "secretspec.resolver"
   @version 1
   @process_group_poll_ms 25
@@ -17,7 +20,10 @@ defmodule SecretSpec.Session do
             process_groups: [],
             executable: nil,
             methods: MapSet.new(),
-            limits: %{max_frame_bytes: @default_max_frame_bytes, max_in_flight: 1},
+            limits: %{
+              max_frame_bytes: @default_max_frame_bytes,
+              max_in_flight: @default_max_in_flight
+            },
             next_id: 1,
             pending: %{},
             callers: %{},
@@ -56,7 +62,7 @@ defmodule SecretSpec.Session do
     executable = Keyword.get(options, :executable) || System.find_executable("secretspec")
 
     if is_nil(executable) do
-      {:stop, {:error, :executable_not_found}}
+      {:stop, :executable_not_found}
     else
       args = Keyword.get(options, :arguments, ["serve"])
 
@@ -83,6 +89,7 @@ defmodule SecretSpec.Session do
         process_grouped: process_grouped,
         process_groups: process_groups,
         executable: executable,
+        limits: offered_limits(options),
         options: options,
         prompt: Keyword.get(options, :prompt),
         owner_ref: owner_ref
@@ -117,7 +124,7 @@ defmodule SecretSpec.Session do
 
     with :ok <- send_message(state, message) do
       timer = Process.send_after(self(), {:deadline, id}, @default_startup)
-      pending = Map.put(state.pending, id, {:initialize, nil, timer})
+      pending = Map.put(state.pending, id, {:initialize, nil, timer, nil})
 
       deadlines =
         Map.put(state.deadlines, id, System.system_time(:millisecond) + @default_startup)
@@ -166,7 +173,11 @@ defmodule SecretSpec.Session do
 
   def handle_call(:close, _from, %{status: :starting} = state) do
     safe_close_port(state.port, state.process_groups, state.process_grouped)
-    {:stop, :normal, :ok, %{state | status: :closed}}
+    reply = {:error, %Error{kind: "session_closed", message: "session closed"}}
+
+    Enum.each(state.waiters, fn {from, _request, _deadline} -> reply_if_present(from, reply) end)
+
+    {:stop, :normal, :ok, %{state | status: :closed, waiters: []}}
   end
 
   def handle_call(:close, _from, %{status: :closed} = state), do: {:reply, :ok, state}
@@ -194,7 +205,7 @@ defmodule SecretSpec.Session do
       {nil, _} ->
         {:noreply, state}
 
-      {{kind, from, timer}, pending} ->
+      {{kind, from, timer, _name}, pending} ->
         if timer, do: Process.cancel_timer(timer)
         send_cancel(state, id)
 
@@ -289,7 +300,7 @@ defmodule SecretSpec.Session do
           {nil, _pending} ->
             {:noreply, %{state | callers: callers}}
 
-          {{_kind, _from, timer}, pending} ->
+          {{_kind, _from, timer, _name}, pending} ->
             if timer, do: Process.cancel_timer(timer)
             send_cancel(state, id)
             state = cancel_callbacks_for_parent(state, id)
@@ -351,7 +362,7 @@ defmodule SecretSpec.Session do
           fail_all({:error, %Error{kind: "protocol", message: "unexpected response id"}}, state)
         end
 
-      {{:initialize, _from, timer}, pending} ->
+      {{:initialize, _from, timer, _name}, pending} ->
         if timer, do: Process.cancel_timer(timer)
 
         with :ok <- validate_initialize(result, state) do
@@ -383,9 +394,9 @@ defmodule SecretSpec.Session do
           {:error, reason} -> fail_all({:error, reason}, state)
         end
 
-      {{:request, from, timer}, pending} ->
+      {{:request, from, timer, name}, pending} ->
         if timer, do: Process.cancel_timer(timer)
-        reply = decode_result(result)
+        reply = decode_result(result, name)
         GenServer.reply(from, reply)
         state = cancel_callbacks_for_parent(state, id)
         state = remove_caller(state, id)
@@ -409,7 +420,7 @@ defmodule SecretSpec.Session do
           fail_all({:error, %Error{kind: "protocol", message: "unexpected response id"}}, state)
         end
 
-      {{:initialize, nil, timer}, pending} ->
+      {{:initialize, nil, timer, _name}, pending} ->
         if timer, do: Process.cancel_timer(timer)
 
         fail_all(
@@ -417,7 +428,7 @@ defmodule SecretSpec.Session do
           %{state | pending: pending, deadlines: Map.delete(state.deadlines, id)}
         )
 
-      {{_kind, from, timer}, pending} ->
+      {{_kind, from, timer, _name}, pending} ->
         if timer, do: Process.cancel_timer(timer)
         reply_if_present(from, {:error, Error.from_response(%{"error" => error})})
         state = cancel_callbacks_for_parent(state, id)
@@ -546,7 +557,7 @@ defmodule SecretSpec.Session do
       with :ok <- send_message(state, message) do
         timer = Process.send_after(self(), {:deadline, id}, timeout)
         caller_ref = Process.monitor(elem(from, 0))
-        pending = Map.put(state.pending, id, {:request, from, timer})
+        pending = Map.put(state.pending, id, {:request, from, timer, Map.get(params, "name")})
         deadlines = Map.put(state.deadlines, id, deadline)
 
         {:ok,
@@ -609,10 +620,10 @@ defmodule SecretSpec.Session do
 
   defp fail_all(reply, state) do
     Enum.each(state.pending, fn
-      {_id, {_kind, nil, timer}} ->
+      {_id, {_kind, nil, timer, _name}} ->
         if timer, do: Process.cancel_timer(timer)
 
-      {_id, {_kind, from, timer}} ->
+      {_id, {_kind, from, timer, _name}} ->
         if timer, do: Process.cancel_timer(timer)
         reply_if_present(from, reply)
     end)
@@ -646,6 +657,20 @@ defmodule SecretSpec.Session do
       message["jsonrpc"] == "2.0" and is_binary(message["method"]) and
       byte_size(message["method"]) in 1..256 and is_map(message["params"])
   end
+
+  defp offered_limits(options) do
+    %{
+      max_frame_bytes:
+        options
+        |> Keyword.get(:max_frame_bytes, @default_max_frame_bytes)
+        |> clamp(@min_frame_bytes, @absolute_max_frame_bytes),
+      max_in_flight:
+        options |> Keyword.get(:max_in_flight, @default_max_in_flight) |> clamp(1, @max_in_flight)
+    }
+  end
+
+  defp clamp(value, min, max) when is_integer(value), do: value |> max(min) |> min(max)
+  defp clamp(_value, min, _max), do: min
 
   defp frame_limit(%{status: :starting}), do: @absolute_max_frame_bytes
   defp frame_limit(state), do: state.limits.max_frame_bytes
@@ -753,45 +778,51 @@ defmodule SecretSpec.Session do
 
   defp validate_limits(%{"max_frame_bytes" => frame_bytes, "max_in_flight" => in_flight}, offered)
        when is_integer(frame_bytes) and is_integer(in_flight) and
-              frame_bytes >= 4096 and frame_bytes <= @absolute_max_frame_bytes and
-              in_flight >= 1 and in_flight <= 32 and
+              frame_bytes >= @min_frame_bytes and frame_bytes <= @absolute_max_frame_bytes and
+              in_flight >= 1 and in_flight <= @max_in_flight and
               frame_bytes <= offered.max_frame_bytes and in_flight <= offered.max_in_flight,
        do: :ok
 
   defp validate_limits(_, _), do: {:error, :invalid_limits}
 
-  defp decode_result(%{"status" => "undeclared"}), do: :undeclared
-  defp decode_result(%{"status" => "missing", "required" => required}), do: {:missing, required}
-  defp decode_result(%{"released" => released}) when is_integer(released), do: :ok
-  defp decode_result(%{} = result) when map_size(result) == 0, do: :ok
+  defp decode_result(%{"status" => "undeclared"}, _name), do: :undeclared
+
+  defp decode_result(%{"status" => "missing", "required" => required}, _name),
+    do: {:missing, required}
+
+  defp decode_result(%{"released" => released}, _name) when is_integer(released), do: :ok
+  defp decode_result(%{} = result, _name) when map_size(result) == 0, do: :ok
 
   defp decode_result(
-         %{"status" => "resolved", "representation" => "value", "value" => value} = result
+         %{"status" => "resolved", "representation" => "value", "value" => value} = result,
+         name
        )
        when is_binary(value) do
-    {:ok, resolved_secret(result, value: value)}
+    {:ok, resolved_secret(result, name, value: value)}
   end
 
   defp decode_result(
-         %{"status" => "resolved", "representation" => "path", "path" => path} = result
+         %{"status" => "resolved", "representation" => "path", "path" => path} = result,
+         name
        )
        when is_binary(path) do
     lease_id = result["path_lease_id"] || result["lease_id"]
 
     if is_binary(lease_id) do
-      {:ok, resolved_secret(result, path: path, lease_id: lease_id)}
+      {:ok, resolved_secret(result, name, path: path, lease_id: lease_id)}
     else
       {:error, %Error{kind: "protocol", message: "invalid resolver result: missing path lease"}}
     end
   end
 
-  defp decode_result(_result),
+  defp decode_result(_result, _name),
     do: {:error, %Error{kind: "protocol", message: "invalid resolver result"}}
 
-  defp resolved_secret(result, fields) do
+  defp resolved_secret(result, name, fields) do
     struct(
       Secret,
       Map.merge(Map.new(fields), %{
+        name: name,
         representation: result["representation"],
         source: result["source"],
         source_provider: result["source_provider"],

@@ -14,7 +14,9 @@ defmodule SecretSpec.CodecTest do
     assert {:error, :frame_too_large} = Codec.decode("\n")
     assert {:error, :truncated_frame} = Codec.decode("{}")
     assert {:error, :invalid_json} = Codec.decode("{}\n{}\n")
-    assert {:ok, %{}} = Codec.decode("{}\r\n")
+    assert {:error, :carriage_return} = Codec.decode("{}\r\n")
+    assert {:error, :carriage_return} = Codec.decode("{\"x\":\"a\rb\"}\n")
+    assert {:error, :carriage_return} = Codec.decode("{\"x\":\"a\\rb\"}\r\n")
     assert {:error, :invalid_json} = Codec.decode("{\"x\":\"a\nb\"}\n")
     assert {:error, :truncated_frame} = Codec.decode(:not_binary)
   end

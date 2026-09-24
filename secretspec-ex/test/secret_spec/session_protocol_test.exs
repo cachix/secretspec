@@ -31,7 +31,13 @@ defmodule SecretSpec.SessionProtocolTest do
       expected =
         case result do
           :path ->
-            {:ok, %Secret{representation: "path", path: "/tmp/secret", lease_id: "lease-1"}}
+            {:ok,
+             %Secret{
+               name: "TOKEN",
+               representation: "path",
+               path: "/tmp/secret",
+               lease_id: "lease-1"
+             }}
 
           :missing ->
             {:missing, true}

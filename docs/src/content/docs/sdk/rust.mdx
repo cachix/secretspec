@@ -122,6 +122,26 @@ The Rust-first API complements `declare_secrets!`: `Spec` describes and
 resolves names dynamically, while the macro continues to generate statically
 typed fields from a manifest at compile time.
 
+## Listing providers {/* #listing-providers-022 */}
+
+<VersionCompatibility version="0.22" />
+
+Use `providers()` to list built-in provider names, descriptions, and example
+URIs without loading a manifest or connecting to a provider:
+
+```rust
+for provider in secretspec::providers() {
+    println!("{}: {}", provider.name, provider.description);
+    for example in provider.examples {
+        println!("  {example}");
+    }
+}
+```
+
+The list also includes providers disabled by Cargo features. Attempting to use
+one of those providers reports the feature required to enable it. External
+providers discovered at runtime are not in this list.
+
 ## Setting byte values {/* #setting-byte-values-021 */}
 
 <VersionCompatibility version="0.21" />

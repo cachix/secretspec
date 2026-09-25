@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Rust callers can use `secretspec::providers()` to list built-in provider
+  names, descriptions, and example URIs, including providers whose Cargo
+  features are disabled.
+
 ### Fixed
 
 - The published `secretspec` crate includes every fixture its tests need, so

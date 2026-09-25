@@ -123,7 +123,10 @@ pub use provider::external::{
     ProviderCredentialBroker, ProviderCredentialPrincipal, ProviderCredentialRequest,
     ProviderDiscovery, ProviderEndpoint, RegistrationScope, set_provider_discovery,
 };
-pub use provider::{Address, DiscoveryContext, ProducedValuePersistence, Provider, ProviderValue};
+pub use provider::{
+    Address, DiscoveryContext, ProducedValuePersistence, Provider, ProviderInfo, ProviderValue,
+    providers,
+};
 pub use report::{
     RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus, SecretResolution,
 };

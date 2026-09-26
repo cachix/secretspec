@@ -1,0 +1,66 @@
+---
+title: Elixir SDK
+description: Resolve SecretSpec secrets from Elixir
+---
+
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.21" />
+
+The Elixir SDK (`secretspec`, 0.21+) is a pure Elixir client for the `secretspec.resolver/1` IPC protocol. It requires a compatible `secretspec` executable (0.21+) and launches `secretspec serve` directly, without a shell, NIF, native archive, or Rust code in the Hex package.
+
+## Install
+
+```elixir
+defp deps do
+  [{:secretspec, "~> 0.21"}]
+end
+```
+
+Install SecretSpec separately and make `secretspec` available on `PATH`, or pass an explicit absolute `executable:` option.
+
+## Sessions
+
+A session fixes the manifest, profile, scope, provider override, and reason for its lifetime. Resolution addresses one exact declared name at a time.
+
+```elixir
+{:ok, session} =
+  SecretSpec.Session.start_link(
+    manifest: "/project/secretspec.toml",
+    profile: "production",
+    scope: "deploy",
+    reason: "start application"
+  )
+
+result = SecretSpec.Session.get(session, "DATABASE_URL",
+  representation: :value,
+  purpose: %{
+    consumer: "my_app",
+    operation: "connect",
+    host: "db.example.com"
+  }
+)
+
+SecretSpec.Session.close(session)
+```
+
+`representation` is `:auto`, `:value`, or `:path`. Path results are resolver-owned leases. Release them explicitly with `SecretSpec.Session.release/2`, or close the session to release all outstanding leases.
+
+`purpose` must include non-empty `consumer` and `operation` fields. Optional `host` and `path` fields provide additional attribution.
+
+## Results
+
+- `{:ok, %SecretSpec.Secret{}}`
+- `{:missing, required}`
+- `:undeclared`
+- `{:error, %SecretSpec.Error{}}`
+
+Use `SecretSpec.with_session/2` for scoped lifetimes:
+
+```elixir
+SecretSpec.with_session([manifest: "/project/secretspec.toml"], fn session ->
+  SecretSpec.Session.get(session, "DATABASE_URL", purpose: %{consumer: "app", operation: "connect"})
+end)
+```
+
+Whole-profile resolution, reports, `SecretSpec.Builder`, and `abi_version/0` are not part of the resolver protocol.

@@ -1,4 +1,11 @@
-{ lib, pkgs, ... }: {
+{ lib, pkgs, ... }:
+let
+  # https://nixos.org/manual/nixpkgs/stable/#beam-structure
+  beamPackages = pkgs.beam29Packages.overrideScope (self: super: { elixir = self.elixir_1_20; });
+  erlang = beamPackages.erlang;
+  elixir = beamPackages.elixir;
+in
+{
   languages.rust = {
     enable = true;
     # The Rust version is pinned in rust-toolchain.toml, which the native CI
@@ -69,6 +76,10 @@
     enable = true;
     jdk.package = pkgs.jdk21;
   };
+  languages.elixir = {
+    enable = true;
+    package = elixir;
+  };
 
   packages = [
     # documentation link validation
@@ -106,6 +117,8 @@
     pkgs.ninja
     # Installs the libsecretspec archive with its header and pkg-config file
     pkgs.cargo-c
+    # expert-lsp needs the erlang binary
+    erlang
   ];
 
   env = {

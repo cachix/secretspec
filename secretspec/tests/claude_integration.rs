@@ -67,6 +67,11 @@ CLAUDE_TOKEN = { description = "Claude token", default = "fixture-claude-token",
         let mut command = Command::new(env!("CARGO_BIN_EXE_secretspec"));
         command
             .current_dir(directory)
+            // Without a terminal, miette's graphical handler wraps errors at
+            // 80 columns, and the errors here embed a TMPDIR-dependent path,
+            // so asserted phrases could be split across lines. The
+            // narratable handler does not wrap.
+            .env("NO_GRAPHICS", "1")
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
             .env("XDG_CONFIG_HOME", self.root.join("config"))

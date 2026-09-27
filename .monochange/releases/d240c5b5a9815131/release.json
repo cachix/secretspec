@@ -1,0 +1,799 @@
+{
+  "schema_version": "0.7",
+  "kind": "monochange.releaseRecord",
+  "created_at": "2026-09-26T12:14:27Z",
+  "command": "release",
+  "version": "0.4.0",
+  "versions": {
+    "monosecret": "0.4.0"
+  },
+  "release_targets": [
+    {
+      "id": "monosecret",
+      "kind": "group",
+      "version": "0.4.0",
+      "version_format": "primary",
+      "tag": true,
+      "release": true,
+      "tag_name": "v0.4.0",
+      "members": [
+        "rust:monosecret",
+        "rust:monosecret_derive",
+        "rust:monosecret_ffi",
+        "rust:monosecret_ipc",
+        "@monosecret/cli",
+        "@monosecret/client",
+        "@monosecret/client-darwin-arm64",
+        "@monosecret/client-linux-arm64-gnu",
+        "@monosecret/client-linux-x64-gnu",
+        "@monosecret/client-win32-x64-msvc",
+        "@monosecret/skill",
+        "@monosecret/cli-darwin-arm64",
+        "@monosecret/cli-darwin-x64",
+        "@monosecret/cli-linux-arm64-gnu",
+        "@monosecret/cli-linux-arm64-musl",
+        "@monosecret/cli-linux-x64-gnu",
+        "@monosecret/cli-linux-x64-musl",
+        "@monosecret/cli-win32-arm64-msvc",
+        "@monosecret/cli-win32-x64-msvc",
+        "dart",
+        "dart:monosecret_builder"
+      ]
+    }
+  ],
+  "released_packages": [
+    "@monosecret/cli",
+    "@monosecret/cli-darwin-arm64",
+    "@monosecret/cli-darwin-x64",
+    "@monosecret/cli-linux-arm64-gnu",
+    "@monosecret/cli-linux-arm64-musl",
+    "@monosecret/cli-linux-x64-gnu",
+    "@monosecret/cli-linux-x64-musl",
+    "@monosecret/cli-win32-arm64-msvc",
+    "@monosecret/cli-win32-x64-msvc",
+    "@monosecret/client",
+    "@monosecret/client-darwin-arm64",
+    "@monosecret/client-linux-arm64-gnu",
+    "@monosecret/client-linux-x64-gnu",
+    "@monosecret/client-win32-x64-msvc",
+    "@monosecret/skill",
+    "monosecret",
+    "monosecret-ipc",
+    "monosecret_builder",
+    "monosecret_derive",
+    "monosecret_ffi"
+  ],
+  "changed_files": [
+    "CHANGELOG.md",
+    "Cargo.lock",
+    "Cargo.toml",
+    "Package.swift",
+    "crates/monosecret/CHANGELOG.md",
+    "crates/monosecret/Cargo.toml",
+    "crates/monosecret_derive/CHANGELOG.md",
+    "crates/monosecret_derive/Cargo.toml",
+    "crates/monosecret_ffi/Cargo.toml",
+    "crates/monosecret_ipc/Cargo.toml",
+    "dart/monosecret/CHANGELOG.md",
+    "dart/monosecret/lib/src/version.dart",
+    "dart/monosecret/pubspec.yaml",
+    "dart/monosecret_builder/CHANGELOG.md",
+    "dart/monosecret_builder/pubspec.yaml",
+    "dotnet/monosecret_dotnet/src/Monosecret/Monosecret.csproj",
+    "haskell/monosecret_hs/monosecret.cabal",
+    "npm/monosecret__cli/package.json",
+    "npm/monosecret__cli-darwin-arm64/package.json",
+    "npm/monosecret__cli-darwin-x64/package.json",
+    "npm/monosecret__cli-linux-arm64-gnu/package.json",
+    "npm/monosecret__cli-linux-arm64-musl/package.json",
+    "npm/monosecret__cli-linux-x64-gnu/package.json",
+    "npm/monosecret__cli-linux-x64-musl/package.json",
+    "npm/monosecret__cli-win32-arm64-msvc/package.json",
+    "npm/monosecret__cli-win32-x64-msvc/package.json",
+    "npm/monosecret__client/package.json",
+    "npm/monosecret__client-darwin-arm64/package.json",
+    "npm/monosecret__client-linux-arm64-gnu/package.json",
+    "npm/monosecret__client-linux-x64-gnu/package.json",
+    "npm/monosecret__client-win32-x64-msvc/package.json",
+    "npm/monosecret__skill/package.json",
+    "pubspec.yaml",
+    "python/monosecret_py/pyproject.toml",
+    "ruby/monosecret_rb/monosecret_rb.gemspec"
+  ],
+  "package_publications": [
+    {
+      "package": "@monosecret/cli",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.4.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "mode": "required",
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-darwin-arm64",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.4.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "mode": "required",
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-darwin-x64",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.4.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "mode": "required",
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-linux-arm64-gnu",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.4.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "mode": "required",
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-linux-arm64-musl",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.4.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "mode": "required",
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-linux-x64-gnu",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.4.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "mode": "required",
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-linux-x64-musl",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.4.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "mode": "required",
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-win32-arm64-msvc",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.4.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "mode": "required",
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/cli-win32-x64-msvc",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.4.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "mode": "required",
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "@monosecret/skill",
+      "ecosystem": "npm",
+      "registry": "npm",
+      "version": "0.4.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "mode": "required",
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "dart",
+      "ecosystem": "dart",
+      "registry": "pub_dev",
+      "version": "0.4.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "mode": "required",
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "dart:monosecret_builder",
+      "ecosystem": "dart",
+      "registry": "pub_dev",
+      "version": "0.4.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "mode": "required",
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "rust:monosecret",
+      "ecosystem": "cargo",
+      "registry": "crates_io",
+      "version": "0.4.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "mode": "required",
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "rust:monosecret_derive",
+      "ecosystem": "cargo",
+      "registry": "crates_io",
+      "version": "0.4.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "mode": "required",
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    },
+    {
+      "package": "rust:monosecret_ipc",
+      "ecosystem": "cargo",
+      "registry": "crates_io",
+      "version": "0.4.0",
+      "mode": "builtin",
+      "trusted_publishing": {
+        "enabled": true,
+        "mode": "required",
+        "repository": null,
+        "workflow": null,
+        "environment": null
+      }
+    }
+  ],
+  "updated_changelogs": [
+    "CHANGELOG.md",
+    "crates/monosecret/CHANGELOG.md",
+    "crates/monosecret_derive/CHANGELOG.md",
+    "dart/monosecret/CHANGELOG.md",
+    "dart/monosecret_builder/CHANGELOG.md"
+  ],
+  "deleted_changesets": [
+    ".changeset/1790278083-monosecret.md",
+    ".changeset/ejson-timeout-tests.md",
+    ".changeset/provider-depends-on-cycle.md"
+  ],
+  "changesets": [
+    {
+      "path": ".changeset/1790278083-monosecret.md",
+      "summary": "Sync upstream SecretSpec 0.21: resolver IPC, binary secrets",
+      "details": "Merge `cachix/secretspec` from `5ea68378` (the recorded 0.21-era merge base) through upstream `main` @ `b3a29191` (post-0.21 fixes), rebranded into the `crates/monosecret`, `crates/monosecret_derive`, `crates/monosecret_ffi`, and per-language `monosecret_*` SDK layout.\n\n###### What breaks\n\n- **Secret values are byte-native.** `Secrets::set` now takes `SecretBytes`; text callers use `set_text` and deletions use `prompt_and_set`. Custom providers update `get`/`set`/`get_many` to `SecretBytes`; `Provider::name` returns `&str` and `generator::generate` returns bytes.\n- **Cache entries use the v4 envelope** preserving binary values. New entries are unreadable by 0.20 and earlier (they fall back to the provider); old entries remain readable.\n- **Command-generated values include all stdout bytes** including trailing newlines and spaces; trim in the command when unwanted. Empty or whitespace-only output is still rejected.\n- **`monosecret get` no longer appends a newline** when writing to a pipe or file; terminal output still ends in a newline. Piped `monosecret set` input remains trimmed text; use `--from-file -` to preserve exact bytes from stdin.\n- **Building the C resolver client requires system yyjson** via pkg-config/CMake; static consumers link `-lyyjson`.\n\n###### New providers\n\n- **Doppler** (`doppler://PROJECT[/CONFIG]`): read, write, delete, and discover with profile-selected configs and `DOPPLER_TOKEN` auth.\n- **Tailscale Setec** (`setec://`): read, write, delete, and discover through a tailnet-authenticated server, with binary values and version-pinned reads.\n\n###### New features\n\n- **`monosecret serve` resolver IPC**: request single declared secrets from another process over a versioned stdio protocol, with leases, prompts, store/delete, expiry/revision metadata, and `--read-only` mode. Rust clients use the new `monosecret-ipc` crate (async and blocking, including SSH transports); C clients use `libmonosecret-resolver`.\n- **External providers**: trusted executables can serve the versioned provider protocol with credential negotiation, interaction references in audit logs, and per-endpoint scoped environments.\n- **Project-wide `[defaults].providers` chains**, editor JSON Schemas (`monosecret schema --config project|global`), OpenPGP/OpenSSH key generation, Bitwarden UUID targeting, and JVM inline specs.\n\n###### Fixes\n\n- Bounded HTTP timeouts (10s connect, 60s request) across Vault, OpenBao, Infisical, Cloudflare, Scaleway, AAC, Doppler, and Setec.\n- macOS keyring no longer prompts on every run after an upgrade; reads preserve items and access settings.\n- KDBX 4.0 files upgrade to 4.1 on write preserving encryption/KDF settings.\n- Bitwarden batch reads use one vault listing with search fallback; pass/gopass/LastPass whitespace handling hardened; cache planning avoids provider reads and refuses self-overlapping caches.\n- Post-0.21 upstream fixes: C-resolver early-output registration, timing-independent regression checks, crate-internal test fixtures, flaky-test hardening, and Nix-sandbox ancestor-walk isolation.",
+      "targets": [
+        {
+          "id": "monosecret",
+          "kind": "group",
+          "bump": "major",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "breaking"
+        }
+      ],
+      "context": {
+        "provider": "github",
+        "host": "github.com",
+        "capabilities": {
+          "commit_web_urls": true,
+          "actor_profiles": true,
+          "review_request_lookup": true,
+          "related_issues": true,
+          "issue_comments": true
+        },
+        "introduced": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": "ifiokjr",
+            "display_name": "ifiokjr",
+            "url": "https://github.com/ifiokjr",
+            "source": "review_request_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "a5a66dc2cf6c9e0ca3b5887895729ec6fd044078",
+            "short_sha": "a5a66dc",
+            "url": "https://github.com/ifiokjr/monosecret/commit/a5a66dc2cf6c9e0ca3b5887895729ec6fd044078",
+            "authored_at": "2026-09-25T04:53:43+01:00",
+            "committed_at": "2026-09-25T04:53:43+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "1160934+ifiokjr@users.noreply.github.com"
+          },
+          "review_request": {
+            "provider": "github",
+            "host": "github.com",
+            "kind": "pull_request",
+            "id": "#73",
+            "title": "feat!: sync upstream SecretSpec 0.21 (byte-native secrets, resolver IPC)",
+            "url": "https://github.com/ifiokjr/monosecret/pull/73",
+            "author": {
+              "provider": "github",
+              "host": "github.com",
+              "id": null,
+              "login": "ifiokjr",
+              "display_name": "ifiokjr",
+              "url": "https://github.com/ifiokjr",
+              "source": "review_request_author"
+            }
+          }
+        },
+        "last_updated": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": "ifiokjr",
+            "display_name": "ifiokjr",
+            "url": "https://github.com/ifiokjr",
+            "source": "review_request_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "a5a66dc2cf6c9e0ca3b5887895729ec6fd044078",
+            "short_sha": "a5a66dc",
+            "url": "https://github.com/ifiokjr/monosecret/commit/a5a66dc2cf6c9e0ca3b5887895729ec6fd044078",
+            "authored_at": "2026-09-25T04:53:43+01:00",
+            "committed_at": "2026-09-25T04:53:43+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "1160934+ifiokjr@users.noreply.github.com"
+          },
+          "review_request": {
+            "provider": "github",
+            "host": "github.com",
+            "kind": "pull_request",
+            "id": "#73",
+            "title": "feat!: sync upstream SecretSpec 0.21 (byte-native secrets, resolver IPC)",
+            "url": "https://github.com/ifiokjr/monosecret/pull/73",
+            "author": {
+              "provider": "github",
+              "host": "github.com",
+              "id": null,
+              "login": "ifiokjr",
+              "display_name": "ifiokjr",
+              "url": "https://github.com/ifiokjr",
+              "source": "review_request_author"
+            }
+          }
+        },
+        "related_issues": [
+          {
+            "provider": "github",
+            "host": "github.com",
+            "id": "#71",
+            "title": null,
+            "url": "https://github.com/ifiokjr/monosecret/issues/71",
+            "relationship": "referenced_by_review_request"
+          }
+        ]
+      }
+    },
+    {
+      "path": ".changeset/ejson-timeout-tests.md",
+      "summary": "ejson timeout tests no longer fail on a loaded machine",
+      "details": "The two tests that prove a hung or exited `ejson` CLI is stopped at its timeout\nread the stub's descendant-PID file with `unwrap`, and a loaded runner could\nkill the process group before the shell wrote it — so the suite failed with \"No\nsuch file or directory\" on a machine that was busy with something else. They now\nwait for the file with a bounded retry, which keeps the assertion (the stub must\nrecord its descendant, and the descendant must be gone) while removing the race,\nand the exit-path test's timeout is generous because what it checks is the cost\nrelative to the deadline rather than how fast the stub runs.\n\nNo runtime behavior changes: the provider's timeout handling is untouched.",
+      "targets": [
+        {
+          "id": "rust:monosecret",
+          "kind": "package",
+          "bump": "patch",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "patch"
+        }
+      ],
+      "context": {
+        "provider": "github",
+        "host": "github.com",
+        "capabilities": {
+          "commit_web_urls": true,
+          "actor_profiles": true,
+          "review_request_lookup": true,
+          "related_issues": true,
+          "issue_comments": true
+        },
+        "introduced": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": "ifiokjr",
+            "display_name": "ifiokjr",
+            "url": "https://github.com/ifiokjr",
+            "source": "review_request_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "a202d26a8b6cdbcc7bbd3cc3ef0a3802454a447e",
+            "short_sha": "a202d26",
+            "url": "https://github.com/ifiokjr/monosecret/commit/a202d26a8b6cdbcc7bbd3cc3ef0a3802454a447e",
+            "authored_at": "2026-09-26T13:11:03+01:00",
+            "committed_at": "2026-09-26T13:11:03+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "1160934+ifiokjr@users.noreply.github.com"
+          },
+          "review_request": {
+            "provider": "github",
+            "host": "github.com",
+            "kind": "pull_request",
+            "id": "#76",
+            "title": "fix: repair the last stale references and two load-sensitive tests",
+            "url": "https://github.com/ifiokjr/monosecret/pull/76",
+            "author": {
+              "provider": "github",
+              "host": "github.com",
+              "id": null,
+              "login": "ifiokjr",
+              "display_name": "ifiokjr",
+              "url": "https://github.com/ifiokjr",
+              "source": "review_request_author"
+            }
+          }
+        },
+        "last_updated": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": "ifiokjr",
+            "display_name": "ifiokjr",
+            "url": "https://github.com/ifiokjr",
+            "source": "review_request_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "a202d26a8b6cdbcc7bbd3cc3ef0a3802454a447e",
+            "short_sha": "a202d26",
+            "url": "https://github.com/ifiokjr/monosecret/commit/a202d26a8b6cdbcc7bbd3cc3ef0a3802454a447e",
+            "authored_at": "2026-09-26T13:11:03+01:00",
+            "committed_at": "2026-09-26T13:11:03+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "1160934+ifiokjr@users.noreply.github.com"
+          },
+          "review_request": {
+            "provider": "github",
+            "host": "github.com",
+            "kind": "pull_request",
+            "id": "#76",
+            "title": "fix: repair the last stale references and two load-sensitive tests",
+            "url": "https://github.com/ifiokjr/monosecret/pull/76",
+            "author": {
+              "provider": "github",
+              "host": "github.com",
+              "id": null,
+              "login": "ifiokjr",
+              "display_name": "ifiokjr",
+              "url": "https://github.com/ifiokjr",
+              "source": "review_request_author"
+            }
+          }
+        },
+        "related_issues": []
+      }
+    },
+    {
+      "path": ".changeset/provider-depends-on-cycle.md",
+      "summary": "`depends_on` cycles no longer overflow the stack",
+      "details": "Forcing a provider that declares `depends_on` (e.g. `monosecret run\n--provider op`) applied the session-wide override to the bootstrap secret too,\nso building the provider needed the provider: unbounded recursion ending in\n`thread 'main' has overflowed its stack` with no error to report or retry\nagainst. The same abort happened for genuine configuration cycles (a\n`depends_on` secret routed back at its own provider directly or through\nprofile defaults).\n\nBootstrap secrets now resolve from their own declared routes — the\n`--provider` flag, the builder override, and `MONOSECRET_PROVIDER` are ignored\nwhile they resolve — so `--provider op` reads `OP_SERVICE_ACCOUNT_TOKEN` from\nwhere it is configured and then queries 1Password. Re-entrant construction is\ntracked per thread and fails with a `provider dependency cycle: store ->\nTOKEN -> store` error naming the chain, and config loading rejects the direct\nform up front (`monosecret check` reports it before anything runs). Six\nregression tests cover the flag, the environment variable, both config-cycle\nspellings, and static validation.",
+      "targets": [
+        {
+          "id": "rust:monosecret",
+          "kind": "package",
+          "bump": "patch",
+          "origin": "direct-change",
+          "evidence_refs": [],
+          "change_type": "fix"
+        }
+      ],
+      "context": {
+        "provider": "github",
+        "host": "github.com",
+        "capabilities": {
+          "commit_web_urls": true,
+          "actor_profiles": true,
+          "review_request_lookup": true,
+          "related_issues": true,
+          "issue_comments": true
+        },
+        "introduced": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": "ifiokjr",
+            "display_name": "ifiokjr",
+            "url": "https://github.com/ifiokjr",
+            "source": "review_request_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "960e4335633daf7bfab5626bf25b1d07be405ec9",
+            "short_sha": "960e433",
+            "url": "https://github.com/ifiokjr/monosecret/commit/960e4335633daf7bfab5626bf25b1d07be405ec9",
+            "authored_at": "2026-09-24T20:27:14+01:00",
+            "committed_at": "2026-09-24T20:27:14+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "1160934+ifiokjr@users.noreply.github.com"
+          },
+          "review_request": {
+            "provider": "github",
+            "host": "github.com",
+            "kind": "pull_request",
+            "id": "#71",
+            "title": "fix(provider): resolve depends_on secrets from their declared routes and report cycles",
+            "url": "https://github.com/ifiokjr/monosecret/pull/71",
+            "author": {
+              "provider": "github",
+              "host": "github.com",
+              "id": null,
+              "login": "ifiokjr",
+              "display_name": "ifiokjr",
+              "url": "https://github.com/ifiokjr",
+              "source": "review_request_author"
+            }
+          }
+        },
+        "last_updated": {
+          "actor": {
+            "provider": "github",
+            "host": "github.com",
+            "id": null,
+            "login": "ifiokjr",
+            "display_name": "ifiokjr",
+            "url": "https://github.com/ifiokjr",
+            "source": "review_request_author"
+          },
+          "commit": {
+            "provider": "github",
+            "host": "github.com",
+            "sha": "39fb7dd8d9e781d526f2cc0f482a6d9407268b5a",
+            "short_sha": "39fb7dd",
+            "url": "https://github.com/ifiokjr/monosecret/commit/39fb7dd8d9e781d526f2cc0f482a6d9407268b5a",
+            "authored_at": "2026-09-26T10:04:51+01:00",
+            "committed_at": "2026-09-26T10:04:51+01:00",
+            "author_name": "Ifiok Jr.",
+            "author_email": "1160934+ifiokjr@users.noreply.github.com"
+          },
+          "review_request": {
+            "provider": "github",
+            "host": "github.com",
+            "kind": "pull_request",
+            "id": "#75",
+            "title": "docs: state the fork's own versions and list the new pages",
+            "url": "https://github.com/ifiokjr/monosecret/pull/75",
+            "author": {
+              "provider": "github",
+              "host": "github.com",
+              "id": null,
+              "login": "ifiokjr",
+              "display_name": "ifiokjr",
+              "url": "https://github.com/ifiokjr",
+              "source": "review_request_author"
+            }
+          }
+        },
+        "related_issues": [
+          {
+            "provider": "github",
+            "host": "github.com",
+            "id": "#70",
+            "title": null,
+            "url": "https://github.com/ifiokjr/monosecret/issues/70",
+            "relationship": "closed_by_review_request"
+          },
+          {
+            "provider": "github",
+            "host": "github.com",
+            "id": "#71",
+            "title": null,
+            "url": "https://github.com/ifiokjr/monosecret/issues/71",
+            "relationship": "referenced_by_review_request"
+          }
+        ]
+      }
+    }
+  ],
+  "changelogs": [
+    {
+      "owner_id": "monosecret",
+      "owner_kind": "group",
+      "output": "default",
+      "stream": "default",
+      "path": "CHANGELOG.md",
+      "format": "keep_a_changelog",
+      "notes": {
+        "title": "[0.4.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.4.0) (2026-09-26)",
+        "summary": [
+          "Grouped release for `monosecret`."
+        ],
+        "sections": [
+          {
+            "title": "Breaking",
+            "collapsed": false,
+            "entries": [
+              "#### Sync upstream SecretSpec 0.21: resolver IPC, binary secrets\n\nMerge `cachix/secretspec` from `5ea68378` (the recorded 0.21-era merge base) through upstream `main` @ `b3a29191` (post-0.21 fixes), rebranded into the `crates/monosecret`, `crates/monosecret_derive`, `crates/monosecret_ffi`, and per-language `monosecret_*` SDK layout.\n\n###### What breaks\n\n- **Secret values are byte-native.** `Secrets::set` now takes `SecretBytes`; text callers use `set_text` and deletions use `prompt_and_set`. Custom providers update `get`/`set`/`get_many` to `SecretBytes`; `Provider::name` returns `&str` and `generator::generate` returns bytes.\n- **Cache entries use the v4 envelope** preserving binary values. New entries are unreadable by 0.20 and earlier (they fall back to the provider); old entries remain readable.\n- **Command-generated values include all stdout bytes** including trailing newlines and spaces; trim in the command when unwanted. Empty or whitespace-only output is still rejected.\n- **`monosecret get` no longer appends a newline** when writing to a pipe or file; terminal output still ends in a newline. Piped `monosecret set` input remains trimmed text; use `--from-file -` to preserve exact bytes from stdin.\n- **Building the C resolver client requires system yyjson** via pkg-config/CMake; static consumers link `-lyyjson`.\n\n###### New providers\n\n- **Doppler** (`doppler://PROJECT[/CONFIG]`): read, write, delete, and discover with profile-selected configs and `DOPPLER_TOKEN` auth.\n- **Tailscale Setec** (`setec://`): read, write, delete, and discover through a tailnet-authenticated server, with binary values and version-pinned reads.\n\n###### New features\n\n- **`monosecret serve` resolver IPC**: request single declared secrets from another process over a versioned stdio protocol, with leases, prompts, store/delete, expiry/revision metadata, and `--read-only` mode. Rust clients use the new `monosecret-ipc` crate (async and blocking, including SSH transports); C clients use `libmonosecret-resolver`.\n- **External providers**: trusted executables can serve the versioned provider protocol with credential negotiation, interaction references in audit logs, and per-endpoint scoped environments.\n- **Project-wide `[defaults].providers` chains**, editor JSON Schemas (`monosecret schema --config project|global`), OpenPGP/OpenSSH key generation, Bitwarden UUID targeting, and JVM inline specs.\n\n###### Fixes\n\n- Bounded HTTP timeouts (10s connect, 60s request) across Vault, OpenBao, Infisical, Cloudflare, Scaleway, AAC, Doppler, and Setec.\n- macOS keyring no longer prompts on every run after an upgrade; reads preserve items and access settings.\n- KDBX 4.0 files upgrade to 4.1 on write preserving encryption/KDF settings.\n- Bitwarden batch reads use one vault listing with search fallback; pass/gopass/LastPass whitespace handling hardened; cache planning avoids provider reads and refuses self-overlapping caches.\n- Post-0.21 upstream fixes: C-resolver early-output registration, timing-independent regression checks, crate-internal test fixtures, flaky-test hardening, and Nix-sandbox ancestor-walk isolation.\n\n_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #73](https://github.com/ifiokjr/monosecret/pull/73) · _Related issues:_ [#71](https://github.com/ifiokjr/monosecret/issues/71)"
+            ]
+          },
+          {
+            "title": "Fixes",
+            "collapsed": false,
+            "entries": [
+              "#### ejson timeout tests no longer fail on a loaded machine\n\n_Packages:_ 🟢 _rust:monosecret_\n\nThe two tests that prove a hung or exited `ejson` CLI is stopped at its timeout\nread the stub's descendant-PID file with `unwrap`, and a loaded runner could\nkill the process group before the shell wrote it — so the suite failed with \"No\nsuch file or directory\" on a machine that was busy with something else. They now\nwait for the file with a bounded retry, which keeps the assertion (the stub must\nrecord its descendant, and the descendant must be gone) while removing the race,\nand the exit-path test's timeout is generous because what it checks is the cost\nrelative to the deadline rather than how fast the stub runs.\n\nNo runtime behavior changes: the provider's timeout handling is untouched.\n\n_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #76](https://github.com/ifiokjr/monosecret/pull/76)",
+              "#### `depends_on` cycles no longer overflow the stack\n\n_Packages:_ 🟢 _rust:monosecret_\n\nForcing a provider that declares `depends_on` (e.g. `monosecret run\n--provider op`) applied the session-wide override to the bootstrap secret too,\nso building the provider needed the provider: unbounded recursion ending in\n`thread 'main' has overflowed its stack` with no error to report or retry\nagainst. The same abort happened for genuine configuration cycles (a\n`depends_on` secret routed back at its own provider directly or through\nprofile defaults).\n\nBootstrap secrets now resolve from their own declared routes — the\n`--provider` flag, the builder override, and `MONOSECRET_PROVIDER` are ignored\nwhile they resolve — so `--provider op` reads `OP_SERVICE_ACCOUNT_TOKEN` from\nwhere it is configured and then queries 1Password. Re-entrant construction is\ntracked per thread and fails with a `provider dependency cycle: store ->\nTOKEN -> store` error naming the chain, and config loading rejects the direct\nform up front (`monosecret check` reports it before anything runs). Six\nregression tests cover the flag, the environment variable, both config-cycle\nspellings, and static validation.\n\n_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #71](https://github.com/ifiokjr/monosecret/pull/71) · _Closed issues:_ [#70](https://github.com/ifiokjr/monosecret/issues/70) · _Related issues:_ [#71](https://github.com/ifiokjr/monosecret/issues/71)"
+            ]
+          }
+        ]
+      },
+      "rendered": "## [0.4.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.4.0) (2026-09-26)\n\nGrouped release for `monosecret`.\n\n### Breaking\n\n#### Sync upstream SecretSpec 0.21: resolver IPC, binary secrets\n\nMerge `cachix/secretspec` from `5ea68378` (the recorded 0.21-era merge base) through upstream `main` @ `b3a29191` (post-0.21 fixes), rebranded into the `crates/monosecret`, `crates/monosecret_derive`, `crates/monosecret_ffi`, and per-language `monosecret_*` SDK layout.\n\n###### What breaks\n\n- **Secret values are byte-native.** `Secrets::set` now takes `SecretBytes`; text callers use `set_text` and deletions use `prompt_and_set`. Custom providers update `get`/`set`/`get_many` to `SecretBytes`; `Provider::name` returns `&str` and `generator::generate` returns bytes.\n- **Cache entries use the v4 envelope** preserving binary values. New entries are unreadable by 0.20 and earlier (they fall back to the provider); old entries remain readable.\n- **Command-generated values include all stdout bytes** including trailing newlines and spaces; trim in the command when unwanted. Empty or whitespace-only output is still rejected.\n- **`monosecret get` no longer appends a newline** when writing to a pipe or file; terminal output still ends in a newline. Piped `monosecret set` input remains trimmed text; use `--from-file -` to preserve exact bytes from stdin.\n- **Building the C resolver client requires system yyjson** via pkg-config/CMake; static consumers link `-lyyjson`.\n\n###### New providers\n\n- **Doppler** (`doppler://PROJECT[/CONFIG]`): read, write, delete, and discover with profile-selected configs and `DOPPLER_TOKEN` auth.\n- **Tailscale Setec** (`setec://`): read, write, delete, and discover through a tailnet-authenticated server, with binary values and version-pinned reads.\n\n###### New features\n\n- **`monosecret serve` resolver IPC**: request single declared secrets from another process over a versioned stdio protocol, with leases, prompts, store/delete, expiry/revision metadata, and `--read-only` mode. Rust clients use the new `monosecret-ipc` crate (async and blocking, including SSH transports); C clients use `libmonosecret-resolver`.\n- **External providers**: trusted executables can serve the versioned provider protocol with credential negotiation, interaction references in audit logs, and per-endpoint scoped environments.\n- **Project-wide `[defaults].providers` chains**, editor JSON Schemas (`monosecret schema --config project|global`), OpenPGP/OpenSSH key generation, Bitwarden UUID targeting, and JVM inline specs.\n\n###### Fixes\n\n- Bounded HTTP timeouts (10s connect, 60s request) across Vault, OpenBao, Infisical, Cloudflare, Scaleway, AAC, Doppler, and Setec.\n- macOS keyring no longer prompts on every run after an upgrade; reads preserve items and access settings.\n- KDBX 4.0 files upgrade to 4.1 on write preserving encryption/KDF settings.\n- Bitwarden batch reads use one vault listing with search fallback; pass/gopass/LastPass whitespace handling hardened; cache planning avoids provider reads and refuses self-overlapping caches.\n- Post-0.21 upstream fixes: C-resolver early-output registration, timing-independent regression checks, crate-internal test fixtures, flaky-test hardening, and Nix-sandbox ancestor-walk isolation.\n\n_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #73](https://github.com/ifiokjr/monosecret/pull/73) · _Related issues:_ [#71](https://github.com/ifiokjr/monosecret/issues/71)\n\n### Fixes\n\n#### ejson timeout tests no longer fail on a loaded machine\n\n_Packages:_ 🟢 _rust:monosecret_\n\nThe two tests that prove a hung or exited `ejson` CLI is stopped at its timeout\nread the stub's descendant-PID file with `unwrap`, and a loaded runner could\nkill the process group before the shell wrote it — so the suite failed with \"No\nsuch file or directory\" on a machine that was busy with something else. They now\nwait for the file with a bounded retry, which keeps the assertion (the stub must\nrecord its descendant, and the descendant must be gone) while removing the race,\nand the exit-path test's timeout is generous because what it checks is the cost\nrelative to the deadline rather than how fast the stub runs.\n\nNo runtime behavior changes: the provider's timeout handling is untouched.\n\n_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #76](https://github.com/ifiokjr/monosecret/pull/76)\n\n#### `depends_on` cycles no longer overflow the stack\n\n_Packages:_ 🟢 _rust:monosecret_\n\nForcing a provider that declares `depends_on` (e.g. `monosecret run\n--provider op`) applied the session-wide override to the bootstrap secret too,\nso building the provider needed the provider: unbounded recursion ending in\n`thread 'main' has overflowed its stack` with no error to report or retry\nagainst. The same abort happened for genuine configuration cycles (a\n`depends_on` secret routed back at its own provider directly or through\nprofile defaults).\n\nBootstrap secrets now resolve from their own declared routes — the\n`--provider` flag, the builder override, and `MONOSECRET_PROVIDER` are ignored\nwhile they resolve — so `--provider op` reads `OP_SERVICE_ACCOUNT_TOKEN` from\nwhere it is configured and then queries 1Password. Re-entrant construction is\ntracked per thread and fails with a `provider dependency cycle: store ->\nTOKEN -> store` error naming the chain, and config loading rejects the direct\nform up front (`monosecret check` reports it before anything runs). Six\nregression tests cover the flag, the environment variable, both config-cycle\nspellings, and static validation.\n\n_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #71](https://github.com/ifiokjr/monosecret/pull/71) · _Closed issues:_ [#70](https://github.com/ifiokjr/monosecret/issues/70) · _Related issues:_ [#71](https://github.com/ifiokjr/monosecret/issues/71)"
+    },
+    {
+      "owner_id": "rust:monosecret",
+      "owner_kind": "package",
+      "output": "default",
+      "stream": "default",
+      "path": "crates/monosecret/CHANGELOG.md",
+      "format": "keep_a_changelog",
+      "notes": {
+        "title": "[0.4.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.4.0) (2026-09-26)",
+        "summary": [],
+        "sections": [
+          {
+            "title": "Fixes",
+            "collapsed": false,
+            "entries": [
+              "#### ejson timeout tests no longer fail on a loaded machine\n\nThe two tests that prove a hung or exited `ejson` CLI is stopped at its timeout\nread the stub's descendant-PID file with `unwrap`, and a loaded runner could\nkill the process group before the shell wrote it — so the suite failed with \"No\nsuch file or directory\" on a machine that was busy with something else. They now\nwait for the file with a bounded retry, which keeps the assertion (the stub must\nrecord its descendant, and the descendant must be gone) while removing the race,\nand the exit-path test's timeout is generous because what it checks is the cost\nrelative to the deadline rather than how fast the stub runs.\n\nNo runtime behavior changes: the provider's timeout handling is untouched.\n\n_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #76](https://github.com/ifiokjr/monosecret/pull/76)",
+              "#### `depends_on` cycles no longer overflow the stack\n\nForcing a provider that declares `depends_on` (e.g. `monosecret run\n--provider op`) applied the session-wide override to the bootstrap secret too,\nso building the provider needed the provider: unbounded recursion ending in\n`thread 'main' has overflowed its stack` with no error to report or retry\nagainst. The same abort happened for genuine configuration cycles (a\n`depends_on` secret routed back at its own provider directly or through\nprofile defaults).\n\nBootstrap secrets now resolve from their own declared routes — the\n`--provider` flag, the builder override, and `MONOSECRET_PROVIDER` are ignored\nwhile they resolve — so `--provider op` reads `OP_SERVICE_ACCOUNT_TOKEN` from\nwhere it is configured and then queries 1Password. Re-entrant construction is\ntracked per thread and fails with a `provider dependency cycle: store ->\nTOKEN -> store` error naming the chain, and config loading rejects the direct\nform up front (`monosecret check` reports it before anything runs). Six\nregression tests cover the flag, the environment variable, both config-cycle\nspellings, and static validation.\n\n_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #71](https://github.com/ifiokjr/monosecret/pull/71) · _Closed issues:_ [#70](https://github.com/ifiokjr/monosecret/issues/70) · _Related issues:_ [#71](https://github.com/ifiokjr/monosecret/issues/71)"
+            ]
+          }
+        ]
+      },
+      "rendered": "## [0.4.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.4.0) (2026-09-26)\n\n### Fixes\n\n#### ejson timeout tests no longer fail on a loaded machine\n\nThe two tests that prove a hung or exited `ejson` CLI is stopped at its timeout\nread the stub's descendant-PID file with `unwrap`, and a loaded runner could\nkill the process group before the shell wrote it — so the suite failed with \"No\nsuch file or directory\" on a machine that was busy with something else. They now\nwait for the file with a bounded retry, which keeps the assertion (the stub must\nrecord its descendant, and the descendant must be gone) while removing the race,\nand the exit-path test's timeout is generous because what it checks is the cost\nrelative to the deadline rather than how fast the stub runs.\n\nNo runtime behavior changes: the provider's timeout handling is untouched.\n\n_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #76](https://github.com/ifiokjr/monosecret/pull/76)\n\n#### `depends_on` cycles no longer overflow the stack\n\nForcing a provider that declares `depends_on` (e.g. `monosecret run\n--provider op`) applied the session-wide override to the bootstrap secret too,\nso building the provider needed the provider: unbounded recursion ending in\n`thread 'main' has overflowed its stack` with no error to report or retry\nagainst. The same abort happened for genuine configuration cycles (a\n`depends_on` secret routed back at its own provider directly or through\nprofile defaults).\n\nBootstrap secrets now resolve from their own declared routes — the\n`--provider` flag, the builder override, and `MONOSECRET_PROVIDER` are ignored\nwhile they resolve — so `--provider op` reads `OP_SERVICE_ACCOUNT_TOKEN` from\nwhere it is configured and then queries 1Password. Re-entrant construction is\ntracked per thread and fails with a `provider dependency cycle: store ->\nTOKEN -> store` error naming the chain, and config loading rejects the direct\nform up front (`monosecret check` reports it before anything runs). Six\nregression tests cover the flag, the environment variable, both config-cycle\nspellings, and static validation.\n\n_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #71](https://github.com/ifiokjr/monosecret/pull/71) · _Closed issues:_ [#70](https://github.com/ifiokjr/monosecret/issues/70) · _Related issues:_ [#71](https://github.com/ifiokjr/monosecret/issues/71)"
+    },
+    {
+      "owner_id": "rust:monosecret_derive",
+      "owner_kind": "package",
+      "output": "default",
+      "stream": "default",
+      "path": "crates/monosecret_derive/CHANGELOG.md",
+      "format": "keep_a_changelog",
+      "notes": {
+        "title": "[0.4.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.4.0) (2026-09-26)",
+        "summary": [],
+        "sections": [
+          {
+            "title": "Changed",
+            "collapsed": false,
+            "entries": [
+              "#### No package-specific changes were recorded; `monosecret_derive` was updated to 0.4.0 as part of group `monosecret`."
+            ]
+          }
+        ]
+      },
+      "rendered": "## [0.4.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.4.0) (2026-09-26)\n\n### Changed\n\n#### No package-specific changes were recorded; `monosecret_derive` was updated to 0.4.0 as part of group `monosecret`."
+    },
+    {
+      "owner_id": "dart",
+      "owner_kind": "package",
+      "output": "default",
+      "stream": "default",
+      "path": "dart/monosecret/CHANGELOG.md",
+      "format": "keep_a_changelog",
+      "notes": {
+        "title": "[0.4.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.4.0) (2026-09-26)",
+        "summary": [],
+        "sections": [
+          {
+            "title": "Changed",
+            "collapsed": false,
+            "entries": [
+              "#### No package-specific changes were recorded; `monosecret` was updated to 0.4.0 as part of group `monosecret`."
+            ]
+          }
+        ]
+      },
+      "rendered": "## [0.4.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.4.0) (2026-09-26)\n\n### Changed\n\n#### No package-specific changes were recorded; `monosecret` was updated to 0.4.0 as part of group `monosecret`."
+    },
+    {
+      "owner_id": "dart:monosecret_builder",
+      "owner_kind": "package",
+      "output": "default",
+      "stream": "default",
+      "path": "dart/monosecret_builder/CHANGELOG.md",
+      "format": "keep_a_changelog",
+      "notes": {
+        "title": "[0.4.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.4.0) (2026-09-26)",
+        "summary": [],
+        "sections": [
+          {
+            "title": "Changed",
+            "collapsed": false,
+            "entries": [
+              "#### No package-specific changes were recorded; `monosecret_builder` was updated to 0.4.0 as part of group `monosecret`."
+            ]
+          }
+        ]
+      },
+      "rendered": "## [0.4.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.4.0) (2026-09-26)\n\n### Changed\n\n#### No package-specific changes were recorded; `monosecret_builder` was updated to 0.4.0 as part of group `monosecret`."
+    }
+  ],
+  "provider": {
+    "kind": "github",
+    "owner": "ifiokjr",
+    "repo": "monosecret",
+    "host": null
+  }
+}

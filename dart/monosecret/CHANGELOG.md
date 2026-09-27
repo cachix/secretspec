@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.4.0) (2026-09-26)
+
+### Changed
+
+#### No package-specific changes were recorded; `monosecret` was updated to 0.4.0 as part of group `monosecret`.
+
 ## [0.3.5](https://github.com/ifiokjr/monosecret/releases/tag/v0.3.5) (2026-09-12)
 
 ### Fixes

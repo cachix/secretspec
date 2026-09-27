@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.4.0) (2026-09-26)
+
+### Fixes
+
+#### ejson timeout tests no longer fail on a loaded machine
+
+The two tests that prove a hung or exited `ejson` CLI is stopped at its timeout
+read the stub's descendant-PID file with `unwrap`, and a loaded runner could
+kill the process group before the shell wrote it — so the suite failed with "No
+such file or directory" on a machine that was busy with something else. They now
+wait for the file with a bounded retry, which keeps the assertion (the stub must
+record its descendant, and the descendant must be gone) while removing the race,
+and the exit-path test's timeout is generous because what it checks is the cost
+relative to the deadline rather than how fast the stub runs.
+
+No runtime behavior changes: the provider's timeout handling is untouched.
+
+_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #76](https://github.com/ifiokjr/monosecret/pull/76)
+
+#### `depends_on` cycles no longer overflow the stack
+
+Forcing a provider that declares `depends_on` (e.g. `monosecret run
+--provider op`) applied the session-wide override to the bootstrap secret too,
+so building the provider needed the provider: unbounded recursion ending in
+`thread 'main' has overflowed its stack` with no error to report or retry
+against. The same abort happened for genuine configuration cycles (a
+`depends_on` secret routed back at its own provider directly or through
+profile defaults).
+
+Bootstrap secrets now resolve from their own declared routes — the
+`--provider` flag, the builder override, and `MONOSECRET_PROVIDER` are ignored
+while they resolve — so `--provider op` reads `OP_SERVICE_ACCOUNT_TOKEN` from
+where it is configured and then queries 1Password. Re-entrant construction is
+tracked per thread and fails with a `provider dependency cycle: store ->
+TOKEN -> store` error naming the chain, and config loading rejects the direct
+form up front (`monosecret check` reports it before anything runs). Six
+regression tests cover the flag, the environment variable, both config-cycle
+spellings, and static validation.
+
+_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #71](https://github.com/ifiokjr/monosecret/pull/71) · _Closed issues:_ [#70](https://github.com/ifiokjr/monosecret/issues/70) · _Related issues:_ [#71](https://github.com/ifiokjr/monosecret/issues/71)
+
 ## [0.3.5](https://github.com/ifiokjr/monosecret/releases/tag/v0.3.5) (2026-09-12)
 
 ### Fixes

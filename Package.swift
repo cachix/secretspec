@@ -6,7 +6,7 @@ import PackageDescription
 // monochange.toml keeps this in sync with the Cargo workspace version.
 // The all-zero checksum is an intentional placeholder while the first
 // Monosecret XCFramework release remains deferred (planned for 0.2+).
-let monosecretBinaryVersion = "0.3.5"
+let monosecretBinaryVersion = "0.4.0"
 let monosecretBinaryChecksum = "0000000000000000000000000000000000000000000000000000000000000000"
 
 let localBinaryPath = "swift/monosecret_swift/Artifacts/CMonosecret.xcframework"

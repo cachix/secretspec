@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |spec|
   spec.name        = "monosecret_rb"
-  spec.version     = "0.3.5"
+  spec.version     = "0.4.0"
   spec.summary     = "Declarative secrets, every environment, any provider (Ruby SDK)"
   spec.description = "Ruby bindings for Monosecret: a native extension that " \
                      "statically links the monosecret_ffi C ABI."

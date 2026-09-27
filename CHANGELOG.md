@@ -5,6 +5,88 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/ifiokjr/monosecret/releases/tag/v0.4.0) (2026-09-26)
+
+Grouped release for `monosecret`.
+
+### Breaking
+
+#### Sync upstream SecretSpec 0.21: resolver IPC, binary secrets
+
+Merge `cachix/secretspec` from `5ea68378` (the recorded 0.21-era merge base) through upstream `main` @ `b3a29191` (post-0.21 fixes), rebranded into the `crates/monosecret`, `crates/monosecret_derive`, `crates/monosecret_ffi`, and per-language `monosecret_*` SDK layout.
+
+###### What breaks
+
+- **Secret values are byte-native.** `Secrets::set` now takes `SecretBytes`; text callers use `set_text` and deletions use `prompt_and_set`. Custom providers update `get`/`set`/`get_many` to `SecretBytes`; `Provider::name` returns `&str` and `generator::generate` returns bytes.
+- **Cache entries use the v4 envelope** preserving binary values. New entries are unreadable by 0.20 and earlier (they fall back to the provider); old entries remain readable.
+- **Command-generated values include all stdout bytes** including trailing newlines and spaces; trim in the command when unwanted. Empty or whitespace-only output is still rejected.
+- **`monosecret get` no longer appends a newline** when writing to a pipe or file; terminal output still ends in a newline. Piped `monosecret set` input remains trimmed text; use `--from-file -` to preserve exact bytes from stdin.
+- **Building the C resolver client requires system yyjson** via pkg-config/CMake; static consumers link `-lyyjson`.
+
+###### New providers
+
+- **Doppler** (`doppler://PROJECT[/CONFIG]`): read, write, delete, and discover with profile-selected configs and `DOPPLER_TOKEN` auth.
+- **Tailscale Setec** (`setec://`): read, write, delete, and discover through a tailnet-authenticated server, with binary values and version-pinned reads.
+
+###### New features
+
+- **`monosecret serve` resolver IPC**: request single declared secrets from another process over a versioned stdio protocol, with leases, prompts, store/delete, expiry/revision metadata, and `--read-only` mode. Rust clients use the new `monosecret-ipc` crate (async and blocking, including SSH transports); C clients use `libmonosecret-resolver`.
+- **External providers**: trusted executables can serve the versioned provider protocol with credential negotiation, interaction references in audit logs, and per-endpoint scoped environments.
+- **Project-wide `[defaults].providers` chains**, editor JSON Schemas (`monosecret schema --config project|global`), OpenPGP/OpenSSH key generation, Bitwarden UUID targeting, and JVM inline specs.
+
+###### Fixes
+
+- Bounded HTTP timeouts (10s connect, 60s request) across Vault, OpenBao, Infisical, Cloudflare, Scaleway, AAC, Doppler, and Setec.
+- macOS keyring no longer prompts on every run after an upgrade; reads preserve items and access settings.
+- KDBX 4.0 files upgrade to 4.1 on write preserving encryption/KDF settings.
+- Bitwarden batch reads use one vault listing with search fallback; pass/gopass/LastPass whitespace handling hardened; cache planning avoids provider reads and refuses self-overlapping caches.
+- Post-0.21 upstream fixes: C-resolver early-output registration, timing-independent regression checks, crate-internal test fixtures, flaky-test hardening, and Nix-sandbox ancestor-walk isolation.
+
+_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #73](https://github.com/ifiokjr/monosecret/pull/73) · _Related issues:_ [#71](https://github.com/ifiokjr/monosecret/issues/71)
+
+### Fixes
+
+#### ejson timeout tests no longer fail on a loaded machine
+
+_Packages:_ 🟢 _rust:monosecret_
+
+The two tests that prove a hung or exited `ejson` CLI is stopped at its timeout
+read the stub's descendant-PID file with `unwrap`, and a loaded runner could
+kill the process group before the shell wrote it — so the suite failed with "No
+such file or directory" on a machine that was busy with something else. They now
+wait for the file with a bounded retry, which keeps the assertion (the stub must
+record its descendant, and the descendant must be gone) while removing the race,
+and the exit-path test's timeout is generous because what it checks is the cost
+relative to the deadline rather than how fast the stub runs.
+
+No runtime behavior changes: the provider's timeout handling is untouched.
+
+_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #76](https://github.com/ifiokjr/monosecret/pull/76)
+
+#### `depends_on` cycles no longer overflow the stack
+
+_Packages:_ 🟢 _rust:monosecret_
+
+Forcing a provider that declares `depends_on` (e.g. `monosecret run
+--provider op`) applied the session-wide override to the bootstrap secret too,
+so building the provider needed the provider: unbounded recursion ending in
+`thread 'main' has overflowed its stack` with no error to report or retry
+against. The same abort happened for genuine configuration cycles (a
+`depends_on` secret routed back at its own provider directly or through
+profile defaults).
+
+Bootstrap secrets now resolve from their own declared routes — the
+`--provider` flag, the builder override, and `MONOSECRET_PROVIDER` are ignored
+while they resolve — so `--provider op` reads `OP_SERVICE_ACCOUNT_TOKEN` from
+where it is configured and then queries 1Password. Re-entrant construction is
+tracked per thread and fails with a `provider dependency cycle: store ->
+TOKEN -> store` error naming the chain, and config loading rejects the direct
+form up front (`monosecret check` reports it before anything runs). Six
+regression tests cover the flag, the environment variable, both config-cycle
+spellings, and static validation.
+
+_Owner:_ [@ifiokjr](https://github.com/ifiokjr) · _Review:_ [PR #71](https://github.com/ifiokjr/monosecret/pull/71) · _Closed issues:_ [#70](https://github.com/ifiokjr/monosecret/issues/70) · _Related issues:_ [#71](https://github.com/ifiokjr/monosecret/issues/71)
+
 ## [0.3.5](https://github.com/ifiokjr/monosecret/releases/tag/v0.3.5) (2026-09-12)
 
 Grouped release for `monosecret`.

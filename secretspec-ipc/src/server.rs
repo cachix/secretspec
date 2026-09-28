@@ -1007,13 +1007,21 @@ async fn send_terminal(
 /// fit. A result carrying a secret must never be truncated onto the wire, and
 /// the caller is owed exactly one terminal frame either way.
 fn encode_response(response: &Response, limit: usize) -> Result<Zeroizing<Vec<u8>>> {
-    let payload = serde_json::to_vec(response)
-        .map_err(|_| Error::Protocol("failed to serialize response"))?;
-    if !payload.is_empty() && payload.len() <= limit {
-        return Ok(Zeroizing::new(payload));
-    }
-    drop(Zeroizing::new(payload));
-    let replacement = Response::error(response.id(), RpcError::new(ErrorKind::MessageTooLarge));
+    let encoded = response
+        .validate_wire_integers()
+        .ok()
+        .and_then(|_| serde_json::to_vec(response).ok());
+    let replacement_kind = match encoded {
+        Some(payload) if !payload.is_empty() && payload.len() <= limit => {
+            return Ok(Zeroizing::new(payload));
+        }
+        Some(payload) => {
+            drop(Zeroizing::new(payload));
+            ErrorKind::MessageTooLarge
+        }
+        None => ErrorKind::Internal,
+    };
+    let replacement = Response::error(response.id(), RpcError::new(replacement_kind));
     serde_json::to_vec(&replacement)
         .map(Zeroizing::new)
         .map_err(|_| Error::Protocol("failed to serialize response"))
@@ -1034,16 +1042,24 @@ async fn commit_application_before(
     cancellation: &CancellationToken,
     disconnected: &CancellationToken,
 ) -> bool {
-    let encoded = serde_json::to_vec(&response).map(Zeroizing::new).ok();
+    let encoded = response
+        .validate_wire_integers()
+        .ok()
+        .and_then(|_| serde_json::to_vec(&response).ok())
+        .map(Zeroizing::new);
     let application_response = encoded
         .as_ref()
         .is_some_and(|payload| !payload.is_empty() && payload.len() <= limit);
     let request_id = response.id();
+    let replacement_kind = if encoded.is_none() {
+        ErrorKind::Internal
+    } else {
+        ErrorKind::MessageTooLarge
+    };
     let payload = match encoded.filter(|_| application_response) {
         Some(payload) => payload,
         None => {
-            let replacement =
-                Response::error(request_id, RpcError::new(ErrorKind::MessageTooLarge));
+            let replacement = Response::error(request_id, RpcError::new(replacement_kind));
             match serde_json::to_vec(&replacement).map(Zeroizing::new) {
                 Ok(payload) => payload,
                 Err(_) => return false,

@@ -28,6 +28,7 @@ SecretSpec IPC wire protocol version 1 is available starting with SecretSpec
 | Frame | One UTF-8 JSON object followed by LF (bounded NDJSON) |
 | Absolute frame limit | 1,048,576 JSON bytes, excluding the terminating LF |
 | Request IDs | Positive JSON integers from 1 through 9,007,199,254,740,991; strictly increasing within one direction of a session |
+| Other integers | Exactly representable JSON integers from -9,007,199,254,740,991 through 9,007,199,254,740,991, subject to each field's narrower rules (0.22+) |
 | Concurrency | Negotiated, at least 1 and at most 32 in-flight requests in version 1 |
 | Deadline | Mandatory absolute Unix time in milliseconds on every request |
 | Discovery | Side-effect-free `rpc.discover` before or after initialization (0.21+) |
@@ -65,6 +66,20 @@ the session. Until the successful initialization response is committed, that
 responses.
 
 ## JSON-RPC profile
+
+<VersionCompatibility version="0.22" kind="changed">
+Version 1 senders and receivers now limit every JSON integer to the range
+-9,007,199,254,740,991 through 9,007,199,254,740,991. Earlier 0.21 releases
+allowed larger unsigned timestamps and durations, which JavaScript clients
+could silently round. Request IDs were already limited to this range.
+</VersionCompatibility>
+
+The bound applies throughout requests, notifications, results, errors, and
+discovery documents. Unsigned timestamps, durations, and counts use 0 through
+9,007,199,254,740,991; fields documented as positive start at 1. JSON-RPC
+error codes retain their specified negative values. Fractional values are not
+valid for integer fields. An unknown expiry is represented by `null`, not a
+large sentinel integer.
 
 Version 1 uses the JSON-RPC string `"2.0"`. Requests and responses use the
 standard `method`, `params`, `result`, and `error` members.

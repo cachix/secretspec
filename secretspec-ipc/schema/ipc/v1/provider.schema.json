@@ -51,7 +51,7 @@
         "profile": { "type": ["string", "null"], "minLength": 1, "maxLength": 4096 },
         "base_dir": { "type": ["string", "null"], "maxLength": 32768 },
         "reason": { "type": ["string", "null"], "maxLength": 4096 },
-        "requested_authorization_duration_ms": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }
+        "requested_authorization_duration_ms": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
       }
     },
     "ProviderMetadata": {
@@ -261,7 +261,7 @@
       "properties": {
         "address": { "$ref": "common.schema.json#/$defs/Address" },
         "value": { "type": "string" },
-        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }
+        "ttl_ms": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
       }
     },
     "StoredResult": {
@@ -308,7 +308,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["cleared"],
-      "properties": { "cleared": { "type": "integer", "minimum": 0 } }
+      "properties": { "cleared": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 } }
     },
     "DescribeWriteTargetResult": {
       "type": "object",

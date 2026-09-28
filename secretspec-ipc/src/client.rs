@@ -153,6 +153,7 @@ impl Client {
         let initialize_id = RequestId::new(1)?;
         let initialize_params = serde_json::to_value(initialize)
             .map_err(|_| Error::Protocol("failed to serialize initialization"))?;
+        let startup_deadline_unix_ms = crate::deadline::clamp_unix_ms(startup_deadline_unix_ms);
         let initialize_request = Request::new(
             initialize_id,
             rpc::INITIALIZE,
@@ -400,6 +401,7 @@ impl Client {
     /// Close the protocol session. The process launcher separately enforces
     /// child termination and reaping after this wire shutdown completes.
     pub async fn close(&self, deadline_unix_ms: u64) -> Result<()> {
+        let deadline_unix_ms = crate::deadline::clamp_unix_ms(deadline_unix_ms);
         let _order = tokio::time::timeout_at(
             instant_from_unix_ms(deadline_unix_ms),
             self.inner.request_order.lock(),
@@ -722,15 +724,24 @@ fn serve_callback(inner: &Arc<Inner>, handler: Arc<dyn CallbackHandler>, request
             inbound.active = inbound.active.saturating_sub(1);
         }
         let limit = inner.max_frame_bytes.load(Ordering::Acquire);
-        let encoded = serde_json::to_vec(&response).map(Zeroizing::new);
+        let encoded = response
+            .validate_wire_integers()
+            .ok()
+            .and_then(|_| serde_json::to_vec(&response).ok())
+            .map(Zeroizing::new);
+        let replacement_kind = if encoded.is_none() {
+            ErrorKind::Internal
+        } else {
+            ErrorKind::MessageTooLarge
+        };
         zeroize_response(&mut response);
         let payload = match encoded {
-            Ok(payload) if payload.len() <= limit => payload,
+            Some(payload) if payload.len() <= limit => payload,
             // An answer that cannot fit still owes the server one terminal
             // frame, or its callback would hang until the deadline.
             _ => {
                 let replacement =
-                    Response::error(Some(request.id), RpcError::new(ErrorKind::MessageTooLarge));
+                    Response::error(Some(request.id), RpcError::new(replacement_kind));
                 match Envelope::Response(replacement).to_vec().map(Zeroizing::new) {
                     Ok(payload) => payload,
                     Err(_) => return,

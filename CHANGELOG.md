@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- IPC v1 now keeps timestamps, durations, retry delays, expiry values, and
+  counts within the JSON integer range that JavaScript clients can represent
+  exactly. Values outside that range are rejected instead of being rounded.
+  Far-future client deadlines are clamped before initialization, calls, and
+  shutdown so their requests remain interoperable. Very long cache `max_age`
+  values are clamped the same way, so expiring writes to external providers
+  and cached results from `secretspec serve` keep working.
+
 - Rust IPC clients now accept additional response, result, and error-data
   members from later compatible v1 peers, while requests remain strict.
 

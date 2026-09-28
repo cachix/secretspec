@@ -1,3 +1,4 @@
+use crate::MAX_JSON_INTEGER;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Returns an absolute Unix-millisecond deadline after `duration`.
@@ -10,7 +11,7 @@ pub fn unix_ms_after(duration: Duration) -> u64 {
         .unwrap_or_default()
         .as_millis()
         .saturating_add(duration.as_millis())
-        .min(u64::MAX as u128) as u64
+        .min(MAX_JSON_INTEGER as u128) as u64
 }
 
 /// Largest interval a peer-supplied deadline may place in the future.

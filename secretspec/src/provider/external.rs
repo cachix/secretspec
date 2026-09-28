@@ -1497,7 +1497,7 @@ impl Provider for ExternalProvider {
             return self.set(addr, value);
         }
         self.check_writable(addr)?;
-        let ttl_ms = max_age.as_millis().try_into().unwrap_or(u64::MAX);
+        let ttl_ms = wire_ttl_ms(max_age);
         if ttl_ms == 0 {
             return Err(discovery_error("external provider expiry must be positive"));
         }
@@ -1852,9 +1852,25 @@ fn ipc_error(error: secretspec_ipc::Error) -> SecretSpecError {
     }
 }
 
+/// Version 1 wire integers stop at 2^53 - 1, so an absurdly long cache
+/// lifetime is clamped instead of failing every expiring write.
+fn wire_ttl_ms(max_age: Duration) -> u64 {
+    max_age
+        .as_millis()
+        .min(u128::from(secretspec_ipc::MAX_JSON_INTEGER)) as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expiring_write_ttl_is_clamped_to_the_wire_integer_range() {
+        assert_eq!(wire_ttl_ms(Duration::from_secs(60)), 60_000);
+        let huge = Duration::from_secs(999_999_999 * 7 * 24 * 60 * 60);
+        assert_eq!(wire_ttl_ms(huge), secretspec_ipc::MAX_JSON_INTEGER);
+        assert_eq!(wire_ttl_ms(Duration::MAX), secretspec_ipc::MAX_JSON_INTEGER);
+    }
 
     fn endpoint(directory: &Path, name: &str, argument: &str) -> ProviderEndpoint {
         let executable = directory.join(name);

@@ -161,7 +161,8 @@ Rules:
 - `context.reason` is the session-wide access reason or null. An endpoint
   needing a different reason must use another session.
 - `context.requested_authorization_duration_ms`, when present, is a positive
-  app-requested default for an approval surface. It is not an authorization or
+  app-requested default for an approval surface (0.22+: at most
+  9,007,199,254,740,991). It is not an authorization or
   an upper bound: the endpoint and approving user choose the actual lifetime.
 - The endpoint MUST reject a URI whose scheme differs from `scheme`.
 
@@ -507,8 +508,9 @@ error, never `missing`.
 
 `expires_at_unix_ms` (0.21+) is required on a found result and may be null. A
 timestamp is the provider's authoritative absolute bound on the validity of the
-secret itself, not a cache freshness time or a promise that no earlier
-revocation can happen. The endpoint MUST NOT knowingly return a value at or
+secret itself (0.22+: at most 9,007,199,254,740,991 when non-null), not a
+cache freshness time or a promise that no earlier revocation can happen. The
+endpoint MUST NOT knowingly return a value at or
 after its reported expiry. Null means the provider does not know or does not
 expose a validity bound; it never means the secret is permanent.
 
@@ -683,8 +685,9 @@ in the same backend consistency domain can observe the write.
 { "jsonrpc": "2.0", "id": 7, "result": { "stored": true } }
 ```
 
-`ttl_ms` is a positive integer. Its interval begins when the endpoint accepts
-the request. An endpoint advertising this capability MUST ensure the stored
+`ttl_ms` is a positive integer (0.22+: at most 9,007,199,254,740,991).
+Its interval begins when the endpoint accepts the request. An endpoint
+advertising this capability MUST ensure the stored
 copy becomes unavailable no later than that interval, including without
 another SecretSpec process running. It may expire it earlier only if the
 backend's documented precision requires rounding.

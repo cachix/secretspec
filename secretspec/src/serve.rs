@@ -251,8 +251,8 @@ impl ResolverHandler for ResolverHandlerImpl {
                     value,
                     source: map_source(source),
                     source_provider,
-                    expires_at_unix_ms,
-                    refresh_at_unix_ms,
+                    expires_at_unix_ms: wire_unix_ms(expires_at_unix_ms),
+                    refresh_at_unix_ms: wire_unix_ms(refresh_at_unix_ms),
                     revision,
                 }))
             }
@@ -327,8 +327,8 @@ impl ResolverHandler for ResolverHandlerImpl {
                     path_lease_id: lease_id,
                     source: map_source(source),
                     source_provider,
-                    expires_at_unix_ms,
-                    refresh_at_unix_ms,
+                    expires_at_unix_ms: wire_unix_ms(expires_at_unix_ms),
+                    refresh_at_unix_ms: wire_unix_ms(refresh_at_unix_ms),
                     revision,
                 }))
             }
@@ -713,6 +713,12 @@ async fn ask(context: &RequestContext, request: &PromptRequest) -> Option<String
         .map(|result| result.value)
 }
 
+/// Clamps a timestamp to the version 1 wire range. A cache `max_age` near the
+/// `u64` limit yields times far past 2^53 - 1, which the wire would reject.
+fn wire_unix_ms(value: Option<u64>) -> Option<u64> {
+    value.map(|value| value.min(secretspec_ipc::MAX_JSON_INTEGER))
+}
+
 fn map_source(source: ResolvedSource) -> Source {
     match source {
         ResolvedSource::Provider => Source::Provider,
@@ -771,6 +777,16 @@ mod tests {
             .unwrap()
             .as_millis() as u64
             + 2_000
+    }
+
+    #[test]
+    fn result_timestamps_are_clamped_to_the_wire_integer_range() {
+        assert_eq!(wire_unix_ms(None), None);
+        assert_eq!(wire_unix_ms(Some(1_000)), Some(1_000));
+        assert_eq!(
+            wire_unix_ms(Some(u64::MAX / 2)),
+            Some(secretspec_ipc::MAX_JSON_INTEGER)
+        );
     }
 
     #[test]

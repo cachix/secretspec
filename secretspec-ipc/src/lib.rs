@@ -13,6 +13,7 @@ pub mod jsonrpc;
 pub mod launch;
 pub mod protocol;
 pub mod revision;
+mod wire_integer;
 
 #[cfg(feature = "tokio")]
 mod description;
@@ -51,5 +52,8 @@ pub const MIN_FRAME_BYTES: usize = 4_096;
 /// Version 1 in-flight ceiling.
 pub const MAX_IN_FLIGHT: usize = 32;
 
+/// Largest integer that all version 1 JSON peers can represent exactly.
+pub const MAX_JSON_INTEGER: u64 = 9_007_199_254_740_991;
+
 /// Largest request ID that is exactly representable by JSON/JavaScript peers.
-pub const MAX_REQUEST_ID: u64 = 9_007_199_254_740_991;
+pub const MAX_REQUEST_ID: u64 = MAX_JSON_INTEGER;

@@ -53,7 +53,7 @@ impl<'de> Deserialize<'de> for InteractionKind {
 pub struct InteractionReference {
     pub kind: InteractionKind,
     pub id: String,
-    #[serde(deserialize_with = "crate::protocol::deserialize_required_nullable")]
+    #[serde(with = "crate::wire_integer::optional")]
     pub expires_at_unix_ms: Option<u64>,
 }
 
@@ -269,7 +269,11 @@ impl<'de> Deserialize<'de> for ErrorKind {
 pub struct ErrorData {
     pub kind: ErrorKind,
     pub retryable: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::wire_integer::optional"
+    )]
     pub retry_after_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interaction: Option<InteractionReference>,

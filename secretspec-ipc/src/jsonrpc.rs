@@ -78,6 +78,7 @@ impl<'de> Deserialize<'de> for Version {
 pub struct Meta {
     /// Mandatory absolute end-to-end deadline. Generic RPC metadata lives
     /// under this one reserved member instead of expanding the envelope.
+    #[serde(with = "crate::wire_integer::unsigned")]
     pub deadline_unix_ms: u64,
     /// A callback names the still-active request that caused it. Ordinary
     /// client-to-server requests omit this member.
@@ -139,6 +140,11 @@ impl Request {
     ) -> Result<Self> {
         let method = method.into();
         validate_method_and_params(&method, &params)?;
+        if deadline_unix_ms > crate::MAX_JSON_INTEGER {
+            return Err(Error::Protocol(
+                "deadline exceeds the version 1 safe integer range",
+            ));
+        }
         Ok(Self {
             jsonrpc: Version,
             id,
@@ -204,6 +210,13 @@ pub enum Response {
 }
 
 impl Response {
+    pub(crate) fn validate_wire_integers(&self) -> Result<()> {
+        if let Self::Success(response) = self {
+            crate::wire_integer::validate_value(&response.result)?;
+        }
+        Ok(())
+    }
+
     pub fn success(id: RequestId, result: Value) -> Self {
         Self::Success(SuccessResponse {
             jsonrpc: Version,
@@ -291,6 +304,13 @@ impl Envelope {
     }
 
     pub fn to_vec(&self) -> Result<Vec<u8>> {
+        match self {
+            Self::Request(request) => crate::wire_integer::validate_value(&request.params)?,
+            Self::Notification(notification) => {
+                crate::wire_integer::validate_value(&notification.params)?
+            }
+            Self::Response(response) => response.validate_wire_integers()?,
+        }
         serde_json::to_vec(self).map_err(|error| Error::ProtocolOwned(error.to_string()))
     }
 }
@@ -318,6 +338,8 @@ fn parse_strict_value(bytes: &[u8]) -> std::result::Result<Value, (Error, ErrorK
         .deserialize(&mut deserializer)
         .map_err(classify_json_error)?;
     deserializer.end().map_err(classify_json_error)?;
+    crate::wire_integer::validate_value(&value)
+        .map_err(|error| (error, ErrorKind::InvalidRequest))?;
     Ok(value)
 }
 

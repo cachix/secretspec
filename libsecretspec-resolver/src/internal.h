@@ -11,7 +11,8 @@
 #define SS_ABSOLUTE_MAX_FRAME ((size_t)1048576)
 #define SS_MIN_FRAME ((size_t)4096)
 #define SS_MAX_IN_FLIGHT ((size_t)32)
-#define SS_MAX_ID UINT64_C(9007199254740991)
+#define SS_MAX_JSON_INTEGER UINT64_C(9007199254740991)
+#define SS_MAX_ID SS_MAX_JSON_INTEGER
 /* Largest interval a caller-supplied deadline may place in the future. Mirrors
  * MAX_DEADLINE_HORIZON in the Rust implementation. Without it a deadline near
  * UINT64_MAX makes every timed wait unrepresentable and requests never expire. */

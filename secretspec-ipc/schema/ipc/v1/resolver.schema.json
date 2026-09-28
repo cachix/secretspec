@@ -38,7 +38,7 @@
         "profile": { "type": ["string", "null"], "maxLength": 4096 },
         "scope": { "type": ["string", "null"], "maxLength": 4096 },
         "reason": { "type": ["string", "null"], "maxLength": 4096 },
-        "requested_authorization_duration_ms": { "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }
+        "requested_authorization_duration_ms": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
       }
     },
     "InitializedApplication": {

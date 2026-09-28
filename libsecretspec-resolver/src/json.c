@@ -61,6 +61,15 @@ static bool ss_json_tree_valid(yyjson_val *value, size_t depth) {
         free(keys);
         return valid;
     }
+    if (yyjson_is_uint(value)) return yyjson_get_uint(value) <= SS_MAX_JSON_INTEGER;
+    if (yyjson_is_sint(value)) {
+        int64_t number = yyjson_get_sint(value);
+        return number >= -(int64_t)SS_MAX_JSON_INTEGER && number <= (int64_t)SS_MAX_JSON_INTEGER;
+    }
+    if (yyjson_is_real(value)) {
+        double number = yyjson_get_real(value);
+        return number >= -(double)SS_MAX_JSON_INTEGER && number <= (double)SS_MAX_JSON_INTEGER;
+    }
     return true;
 }
 
@@ -103,7 +112,7 @@ bool ss_json_is_closed_object(yyjson_val *object, const char *const *keys, size_
 }
 
 bool ss_json_u64(yyjson_val *value, uint64_t *number) {
-    if (!yyjson_is_uint(value) || number == NULL) return false;
+    if (!yyjson_is_uint(value) || number == NULL || yyjson_get_uint(value) > SS_MAX_JSON_INTEGER) return false;
     *number = yyjson_get_uint(value);
     return true;
 }

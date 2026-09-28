@@ -416,7 +416,9 @@ static secretspec_resolver_status start_request(
     ss_request *request;
     secretspec_resolver_call *handle;
     secretspec_resolver_buffer payload = {NULL, 0};
-    uint64_t ceiling = ss_now_unix_ms() + SS_MAX_DEADLINE_HORIZON_MS;
+    uint64_t now = ss_now_unix_ms();
+    uint64_t ceiling = now >= SS_MAX_JSON_INTEGER - SS_MAX_DEADLINE_HORIZON_MS
+        ? SS_MAX_JSON_INTEGER : now + SS_MAX_DEADLINE_HORIZON_MS;
     /* Bound the tracked deadline so the request is guaranteed to expire and
      * release its in-flight slot. The wire value carries the same clamp so the
      * peer never enforces a longer deadline than this client tracks. */

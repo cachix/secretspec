@@ -39,11 +39,20 @@ typedef enum {
     MODE_UNKNOWN_NOTIFICATION,
     MODE_INVALID_NOTIFICATION,
     MODE_CHECK_ENVIRONMENT,
+    MODE_CHECK_DEADLINES,
     MODE_SMALL_FRAME_PROMPT,
     MODE_INITIALIZE_PROMPT,
     MODE_PROMPT_THEN_CLOSE,
-    MODE_PROMPT_DURING_CLOSE
+    MODE_PROMPT_DURING_CLOSE,
+    MODE_RETRY_AFTER
 } peer_mode;
+
+static uint64_t now_ms(void) {
+    struct timespec time;
+    if (timespec_get(&time, TIME_UTC) != TIME_UTC) return 0;
+    return (uint64_t)time.tv_sec * UINT64_C(1000) +
+           (uint64_t)time.tv_nsec / UINT64_C(1000000);
+}
 
 static void pause_for_backpressure(void) {
 #ifdef _WIN32
@@ -202,10 +211,12 @@ static peer_mode parse_mode(int argc, char **argv) {
     if (strcmp(argv[1], "--unknown-notification") == 0) return MODE_UNKNOWN_NOTIFICATION;
     if (strcmp(argv[1], "--invalid-notification") == 0) return MODE_INVALID_NOTIFICATION;
     if (strcmp(argv[1], "--check-environment") == 0) return MODE_CHECK_ENVIRONMENT;
+    if (strcmp(argv[1], "--check-deadlines") == 0) return MODE_CHECK_DEADLINES;
     if (strcmp(argv[1], "--small-frame-prompt") == 0) return MODE_SMALL_FRAME_PROMPT;
     if (strcmp(argv[1], "--initialize-prompt") == 0) return MODE_INITIALIZE_PROMPT;
     if (strcmp(argv[1], "--prompt-then-close") == 0) return MODE_PROMPT_THEN_CLOSE;
     if (strcmp(argv[1], "--prompt-during-close") == 0) return MODE_PROMPT_DURING_CLOSE;
+    if (strncmp(argv[1], "--retry-after=", 14) == 0) return MODE_RETRY_AFTER;
     return MODE_NORMAL;
 }
 
@@ -291,6 +302,12 @@ int main(int argc, char **argv) {
             yyjson_doc_free(document);
             return EXIT_FAILURE;
         }
+        if (mode == MODE_CHECK_DEADLINES && id != NULL &&
+            (yyjson_get_uint(deadline) > UINT64_C(9007199254740991) ||
+             yyjson_get_uint(deadline) > now_ms() + UINT64_C(300000))) {
+            yyjson_doc_free(document);
+            return EXIT_FAILURE;
+        }
         if (yyjson_equals_str(method, "rpc.initialize")) {
             if (mode == MODE_INITIALIZE_PROMPT) {
                 /* A prompt may only belong to an application call. */
@@ -357,6 +374,12 @@ int main(int argc, char **argv) {
                 "\"message\":\"dynamic session required\","
                 "\"data\":{\"kind\":\"dynamic_session_required\",\"retryable\":false}}}",
                 (unsigned long long)yyjson_get_uint(id));
+        } else if (mode == MODE_RETRY_AFTER) {
+            length = snprintf(response, sizeof(response),
+                "{\"jsonrpc\":\"2.0\",\"id\":%llu,\"error\":{\"code\":-32004,"
+                "\"message\":\"unavailable\",\"data\":{\"kind\":\"unavailable\","
+                "\"retryable\":true,\"retry_after_ms\":%s}}}",
+                (unsigned long long)yyjson_get_uint(id), argv[1] + 14);
         } else if (mode == MODE_PROMPT || mode == MODE_SMALL_FRAME_PROMPT) {
             /* Ask the client for a value mid-call, then answer the call with
              * whatever came back. The prompt uses this side's own request ID

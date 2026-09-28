@@ -139,6 +139,40 @@ static int open_client(
     return status == SECRETSPEC_RESOLVER_OK;
 }
 
+static int far_future_deadlines_stay_in_the_wire_range(const char *peer) {
+    secretspec_resolver_options options;
+    secretspec_resolver_client *client = NULL;
+    secretspec_resolver_call *call = NULL;
+    secretspec_resolver_buffer server = {NULL, 0};
+    secretspec_resolver_buffer result = {NULL, 0};
+    secretspec_resolver_buffer error = {NULL, 0};
+    static const unsigned char params[] = "{}";
+    secretspec_resolver_status status;
+    int outcome = 0;
+
+    set_options(&options, peer, "--check-deadlines", client_initialize);
+    status = secretspec_resolver_client_open(
+        &options, UINT64_MAX, &client, &server, &error);
+    secretspec_resolver_buffer_free(server);
+    if (status != SECRETSPEC_RESOLVER_OK) goto done;
+    status = secretspec_resolver_call_start(
+        client, (const unsigned char *)"resolver.get", strlen("resolver.get"),
+        params, sizeof(params) - 1, UINT64_MAX, &call, &error);
+    if (status != SECRETSPEC_RESOLVER_OK) goto done;
+    status = secretspec_resolver_call_wait(call, &result, &error);
+    if (status != SECRETSPEC_RESOLVER_OK) goto done;
+    secretspec_resolver_call_free(call);
+    call = NULL;
+    status = secretspec_resolver_client_close(client, UINT64_MAX, &error);
+    outcome = status == SECRETSPEC_RESOLVER_OK;
+done:
+    if (call != NULL) secretspec_resolver_call_free(call);
+    secretspec_resolver_buffer_free(result);
+    secretspec_resolver_buffer_free(error);
+    if (client != NULL) secretspec_resolver_client_free(client);
+    return outcome;
+}
+
 static secretspec_resolver_status start_get(
     secretspec_resolver_client *client,
     uint64_t deadline,
@@ -348,6 +382,36 @@ failed:
     secretspec_resolver_buffer_free(error);
     if (client != NULL) secretspec_resolver_client_free(client);
     return 0;
+}
+
+static int retry_delay_uses_portable_integer_bounds(const char *peer) {
+    static const unsigned char params[] = "{}";
+    const struct { const char *mode; secretspec_resolver_status expected; } cases[] = {
+        {"--retry-after=9007199254740991", SECRETSPEC_RESOLVER_UNAVAILABLE},
+        {"--retry-after=1.5", SECRETSPEC_RESOLVER_PROTOCOL},
+        {"--retry-after=-1", SECRETSPEC_RESOLVER_PROTOCOL},
+        {"--retry-after=9007199254740992", SECRETSPEC_RESOLVER_PROTOCOL},
+        {"--retry-after=18446744073709551615", SECRETSPEC_RESOLVER_PROTOCOL},
+    };
+    size_t index;
+    for (index = 0; index < sizeof(cases) / sizeof(cases[0]); index++) {
+        secretspec_resolver_client *client = NULL;
+        secretspec_resolver_buffer error = {NULL, 0};
+        secretspec_resolver_buffer result = {NULL, 0};
+        secretspec_resolver_status status;
+        if (!open_client(peer, cases[index].mode, &client, &error)) {
+            secretspec_resolver_buffer_free(error);
+            return 0;
+        }
+        status = secretspec_resolver_client_call(
+            client, (const unsigned char *)"resolver.get", strlen("resolver.get"),
+            params, sizeof(params) - 1, far_deadline(), &result, &error);
+        secretspec_resolver_buffer_free(result);
+        secretspec_resolver_buffer_free(error);
+        secretspec_resolver_client_free(client);
+        if (status != cases[index].expected) return 0;
+    }
+    return 1;
 }
 
 /* The prompt loop end to end: the peer asks mid-call, the caller answers
@@ -862,6 +926,7 @@ static const regression_check checks[] = {
 #ifndef _WIN32
     {"closed_standard_streams_work", closed_standard_streams_work},
 #endif
+    {"far_future_deadlines_stay_in_the_wire_range", far_future_deadlines_stay_in_the_wire_range},
     {"launches_with_a_sorted_environment", launches_with_a_sorted_environment},
     {"names_non_protocol_text", names_non_protocol_text},
     {"answers_a_prompt_and_completes_the_call", answers_a_prompt_and_completes_the_call},
@@ -875,6 +940,7 @@ static const regression_check checks[] = {
     {"rejects_a_callback_deadline_after_its_parent", rejects_a_callback_deadline_after_its_parent},
     {"notification_semantics_are_consistent", notification_semantics_are_consistent},
     {"a_future_error_kind_does_not_kill_the_session", a_future_error_kind_does_not_kill_the_session},
+    {"retry_delay_uses_portable_integer_bounds", retry_delay_uses_portable_integer_bounds},
     {"rejects_bad_shutdown", rejects_bad_shutdown},
     {"freed_calls_expire", freed_calls_expire},
     {"descendant_pipes_do_not_block_close", descendant_pipes_do_not_block_close},

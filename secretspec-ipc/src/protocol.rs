@@ -508,7 +508,11 @@ pub mod resolver {
         pub reason: Option<String>,
         /// App-requested authorization lifetime in milliseconds. The provider
         /// may shorten, extend, or reject this request after user approval.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "crate::wire_integer::optional"
+        )]
         pub requested_authorization_duration_ms: Option<u64>,
     }
 
@@ -755,12 +759,12 @@ pub mod resolver {
         pub source: Source,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub source_provider: Option<String>,
-        #[serde(deserialize_with = "deserialize_required_nullable")]
+        #[serde(with = "crate::wire_integer::optional")]
         pub expires_at_unix_ms: Option<u64>,
         /// Opaque revision of the returned logical value (0.21+).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub revision: Option<crate::Revision>,
-        #[serde(deserialize_with = "deserialize_required_nullable")]
+        #[serde(with = "crate::wire_integer::optional")]
         pub refresh_at_unix_ms: Option<u64>,
     }
 
@@ -776,12 +780,12 @@ pub mod resolver {
         pub source: Source,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub source_provider: Option<String>,
-        #[serde(deserialize_with = "deserialize_required_nullable")]
+        #[serde(with = "crate::wire_integer::optional")]
         pub expires_at_unix_ms: Option<u64>,
         /// Opaque revision of the returned logical value (0.21+).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub revision: Option<crate::Revision>,
-        #[serde(deserialize_with = "deserialize_required_nullable")]
+        #[serde(with = "crate::wire_integer::optional")]
         pub refresh_at_unix_ms: Option<u64>,
     }
 
@@ -918,6 +922,7 @@ pub mod resolver {
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     pub struct ReleaseResult {
+        #[serde(with = "crate::wire_integer::count")]
         pub released: usize,
     }
 
@@ -1078,7 +1083,11 @@ pub mod provider {
         pub reason: Option<String>,
         /// App-requested authorization lifetime in milliseconds. This is an
         /// untrusted default for an approval surface, not an authorization.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "crate::wire_integer::optional"
+        )]
         pub requested_authorization_duration_ms: Option<u64>,
     }
 
@@ -1328,7 +1337,7 @@ pub mod provider {
     pub enum GetResult {
         Found {
             value: String,
-            #[serde(deserialize_with = "deserialize_required_nullable")]
+            #[serde(with = "crate::wire_integer::optional")]
             expires_at_unix_ms: Option<u64>,
             #[serde(default, skip_serializing_if = "Option::is_none")]
             revision: Option<crate::Revision>,
@@ -1405,7 +1414,7 @@ pub mod provider {
                 name: String,
                 status: FoundStatus,
                 value: String,
-                #[serde(deserialize_with = "deserialize_required_nullable")]
+                #[serde(with = "crate::wire_integer::optional")]
                 expires_at_unix_ms: Option<u64>,
                 #[serde(default, skip_serializing_if = "Option::is_none")]
                 revision: Option<crate::Revision>,
@@ -1500,6 +1509,7 @@ pub mod provider {
     pub struct SetExpiringParams {
         pub address: Address,
         pub value: String,
+        #[serde(with = "crate::wire_integer::unsigned")]
         pub ttl_ms: u64,
     }
 
@@ -1564,6 +1574,7 @@ pub mod provider {
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     pub struct ClearResult {
+        #[serde(with = "crate::wire_integer::count")]
         pub cleared: usize,
     }
 

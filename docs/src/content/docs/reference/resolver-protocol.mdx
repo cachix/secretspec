@@ -202,8 +202,9 @@ Rules:
   meaning. Null requests the resolver's configured/default value; it does not
   consult a resolver-specific environment variable.
 - `requested_authorization_duration_ms` is an optional positive app-requested
-  default for provider approval surfaces. The provider and approving user may
-  choose a different lifetime.
+  default for provider approval surfaces (0.22+: at most
+  9,007,199,254,740,991). The provider and approving user may choose a
+  different lifetime.
 - The complete object is immutable after initialization. A caller needing
   another profile, scope, reason, authorization-duration request, or manifest
   opens another session.
@@ -360,7 +361,8 @@ vouch for and decides accordingly.
 credential-free display URI returned by `Provider::uri()`.
 
 Both absolute timestamps are available starting with SecretSpec 0.21. They are
-required and nullable, but they answer different questions:
+required and nullable, but they answer different questions. Starting in 0.22,
+non-null values must be at most 9,007,199,254,740,991:
 
 - `expires_at_unix_ms` is the provider-reported time at which the secret itself
   ceases to be valid. At or after this time the consumer MUST stop using the

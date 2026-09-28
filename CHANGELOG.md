@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `secretspec init` now adds the project schema directive to the top of new
   manifests, enabling editor autocomplete and structural validation.
 
+### Fixed
+
+- Rust IPC clients now accept additional response, result, and error-data
+  members from later compatible v1 peers, while requests remain strict.
+
 ## [0.21.1] - 2026-09-27
 
 ### Added

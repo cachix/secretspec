@@ -520,7 +520,8 @@ The rules an implementation must follow to keep version 1 extensible:
 4. **Requests are strict and results are tolerant.** Request objects and
    notification envelopes reject unknown members. Receivers ignore unknown
    members in response and result objects, so descriptive output can grow
-   without a new capability.
+   without a new capability. Required members and the values of known members
+   still have to satisfy their defined shapes.
 5. **New methods, notifications, and callbacks are capability-gated.** A
    receiver ignores an unknown notification method because it has no response
    channel. A sender nevertheless sends a later notification only when the
@@ -534,6 +535,12 @@ The rules an implementation must follow to keep version 1 extensible:
 None of this weakens strict request parsing. An endpoint still rejects an
 unknown member of a `params` object, an unknown method, and a request that used
 a capability it did not advertise.
+
+The version 1 JSON Schemas describe canonical sender output, so their closed
+response and error objects remain useful for checking what a sender emits.
+Receivers must apply the compatibility rules above when decoding responses;
+validating a received response against those sender schemas would reject
+compatible additions.
 
 ## Shutdown and disconnect
 

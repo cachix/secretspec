@@ -182,7 +182,6 @@ impl Notification {
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SuccessResponse {
     pub jsonrpc: Version,
     pub id: RequestId,
@@ -190,7 +189,6 @@ pub struct SuccessResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ErrorResponse {
     pub jsonrpc: Version,
     #[serde(deserialize_with = "crate::protocol::deserialize_required_nullable")]
@@ -239,8 +237,9 @@ pub enum Envelope {
 }
 
 impl Envelope {
-    /// Parse one strict JSON-RPC object, rejecting duplicate keys, non-objects,
-    /// unknown envelope members, invalid IDs, and excessive nesting.
+    /// Parse one JSON-RPC object, rejecting duplicate keys, non-objects,
+    /// unknown request and notification members, invalid IDs, and excessive
+    /// nesting. Unknown response members are ignored.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         Self::parse_classified(bytes).map_err(|(error, _)| error)
     }
@@ -248,8 +247,8 @@ impl Envelope {
     /// Parse, reporting the error kind the frame should be answered with.
     ///
     /// Malformed bytes yield `parse_error`; anything that parsed as JSON but
-    /// broke a rule above it (duplicate keys, nesting depth, unknown members,
-    /// invalid IDs, method and params shape) yields `invalid_request`. Callers
+    /// broke a rule above it (duplicate keys, nesting depth, unknown request
+    /// members, invalid IDs, method and params shape) yields `invalid_request`. Callers
     /// that must answer with an error kind use this instead of re-parsing the
     /// frame with a laxer parser to guess which layer failed.
     pub fn parse_classified(bytes: &[u8]) -> std::result::Result<Self, (Error, ErrorKind)> {
@@ -267,6 +266,9 @@ impl Envelope {
         } else if object.contains_key("method") {
             Self::Notification(from_value(value)?)
         } else if object.contains_key("result") || object.contains_key("error") {
+            if object.contains_key("result") && object.contains_key("error") {
+                return Err(Error::Protocol("response has both result and error"));
+            }
             let response: Response = from_value(value)?;
             if let Response::Error(error) = &response {
                 error.error.validate().map_err(Error::Protocol)?;
@@ -522,14 +524,23 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_top_level_members() {
+    fn requests_reject_unknown_members_and_responses_accept_them() {
         assert!(
             Envelope::parse(
                 br#"{"jsonrpc":"2.0","id":1,"method":"x","_meta":{"deadline_unix_ms":1},"params":{},"extra":true}"#
             )
                 .is_err()
         );
-        assert!(Envelope::parse(br#"{"jsonrpc":"2.0","id":1,"result":{},"extra":true}"#).is_err());
+        assert!(matches!(
+            Envelope::parse(br#"{"jsonrpc":"2.0","id":1,"result":{},"extra":true}"#),
+            Ok(Envelope::Response(Response::Success(_)))
+        ));
+        assert!(matches!(
+            Envelope::parse(
+                br#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"internal error","data":{"kind":"internal","retryable":false}},"extra":true}"#
+            ),
+            Ok(Envelope::Response(Response::Error(_)))
+        ));
         assert!(
             Envelope::parse(
                 br#"{"jsonrpc":"2.0","id":1,"result":{},"error":{"code":-32603,"message":"internal error","data":{"kind":"internal","retryable":false}}}"#

@@ -126,12 +126,51 @@ impl<A> InitializeParams<A> {
 pub struct InitializeResult<A> {
     pub protocol: String,
     pub version: u32,
+    #[serde(deserialize_with = "deserialize_response_product")]
     pub server: Product,
     pub methods: Vec<String>,
     #[serde(default)]
     pub capabilities: BTreeMap<String, bool>,
+    #[serde(deserialize_with = "deserialize_response_limits")]
     pub limits: Limits,
     pub application: A,
+}
+
+// Product and Limits are shared with strict initialization requests. Decode
+// their response occurrences separately so additive metadata cannot loosen
+// request validation.
+fn deserialize_response_product<'de, D>(deserializer: D) -> std::result::Result<Product, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    struct ResponseProduct {
+        name: String,
+        version: String,
+    }
+
+    let product = ResponseProduct::deserialize(deserializer)?;
+    Ok(Product {
+        name: product.name,
+        version: product.version,
+    })
+}
+
+fn deserialize_response_limits<'de, D>(deserializer: D) -> std::result::Result<Limits, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    struct ResponseLimits {
+        max_frame_bytes: usize,
+        max_in_flight: usize,
+    }
+
+    let limits = ResponseLimits::deserialize(deserializer)?;
+    Ok(Limits {
+        max_frame_bytes: limits.max_frame_bytes,
+        max_in_flight: limits.max_in_flight,
+    })
 }
 
 impl<A> InitializeResult<A> {
@@ -287,7 +326,7 @@ pub mod callback {
     /// is not a transport failure: the endpoint may try another authentication
     /// mechanism or return its own actionable authentication error.
     #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+    #[serde(tag = "status", rename_all = "snake_case")]
     pub enum CredentialResult {
         Found { value: String },
         Missing,
@@ -534,7 +573,6 @@ pub mod resolver {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
     pub struct InitializedApplication {
         pub manifest_kind: String,
         pub supports_inline_manifest: bool,
@@ -1125,7 +1163,6 @@ pub mod provider {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
     pub struct Metadata {
         pub name: String,
         pub display_uri: String,
@@ -1169,7 +1206,6 @@ pub mod provider {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
     pub struct InitializedApplication {
         pub provider: Metadata,
     }
@@ -1186,6 +1222,37 @@ pub mod provider {
         pub section: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub version: Option<String>,
+    }
+
+    // Coordinates also occur inside request addresses, where unknown members
+    // must remain an error. Only response occurrences use this reader.
+    fn deserialize_response_coordinates<'de, D>(
+        deserializer: D,
+    ) -> std::result::Result<Coordinates, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct ResponseCoordinates {
+            item: String,
+            #[serde(default)]
+            field: Option<String>,
+            #[serde(default)]
+            vault: Option<String>,
+            #[serde(default)]
+            section: Option<String>,
+            #[serde(default)]
+            version: Option<String>,
+        }
+
+        let coordinates = ResponseCoordinates::deserialize(deserializer)?;
+        Ok(Coordinates {
+            item: coordinates.item,
+            field: coordinates.field,
+            vault: coordinates.vault,
+            section: coordinates.section,
+            version: coordinates.version,
+        })
     }
 
     impl Coordinates {
@@ -1252,6 +1319,7 @@ pub mod provider {
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct ResolveAddressResult {
+        #[serde(deserialize_with = "deserialize_response_coordinates")]
         pub coordinates: Coordinates,
     }
 
@@ -1519,11 +1587,10 @@ pub mod provider {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
     pub struct ReflectedDeclaration {
         pub description: String,
         pub required: bool,
-        #[serde(rename = "ref")]
+        #[serde(rename = "ref", deserialize_with = "deserialize_response_coordinates")]
         pub reference: Coordinates,
     }
 
@@ -1659,6 +1726,94 @@ mod tests {
     }
 
     #[test]
+    fn initialization_response_metadata_accepts_additions_without_loosening_requests() {
+        let response: InitializeResult<resolver::InitializedApplication> =
+            serde_json::from_value(serde_json::json!({
+                "protocol": RESOLVER_PROTOCOL,
+                "version": 1,
+                "server": {"name": "secretspec", "version": "0.21", "later_member": true},
+                "methods": [],
+                "limits": {"max_frame_bytes": 4096, "max_in_flight": 1, "later_member": true},
+                "application": {
+                    "manifest_kind": "path", "supports_inline_manifest": false,
+                    "later_member": true
+                }
+            }))
+            .unwrap();
+        assert_eq!(response.server.name, "secretspec");
+
+        let provider_response: provider::InitializedApplication =
+            serde_json::from_value(serde_json::json!({
+                "provider": {
+                    "name": "example",
+                    "display_uri": "example://",
+                    "supported_coordinates": [],
+                    "generated_value_persistence": "persist",
+                    "prompted_value_persistence": "persist",
+                    "storage_identity": "store",
+                    "entry_container_identity": "container",
+                    "physical_store_path": null,
+                    "later_metadata_member": true
+                },
+                "later_application_member": true
+            }))
+            .unwrap();
+        assert_eq!(provider_response.provider.name, "example");
+
+        for field in ["client", "limits"] {
+            let mut request = serde_json::json!({
+                "protocol": RESOLVER_PROTOCOL,
+                "versions": [1],
+                "client": {"name": "client", "version": "1"},
+                "limits": {"max_frame_bytes": 4096, "max_in_flight": 1},
+                "application": {}
+            });
+            request[field]["later_member"] = serde_json::json!(true);
+            assert!(
+                serde_json::from_value::<InitializeParams<serde_json::Value>>(request).is_err(),
+                "accepted unknown {field} request member"
+            );
+        }
+    }
+
+    #[test]
+    fn known_result_variants_and_nested_coordinates_accept_additions() {
+        let credential: callback::CredentialResult = serde_json::from_value(serde_json::json!({
+            "status": "found", "value": "secret", "later_member": true
+        }))
+        .unwrap();
+        assert!(matches!(
+            credential,
+            callback::CredentialResult::Found { .. }
+        ));
+
+        let address: provider::ResolveAddressResult = serde_json::from_value(serde_json::json!({
+            "coordinates": {"item": "entry", "later_member": true},
+            "later_result_member": true
+        }))
+        .unwrap();
+        assert_eq!(address.coordinates.item, "entry");
+
+        let reflection: provider::ReflectedDeclaration =
+            serde_json::from_value(serde_json::json!({
+                "description": "A token", "required": true,
+                "ref": {"item": "entry", "later_member": true},
+                "later_declaration_member": true
+            }))
+            .unwrap();
+        assert_eq!(reflection.reference.item, "entry");
+
+        assert!(
+            serde_json::from_value::<provider::AddressParams>(serde_json::json!({
+                "address": {"kind": "native", "coordinates": {
+                    "item": "entry", "later_member": true
+                }}
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn provider_uri_scheme_must_match() {
         let application = provider::InitializeApplication {
             scheme: "factorseal".into(),
@@ -1730,7 +1885,7 @@ mod tests {
     }
 
     #[test]
-    fn named_provider_batch_results_are_flattened_and_closed() {
+    fn named_provider_batch_results_are_flattened_and_tolerant() {
         let found = serde_json::from_value::<provider::NamedGetResult>(serde_json::json!({
             "name": "token",
             "status": "found",

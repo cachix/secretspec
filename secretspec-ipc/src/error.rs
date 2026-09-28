@@ -50,7 +50,6 @@ impl<'de> Deserialize<'de> for InteractionKind {
 /// Opaque, non-secret correlation data for provider-owned interaction.
 /// Available starting with SecretSpec 0.21.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct InteractionReference {
     pub kind: InteractionKind,
     pub id: String,
@@ -265,9 +264,8 @@ impl<'de> Deserialize<'de> for ErrorKind {
     }
 }
 
-/// Closed JSON-RPC `error.data` payload.
+/// JSON-RPC `error.data` payload. Receivers ignore later descriptive members.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ErrorData {
     pub kind: ErrorKind,
     pub retryable: bool,
@@ -279,7 +277,6 @@ pub struct ErrorData {
 
 /// A stable, redacted JSON-RPC error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RpcError {
     pub code: i32,
     pub message: String,
@@ -432,7 +429,8 @@ mod tests {
     fn an_undefined_kind_decodes_instead_of_failing_the_frame() {
         let later: RpcError = serde_json::from_str(
             r#"{"code":-32011,"message":"dynamic session required",
-                "data":{"kind":"dynamic_session_required","retryable":false}}"#,
+                "data":{"kind":"dynamic_session_required","retryable":false,
+                "later_detail":"ignored"},"later_error_member":true}"#,
         )
         .unwrap();
         assert_eq!(later.data.kind, ErrorKind::Unrecognized);
@@ -493,7 +491,7 @@ mod tests {
             r#"{"code":-32006,"message":"interaction required",
                 "data":{"kind":"interaction_required","retryable":false,
                 "interaction":{"kind":"later_kind","id":"ref_1",
-                "expires_at_unix_ms":null}}}"#,
+                "expires_at_unix_ms":null,"later_reference_member":true}}}"#,
         )
         .unwrap();
         assert_eq!(

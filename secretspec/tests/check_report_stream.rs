@@ -9,17 +9,19 @@ fn config_home(project: &Path) -> PathBuf {
 }
 
 fn run_check(project: &Path, present: bool) -> Output {
+    run(project, present, &["check", "--no-prompt"])
+}
+
+fn run(project: &Path, present: bool, args: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_secretspec"));
     command
-        .args([
-            "--file",
-            project.join("secretspec.toml").to_str().unwrap(),
-            "check",
-            "--no-prompt",
-            "--provider",
-            "env",
-        ])
+        .args(["--file", project.join("secretspec.toml").to_str().unwrap()])
+        .args(args)
+        .args(["--provider", "env"])
         .current_dir(project)
+        .env("TMPDIR", temp_dir(project))
+        .env("TMP", temp_dir(project))
+        .env("TEMP", temp_dir(project))
         .env("HOME", project)
         .env("XDG_CONFIG_HOME", config_home(project))
         .env("XDG_STATE_HOME", project.join("state"))
@@ -38,8 +40,17 @@ fn run_check(project: &Path, present: bool) -> Output {
     command.output().expect("run secretspec check")
 }
 
+fn temp_dir(project: &Path) -> PathBuf {
+    project.join("tmp")
+}
+
 fn project() -> tempfile::TempDir {
+    project_with(false)
+}
+
+fn project_with(as_path: bool) -> tempfile::TempDir {
     let project = tempfile::tempdir().unwrap();
+    fs::create_dir(temp_dir(project.path())).unwrap();
     fs::write(
         project.path().join("secretspec.toml"),
         format!(
@@ -49,12 +60,19 @@ revision = "1.0"
 require_reason = false
 
 [profiles.default]
-{SECRET_NAME} = {{ description = "database URL" }}
+{SECRET_NAME} = {{ description = "database URL", as_path = {as_path} }}
 "#
         ),
     )
     .unwrap();
     project
+}
+
+fn temp_files(project: &Path) -> Vec<PathBuf> {
+    fs::read_dir(temp_dir(project))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect()
 }
 
 fn stdout(output: &Output) -> String {
@@ -93,4 +111,27 @@ fn failing_check_keeps_the_report_separate_from_diagnostics() {
     assert!(stdout(&output).contains("Summary:"));
     assert!(!stderr(&output).contains("Summary:"));
     assert!(stderr(&output).contains("Failed to check secrets"));
+}
+
+#[test]
+fn get_keeps_the_as_path_file_it_prints() {
+    let project = project_with(true);
+    let output = run(project.path(), true, &["get", SECRET_NAME]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let printed = PathBuf::from(stdout(&output).trim());
+    assert_eq!(temp_files(project.path()), vec![printed.clone()]);
+    assert_eq!(
+        fs::read_to_string(printed).unwrap(),
+        "postgres://localhost/example"
+    );
+}
+
+#[test]
+fn check_leaves_no_as_path_files_behind() {
+    let project = project_with(true);
+    let output = run_check(project.path(), true);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(temp_files(project.path()), Vec::<PathBuf>::new());
 }

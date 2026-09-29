@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rust IPC clients now accept additional response, result, and error-data
   members from later compatible v1 peers, while requests remain strict.
 
+- `ResolvedSecret` now redacts its value in `Debug` output, so logging a
+  `ResolveResponse` or `NamedResolution` with `{:?}` no longer prints secret
+  values. File paths and provenance remain visible.
+
 ## [0.21.1] - 2026-09-27
 
 ### Added

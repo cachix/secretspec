@@ -23,6 +23,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
 
 /// Version of the [`ResolveResponse`] wire format.
 pub const RESOLVE_SCHEMA_VERSION: u32 = 2;
@@ -47,7 +48,10 @@ pub enum ResolvedSource {
 /// the secret is materialized to a temp file (`as_path`), `value` otherwise.
 /// The default inline type is `String` for text/JSON APIs. Byte resolution
 /// APIs use [`crate::SecretBytes`] starting with 0.21.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Debug` output redacts `value`, so logging a resolution never prints the
+/// secret itself.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedSecret<T = String> {
     /// The secret value, when exposed inline.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -63,6 +67,27 @@ pub struct ResolvedSecret<T = String> {
     /// `provider`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_provider: Option<String>,
+}
+
+impl<T> fmt::Debug for ResolvedSecret<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct Redacted;
+
+        impl fmt::Debug for Redacted {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("[REDACTED]")
+            }
+        }
+
+        formatter
+            .debug_struct("ResolvedSecret")
+            .field("value", &self.value.as_ref().map(|_| Redacted))
+            .field("path", &self.path)
+            .field("as_path", &self.as_path)
+            .field("source", &self.source)
+            .field("source_provider", &self.source_provider)
+            .finish()
+    }
 }
 
 /// A complete value-carrying resolution result for one profile.
@@ -305,5 +330,56 @@ mod tests {
         .unwrap();
         assert_eq!(response["ok"], false);
         assert_eq!(response["error"]["kind"], "invalid_request");
+    }
+
+    #[test]
+    fn debug_redacts_inline_values_through_every_wrapper() {
+        let secret = ResolvedSecret {
+            value: Some("hunter2".to_string()),
+            path: None,
+            as_path: false,
+            source: ResolvedSource::Provider,
+            source_provider: Some("keyring://".to_string()),
+        };
+        let response = ResolveResponse {
+            schema_version: RESOLVE_SCHEMA_VERSION,
+            provider: "keyring://".to_string(),
+            profile: "default".to_string(),
+            scope: None,
+            secrets: BTreeMap::from([("PASSWORD".to_string(), secret.clone())]),
+            missing_required: Vec::new(),
+            missing_optional: Vec::new(),
+        };
+
+        for rendered in [
+            format!("{secret:?}"),
+            format!("{secret:#?}"),
+            format!("{response:?}"),
+            format!("{:?}", NamedResolution::Resolved(secret.clone())),
+        ] {
+            assert!(!rendered.contains("hunter2"), "{rendered}");
+            assert!(rendered.contains("[REDACTED]"), "{rendered}");
+        }
+        assert_eq!(
+            format!("{secret:?}"),
+            "ResolvedSecret { value: Some([REDACTED]), path: None, as_path: false, \
+             source: Provider, source_provider: Some(\"keyring://\") }"
+        );
+    }
+
+    #[test]
+    fn debug_keeps_as_path_file_paths_visible() {
+        let secret: ResolvedSecret = ResolvedSecret {
+            value: None,
+            path: Some("/tmp/.tmpABC".to_string()),
+            as_path: true,
+            source: ResolvedSource::Provider,
+            source_provider: None,
+        };
+
+        let rendered = format!("{secret:?}");
+
+        assert!(rendered.contains("value: None"), "{rendered}");
+        assert!(rendered.contains("/tmp/.tmpABC"), "{rendered}");
     }
 }

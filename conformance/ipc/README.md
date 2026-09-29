@@ -38,7 +38,9 @@ must not call private implementation internals. The same command protocol is
 used by C and Rust client drivers so their normalized transcripts can be
 compared by CI and by third-party provider endpoints. The checked-in
 `ipc-client-conformance-driver` has independent `c` and `rust` modes and runs
-the common wire cases plus `client.lifecycle` through each public client.
+the common wire cases, `client.lifecycle`, and `client.additive-initialize`
+(an initialization result carrying members from a later compatible v1
+revision) through each public client.
 
 Rust server coverage includes `rpc.discover` (0.21+): it works before and after
 initialization, returns a self-contained OpenRPC document, preserves increasing

@@ -9,6 +9,7 @@ enum Mode {
     SilentInitialize,
     FragmentInitialize(Vec<usize>),
     NotifyInitialize,
+    AdditiveInitialize,
     RejectInitialize(Rejection),
     DescendantHoldsPipes,
     HoldPipes,
@@ -52,6 +53,7 @@ fn parse_mode() -> Result<Mode, ()> {
         }
         Some("--hold-pipes") if arguments.next().is_none() => Ok(Mode::HoldPipes),
         Some("--notify-init") if arguments.next().is_none() => Ok(Mode::NotifyInitialize),
+        Some("--additive-init") if arguments.next().is_none() => Ok(Mode::AdditiveInitialize),
         Some("--fragment-init") => {
             let chunks = arguments
                 .next()
@@ -127,6 +129,9 @@ fn serve(mode: Mode) -> Result<(), ()> {
                             }),
                         )?;
                         write_frame(&mut output, &response)?;
+                    }
+                    Mode::AdditiveInitialize => {
+                        write_frame(&mut output, &with_additive_members(response))?
                     }
                     Mode::DescendantHoldsPipes => {
                         write_frame(&mut output, &response)?;
@@ -269,6 +274,19 @@ fn initialize_response(id: u64) -> Value {
             "application": {"manifest_kind": "inline", "supports_inline_manifest": true}
         }
     })
+}
+
+/// Adds the members a later compatible v1 server may send. Receivers must
+/// ignore unknown members in responses and results at every level.
+fn with_additive_members(mut response: Value) -> Value {
+    let later = json!({"added_in": "a later v1 revision"});
+    response["later_envelope_member"] = later.clone();
+    let result = &mut response["result"];
+    result["later_result_member"] = later.clone();
+    result["server"]["later_server_member"] = later.clone();
+    result["limits"]["later_limits_member"] = later.clone();
+    result["application"]["later_application_member"] = later;
+    response
 }
 
 fn read_frame(reader: &mut impl Read) -> Result<Option<Vec<u8>>, ()> {

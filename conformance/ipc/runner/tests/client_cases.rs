@@ -29,6 +29,7 @@ fn run_client_cases(target: &str, implementation: &str) {
     assert_eq!(
         completed,
         BTreeSet::from([
+            "ok client.additive-initialize".to_string(),
             "ok client.lifecycle".to_string(),
             "ok wire.fragmented-frame".to_string(),
             "ok wire.strict-rejections".to_string(),

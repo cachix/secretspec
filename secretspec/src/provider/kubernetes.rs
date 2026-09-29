@@ -1,7 +1,7 @@
 //! Kubernetes provider
 use crate::{Result, SecretSpecError};
 
-use super::{Address, Provider, ProviderUrl};
+use super::{Address, Provider, ProviderUrl, block_on};
 use crate::SecretBytes;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use json_patch::jsonptr::Token;
@@ -20,37 +20,6 @@ use kube::{
 };
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, format, sync::OnceLock, write};
-
-fn runtime() -> &'static tokio::runtime::Runtime {
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create tokio runtime for kube")
-    })
-}
-
-fn block_on<F>(future: F) -> F::Output
-where
-    F: std::future::Future + Send,
-    F::Output: Send,
-{
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-            tokio::task::block_in_place(|| runtime().block_on(future))
-        }
-        Ok(_) => std::thread::scope(|scope| {
-            let worker = scope.spawn(move || runtime().block_on(future));
-            match worker.join() {
-                Ok(output) => output,
-                Err(panic) => std::panic::resume_unwind(panic),
-            }
-        }),
-        Err(_) => runtime().block_on(future),
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum KubernetesKind {

@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ResolveResponse` or `NamedResolution` with `{:?}` no longer prints secret
   values. File paths and provenance remain visible.
 
+- The Rust library no longer panics when AWS, Google Cloud, Azure, Doppler,
+  Infisical, Cloudflare, Scaleway, Setec, or external providers are used from
+  inside a current-thread Tokio runtime, such as
+  `#[tokio::main(flavor = "current_thread")]` or `#[tokio::test]`.
+
 ## [0.21.1] - 2026-09-27
 
 ### Added

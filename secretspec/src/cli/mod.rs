@@ -1771,15 +1771,11 @@ pub fn main() -> Result<()> {
             }
 
             let mut out = std::io::stdout();
-            let mut validated = app
-                .check_with_writer(no_prompt, &mut out)
+            // `check` never prints `as_path` file paths, so the temp files are
+            // removed when `ValidatedSecrets` drops instead of being leaked.
+            app.check_with_writer(no_prompt, &mut out)
                 .into_diagnostic()
                 .wrap_err("Failed to check secrets")?;
-            // Persist temp files so they outlive the command
-            validated
-                .keep_temp_files()
-                .into_diagnostic()
-                .wrap_err("Failed to persist temporary files")?;
             Ok(())
         }
         // Export typed-accessor or configuration editor schemas (value-free).

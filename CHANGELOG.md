@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ResolveResponse` or `NamedResolution` with `{:?}` no longer prints secret
   values. File paths and provenance remain visible.
 
+- `secretspec check` no longer leaves decrypted `as_path` secret files in the
+  temporary directory. It never printed their paths, so nothing could use
+  them.
+
 ## [0.21.1] - 2026-09-27
 
 ### Added

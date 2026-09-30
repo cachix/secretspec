@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rust IPC clients now accept additional response, result, and error-data
   members from later compatible v1 peers, while requests remain strict.
 
+- The C resolver client now accepts additional members in a later compatible
+  v1 server's initialization result, including its `server`, `limits`, and
+  `application` objects, instead of failing to open the session. The client's
+  own initialization offer is still validated strictly.
+
 - `ResolvedSecret` now redacts its value in `Debug` output, so logging a
   `ResolveResponse` or `NamedResolution` with `{:?}` no longer prints secret
   values. File paths and provenance remain visible.

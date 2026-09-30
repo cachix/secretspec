@@ -1093,22 +1093,25 @@ static bool string_array_valid(yyjson_val *array, bool nonempty) {
     return true;
 }
 
-static bool product_valid(yyjson_val *product) {
+/* Requests are strict and results are tolerant: `closed` rejects unknown
+ * members in the caller's offer, while a server's initialize result may carry
+ * members added by a later compatible v1 revision. */
+static bool product_valid(yyjson_val *product, bool closed) {
     static const char *const keys[] = {"name", "version"};
     yyjson_val *name;
     yyjson_val *version;
-    if (!ss_json_is_closed_object(product, keys, 2)) return false;
+    if (!yyjson_is_obj(product) || (closed && !ss_json_is_closed_object(product, keys, 2))) return false;
     name = yyjson_obj_get(product, "name");
     version = yyjson_obj_get(product, "version");
     return yyjson_is_str(name) && yyjson_get_len(name) > 0 && yyjson_get_len(name) <= 256 &&
            yyjson_is_str(version) && yyjson_get_len(version) > 0 && yyjson_get_len(version) <= 256;
 }
 
-static bool limits_valid(yyjson_val *limits, size_t *frame, size_t *in_flight) {
+static bool limits_valid(yyjson_val *limits, bool closed, size_t *frame, size_t *in_flight) {
     static const char *const keys[] = {"max_frame_bytes", "max_in_flight"};
     uint64_t frame_value;
     uint64_t in_flight_value;
-    if (!ss_json_is_closed_object(limits, keys, 2) ||
+    if (!yyjson_is_obj(limits) || (closed && !ss_json_is_closed_object(limits, keys, 2)) ||
         !ss_json_u64(yyjson_obj_get(limits, "max_frame_bytes"), &frame_value) ||
         !ss_json_u64(yyjson_obj_get(limits, "max_in_flight"), &in_flight_value) ||
         frame_value < SS_MIN_FRAME || frame_value > SS_ABSOLUTE_MAX_FRAME ||
@@ -1164,8 +1167,8 @@ static bool initialize_offer_valid(yyjson_val *offer) {
      * resolver, which is Rust, so a C client for it would serve nobody. */
     if (!string_equals(protocol, "secretspec.resolver") ||
         !yyjson_is_arr(versions) || yyjson_arr_size(versions) == 0 ||
-        !product_valid(yyjson_obj_get(offer, "client")) ||
-        !limits_valid(yyjson_obj_get(offer, "limits"), &frame, &in_flight) ||
+        !product_valid(yyjson_obj_get(offer, "client"), true) ||
+        !limits_valid(yyjson_obj_get(offer, "limits"), true, &frame, &in_flight) ||
         !yyjson_is_obj(yyjson_obj_get(offer, "application"))) return false;
     yyjson_arr_foreach(versions, index, maximum, version) {
         uint64_t value;
@@ -1191,9 +1194,6 @@ static bool validate_initialize_result(
     yyjson_val *offer,
     const unsigned char *json,
     size_t json_size) {
-    static const char *const keys[] = {
-        "protocol", "version", "server", "methods", "capabilities", "limits", "application"
-    };
     yyjson_doc *document = NULL;
     yyjson_val *result;
     yyjson_val *protocol;
@@ -1215,15 +1215,15 @@ static bool validate_initialize_result(
     version = yyjson_obj_get(result, "version");
     capabilities = yyjson_obj_get(result, "methods");
     offered_versions = yyjson_obj_get(offer, "versions");
-    if (!ss_json_is_closed_object(result, keys, 7) ||
+    if (!yyjson_is_obj(result) ||
         !yyjson_equals_strn(protocol, yyjson_get_str(yyjson_obj_get(offer, "protocol")),
                             yyjson_get_len(yyjson_obj_get(offer, "protocol"))) ||
         !ss_json_u64(version, &selected_version) ||
         !versions_contains(offered_versions, selected_version) ||
-        !product_valid(yyjson_obj_get(result, "server")) ||
+        !product_valid(yyjson_obj_get(result, "server"), false) ||
         !string_array_valid(capabilities, true) || !yyjson_is_obj(yyjson_obj_get(result, "capabilities")) ||
-        !limits_valid(yyjson_obj_get(result, "limits"), &frame, &in_flight) ||
-        !limits_valid(yyjson_obj_get(offer, "limits"), &offered_frame, &offered_in_flight) ||
+        !limits_valid(yyjson_obj_get(result, "limits"), false, &frame, &in_flight) ||
+        !limits_valid(yyjson_obj_get(offer, "limits"), true, &offered_frame, &offered_in_flight) ||
         frame > offered_frame || in_flight > offered_in_flight ||
         !yyjson_is_obj(yyjson_obj_get(result, "application"))) goto done;
     if (!array_has_text(capabilities, "resolver.get") ||

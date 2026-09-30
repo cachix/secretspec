@@ -333,6 +333,22 @@ API_KEY = { description = "API key for external service", required = false, defa
         Some("Secret key for JWT token signing".to_string())
     );
     assert_eq!(jwt_config.required, Some(true));
+
+    // The public `Spec` API loads the same multi-parent inheritance.
+    let spec = crate::Spec::try_from(base_path.join("base/secretspec.toml").as_path()).unwrap();
+    assert_eq!(spec.project(), "test_project");
+    let mut names: Vec<_> = spec.secrets("default").unwrap().collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        [
+            "API_KEY",
+            "DATABASE_URL",
+            "JWT_SECRET",
+            "OAUTH_CLIENT_ID",
+            "REDIS_URL"
+        ]
+    );
 }
 
 #[test]

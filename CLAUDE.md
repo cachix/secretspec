@@ -175,7 +175,7 @@ Projects can extend other configurations via `extends = ["../shared/common"]`. T
 ## Testing
 
 - Unit tests are located alongside the code
-- Integration tests in `secretspec-derive/tests/` and `tests/integration/`
+- Integration tests in `secretspec/tests/` (CLI binaries) and `secretspec-derive/tests/`
 - UI tests using `trybuild` for macro error testing
 - Run specific test: `cargo test test_name`
 - Test CI runs on Ubuntu and macOS using devenv

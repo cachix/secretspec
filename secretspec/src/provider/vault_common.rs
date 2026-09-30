@@ -4,7 +4,9 @@
 //! configuration conventions. This module contains only the compatible KV,
 //! authentication-exchange, and HTTP mechanics used by both providers.
 
-use super::{Address, ProviderCredentials, ProviderUrl, credential_or_envs, preferred_env};
+use super::{
+    Address, ProviderCredentials, ProviderUrl, block_on, credential_or_envs, preferred_env,
+};
 use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
@@ -20,43 +22,6 @@ use url::Url;
 pub(crate) const ROLE_ID: &str = "role_id";
 pub(crate) const SECRET_ID: &str = "secret_id";
 pub(crate) const TOKEN: &str = "token";
-
-/// Stable runtime for the shared Vault-compatible HTTP connection pools.
-///
-/// `get_many` invokes its synchronous fetch closure from several OS threads.
-/// Giving each closure a temporary runtime can strand a pooled reqwest
-/// connection when the runtime that owns its dispatch task is dropped. One
-/// process-wide runtime keeps those tasks alive across requests and providers.
-fn runtime() -> &'static tokio::runtime::Runtime {
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create Vault-compatible HTTP runtime")
-    })
-}
-
-fn block_on<F>(future: F) -> F::Output
-where
-    F: std::future::Future + Send,
-    F::Output: Send,
-{
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-            tokio::task::block_in_place(|| runtime().block_on(future))
-        }
-        Ok(_) => std::thread::scope(|scope| {
-            let worker = scope.spawn(move || runtime().block_on(future));
-            match worker.join() {
-                Ok(output) => output,
-                Err(panic) => std::panic::resume_unwind(panic),
-            }
-        }),
-        Err(_) => runtime().block_on(future),
-    }
-}
 
 /// KV secrets engine version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -2175,29 +2140,6 @@ mod tests {
 
         assert!(error.to_string().contains("references need a `field`"));
         assert!(!error.to_string().contains("role_id credential is required"));
-    }
-
-    #[test]
-    fn block_on_is_safe_inside_a_current_thread_runtime() {
-        let outer = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        let answer = outer.block_on(async { block_on(async { 42 }) });
-
-        assert_eq!(answer, 42);
-    }
-
-    #[test]
-    fn vault_compatible_http_work_uses_one_runtime_across_batch_threads() {
-        let first = block_on(async { tokio::runtime::Handle::current().id() });
-        let second =
-            std::thread::spawn(|| block_on(async { tokio::runtime::Handle::current().id() }))
-                .join()
-                .unwrap();
-
-        assert_eq!(first, second);
     }
 
     #[test]

@@ -1225,6 +1225,8 @@ impl ExternalProvider {
     fn call<M>(&self, params: &M::Params) -> Result<M::Result>
     where
         M: wire::method::Method,
+        M::Params: Sync,
+        M::Result: Send,
     {
         let session = self.require(M::NAME)?;
         // Endpoints may request a credential again mid-operation, for example
@@ -1775,10 +1777,9 @@ fn close_live_session(session: Arc<ProviderSession>) {
 
 /// Runs cleanup that must never panic, including from `Drop`.
 ///
-/// `block_on` enters `block_in_place`, which panics on a current-thread
-/// runtime, and a panic in `Drop` while unwinding aborts the process. There
-/// the cleanup moves to a helper thread instead of blocking the only runtime
-/// worker; elsewhere it completes before returning.
+/// On a current-thread runtime the cleanup moves to a detached helper thread
+/// instead of stalling the only runtime worker for the close deadline;
+/// elsewhere it completes before returning.
 fn run_to_completion_or_detach<F>(cleanup: F)
 where
     F: std::future::Future<Output = ()> + Send + 'static,

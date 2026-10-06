@@ -1012,21 +1012,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn wrangler_auth_supports_oauth_and_named_profiles() {
-        use std::os::unix::fs::PermissionsExt;
-
         let directory = tempfile::tempdir().unwrap();
         let binary = directory.path().join("wrangler");
-        std::fs::write(
+        crate::fake_executable::install(
             &binary,
             r#"#!/bin/sh
 printf '%s' "$*" > "$(dirname "$0")/args"
 printf '%s' '{"type":"oauth","token":"oauth-token"}'
 "#,
-        )
-        .unwrap();
-        let mut permissions = std::fs::metadata(&binary).unwrap().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&binary, permissions).unwrap();
+        );
 
         let mut provider = CloudflareProvider::new(config(&format!(
             "cloudflare://{STORE}?account_id={ACCOUNT}&auth=wrangler&wrangler_profile=production"

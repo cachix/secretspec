@@ -1281,21 +1281,17 @@ mod tests {
 
     #[cfg(unix)]
     fn fake_cli(directory: &Path, output: &str, count_file: &Path) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-
         let script = directory.join("ejson");
         let escaped_output = output.replace('\\', "\\\\").replace('\'', "'\\''");
-        fs::write(
+        crate::fake_executable::install(
             &script,
-            format!(
+            &format!(
                 "#!/bin/sh\nset -eu\n[ \"$1\" = decrypt ]\n[ \"$2\" = --key-from-stdin ]\n[ -f \"$3\" ]\nkey=$(cat)\n[ \"$key\" = '{}' ]\nprintf x >> '{}'\nprintf '%s' '{}'\n",
                 TEST_PRIVATE_KEY,
                 count_file.display(),
                 escaped_output,
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        );
         script
     }
 
@@ -1531,14 +1527,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cli_failure_is_generic_and_does_not_expose_key() {
-        use std::os::unix::fs::PermissionsExt;
-
         let directory = tempfile::tempdir().unwrap();
         let encrypted = directory.path().join("secrets.ejson");
         fs::write(&encrypted, "{\"_public_key\":\"placeholder\"}").unwrap();
         let cli = directory.path().join("ejson");
-        fs::write(&cli, "#!/bin/sh\nkey=$(cat)\necho \"$key\" >&2\nexit 1\n").unwrap();
-        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+        crate::fake_executable::install(&cli, "#!/bin/sh\nkey=$(cat)\necho \"$key\" >&2\nexit 1\n");
         let mut provider = EjsonProvider::new(EjsonConfig { path: encrypted }).with_cli_binary(cli);
         provider.credentials.insert(
             PRIVATE_KEY.to_string(),
@@ -1560,15 +1553,13 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn hung_cli_that_never_reads_stdin_is_stopped_at_timeout() {
-        use std::os::unix::fs::PermissionsExt;
         use std::time::Instant;
 
         let directory = tempfile::tempdir().unwrap();
         let encrypted = directory.path().join("secrets.ejson");
         fs::write(&encrypted, "{\"_public_key\":\"placeholder\"}").unwrap();
         let cli = directory.path().join("ejson");
-        fs::write(&cli, "#!/bin/sh\nsleep 60\n").unwrap();
-        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+        crate::fake_executable::install(&cli, "#!/bin/sh\nsleep 60\n");
         let mut provider = EjsonProvider::new(EjsonConfig { path: encrypted })
             .with_cli_binary(cli)
             .with_cli_timeout(Duration::from_millis(500));
@@ -1592,7 +1583,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn hung_cli_and_descendants_are_stopped_at_timeout() {
-        use std::os::unix::fs::PermissionsExt;
         use std::time::Instant;
 
         let directory = tempfile::tempdir().unwrap();
@@ -1600,15 +1590,13 @@ mod tests {
         fs::write(&encrypted, "{\"_public_key\":\"placeholder\"}").unwrap();
         let cli = directory.path().join("ejson");
         let descendant_pid = directory.path().join("descendant-pid");
-        fs::write(
+        crate::fake_executable::install(
             &cli,
-            format!(
+            &format!(
                 "#!/bin/sh\nsleep 60 &\necho $! > '{}'\ncat >/dev/null\nwait\n",
                 descendant_pid.display()
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+        );
         let mut provider = EjsonProvider::new(EjsonConfig { path: encrypted })
             .with_cli_binary(cli)
             .with_cli_timeout(Duration::from_secs(2));
@@ -1648,7 +1636,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn exited_cli_stops_descendant_holding_stdout_without_waiting_for_deadline() {
-        use std::os::unix::fs::PermissionsExt;
         use std::time::Instant;
 
         let directory = tempfile::tempdir().unwrap();
@@ -1656,15 +1643,13 @@ mod tests {
         fs::write(&encrypted, "{\"_public_key\":\"placeholder\"}").unwrap();
         let cli = directory.path().join("ejson");
         let descendant_pid = directory.path().join("descendant-pid");
-        fs::write(
+        crate::fake_executable::install(
             &cli,
-            format!(
+            &format!(
                 "#!/bin/sh\ncat >/dev/null\nsleep 60 &\necho $! > '{}'\nexit 0\n",
                 descendant_pid.display()
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+        );
         let mut provider = EjsonProvider::new(EjsonConfig { path: encrypted })
             .with_cli_binary(cli)
             .with_cli_timeout(Duration::from_secs(5));
@@ -1726,18 +1711,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn rejects_oversized_decrypted_output() {
-        use std::os::unix::fs::PermissionsExt;
-
         let directory = tempfile::tempdir().unwrap();
         let encrypted = directory.path().join("secrets.ejson");
         fs::write(&encrypted, "{\"_public_key\":\"placeholder\"}").unwrap();
         let cli = directory.path().join("ejson");
-        fs::write(
+        crate::fake_executable::install(
             &cli,
             "#!/bin/sh\ncat >/dev/null\nhead -c 16777217 /dev/zero\n",
-        )
-        .unwrap();
-        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+        );
         let mut provider = EjsonProvider::new(EjsonConfig { path: encrypted }).with_cli_binary(cli);
         provider.credentials.insert(
             PRIVATE_KEY.to_string(),
@@ -1781,22 +1762,18 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn malformed_output_stops_descendants_that_closed_stdout() {
-        use std::os::unix::fs::PermissionsExt;
-
         let directory = tempfile::tempdir().unwrap();
         let encrypted = directory.path().join("secrets.ejson");
         fs::write(&encrypted, "{\"_public_key\":\"placeholder\"}").unwrap();
         let descendant_pid = directory.path().join("descendant-pid");
         let cli = directory.path().join("ejson");
-        fs::write(
+        crate::fake_executable::install(
             &cli,
-            format!(
+            &format!(
                 "#!/bin/sh\nsleep 60 </dev/null >/dev/null 2>&1 &\necho $! > '{}'\ncat >/dev/null\nprintf not-json\n",
                 descendant_pid.display()
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+        );
         let mut provider = EjsonProvider::new(EjsonConfig { path: encrypted }).with_cli_binary(cli);
         provider.credentials.insert(
             PRIVATE_KEY.to_string(),
@@ -1832,7 +1809,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn configured_file_replacement_does_not_change_open_snapshot() {
-        use std::os::unix::fs::PermissionsExt;
         use std::time::{Duration, Instant};
 
         let directory = tempfile::tempdir().unwrap();
@@ -1841,16 +1817,14 @@ mod tests {
         let ready = directory.path().join("ready");
         let proceed = directory.path().join("proceed");
         let cli = directory.path().join("ejson");
-        fs::write(
+        crate::fake_executable::install(
             &cli,
-            format!(
+            &format!(
                 "#!/bin/sh\nset -eu\ncat >/dev/null\ntouch '{}'\nwhile [ ! -f '{}' ]; do sleep 0.01; done\ncat \"$3\"\n",
                 ready.display(),
                 proceed.display(),
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+        );
         let mut provider = EjsonProvider::new(EjsonConfig {
             path: encrypted.clone(),
         })

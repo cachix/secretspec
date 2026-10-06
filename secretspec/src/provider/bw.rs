@@ -4592,16 +4592,7 @@ mod tests {
                 env!("CARGO_MANIFEST_DIR"),
                 "/tests/fixtures/bw-shim.sh"
             ));
-            std::fs::write(dir.join("bw"), script).expect("install fake bw script");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = std::fs::metadata(dir.join("bw"))
-                    .expect("stat fake bw")
-                    .permissions();
-                perms.set_mode(0o755);
-                std::fs::set_permissions(dir.join("bw"), perms).expect("chmod fake bw");
-            }
+            crate::fake_executable::install(&dir.join("bw"), script);
             FakeBw { dir }
         }
 

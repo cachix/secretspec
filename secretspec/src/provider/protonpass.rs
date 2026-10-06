@@ -642,26 +642,11 @@ mod tests {
         assert!(found, "PROTON_PASS_AGENT_REASON must be set on the command");
     }
 
-    /// Writes an executable stand-in for `pass-cli` into `dir` and returns its
-    /// path.
-    ///
-    /// The script is renamed into place only after its write descriptor is
-    /// closed, so a subprocess forked by a concurrent test can never hold a
-    /// write descriptor to the file we are about to execute (`ETXTBSY`). The
-    /// same helper in [`crate::provider::bws`] documents that reasoning in full.
+    /// Installs an executable fake `pass-cli` in `dir`, returning its path.
     #[cfg(unix)]
     fn install_fake_cli(dir: &std::path::Path, script: &str) -> std::path::PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-
-        let scratch = dir.join("pass-cli.script");
-        std::fs::write(&scratch, script).unwrap();
-
         let cli = dir.join("pass-cli");
-        std::fs::rename(&scratch, &cli).expect("install fake pass-cli script");
-
-        let mut permissions = std::fs::metadata(&cli).unwrap().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&cli, permissions).unwrap();
+        crate::fake_executable::install(&cli, script);
         cli
     }
 

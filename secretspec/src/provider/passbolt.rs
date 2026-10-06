@@ -771,9 +771,6 @@ mod tests {
     #[cfg(unix)]
     impl FakePassbolt {
         fn new(list: serde_json::Value, get: serde_json::Value) -> Self {
-            use std::io::Write;
-            use std::os::unix::fs::PermissionsExt;
-
             let env_guard = ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
             let dir = tempfile::tempdir().unwrap();
             let script = r#"#!/bin/sh
@@ -786,14 +783,7 @@ case "$*" in
   *) printf 'unexpected fake passbolt invocation: %s\n' "$*" >&2; exit 2 ;;
 esac
 "#;
-            let binary = dir.path().join("passbolt");
-            let mut executable = std::fs::File::create(&binary).unwrap();
-            executable.write_all(script.as_bytes()).unwrap();
-            executable.sync_all().unwrap();
-            let mut permissions = executable.metadata().unwrap().permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&binary, permissions).unwrap();
-            drop(executable);
+            crate::fake_executable::install(&dir.path().join("passbolt"), script);
             std::fs::write(dir.path().join("list.json"), list.to_string()).unwrap();
             std::fs::write(dir.path().join("get.json"), get.to_string()).unwrap();
             Self {

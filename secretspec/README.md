@@ -366,6 +366,14 @@ secretspec completions fish | source
 
 See the [full CLI reference](https://secretspec.dev/reference/cli) for all commands and options.
 
+## Provider retries (0.22+)
+
+Recognized temporary provider read failures retry with exponential backoff,
+using three total attempts by default. Configure `[defaults.retry]` with
+`max_attempts = 1` in `~/.config/secretspec/config.toml` to disable retries, or
+choose an attempt count from 1 to 10. See the [retry policy documentation](https://secretspec.dev/concepts/providers/#transient-failures)
+for batching, safe writes, and native SDK behavior.
+
 ## Contributing
 
 We welcome contributions! Areas where you can help:

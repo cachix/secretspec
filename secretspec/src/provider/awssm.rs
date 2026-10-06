@@ -181,6 +181,7 @@ impl TryFrom<&ProviderUrl> for AwssmConfig {
 /// This provider stores and retrieves secrets from AWS Secrets Manager using
 /// the standard AWS SDK credential chain for authentication.
 pub struct AwssmProvider {
+    retry_policy: super::RetryPolicy,
     config: AwssmConfig,
 }
 
@@ -199,7 +200,10 @@ impl AwssmProvider {
 
     /// Creates a new AwssmProvider with the given configuration.
     pub fn new(config: AwssmConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            retry_policy: super::RetryPolicy::default(),
+        }
     }
 
     /// Formats the secret name for AWS Secrets Manager.
@@ -246,7 +250,13 @@ impl AwssmProvider {
 
     /// Creates an AWS Secrets Manager client.
     async fn create_client(&self) -> Result<Client> {
-        let mut config_loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
+        let mut config_loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .retry_config(
+                aws_config::retry::RetryConfig::standard()
+                    .with_max_attempts(self.retry_policy.max_attempts())
+                    .with_initial_backoff(std::time::Duration::from_millis(250))
+                    .with_max_backoff(std::time::Duration::from_secs(10)),
+            );
 
         if let Some(region) = &self.config.region {
             config_loader = config_loader.region(aws_config::Region::new(region.clone()));
@@ -500,6 +510,13 @@ impl AwssmProvider {
 }
 
 impl Provider for AwssmProvider {
+    fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
+        self.retry_policy = policy;
+    }
+    fn retry_ownership(&self) -> super::RetryOwnership {
+        super::RetryOwnership::Managed
+    }
+
     /// Convention secrets are named `[{prefix}/]secretspec/{project}/{profile}/{key}`.
     fn convention_address(
         &self,

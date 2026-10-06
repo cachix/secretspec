@@ -172,6 +172,7 @@ impl TryFrom<&ProviderUrl> for AwspsConfig {
 
 /// AWS Systems Manager Parameter Store provider, available in SecretSpec 0.18+.
 pub struct AwspsProvider {
+    retry_policy: super::RetryPolicy,
     config: AwspsConfig,
 }
 
@@ -183,7 +184,10 @@ crate::register_provider! {
 
 impl AwspsProvider {
     pub fn new(config: AwspsConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            retry_policy: super::RetryPolicy::default(),
+        }
     }
 
     fn effective_template(prefix: Option<&str>, template: Option<&str>) -> Result<String> {
@@ -391,7 +395,12 @@ impl AwspsProvider {
     }
 
     async fn create_client(&self) -> Client {
-        let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
+        let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest()).retry_config(
+            aws_config::retry::RetryConfig::standard()
+                .with_max_attempts(self.retry_policy.max_attempts())
+                .with_initial_backoff(std::time::Duration::from_millis(250))
+                .with_max_backoff(std::time::Duration::from_secs(10)),
+        );
         if let Some(region) = &self.config.region {
             loader = loader.region(aws_config::Region::new(region.clone()));
         }
@@ -581,6 +590,13 @@ impl AwspsProvider {
 }
 
 impl Provider for AwspsProvider {
+    fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
+        self.retry_policy = policy;
+    }
+    fn retry_ownership(&self) -> super::RetryOwnership {
+        super::RetryOwnership::Managed
+    }
+
     fn convention_address(
         &self,
         project: &str,

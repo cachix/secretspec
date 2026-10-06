@@ -399,6 +399,7 @@ impl KvConfig {
 
 /// Compatible KV client used behind the product-specific provider wrappers.
 pub(crate) struct KvProvider {
+    retry_policy: super::RetryPolicy,
     config: KvConfig,
     credentials: ProviderCredentials,
     product: Product,
@@ -535,8 +536,13 @@ impl KvProvider {
             config,
             credentials: ProviderCredentials::new(),
             product,
+            retry_policy: super::RetryPolicy::default(),
             http: OnceLock::new(),
         }
+    }
+
+    pub(crate) fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
+        self.retry_policy = policy;
     }
 
     /// The shared HTTP client.
@@ -1182,52 +1188,57 @@ impl KvProvider {
         Ok(headers)
     }
 
-    /// Sends one authenticated request, retrying connect and timeout failures.
-    ///
-    /// A connect failure cannot have reached the server, so the same token
-    /// claim remains valid. A later timeout is ambiguous: the server may have
-    /// consumed the request before the response was lost, so a retry claims
-    /// another use. HTTP status failures are not retried.
+    /// Retries within one authenticated session, never by repeating AppRole login.
+    /// Mutations are replayed only after a failed connection establishment.
     async fn send_with_connect_retry(
         &self,
         session: &KvSession<'_>,
         mut token: SecretBytes,
         mut build: impl FnMut(&SecretBytes) -> Result<reqwest::RequestBuilder>,
     ) -> Result<reqwest::Response> {
-        const ATTEMPTS: usize = 3;
-        let mut last_error = None;
-        for attempt in 1..=ATTEMPTS {
-            let response = build(&token)?.send().await;
-            match response {
-                Ok(response) => return Ok(response),
-                Err(error) if attempt < ATTEMPTS && (error.is_connect() || error.is_timeout()) => {
-                    if error.is_timeout() && !error.is_connect() {
-                        token = session.claim_token().await?;
+        let policy = self.retry_policy;
+        for attempt in 1..=policy.max_attempts() {
+            let request = build(&token)?
+                .build()
+                .map_err(|e| super::http::transport_error(self.product.display_name(), e))?;
+            let is_read = matches!(
+                *request.method(),
+                reqwest::Method::GET | reqwest::Method::HEAD
+            );
+            let response = self.http().execute(request).await;
+            let (failure, consumed, safe) = match response {
+                Ok(response) => {
+                    match super::http::checked_response(self.product.display_name(), response).await
+                    {
+                        Ok(response) => return Ok(response),
+                        Err(error) => (error, true, is_read),
                     }
-                    last_error = Some(error);
-                    // get_each already runs each get on its own thread, so a
-                    // brief blocking backoff is fine and avoids a tokio/time
-                    // feature dependency on the vault build.
-                    std::thread::sleep(std::time::Duration::from_millis(25 * attempt as u64));
                 }
                 Err(error) => {
-                    return Err(SecretSpecError::ProviderOperationFailed(format!(
-                        "Failed to connect to {} at {}: {}",
-                        self.product.display_name(),
-                        self.config.endpoint,
-                        crate::error::display_error_chain(&error)
-                    )));
+                    let connected = !error.is_connect();
+                    (
+                        super::http::transport_error(self.product.display_name(), error),
+                        connected,
+                        is_read || !connected,
+                    )
                 }
+            };
+            let hint = super::retry::retry_hint(&failure);
+            let Some(wait) = hint.and_then(|hint| policy.delay(attempt, hint)) else {
+                return Err(failure);
+            };
+            if !safe {
+                return Err(failure);
             }
+            if consumed {
+                let Some(next) = session.claim_retry_token().await else {
+                    return Err(failure);
+                };
+                token = next;
+            }
+            tokio::time::sleep(wait).await;
         }
-        Err(SecretSpecError::ProviderOperationFailed(format!(
-            "Failed to connect to {} at {}: {}",
-            self.product.display_name(),
-            self.config.endpoint,
-            crate::error::display_error_chain(
-                &last_error.expect("connect retry exhausted with an error")
-            )
-        )))
+        unreachable!("validated retry attempt count")
     }
 
     /// Builds the raw API path, inserting KV v2's required `/data/` segment.
@@ -1482,6 +1493,18 @@ impl KvProvider {
 }
 
 impl KvSession<'_> {
+    /// Retry only with authentication already acquired for this operation.
+    async fn claim_retry_token(&self) -> Option<SecretBytes> {
+        let mut pool = self.tokens.lock().await;
+        while let Some(token) = pool.tokens.front_mut() {
+            if let Some(token) = token.claim() {
+                return Some(token);
+            }
+            pool.tokens.pop_front();
+        }
+        None
+    }
+
     async fn claim_token(&self) -> Result<SecretBytes> {
         let mut pool = self.tokens.lock().await;
         loop {
@@ -2063,6 +2086,27 @@ mod tests {
         assert!(observed[2].0.contains("/v1/auth/approle/login"));
         assert!(observed[3].0.starts_with("DELETE /v1/secret/metadata/"));
         assert_eq!(observed[3].1.as_deref(), Some("operation-token-2"));
+    }
+
+    #[test]
+    fn retry_token_claims_never_reauthenticate_when_capacity_is_exhausted() {
+        let provider = KvProvider::new(KvConfig::default(), Product::Vault);
+        let token = parse_test_login(serde_json::json!({
+            "client_token": "limited", "num_uses": 1, "lease_duration": 3600
+        }))
+        .unwrap();
+        let session = KvSession {
+            provider: &provider,
+            tokens: Mutex::new(TokenPool::new(token)),
+        };
+        block_on(async {
+            assert_eq!(
+                session.claim_retry_token().await.unwrap().expose_secret(),
+                b"limited"
+            );
+            // This would attempt a real login if retry token claims replenished the pool.
+            assert!(session.claim_retry_token().await.is_none());
+        });
     }
 
     #[test]

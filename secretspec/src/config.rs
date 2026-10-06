@@ -2887,6 +2887,10 @@ pub struct GlobalConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
 #[doc(hidden)]
 pub struct GlobalDefaults {
+    /// Retry policy for provider operations (0.22+). One attempt disables retries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<crate::provider::RetryPolicy>,
+
     /// Default provider to use when not specified
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,

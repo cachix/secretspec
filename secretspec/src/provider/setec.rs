@@ -170,6 +170,7 @@ struct SecretInfo {
 
 /// Provider for a Tailscale Setec secrets service.
 pub struct SetecProvider {
+    retry_policy: super::RetryPolicy,
     config: SetecConfig,
     client: OnceLock<reqwest::Client>,
 }
@@ -185,6 +186,7 @@ impl SetecProvider {
         Self {
             config,
             client: OnceLock::new(),
+            retry_policy: super::RetryPolicy::default(),
         }
     }
 
@@ -259,14 +261,16 @@ impl SetecProvider {
     where
         Req: Serialize + ?Sized,
     {
-        let response = self
-            .client()?
-            .post(format!("{}{path}", self.server_url()))
-            .header(NO_BROWSERS_HEADER, "setec")
-            .json(request)
-            .send()
-            .await
-            .map_err(|error| reach_error(action, error))?;
+        let response = super::http::send(
+            self.retry_policy,
+            "Setec",
+            self.client()?
+                .post(format!("{}{path}", self.server_url()))
+                .header(NO_BROWSERS_HEADER, "setec")
+                .json(request),
+            matches!(path, "/api/get" | "/api/info" | "/api/list"),
+        )
+        .await?;
         let status = response.status();
         let body = response
             .bytes()
@@ -411,6 +415,14 @@ impl SetecProvider {
 }
 
 impl Provider for SetecProvider {
+    fn retry_ownership(&self) -> super::RetryOwnership {
+        super::RetryOwnership::Managed
+    }
+
+    fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
+        self.retry_policy = policy;
+    }
+
     fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
         validate_convention_component("key", key)?;
         Ok(NativeAddress {
@@ -835,15 +847,15 @@ mod tests {
         );
         assert_eq!(server.join().unwrap().len(), 2);
 
-        let (endpoint, server) = response_server(vec![("500 Internal Server Error", "boom")]);
+        let (endpoint, server) = response_server(vec![("500 Internal Server Error", "boom"); 3]);
         let error = provider(endpoint)
             .delete(Address::convention("app", "prod", "KEY"))
             .unwrap_err();
         assert!(error.to_string().contains("HTTP 500"), "{error}");
         assert_eq!(
             server.join().unwrap().len(),
-            1,
-            "no delete after a failed probe"
+            3,
+            "retry the read-only probe without issuing a delete"
         );
     }
 

@@ -30,14 +30,14 @@ pub(crate) struct ProviderWithPreflight {
 /// Failures are returned to every caller waiting on the in-flight probe but
 /// are not cached beyond that: the user may fix auth mid-process (e.g. unlock
 /// the desktop app in a long-lived SDK process), so the next check re-probes.
-type AuthCheckResult = std::result::Result<(), String>;
-type AuthCheckCell = Arc<OnceLock<AuthCheckResult>>;
+type AuthCheckResult<E> = std::result::Result<(), E>;
+type AuthCheckCell<E> = Arc<OnceLock<AuthCheckResult<E>>>;
 
-pub(crate) struct AuthCheckCache<K> {
-    cells: Mutex<HashMap<K, AuthCheckCell>>,
+pub(crate) struct AuthCheckCache<K, E = String> {
+    cells: Mutex<HashMap<K, AuthCheckCell<E>>>,
 }
 
-impl<K> Default for AuthCheckCache<K> {
+impl<K, E> Default for AuthCheckCache<K, E> {
     fn default() -> Self {
         Self {
             cells: Mutex::new(HashMap::new()),
@@ -45,12 +45,12 @@ impl<K> Default for AuthCheckCache<K> {
     }
 }
 
-impl<K: std::hash::Hash + Eq + Clone> AuthCheckCache<K> {
+impl<K: std::hash::Hash + Eq + Clone, E: Clone> AuthCheckCache<K, E> {
     pub(crate) fn check(
         &self,
         key: K,
-        probe: impl FnOnce() -> std::result::Result<(), String>,
-    ) -> std::result::Result<(), String> {
+        probe: impl FnOnce() -> std::result::Result<(), E>,
+    ) -> std::result::Result<(), E> {
         let cell = self
             .cells
             .lock()
@@ -75,15 +75,16 @@ impl<K: std::hash::Hash + Eq + Clone> AuthCheckCache<K> {
 
 /// Auth probes shared across provider instances (see
 /// [`Provider::auth_scope_key`]), keyed by provider name plus scope.
-static PREFLIGHT_AUTH_CACHE: LazyLock<AuthCheckCache<(String, String)>> =
+static PREFLIGHT_AUTH_CACHE: LazyLock<AuthCheckCache<(String, String), Arc<SecretSpecError>>> =
     LazyLock::new(AuthCheckCache::default);
 
-/// Wrapper that runs a preflight check exactly once before any provider
-/// operation, caching the result for all subsequent calls.
+/// Wrapper that caches successful preflight checks before provider operations.
+/// Failed checks keep their typed error and may be tried again on a later call.
 pub(super) struct PreflightGuard {
     inner: Box<dyn Provider>,
     preflight: Option<Box<dyn Fn() -> Result<()> + Send + Sync>>,
-    result: OnceLock<std::result::Result<(), String>>,
+    result: AuthCheckCache<(), Arc<SecretSpecError>>,
+    policy: super::RetryPolicy,
 }
 
 impl PreflightGuard {
@@ -91,7 +92,8 @@ impl PreflightGuard {
         Self {
             inner: pwp.provider,
             preflight: pwp.preflight,
-            result: OnceLock::new(),
+            result: AuthCheckCache::default(),
+            policy: super::RetryPolicy::default(),
         }
     }
 
@@ -99,27 +101,28 @@ impl PreflightGuard {
         let Some(f) = &self.preflight else {
             return Ok(());
         };
-        // A provider with a shared auth scope dedupes the probe process-wide
-        // in PREFLIGHT_AUTH_CACHE, so the per-instance providers that a
-        // secret's `providers` chain creates all reuse one probe.
-        if let Some(scope) = self.inner.auth_scope_key() {
-            return PREFLIGHT_AUTH_CACHE
-                .check((self.inner.name().to_string(), scope), || {
-                    f().map_err(|e| crate::error::display_error_chain(&e))
-                })
-                .map_err(SecretSpecError::ProviderOperationFailed);
-        }
-        let result = self
-            .result
-            .get_or_init(|| f().map_err(|e| crate::error::display_error_chain(&e)));
-        match result {
-            Ok(()) => Ok(()),
-            Err(msg) => Err(SecretSpecError::ProviderOperationFailed(msg.clone())),
-        }
+        let probe = || self.policy.run(self.inner.name(), f).map_err(Arc::new);
+        let result = if let Some(scope) = self.inner.auth_scope_key() {
+            PREFLIGHT_AUTH_CACHE.check((self.inner.name().to_string(), scope), probe)
+        } else {
+            self.result.check((), probe)
+        };
+        result.map_err(SecretSpecError::SharedProvider)
     }
 }
 
 impl Provider for PreflightGuard {
+    fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
+        self.policy = policy;
+        self.inner.set_retry_policy(policy);
+    }
+    fn retry_ownership(&self) -> super::RetryOwnership {
+        self.inner.retry_ownership()
+    }
+    fn retry_safe(&self, operation: super::RetryOperation, addr: Address<'_>) -> bool {
+        self.inner.retry_safe(operation, addr)
+    }
+
     fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
         // Pure naming, no I/O: needs no auth preflight.
         self.inner.convention_address(project, profile, key)
@@ -363,7 +366,7 @@ mod tests {
 
     #[test]
     fn success_probes_once_per_key() {
-        let cache = AuthCheckCache::default();
+        let cache: AuthCheckCache<_, String> = AuthCheckCache::default();
         let probes = Cell::new(0);
         for _ in 0..3 {
             let result = cache.check("key", || {
@@ -377,7 +380,7 @@ mod tests {
 
     #[test]
     fn failure_is_not_cached() {
-        let cache = AuthCheckCache::default();
+        let cache: AuthCheckCache<_, String> = AuthCheckCache::default();
         assert_eq!(
             cache.check("key", || Err("not signed in".to_string())),
             Err("not signed in".to_string())
@@ -397,7 +400,7 @@ mod tests {
 
     #[test]
     fn keys_are_independent() {
-        let cache = AuthCheckCache::default();
+        let cache: AuthCheckCache<_, String> = AuthCheckCache::default();
         assert_eq!(cache.check("a", || Ok(())), Ok(()));
         assert_eq!(
             cache.check("b", || Err("nope".to_string())),
@@ -419,5 +422,53 @@ mod tests {
         guard.set_profile("production");
 
         assert_eq!(profile.lock().unwrap().as_deref(), Some("production"));
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[test]
+    fn concurrent_probes_share_one_success() {
+        let cache = Arc::new(AuthCheckCache::<&str, String>::default());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let start = Arc::new(std::sync::Barrier::new(9));
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let cache = cache.clone();
+                let calls = calls.clone();
+                let start = start.clone();
+                scope.spawn(move || {
+                    start.wait();
+                    cache
+                        .check("same", || {
+                            calls.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        })
+                        .unwrap();
+                });
+            }
+            start.wait();
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn failed_per_instance_preflight_retains_retry_advice_and_can_recover() {
+        let cache = AuthCheckCache::<(), Arc<SecretSpecError>>::default();
+        let failure = cache
+            .check((), || {
+                Err(Arc::new(super::super::retry::transient(
+                    SecretSpecError::ProviderOperationFailed("temporary".into()),
+                    Some(std::time::Duration::ZERO),
+                )))
+            })
+            .unwrap_err();
+        let shared = SecretSpecError::SharedProvider(failure);
+        assert_eq!(
+            super::super::retry::retry_hint(&shared),
+            Some(Some(std::time::Duration::ZERO))
+        );
+        cache.check((), || Ok(())).unwrap();
     }
 }

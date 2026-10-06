@@ -1839,15 +1839,41 @@ fn map_persistence(value: Persistence) -> ProducedValuePersistence {
 
 fn ipc_error(error: secretspec_ipc::Error) -> SecretSpecError {
     match error {
-        secretspec_ipc::Error::Remote(error) => SecretSpecError::ProviderProtocol {
-            kind: error.data.kind,
-            interaction: error.data.interaction,
-        },
+        secretspec_ipc::Error::Remote(error) => {
+            let retryable = error.data.retryable
+                && error.data.interaction.is_none()
+                && !matches!(
+                    error.data.kind,
+                    secretspec_ipc::ErrorKind::DeadlineExceeded
+                        | secretspec_ipc::ErrorKind::Cancelled
+                        | secretspec_ipc::ErrorKind::InteractionRequired
+                );
+            let hint = error
+                .data
+                .retry_after_ms
+                .map(std::time::Duration::from_millis);
+            let failure = SecretSpecError::ProviderProtocol {
+                kind: error.data.kind,
+                interaction: error.data.interaction,
+            };
+            if retryable {
+                super::retry::transient(failure, hint)
+            } else {
+                failure
+            }
+        }
         error => match error.rpc_kind() {
-            Some(kind) => SecretSpecError::ProviderProtocol {
-                kind,
-                interaction: None,
-            },
+            Some(kind) => {
+                let failure = SecretSpecError::ProviderProtocol {
+                    kind,
+                    interaction: None,
+                };
+                if kind == secretspec_ipc::ErrorKind::Unavailable {
+                    super::retry::transient(failure, None)
+                } else {
+                    failure
+                }
+            }
             None => SecretSpecError::ProviderOperationFailed(error.stable_message().to_string()),
         },
     }
@@ -1864,6 +1890,38 @@ fn wire_ttl_ms(max_age: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_metadata_and_terminal_errors_survive_the_adapter() {
+        let error = ipc_error(secretspec_ipc::Error::Remote(RpcError::unavailable(Some(
+            7,
+        ))));
+        assert_eq!(
+            super::super::retry::retry_hint(&error),
+            Some(Some(Duration::from_millis(7)))
+        );
+        assert_eq!(
+            error.protocol_kind(),
+            Some(secretspec_ipc::ErrorKind::Unavailable)
+        );
+        let mut permanent = RpcError::unavailable(Some(7));
+        permanent.data.retryable = false;
+        assert!(
+            super::super::retry::retry_hint(&ipc_error(secretspec_ipc::Error::Remote(permanent)))
+                .is_none()
+        );
+        for kind in [
+            secretspec_ipc::ErrorKind::DeadlineExceeded,
+            secretspec_ipc::ErrorKind::Cancelled,
+            secretspec_ipc::ErrorKind::InteractionRequired,
+        ] {
+            let mut error = RpcError::new(kind);
+            error.data.retryable = true;
+            let error = ipc_error(secretspec_ipc::Error::Remote(error));
+            assert_eq!(error.protocol_kind(), Some(kind));
+            assert!(super::super::retry::retry_hint(&error).is_none());
+        }
+    }
 
     #[test]
     fn expiring_write_ttl_is_clamped_to_the_wire_integer_range() {

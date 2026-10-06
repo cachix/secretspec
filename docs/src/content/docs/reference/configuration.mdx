@@ -1216,3 +1216,26 @@ not contain control characters.
   either in a profile replaces the form inherited from `[profiles.default]`,
   while declaring neither inherits it
 - Use the `extends` field in `[project]` to inherit from other secretspec.toml files
+
+## Provider retry policy
+
+<VersionCompatibility version="0.22" />
+
+The retry policy is an operator setting in `~/.config/secretspec/config.toml`.
+It is not a field in the project's `secretspec.toml`.
+
+```toml title="~/.config/secretspec/config.toml"
+[defaults.retry]
+max_attempts = 3
+```
+
+`max_attempts` counts the original attempt and accepts integers from 1 to 10.
+The default is 3; use 1 to disable SecretSpec-controlled retries. Omitting the
+retry table or its `max_attempts` field uses the default.
+
+The delay grows exponentially from 250 ms and is capped at ten seconds. A valid
+server retry hint is honored up to that same cap. The delay policy is fixed;
+there are no project settings, environment variables, or CLI flags for it.
+An explicit Rust `Secrets::with_retry_policy` override takes precedence over
+user configuration. See [transient provider failures](/concepts/providers/#transient-failures)
+for operation safety and SDK/CLI behavior.

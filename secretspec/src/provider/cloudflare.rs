@@ -229,6 +229,7 @@ enum WranglerCredentials {
 
 /// A write-only Cloudflare account Secrets Store provider.
 pub struct CloudflareProvider {
+    retry_policy: super::RetryPolicy,
     config: CloudflareConfig,
     credentials: ProviderCredentials,
     api_base: String,
@@ -246,6 +247,7 @@ impl CloudflareProvider {
         Self {
             config,
             credentials: ProviderCredentials::new(),
+            retry_policy: super::RetryPolicy::default(),
             api_base: API_BASE.to_string(),
             wrangler_binary_path: std::env::var(WRANGLER_PATH_ENV)
                 .unwrap_or_else(|_| "wrangler".to_string()),
@@ -272,6 +274,11 @@ impl CloudflareProvider {
     }
 
     fn wrangler_credentials(&self) -> Result<WranglerCredentials> {
+        self.retry_policy
+            .run("cloudflare", || self.wrangler_credentials_once())
+    }
+
+    fn wrangler_credentials_once(&self) -> Result<WranglerCredentials> {
         let mut command = Command::new(&self.wrangler_binary_path);
         command.args(["auth", "token", "--json"]);
         if let Some(profile) = &self.config.wrangler_profile {
@@ -401,12 +408,13 @@ impl CloudflareProvider {
             if let Some(search) = search {
                 query.push(("search", search));
             }
-            let response = client
-                .get(&url)
-                .query(&query)
-                .send()
-                .await
-                .map_err(|error| reach_error("listing secrets", error))?;
+            let response = super::http::send(
+                self.retry_policy,
+                "Cloudflare",
+                client.get(&url).query(&query),
+                false,
+            )
+            .await?;
             let envelope: ApiEnvelope<Vec<ListedSecret>> =
                 parse_envelope(response, "listing secrets").await?;
             let page_results = envelope.result.ok_or_else(|| {
@@ -459,15 +467,16 @@ impl CloudflareProvider {
     ) -> Result<()> {
         validate_cloudflare_id("secret ID", secret_id)?;
         let url = format!("{}/{}", self.secrets_url(account_id), secret_id);
-        let response = client
-            .patch(url)
-            .json(&UpdateSecret {
+        let response = super::http::send(
+            self.retry_policy,
+            "Cloudflare",
+            client.patch(url).json(&UpdateSecret {
                 scopes: &self.config.scopes,
                 value,
-            })
-            .send()
-            .await
-            .map_err(|error| reach_error("updating secret", error))?;
+            }),
+            false,
+        )
+        .await?;
         let _: ApiEnvelope<serde_json::Value> = parse_envelope(response, "updating secret").await?;
         Ok(())
     }
@@ -482,16 +491,19 @@ impl CloudflareProvider {
                 .await;
         }
 
-        let response = client
-            .post(self.secrets_url(&account_id))
-            .json(&[CreateSecret {
-                name,
-                scopes: &self.config.scopes,
-                value,
-            }])
-            .send()
-            .await
-            .map_err(|error| reach_error("creating secret", error))?;
+        let response = super::http::send(
+            self.retry_policy,
+            "Cloudflare",
+            client
+                .post(self.secrets_url(&account_id))
+                .json(&[CreateSecret {
+                    name,
+                    scopes: &self.config.scopes,
+                    value,
+                }]),
+            false,
+        )
+        .await?;
         if response.status() == reqwest::StatusCode::CONFLICT {
             if let Some(existing) = self.lookup_secret(&client, &account_id, name).await? {
                 return self
@@ -514,17 +526,22 @@ impl CloudflareProvider {
         };
         validate_cloudflare_id("secret ID", &existing.id)?;
         let url = format!("{}/{}", self.secrets_url(&account_id), existing.id);
-        let response = client
-            .delete(url)
-            .send()
-            .await
-            .map_err(|error| reach_error("deleting secret", error))?;
+        let response =
+            super::http::send(self.retry_policy, "Cloudflare", client.delete(url), false).await?;
         let _: ApiEnvelope<serde_json::Value> = parse_envelope(response, "deleting secret").await?;
         Ok(true)
     }
 }
 
 impl Provider for CloudflareProvider {
+    fn retry_ownership(&self) -> super::RetryOwnership {
+        super::RetryOwnership::Managed
+    }
+
+    fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
+        self.retry_policy = policy;
+    }
+
     /// The selected store supplies project/environment isolation; convention
     /// writes use the SecretSpec key directly as the account-secret name.
     fn convention_address(
@@ -660,11 +677,14 @@ async fn parse_envelope<T: DeserializeOwned>(
 ) -> Result<ApiEnvelope<T>> {
     let status = response.status();
     let envelope: ApiEnvelope<T> = response.json().await.map_err(|error| {
-        operation_error(format!(
-            "Cloudflare returned invalid JSON while {action} (HTTP {}): {}",
-            status.as_u16(),
-            crate::error::display_error_chain(&error)
-        ))
+        super::http::body_error(
+            operation_error(format!(
+                "Cloudflare returned invalid JSON while {action} (HTTP {}): {}",
+                status.as_u16(),
+                crate::error::display_error_chain(&error)
+            )),
+            error,
+        )
     })?;
     if status.is_success() && envelope.success {
         return Ok(envelope);
@@ -686,13 +706,6 @@ async fn parse_envelope<T: DeserializeOwned>(
         "Cloudflare returned HTTP {} while {action}: {details}",
         status.as_u16()
     )))
-}
-
-fn reach_error(action: &str, error: reqwest::Error) -> SecretSpecError {
-    operation_error(format!(
-        "failed to reach Cloudflare while {action}: {}",
-        crate::error::display_error_chain(&error)
-    ))
 }
 
 fn operation_error(message: impl Into<String>) -> SecretSpecError {

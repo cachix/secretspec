@@ -130,10 +130,13 @@ impl KubernetesProvider {
             return Ok(client);
         }
         let created = Client::try_default().await.map_err(|e| {
-            SecretSpecError::ProviderOperationFailed(format!(
-                "Failed to create Kubernetes client: {}",
-                crate::error::display_error_chain(&e)
-            ))
+            kube_error(
+                format!(
+                    "Failed to create Kubernetes client: {}",
+                    crate::error::display_error_chain(&e)
+                ),
+                e,
+            )
         });
         match created {
             Ok(client) => Ok(self.client.get_or_init(|| client)),
@@ -218,13 +221,16 @@ impl KubernetesProvider {
             Ok(Some(StringRepresentation::Plain(s))) => Ok(Some(SecretBytes::from_utf8(s))),
             Ok(Some(StringRepresentation::Base64(s))) => Ok(Some(SecretBytes::from_vec(s.0))),
             Ok(None) => Ok(None),
-            Err(e) => Err(SecretSpecError::ProviderOperationFailed(format!(
-                "Cannot get {}/{} in namespace {}: {}",
-                self.config.kind,
-                name,
-                namespace,
-                crate::error::display_error_chain(&e)
-            ))),
+            Err(e) => Err(kube_error(
+                format!(
+                    "Cannot get {}/{} in namespace {}: {}",
+                    self.config.kind,
+                    name,
+                    namespace,
+                    crate::error::display_error_chain(&e)
+                ),
+                e,
+            )),
         }
     }
 
@@ -299,11 +305,14 @@ impl KubernetesProvider {
             Err(kube::Error::Api(status)) if status.code == 422 && status.reason == "Invalid" => {
                 Ok(false)
             }
-            Err(e) => Err(SecretSpecError::ProviderOperationFailed(format!(
-                "Failed to patch {}: {}",
-                self.config.kind,
-                crate::error::display_error_chain(&e)
-            ))),
+            Err(e) => Err(kube_error(
+                format!(
+                    "Failed to patch {}: {}",
+                    self.config.kind,
+                    crate::error::display_error_chain(&e)
+                ),
+                e,
+            )),
         }
     }
 
@@ -334,11 +343,14 @@ impl KubernetesProvider {
             .create(&PostParams::default(), &self_subject_access_review)
             .await
             .map_err(|e| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "Cannot verify if {} resource can be patched: {}",
-                    self.config.kind,
-                    crate::error::display_error_chain(&e)
-                ))
+                kube_error(
+                    format!(
+                        "Cannot verify if {} resource can be patched: {}",
+                        self.config.kind,
+                        crate::error::display_error_chain(&e)
+                    ),
+                    e,
+                )
             });
         response.map(|r| r.status.map(|s| s.allowed).unwrap_or(false))
     }
@@ -671,5 +683,19 @@ mod tests {
     fn test_format_secret_name_rejects_component_with_double_hyphens() {
         let result = KubernetesProvider::format_secret_name("my--app", "prod", "DB_URL");
         assert!(result.is_err());
+    }
+}
+
+fn kube_error(message: String, error: kube::Error) -> SecretSpecError {
+    let retryable = matches!(&error, kube::Error::Api(response) if matches!(response.code, 429 | 500 | 502 | 503 | 504))
+        || super::retry::temporary_io(&error);
+    let failure = SecretSpecError::ProviderBackend {
+        message,
+        source: Box::new(error),
+    };
+    if retryable {
+        super::retry::transient(failure, None)
+    } else {
+        failure
     }
 }

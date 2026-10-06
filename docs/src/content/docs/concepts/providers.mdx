@@ -366,3 +366,38 @@ Provider credentials follow these rules:
   environment.
 - Learn how [Secret references](/concepts/references/) separate provider
   selection from provider-native addresses.
+
+## Transient failures
+
+<VersionCompatibility version="0.22" />
+
+SecretSpec retries recognized temporary failures against the same provider before
+trying a fallback or using an eligible cached value. The default is three total
+attempts with exponential backoff: 250 ms before the second attempt and 500 ms
+before the third. A server's retry hint replaces the backoff, with a maximum wait
+of ten seconds per delay.
+
+HTTP providers recognize throttling (`429`) and temporary service failures (`500`,
+`502`, `503`, `504`), along with temporary transport failures. CLI providers use
+conservative signatures in failed-command diagnostics. Authentication failures,
+missing secrets, invalid configuration, malformed output, and unknown errors
+are returned immediately. Successful secret values never influence classification.
+
+Batch providers retain their optimized listing or bulk read. BWS retries its
+listing request, so a temporary failure does not immediately fail every secret
+in the profile. Vault and OpenBao retry inside the authenticated session without
+repeating AppRole login for a failed read.
+
+Mutations require an explicit replay-safety guarantee. The shared wrapper retries
+Doppler value-setting operations; it does not replay other providers' writes,
+deletes, or expiring writes. Reads and authentication probes preceding a write
+can retry independently. SDK-native retry owners retain their own safety rules.
+AWS, Google Cloud Secret Manager, and Azure Key Vault receive the configured
+attempt budget and exponential backoff settings rather than an additional outer
+retry loop. A retry budget is not a request timeout or a total operation deadline.
+Retries stop for external-provider interaction, cancellation, and deadline errors.
+
+Configure the [user retry policy](/reference/configuration/#provider-retry-policy)
+or [override it in Rust](/sdk/rust/#provider-retry-policy). Setting one total
+attempt disables SecretSpec-controlled retries. Independently installed CLIs may
+have their own internal retries that this setting cannot control.

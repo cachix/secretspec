@@ -729,8 +729,14 @@ fn map_source(source: ResolvedSource) -> Source {
 }
 
 fn map_resolver_error(error: SecretSpecError) -> RpcError {
+    if let Some(kind) = error.protocol_kind() {
+        return if kind == ErrorKind::InteractionRequired {
+            RpcError::interaction_required(error.interaction().cloned())
+        } else {
+            RpcError::new(kind)
+        };
+    }
     let (kind, interaction) = match error {
-        SecretSpecError::ProviderProtocol { kind, interaction } => (kind, interaction),
         SecretSpecError::PromptUnavailable(_) | SecretSpecError::ReasonRequired => {
             (ErrorKind::InteractionRequired, None)
         }

@@ -135,11 +135,3 @@ ARTIFACTORY_USER = { description = "Artifactory user", providers = ["shared"] }
 ```
 
 Both projects will resolve `ARTIFACTORY_USER` from pass entry `secretspec/shared/default/ARTIFACTORY_USER`.
-
-## Transient failures
-
-Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
-The default is three total attempts with exponential backoff. Authentication,
-configuration, and unknown failures are returned immediately. Configure
-[`max_attempts`](/reference/configuration/#provider-retry-policy) in user
-configuration; one total attempt disables SecretSpec-controlled retries.

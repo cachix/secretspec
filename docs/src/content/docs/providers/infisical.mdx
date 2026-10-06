@@ -285,13 +285,3 @@ so the value is written once the request is approved.
   accepted, since Infisical's own CLI takes the domain in that form
 - If a profile does not match an environment slug — Infisical's own default projects use `dev`,
   `staging` and `prod` — pin the right one with `?env=`
-
-## Transient failures
-
-An uncertain Universal Auth exchange is not replayed, since a machine identity credential may have a one-use limit.
-
-Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
-The default is three total attempts with exponential backoff. Authentication,
-configuration, and unknown failures are returned immediately. Configure
-[`max_attempts`](/reference/configuration/#provider-retry-policy) in user
-configuration; one total attempt disables SecretSpec-controlled retries.

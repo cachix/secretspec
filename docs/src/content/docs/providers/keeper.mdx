@@ -216,11 +216,3 @@ process. Secret values and KSM credentials are not placed in child-process
 arguments. A `config_file` contains long-lived private client keys and must be
 protected like any other secret; prefer `KSM_CONFIG` or a provider credential
 when persistent local files are undesirable.
-
-## Transient failures
-
-Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
-The default is three total attempts with exponential backoff. Authentication,
-configuration, and unknown failures are returned immediately. Configure
-[`max_attempts`](/reference/configuration/#provider-retry-policy) in user
-configuration; one total attempt disables SecretSpec-controlled retries.

@@ -177,11 +177,3 @@ $ secretspec run --provider setec://secrets.example.ts.net -- deploy
   consumers still require valid UTF-8.
 - A write can create a new inactive version before `activate` fails. The error
   identifies this partial result; the previously active value remains active.
-
-## Transient failures
-
-Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
-The default is three total attempts with exponential backoff. Authentication,
-configuration, and unknown failures are returned immediately. Configure
-[`max_attempts`](/reference/configuration/#provider-retry-policy) in user
-configuration; one total attempt disables SecretSpec-controlled retries.

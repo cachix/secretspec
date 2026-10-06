@@ -252,13 +252,3 @@ Both single and batch reads preserve revisions. A SecretSpec cache returns the
 revision of its cached value, so rotation can remain unobserved until refresh.
 See [resolver revision semantics](/reference/resolver-protocol#secret-revisions)
 for task-cache integration and unknown-revision handling.
-
-## Transient failures
-
-The native SDK receives the shared attempt budget and exponential backoff settings. SecretSpec does not add an outer loop around SDK retries. SDK-native mutation safety rules still apply.
-
-Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
-The default is three total attempts with exponential backoff. Authentication,
-configuration, and unknown failures are returned immediately. Configure
-[`max_attempts`](/reference/configuration/#provider-retry-policy) in user
-configuration; one total attempt disables SecretSpec-controlled retries.

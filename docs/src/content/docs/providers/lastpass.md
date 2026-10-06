@@ -121,11 +121,3 @@ $ echo "$LASTPASS_PASSWORD" | lpass login --trust your-email@example.com
 
 $ secretspec run --provider lastpass -- deploy
 ```
-
-## Transient failures
-
-Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
-The default is three total attempts with exponential backoff. Authentication,
-configuration, and unknown failures are returned immediately. Configure
-[`max_attempts`](/reference/configuration/#provider-retry-policy) in user
-configuration; one total attempt disables SecretSpec-controlled retries.

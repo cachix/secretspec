@@ -272,13 +272,3 @@ $ export BAO_TOKEN="dev-only-token"
 
 $ secretspec check --provider "openbao://127.0.0.1:8200/secret?tls=false"
 ```
-
-## Transient failures
-
-Authenticated read requests retry within the existing token session. A failed read does not repeat AppRole login; token usage accounting is preserved. Writes retry only temporary connection-establishment failures, where the request has not reached the server.
-
-Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
-The default is three total attempts with exponential backoff. Authentication,
-configuration, and unknown failures are returned immediately. Configure
-[`max_attempts`](/reference/configuration/#provider-retry-policy) in user
-configuration; one total attempt disables SecretSpec-controlled retries.

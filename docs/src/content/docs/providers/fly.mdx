@@ -240,11 +240,3 @@ provider URI.
   configured. Review the rollout effect before using the provider in a loop.
 - `secretspec delete` first lists names so it can report whether anything was
   removed. The listing never contains plaintext values.
-
-## Transient failures
-
-Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
-The default is three total attempts with exponential backoff. Authentication,
-configuration, and unknown failures are returned immediately. Configure
-[`max_attempts`](/reference/configuration/#provider-retry-policy) in user
-configuration; one total attempt disables SecretSpec-controlled retries.

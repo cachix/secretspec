@@ -50,6 +50,8 @@ mod compiled_spec;
 mod composition;
 mod config;
 mod error;
+#[cfg(all(test, unix))]
+pub(crate) mod fake_executable;
 pub(crate) mod generator;
 pub(crate) mod ini_field;
 pub(crate) mod json_field;

@@ -537,13 +537,10 @@ mod tests {
     #[cfg(unix)]
     impl FakeFlyctl {
         fn new(spec: &str) -> Self {
-            use std::os::unix::fs::PermissionsExt;
-
             let dir = tempfile::tempdir().unwrap();
             let binary = dir.path().join("flyctl");
-            let scratch = dir.path().join("flyctl.script");
-            std::fs::write(
-                &scratch,
+            crate::fake_executable::install(
+                &binary,
                 r#"#!/bin/sh
 fixture_dir=$(dirname "$0")
 printf '%s\n' "$*" >> "$fixture_dir/invocations.log"
@@ -555,15 +552,7 @@ case "$1 $2" in
   *) printf 'unexpected flyctl invocation: %s\n' "$*" >&2; exit 2 ;;
 esac
 "#,
-            )
-            .unwrap();
-            // Install only after the writer has closed. Concurrent subprocess
-            // tests can otherwise inherit the write descriptor and make Linux
-            // reject execution with ETXTBSY.
-            std::fs::rename(&scratch, &binary).unwrap();
-            let mut permissions = std::fs::metadata(&binary).unwrap().permissions();
-            permissions.set_mode(0o700);
-            std::fs::set_permissions(&binary, permissions).unwrap();
+            );
             std::fs::write(
                 dir.path().join("list.json"),
                 r#"[{"name":"EXISTING","digest":"abc","status":"Deployed"},{"Name":"LEGACY","Digest":"def"}]"#,

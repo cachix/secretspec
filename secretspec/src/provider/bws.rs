@@ -601,33 +601,10 @@ mod tests {
     }
 
     /// Installs an executable fake `bws` in `dir`, returning its path.
-    ///
-    /// The script is written to a scratch file and renamed into place after the
-    /// write descriptor is closed, so this process never holds a write descriptor
-    /// to the file it is about to execute.
-    ///
-    /// That indirection is the whole point. libtest runs this crate's tests as
-    /// threads of one process, and several of them spawn subprocesses. `fork`
-    /// copies the descriptor table, so a child forked by another thread while we
-    /// held a write descriptor to this script would keep that descriptor open
-    /// until its own `exec` — and the kernel refuses to `execve` a file that any
-    /// process has open for writing (`ETXTBSY`, "Text file busy"). Keeping the
-    /// descriptor out of our table means the window cannot exist, rather than
-    /// retrying until it closes. `chmod` needs no descriptor, and the scratch
-    /// file is never executed, so a descriptor to *it* is harmless.
     #[cfg(unix)]
     fn install_fake_cli(dir: &std::path::Path, script: &str) -> std::path::PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-
-        let scratch = dir.join("bws.script");
-        std::fs::write(&scratch, script).unwrap();
-
         let cli = dir.join("bws");
-        std::fs::rename(&scratch, &cli).expect("install fake bws script");
-
-        let mut permissions = std::fs::metadata(&cli).unwrap().permissions();
-        permissions.set_mode(0o700);
-        std::fs::set_permissions(&cli, permissions).unwrap();
+        crate::fake_executable::install(&cli, script);
         cli
     }
 

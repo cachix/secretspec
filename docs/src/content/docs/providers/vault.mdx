@@ -282,10 +282,6 @@ $ secretspec check --provider "vault://127.0.0.1:8200/secret?tls=false"
 
 ## Transient failures
 
-<VersionCompatibility version="0.22" kind="changed">
-Retry attempts now follow the shared SecretSpec retry policy.
-</VersionCompatibility>
-
 Authenticated read requests retry within the existing token session. A failed read does not repeat AppRole login; token usage accounting is preserved. Writes retry only temporary connection-establishment failures, where the request has not reached the server.
 
 Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).

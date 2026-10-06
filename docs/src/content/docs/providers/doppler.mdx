@@ -407,10 +407,6 @@ as a literal `${...}` template that fails later, far from its cause.
 
 ## Transient failures
 
-<VersionCompatibility version="0.22" kind="changed">
-Retry attempts now follow the shared SecretSpec retry policy.
-</VersionCompatibility>
-
 Value-setting operations also retry because repeating the same value is safe. Deletes are not replayed as complete operations.
 
 Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).

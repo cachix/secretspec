@@ -232,8 +232,6 @@ explicit reason.
 
 ## Transient failures
 
-**New in SecretSpec 0.22.**
-
 Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
 The default is three total attempts with exponential backoff. Authentication,
 configuration, and unknown failures are returned immediately. Configure

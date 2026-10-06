@@ -250,10 +250,6 @@ $ secretspec run --provider awsps -- deploy
 
 ## Transient failures
 
-<VersionCompatibility version="0.22" kind="changed">
-Retry attempts now follow the shared SecretSpec retry policy.
-</VersionCompatibility>
-
 The native SDK receives the shared attempt budget and exponential backoff settings. SecretSpec does not add an outer loop around SDK retries. SDK-native mutation safety rules still apply.
 
 Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).

@@ -118,6 +118,7 @@ pub use native::{
     INLINE_SPEC_SCHEMA_VERSION, MIN_INLINE_SPEC_SCHEMA_VERSION, NATIVE_CALL_REQUEST_VERSION,
     call_json,
 };
+pub use provider::RetryPolicy;
 pub use provider::external::{
     BASE_ENDPOINT_ENVIRONMENT, EndpointSecurity, ExternalProvider, PlatformEndpointSecurity,
     ProviderCredentialBroker, ProviderCredentialPrincipal, ProviderCredentialRequest,

@@ -448,6 +448,7 @@ struct SyncToken {
 
 /// Azure App Configuration provider, available in SecretSpec 0.20+.
 pub struct AacProvider {
+    retry_policy: super::RetryPolicy,
     config: AacConfig,
     credentials: ProviderCredentials,
     http: OnceLock<reqwest::Client>,
@@ -471,6 +472,7 @@ impl AacProvider {
         Self {
             config,
             credentials: ProviderCredentials::new(),
+            retry_policy: super::RetryPolicy::default(),
             http: OnceLock::new(),
             auth: OnceLock::new(),
             key_vault_credential: OnceLock::new(),
@@ -671,12 +673,34 @@ impl AacProvider {
             }
         };
 
-        let response = request.send().await.map_err(|error| {
-            operation_error(format!(
-                "Azure App Configuration request failed for {}: {error}",
-                safe_request_target(&url)
-            ))
-        })?;
+        let action = if method == Method::GET || method == Method::HEAD {
+            "read"
+        } else if method == Method::DELETE {
+            "delete"
+        } else {
+            "write"
+        };
+        let response = super::http::send_checked(
+            self.retry_policy,
+            "Azure App Configuration",
+            request,
+            false,
+            |response| async {
+                if super::http::transient_status(response.status().as_u16()) {
+                    let hint = response
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(super::http::retry_after);
+                    return Err(super::retry::transient(
+                        self.response_error(action, response).await,
+                        hint,
+                    ));
+                }
+                super::http::checked_response("Azure App Configuration", response).await
+            },
+        )
+        .await?;
         self.merge_sync_tokens(response.headers());
         Ok(response)
     }
@@ -742,6 +766,7 @@ fn parse_connection_string(value: &str, configured_endpoint: &str) -> Result<Con
     })
 }
 
+#[cfg(test)]
 fn safe_request_target(url: &Url) -> String {
     match url.query() {
         Some(query) => format!("{}?{query}", url.path()),
@@ -1007,9 +1032,12 @@ impl AacProvider {
 
     async fn parse_key_value(&self, action: &str, response: reqwest::Response) -> Result<KeyValue> {
         let bytes = response.bytes().await.map_err(|error| {
-            operation_error(format!(
-                "failed to read Azure App Configuration {action} response: {error}"
-            ))
+            super::http::body_error(
+                operation_error(format!(
+                    "failed to read Azure App Configuration {action} response: {error}"
+                )),
+                error,
+            )
         })?;
         serde_json::from_slice(&bytes).map_err(|error| {
             operation_error(format!(
@@ -1423,9 +1451,9 @@ impl AacProvider {
             reference.vault_host.clone(),
             super::akv::AuthMethod::Env,
         );
-        let provider = Arc::new(super::akv::AkvProvider::with_token_credential(
-            config, credential,
-        ));
+        let mut provider = super::akv::AkvProvider::with_token_credential(config, credential);
+        provider.set_retry_policy(self.retry_policy);
+        let provider = Arc::new(provider);
         let mut vaults = self.vaults.lock().unwrap();
         if let Some(existing) = vaults.get(&reference.vault_host) {
             return Ok(Arc::clone(existing));
@@ -1636,9 +1664,12 @@ impl AacProvider {
                 return Err(self.response_error("discovery", response).await);
             }
             let bytes = response.bytes().await.map_err(|error| {
-                operation_error(format!(
-                    "failed to read Azure App Configuration discovery response: {error}"
-                ))
+                super::http::body_error(
+                    operation_error(format!(
+                        "failed to read Azure App Configuration discovery response: {error}"
+                    )),
+                    error,
+                )
             })?;
             let page: KeyValueList = serde_json::from_slice(&bytes).map_err(|error| {
                 operation_error(format!(
@@ -1665,6 +1696,14 @@ impl AacProvider {
 }
 
 impl Provider for AacProvider {
+    fn retry_ownership(&self) -> super::RetryOwnership {
+        super::RetryOwnership::Managed
+    }
+
+    fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
+        self.retry_policy = policy;
+    }
+
     fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
         Ok(NativeAddress {
             item: self.convention_key(project, profile, key)?,
@@ -1853,6 +1892,7 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
     struct StubResponse {
         status: u16,
         headers: Vec<(String, String)>,
@@ -2427,14 +2467,17 @@ mod tests {
 
         for status in [400, 401, 403, 409, 412, 429] {
             let failure = HttpFixture::start(|_| {
-                vec![StubResponse::json(
-                    status,
-                    json!({
-                        "name": "tags",
-                        "title": "request failed",
-                        "detail": "sensitive response detail"
-                    }),
-                )]
+                vec![
+                    StubResponse::json(
+                        status,
+                        json!({
+                            "name": "tags",
+                            "title": "request failed",
+                            "detail": "sensitive response detail"
+                        }),
+                    );
+                    if status == 429 { 3 } else { 1 }
+                ]
             });
             let provider = fixture_provider(&failure.endpoint, "aac://shared");
             let error =
@@ -2446,7 +2489,7 @@ mod tests {
             assert!(error.to_string().contains("parameter 'tags'"), "{error}");
             assert!(!error.to_string().contains("request failed"), "{error}");
             assert!(!error.to_string().contains("sensitive"), "{error}");
-            assert_eq!(failure.finish().len(), 1);
+            assert_eq!(failure.finish().len(), if status == 429 { 3 } else { 1 });
         }
 
         let oversized = HttpFixture::start(|_| {

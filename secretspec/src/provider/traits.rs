@@ -97,6 +97,20 @@ impl ProviderValue {
 /// - Providers may choose to be read-only by overriding [`check_writable`](Provider::check_writable)
 /// - Provider names should be lowercase and descriptive
 pub trait Provider: Send + Sync {
+    /// Configures the shared retry policy (0.22+). Called before first I/O.
+    fn set_retry_policy(&mut self, _policy: super::RetryPolicy) {}
+
+    /// Native SDK/session retry owners must not receive an outer retry loop (0.22+).
+    fn retry_ownership(&self) -> super::RetryOwnership {
+        super::RetryOwnership::Shared
+    }
+
+    /// Whether a mutation may be repeated without changing its observable result (0.22+).
+    /// Reads are always handled independently. Mutations require explicit opt-in.
+    fn retry_safe(&self, _operation: super::RetryOperation, _addr: Address<'_>) -> bool {
+        false
+    }
+
     /// Compiles SecretSpec's `{project}/{profile}/{key}` naming convention into
     /// this store's native coordinates: the same address space a secret's
     /// `ref` uses.
@@ -930,6 +944,18 @@ where
 }
 
 impl<T: Provider> Provider for std::sync::Arc<T> {
+    fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
+        if let Some(inner) = std::sync::Arc::get_mut(self) {
+            inner.set_retry_policy(policy);
+        }
+    }
+    fn retry_ownership(&self) -> super::RetryOwnership {
+        (**self).retry_ownership()
+    }
+    fn retry_safe(&self, operation: super::RetryOperation, addr: Address<'_>) -> bool {
+        (**self).retry_safe(operation, addr)
+    }
+
     fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
         (**self).convention_address(project, profile, key)
     }

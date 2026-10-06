@@ -3,6 +3,8 @@ title: Bitwarden Secrets Manager Provider
 description: Bitwarden Secrets Manager integration
 ---
 
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
 import ProviderCredentials from '../../../components/ProviderCredentials.astro';
 
 :::caution[Why SecretSpec 0.17+ uses the CLI]
@@ -166,3 +168,15 @@ CLI's `--access-token` argument. The official CLI requires new or updated
 secret values as command-line arguments, however, so during `secretspec set`
 the value may briefly be visible to process-inspection tools available to the
 same user. This applies to the CLI-backed provider in SecretSpec 0.17 and later.
+
+## Transient failures
+
+<VersionCompatibility version="0.22" />
+
+The project listing is retried before resolving the batch, including the listing before a write. Secret creation and editing are not replayed.
+
+Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
+The default is three total attempts with exponential backoff. Authentication,
+configuration, and unknown failures are returned immediately. Configure
+[`max_attempts`](/reference/configuration/#provider-retry-policy) in user
+configuration; one total attempt disables SecretSpec-controlled retries.

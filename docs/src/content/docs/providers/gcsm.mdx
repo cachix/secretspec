@@ -192,3 +192,17 @@ $ export GOOGLE_APPLICATION_CREDENTIALS="/path/to/key.json"
 # Run command
 $ secretspec run --provider gcsm://my-gcp-project -- deploy
 ```
+
+## Transient failures
+
+<VersionCompatibility version="0.22" kind="changed">
+Retry attempts now follow the shared SecretSpec retry policy.
+</VersionCompatibility>
+
+The native SDK receives the shared attempt budget and exponential backoff settings. SecretSpec does not add an outer loop around SDK retries. SDK-native mutation safety rules still apply.
+
+Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
+The default is three total attempts with exponential backoff. Authentication,
+configuration, and unknown failures are returned immediately. Configure
+[`max_attempts`](/reference/configuration/#provider-retry-policy) in user
+configuration; one total attempt disables SecretSpec-controlled retries.

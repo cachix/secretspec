@@ -177,7 +177,9 @@ async fn call_when_slot_is_released(client: &Client, label: &str) -> Value {
                 )
                 .await
             {
-                Err(secretspec_ipc::Error::Unavailable) => tokio::task::yield_now().await,
+                Err(error) if error.rpc_kind() == Some(secretspec_ipc::ErrorKind::Unavailable) => {
+                    tokio::task::yield_now().await
+                }
                 outcome => return outcome.unwrap(),
             }
         }

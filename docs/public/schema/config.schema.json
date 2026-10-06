@@ -82,6 +82,14 @@
           "type": [
             "object"
           ]
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RetryPolicy"
+            }
+          ],
+          "description": "Retry policy for provider operations (0.22+). One attempt disables retries."
         }
       },
       "type": "object"
@@ -284,6 +292,20 @@
         "provider",
         "max_age"
       ],
+      "type": "object"
+    },
+    "RetryPolicy": {
+      "additionalProperties": false,
+      "description": "A bounded retry policy. Attempt counts include the original call (0.22+).",
+      "properties": {
+        "max_attempts": {
+          "default": 3,
+          "format": "uint32",
+          "maximum": 10,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
       "type": "object"
     }
   },

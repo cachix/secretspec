@@ -487,3 +487,13 @@ When `?server=` names a different server than the one the `bw` CLI is configured
 for, the operation stops before touching the vault and reports both addresses
 alongside the `bw logout` / `bw config server` / `bw login` / `bw unlock`
 sequence needed to correct it.
+
+## Transient failures
+
+<VersionCompatibility version="0.22" />
+
+Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
+The default is three total attempts with exponential backoff. Authentication,
+configuration, and unknown failures are returned immediately. Configure
+[`max_attempts`](/reference/configuration/#provider-retry-policy) in user
+configuration; one total attempt disables SecretSpec-controlled retries.

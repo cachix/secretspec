@@ -105,6 +105,7 @@ impl TryFrom<&ProviderUrl> for BwsConfig {
 /// a machine account access token for authentication. Secrets are namespaced by
 /// the BWS project ID specified in the provider URI.
 pub struct BwsProvider {
+    retry_policy: super::RetryPolicy,
     config: BwsConfig,
     secrets_cache: OnceLock<Vec<BwsSecret>>,
     /// Credentials supplied by the provider alias.
@@ -138,6 +139,7 @@ impl BwsProvider {
         Self {
             config,
             secrets_cache: OnceLock::new(),
+            retry_policy: super::RetryPolicy::default(),
             credentials: ProviderCredentials::new(),
             cli_binary_path: std::env::var(BWS_CLI_PATH_ENV).unwrap_or_else(|_| "bws".to_string()),
         }
@@ -247,10 +249,12 @@ impl BwsProvider {
     /// Fetches all secrets from the BWS project (always invokes the CLI, no caching).
     fn fetch_secrets(&self) -> Result<Vec<BwsSecret>> {
         let project_id = self.config.project_id.to_string();
-        let output = self.run_bws(
-            &["secret", "list", &project_id, "--output", "json"],
-            &format!("list secrets in BWS project '{}'", self.config.project_id),
-        )?;
+        let output = self.retry_policy.run("bws", || {
+            self.run_bws(
+                &["secret", "list", &project_id, "--output", "json"],
+                &format!("list secrets in BWS project '{}'", self.config.project_id),
+            )
+        })?;
 
         serde_json::from_str(&output).map_err(|error| {
             SecretSpecError::ProviderOperationFailed(format!(
@@ -320,6 +324,13 @@ impl BwsProvider {
 }
 
 impl Provider for BwsProvider {
+    fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
+        self.retry_policy = policy;
+    }
+    fn retry_ownership(&self) -> super::RetryOwnership {
+        super::RetryOwnership::Managed
+    }
+
     /// Convention names map straight to the BWS key named after the secret;
     /// the project UUID in the URI provides namespace isolation instead.
     fn convention_address(

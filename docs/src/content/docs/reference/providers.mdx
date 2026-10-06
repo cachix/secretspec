@@ -896,3 +896,12 @@ $ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | age (0.17+) | ✅ age encryption | Local filesystem | ❌ No |
 | SOPS (0.17+) | ✅ Configured SOPS encryption | Local filesystem | Depends on configured key service |
 | Kubernetes (0.20+) | ❌ ConfigMap ✅ Secret if configured | Kubernetes server | ✅ Yes |
+
+## Transient failures
+
+<VersionCompatibility version="0.22" />
+
+Provider reads share a bounded exponential retry policy across HTTP, SDK, CLI,
+and external transports. Unknown errors remain permanent; writes require an
+explicit replay-safety guarantee. See [retry behavior](/concepts/providers/#transient-failures)
+and the [user retry setting](/reference/configuration/#provider-retry-policy).

@@ -58,6 +58,7 @@ jiff = "0.2"
 secrecy = { version = "0.10.3", features = ["serde"] }
 base64 = "0.22"
 google-cloud-secretmanager-v1 = "1.2"
+google-cloud-gax = "1.8"
 aws-config = "1"
 aws-sdk-secretsmanager = "1"
 aws-sdk-ssm = "1"

@@ -278,3 +278,13 @@ permission only when the job must run `set` or persist generated values.
 - A folder limits lookup and creation, but it is not an independent permission
   boundary. Passbolt evaluates access to an existing item from that resource's
   permissions, which may differ from the folder's permissions.
+
+## Transient failures
+
+<VersionCompatibility version="0.22" />
+
+Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
+The default is three total attempts with exponential backoff. Authentication,
+configuration, and unknown failures are returned immediately. Configure
+[`max_attempts`](/reference/configuration/#provider-retry-policy) in user
+configuration; one total attempt disables SecretSpec-controlled retries.

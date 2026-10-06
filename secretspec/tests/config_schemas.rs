@@ -227,3 +227,26 @@ fn config_schemas_reject_invalid_shapes_and_typos() {
         assert!(!user.is_valid(&document), "{document}");
     }
 }
+
+#[test]
+fn retry_configuration_schema_and_parser_agree() {
+    let schema = schema("config");
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    for attempts in [1, 3, 10] {
+        let value = json!({"defaults": {"retry": {"max_attempts": attempts}}});
+        assert!(validator.is_valid(&value));
+        let config: secretspec::RetryPolicy =
+            toml::from_str(&format!("max_attempts = {attempts}")).unwrap();
+        assert_eq!(config.max_attempts(), attempts);
+    }
+    for attempts in [0, 11] {
+        assert!(!validator.is_valid(&json!({"defaults": {"retry": {"max_attempts": attempts}}})));
+        assert!(
+            toml::from_str::<secretspec::RetryPolicy>(&format!("max_attempts = {attempts}"))
+                .is_err()
+        );
+    }
+    assert!(validator.is_valid(&json!({"defaults": {"retry": {}}})));
+    assert!(!validator.is_valid(&json!({"defaults": {"retry": {"backoff": 20}}})));
+    assert!(toml::from_str::<secretspec::RetryPolicy>("backoff = 20").is_err());
+}

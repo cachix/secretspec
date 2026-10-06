@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Provider reads now retry recognized transient failures with bounded exponential
+  backoff, including CLI providers such as BWS. Set `[defaults.retry].max_attempts`
+  in user configuration or use `Secrets::with_retry_policy` in Rust to control
+  the attempt budget; one attempt disables retries. Safe Doppler value writes
+  also retry, while other mutations are not replayed by the shared wrapper.
+
 - `secretspec init` now adds the project schema directive to the top of new
   manifests, enabling editor autocomplete and structural validation.
 

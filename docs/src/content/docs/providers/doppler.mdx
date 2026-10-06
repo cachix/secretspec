@@ -404,3 +404,17 @@ Doppler refusal.
 Secret values are read from Doppler's `computed` field, so a value assembled
 from references is resolved before it reaches your process rather than arriving
 as a literal `${...}` template that fails later, far from its cause.
+
+## Transient failures
+
+<VersionCompatibility version="0.22" kind="changed">
+Retry attempts now follow the shared SecretSpec retry policy.
+</VersionCompatibility>
+
+Value-setting operations also retry because repeating the same value is safe. Deletes are not replayed as complete operations.
+
+Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
+The default is three total attempts with exponential backoff. Authentication,
+configuration, and unknown failures are returned immediately. Configure
+[`max_attempts`](/reference/configuration/#provider-retry-policy) in user
+configuration; one total attempt disables SecretSpec-controlled retries.

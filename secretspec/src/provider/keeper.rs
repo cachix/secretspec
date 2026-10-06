@@ -123,7 +123,8 @@ type KeeperClient = Mutex<Box<dyn KeeperApi>>;
 pub struct KeeperProvider {
     config: KeeperConfig,
     credentials: ProviderCredentials,
-    client: OnceLock<std::result::Result<KeeperClient, String>>,
+    client: OnceLock<KeeperClient>,
+    client_initialization: Mutex<()>,
 }
 
 crate::register_provider! {
@@ -157,6 +158,7 @@ impl KeeperProvider {
             config,
             credentials: ProviderCredentials::new(),
             client: OnceLock::new(),
+            client_initialization: Mutex::new(()),
         }
     }
 
@@ -216,10 +218,22 @@ impl KeeperProvider {
     }
 
     fn client(&self) -> Result<&KeeperClient> {
-        match self.client.get_or_init(|| self.build_client()) {
-            Ok(client) => Ok(client),
-            Err(error) => Err(self.operation_error("initialize the SDK client", error)),
+        if let Some(client) = self.client.get() {
+            return Ok(client);
         }
+        let _initialization = self.client_initialization.lock().map_err(|_| {
+            self.operation_error(
+                "initialize the SDK client",
+                "initialization lock was poisoned",
+            )
+        })?;
+        if let Some(client) = self.client.get() {
+            return Ok(client);
+        }
+        let client = self
+            .build_client()
+            .map_err(|error| self.operation_error("initialize the SDK client", error))?;
+        Ok(self.client.get_or_init(|| client))
     }
 
     fn with_client<T>(
@@ -673,9 +687,9 @@ mod tests {
         });
         provider
             .client
-            .set(Ok(Mutex::new(Box::new(MockApi {
+            .set(Mutex::new(Box::new(MockApi {
                 state: Arc::clone(&state),
-            }))))
+            })))
             .ok()
             .unwrap();
         (provider, state)

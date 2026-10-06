@@ -120,6 +120,13 @@ impl OpenBaoProvider {
 }
 
 impl Provider for OpenBaoProvider {
+    fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
+        self.core.set_retry_policy(policy);
+    }
+    fn retry_ownership(&self) -> super::RetryOwnership {
+        super::RetryOwnership::Managed
+    }
+
     /// Convention secrets use one KV path per secret and the `value` map field.
     fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
         self.core.convention_address(project, profile, key)

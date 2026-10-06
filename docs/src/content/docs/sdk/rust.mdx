@@ -277,3 +277,28 @@ Secrets declared with `as_path = true` are generated as `PathBuf` instead of
 `String`. Optional file-shaped secrets use `Option<PathBuf>`:
 
 <Code code={asPathExample} lang="rust" meta='title="as_path.rs"' />
+
+## Provider retry policy
+
+<VersionCompatibility version="0.22" />
+
+Override the user configuration for a resolver with a validated `RetryPolicy`:
+
+```rust
+use secretspec::{RetryPolicy, Secrets};
+
+let secrets = Secrets::load()?.with_retry_policy(RetryPolicy::new(3)?);
+// Use RetryPolicy::new(1)? to disable SecretSpec-controlled retries.
+```
+
+The built-in default is three total attempts with exponential backoff.
+`RetryPolicy::new` accepts 1 to 10 total attempts. URI-based provider factories
+install shared retry handling automatically. Custom providers can opt in using
+`secretspec::provider::RetryingProvider::new(provider, policy)`; direct concrete
+constructors retain their provider-specific behavior.
+
+Providers supply structured transient errors and use the `Provider` retry hooks
+to declare native retry ownership and mutation replay safety. The default rejects
+mutation replay. Set the policy before first provider I/O and before sharing an
+`Arc` provider. See [transient failures](/concepts/providers/#transient-failures)
+for batching, authentication, and native SDK behavior.

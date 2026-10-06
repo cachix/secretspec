@@ -2277,6 +2277,7 @@ pub struct Secrets {
     pub(crate) config_dir: PathBuf,
     /// Optional global user configuration
     global_config: Option<GlobalConfig>,
+    retry_policy: Option<crate::provider::RetryPolicy>,
     /// The provider to use (if set via builder)
     provider: Option<String>,
     /// Resolver sessions fix provider selection at initialization and must not
@@ -2577,6 +2578,7 @@ impl Secrets {
             manifest,
             config_dir: PathBuf::from("."),
             global_config,
+            retry_policy: None,
             provider,
             ignore_ambient_provider: false,
             profile,
@@ -2712,6 +2714,7 @@ impl Secrets {
             manifest,
             config_dir,
             global_config,
+            retry_policy: None,
             provider: None,
             ignore_ambient_provider: !use_ambient_session,
             profile: None,
@@ -3278,7 +3281,22 @@ impl Secrets {
         Ok(provider)
     }
 
+    /// Overrides the user-configured provider retry policy (0.22+).
+    pub fn with_retry_policy(mut self, policy: crate::provider::RetryPolicy) -> Self {
+        self.retry_policy = Some(policy);
+        self
+    }
+
     fn apply_provider_context(&self, provider: &mut dyn ProviderTrait, profile: Option<&str>) {
+        provider.set_retry_policy(
+            self.retry_policy
+                .or_else(|| {
+                    self.global_config
+                        .as_ref()
+                        .and_then(|config| config.defaults.retry)
+                })
+                .unwrap_or_default(),
+        );
         provider.with_base_dir(&self.config_dir);
         provider.set_reason(self.reason.clone());
         provider.set_requested_authorization_duration(self.requested_authorization_duration);
@@ -9262,5 +9280,54 @@ mod reference_routing_tests {
                 .is_ok(),
             "a multi-store ref must defer coordinate checking to read time"
         );
+    }
+}
+
+#[cfg(test)]
+mod retry_policy_tests {
+    use super::*;
+    struct RecordingProvider(Option<crate::RetryPolicy>);
+    impl ProviderTrait for RecordingProvider {
+        fn set_retry_policy(&mut self, policy: crate::RetryPolicy) {
+            self.0 = Some(policy);
+        }
+        fn convention_address(
+            &self,
+            _: &str,
+            _: &str,
+            key: &str,
+        ) -> Result<crate::config::NativeAddress> {
+            Ok(crate::config::NativeAddress {
+                item: key.into(),
+                ..Default::default()
+            })
+        }
+        fn get(&self, _: crate::provider::Address<'_>) -> Result<Option<SecretBytes>> {
+            Ok(None)
+        }
+        fn set(&self, _: crate::provider::Address<'_>, _: &SecretBytes) -> Result<()> {
+            Ok(())
+        }
+        fn name(&self) -> &str {
+            "recording"
+        }
+        fn uri(&self) -> String {
+            "recording://".into()
+        }
+    }
+    #[test]
+    fn explicit_policy_overrides_user_default_and_absence_uses_builtin_default() {
+        let config: Config = toml::from_str("[project]\nname = 'retry'\nrevision = '1.0'\n[profiles.default]\nKEY = { description = 'key' }").unwrap();
+        let global: GlobalConfig = toml::from_str("[defaults.retry]\nmax_attempts = 1").unwrap();
+        let manager = Secrets::new(config.clone(), Some(global), None, None);
+        let mut provider = RecordingProvider(None);
+        manager.apply_provider_context(&mut provider, None);
+        assert_eq!(provider.0.unwrap().max_attempts(), 1);
+        manager
+            .with_retry_policy(crate::RetryPolicy::new(5).unwrap())
+            .apply_provider_context(&mut provider, None);
+        assert_eq!(provider.0.unwrap().max_attempts(), 5);
+        Secrets::new(config, None, None, None).apply_provider_context(&mut provider, None);
+        assert_eq!(provider.0.unwrap(), crate::RetryPolicy::default());
     }
 }

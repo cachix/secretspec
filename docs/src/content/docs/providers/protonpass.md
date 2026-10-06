@@ -229,3 +229,13 @@ detects as AI agents must explain why they read a secret. Detection is
 heuristic; set it to `true` to require a reason from every SecretSpec caller.
 secretspec then refuses operations through SecretSpec that do not supply an
 explicit reason.
+
+## Transient failures
+
+**New in SecretSpec 0.22.**
+
+Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
+The default is three total attempts with exponential backoff. Authentication,
+configuration, and unknown failures are returned immediately. Configure
+[`max_attempts`](/reference/configuration/#provider-retry-policy) in user
+configuration; one total attempt disables SecretSpec-controlled retries.

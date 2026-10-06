@@ -107,6 +107,8 @@ pub mod macros;
 mod path;
 mod preflight;
 mod registry;
+mod retry;
+pub use retry::{RetryOperation, RetryOwnership, RetryPolicy, RetryingProvider};
 mod runtime;
 mod traits;
 mod url;

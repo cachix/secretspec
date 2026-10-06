@@ -153,6 +153,7 @@ impl TryFrom<&ProviderUrl> for GcsmConfig {
 /// This provider stores and retrieves secrets from Google Cloud Secret Manager using
 /// Application Default Credentials for authentication.
 pub struct GcsmProvider {
+    retry_policy: super::RetryPolicy,
     config: GcsmConfig,
 }
 
@@ -270,7 +271,10 @@ crate::register_provider! {
 impl GcsmProvider {
     /// Creates a new GcsmProvider with the given configuration.
     pub fn new(config: GcsmConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            retry_policy: super::RetryPolicy::default(),
+        }
     }
 
     /// Validates a secret name component for GCP Secret Manager.
@@ -361,7 +365,23 @@ impl GcsmProvider {
 
     /// Creates a SecretManagerService client.
     async fn create_client(&self) -> Result<SecretManagerService> {
-        SecretManagerService::builder().build().await.map_err(|e| {
+        {
+            use google_cloud_gax::retry_policy::RetryPolicyExt;
+            SecretManagerService::builder()
+                .with_retry_policy(
+                    SdkRetryPolicy.with_attempt_limit(self.retry_policy.max_attempts()),
+                )
+                .with_backoff_policy(
+                    google_cloud_gax::exponential_backoff::ExponentialBackoffBuilder::new()
+                        .with_initial_delay(std::time::Duration::from_millis(250))
+                        .with_maximum_delay(std::time::Duration::from_secs(10))
+                        .build()
+                        .expect("valid backoff"),
+                )
+                .build()
+                .await
+        }
+        .map_err(|e| {
             SecretSpecError::ProviderOperationFailed(format!(
                 "Failed to create GCP Secret Manager client: {}\n\n\
                 Ensure Application Default Credentials are configured:\n  \
@@ -519,6 +539,13 @@ impl GcsmProvider {
 }
 
 impl Provider for GcsmProvider {
+    fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
+        self.retry_policy = policy;
+    }
+    fn retry_ownership(&self) -> super::RetryOwnership {
+        super::RetryOwnership::Managed
+    }
+
     /// Convention names use validated `--` boundaries so distinct accepted
     /// project/profile/key triples always produce distinct GCSM secret ids.
     fn convention_address(
@@ -1038,5 +1065,90 @@ mod legacy_fallback_tests {
 
         let error = read_project(&backend, "my--app").unwrap_err();
         assert!(error.to_string().contains("Rename it"), "{error}");
+    }
+}
+
+/// Extend the SDK's safe replay rules with recognized service overload errors.
+#[derive(Debug)]
+struct SdkRetryPolicy;
+impl google_cloud_gax::retry_policy::RetryPolicy for SdkRetryPolicy {
+    fn on_error(
+        &self,
+        state: &google_cloud_gax::retry_state::RetryState,
+        error: google_cloud_gax::error::Error,
+    ) -> google_cloud_gax::retry_result::RetryResult {
+        use google_cloud_gax::{
+            error::rpc::Code, retry_policy::Aip194Strict, retry_result::RetryResult,
+        };
+        let transient = error
+            .http_status_code()
+            .is_some_and(|code| matches!(code, 429 | 500 | 502 | 503 | 504))
+            || error.status().is_some_and(|status| {
+                matches!(
+                    status.code,
+                    Code::Unavailable | Code::Internal | Code::ResourceExhausted
+                )
+            });
+        if state.idempotent && transient {
+            RetryResult::Continue(error)
+        } else {
+            google_cloud_gax::retry_policy::RetryPolicy::on_error(&Aip194Strict, state, error)
+        }
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use google_cloud_gax::{
+        error::{
+            Error,
+            rpc::{Code, Status},
+        },
+        retry_policy::{RetryPolicy, RetryPolicyExt},
+        retry_state::RetryState,
+    };
+    #[test]
+    fn sdk_service_retries_respect_idempotency_and_total_attempt_budget() {
+        let policy = SdkRetryPolicy.with_attempt_limit(3);
+        for code in [Code::Unavailable, Code::Internal, Code::ResourceExhausted] {
+            let error = || Error::service(Status::default().set_code(code));
+            assert!(
+                policy
+                    .on_error(&RetryState::new(true).set_attempt_count(1_u32), error())
+                    .is_continue()
+            );
+            assert!(
+                policy
+                    .on_error(&RetryState::new(true).set_attempt_count(3_u32), error())
+                    .is_exhausted()
+            );
+            assert!(
+                policy
+                    .on_error(&RetryState::new(false).set_attempt_count(1_u32), error())
+                    .is_permanent()
+            );
+        }
+        for code in [429, 500, 502, 503, 504] {
+            let error = || Error::http(code, Default::default(), Default::default());
+            assert!(
+                policy
+                    .on_error(&RetryState::new(true).set_attempt_count(1_u32), error())
+                    .is_continue()
+            );
+            assert!(
+                policy
+                    .on_error(&RetryState::new(false).set_attempt_count(1_u32), error())
+                    .is_permanent()
+            );
+        }
+        assert!(
+            policy
+                .on_error(
+                    &RetryState::new(true),
+                    Error::service(Status::default().set_code(Code::PermissionDenied))
+                )
+                .is_permanent()
+        );
     }
 }

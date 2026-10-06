@@ -1384,6 +1384,7 @@ pub fn main() -> Result<()> {
                                 .into_diagnostic()?
                                 .unwrap_or(GlobalConfig {
                                     defaults: GlobalDefaults {
+                                        retry: None,
                                         provider: None,
                                         profile: None,
                                         providers: None,

@@ -109,3 +109,13 @@ the Kubernetes object. Reads and writes target that entry in place.
 [profiles.default]
 API_TOKEN = { description = "Token", ref = { item = "com.example.app" }, providers = ["k8s+secret://app-config"] }
 ```
+
+## Transient failures
+
+<VersionCompatibility version="0.22" />
+
+Recognized temporary read failures use the [shared retry policy](/concepts/providers/#transient-failures).
+The default is three total attempts with exponential backoff. Authentication,
+configuration, and unknown failures are returned immediately. Configure
+[`max_attempts`](/reference/configuration/#provider-retry-policy) in user
+configuration; one total attempt disables SecretSpec-controlled retries.

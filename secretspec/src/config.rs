@@ -2085,6 +2085,7 @@ struct RequiredGroups {
 /// Serde proxy that keeps the established Rust `Secret` API while presenting
 /// requiredness as one boolean-or-table field in TOML.
 #[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(extend("not" = {"required": ["ref", "refs"]}))]
 struct SecretSerde {
     /// Human-readable explanation of this secret.
@@ -3741,6 +3742,41 @@ ACCESS_TOKEN = { required = { at_least_one = "auth" } }
             .validate()
             .unwrap_err();
         assert!(err.to_string().contains("Invalid secret name"));
+    }
+
+    #[test]
+    fn secret_declarations_reject_unknown_fields() {
+        for field in ["compose", "requred", "providerss", "metadata"] {
+            let declaration = format!(
+                r#"description = "Temporary home"
+{field} = "${{REPO_PATH}}/.tmp""#
+            );
+            let error = toml::from_str::<Secret>(&declaration)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(&format!("unknown field `{field}`")),
+                "{error}"
+            );
+
+            let manifest = format!(
+                r#"
+[project]
+name = "unknown-fields"
+revision = "1.0"
+
+[profiles.development]
+REPO_PATH = {{ description = "Repository path", default = "c:/ws/my-repo", providers = ["dotenv"] }}
+TEMP_HOME = {{ description = "Temporary home", {field} = "${{REPO_PATH}}/.tmp", providers = ["null"] }}
+"#
+            );
+            let error = Config::parse_document(&manifest).unwrap_err().to_string();
+            assert!(
+                error.contains(&format!("unknown field `{field}`")),
+                "{error}"
+            );
+            assert!(error.contains("expected one of"), "{error}");
+        }
     }
 
     #[test]

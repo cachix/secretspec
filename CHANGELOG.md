@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Generate passphrases, BIP-39 mnemonics, WireGuard private keys, signing JWKs,
+  age identities, and self-signed P-256 X.509 identities. Derive keys,
+  certificates, chains, and password-protected PKCS#12 archives from a declared
+  identity with `from`, `format`, and `credentials`, or select JSON/INI fields
+  from another declared secret with `from` and `extract`. Dependencies resolve
+  in order and scopes include hidden inputs without exposing their values.
+
 - Provider reads now retry recognized transient failures with bounded exponential
   backoff, including CLI providers such as BWS. Set `[defaults.retry].max_attempts`
   in user configuration or use `Secrets::with_retry_policy` in Rust to control

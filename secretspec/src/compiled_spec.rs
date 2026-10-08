@@ -79,6 +79,26 @@ impl CompiledSecret {
             composition,
         }
     }
+
+    /// Every declared secret this one must resolve first: the references of a
+    /// composed template, the `from` source, and each credential binding, in
+    /// that order. One definition feeds graph validation, scope closure,
+    /// prompting, the SSH agent's dependency walk, and the executor, so none
+    /// of them can disagree about what a derived or typed secret needs.
+    pub(crate) fn dependencies(&self) -> Vec<&str> {
+        let mut dependencies: Vec<&str> = self
+            .composition
+            .as_ref()
+            .map(|template| template.dependencies().iter().map(String::as_str).collect())
+            .unwrap_or_default();
+        dependencies.extend(self.config.from.as_deref());
+        dependencies.extend(
+            self.config
+                .credential_secrets()
+                .map(|(_, credential)| credential),
+        );
+        dependencies
+    }
 }
 
 #[cfg(test)]

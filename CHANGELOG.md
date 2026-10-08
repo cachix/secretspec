@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Secret declarations now warn about ignored unknown fields, with a suggestion
+  to use `composed` when `compose` is misspelled and a note that the field may
+  be supported in a newer version. Unknown fields remain accepted for
+  compatibility with manifests from newer versions.
+
 - IPC v1 now keeps timestamps, durations, retry delays, expiry values, and
   counts within the JSON integer range that JavaScript clients can represent
   exactly. Values outside that range are rejected instead of being rounded.

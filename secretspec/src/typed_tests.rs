@@ -1570,3 +1570,57 @@ CERT = { description = "certificate", type = "x509_certificate", from = "IDENTIT
     let result = Secrets::new(config, None, None, None).resolve().unwrap();
     X509::from_pem(result.secrets["CERT"].value.as_ref().unwrap().as_bytes()).unwrap();
 }
+
+#[cfg(feature = "cli")]
+#[test]
+fn named_identity_and_certificate_inherit_password_refresh_deadline() {
+    let _env = scrub_resolution_env();
+    let dir = TempDir::new().unwrap();
+    let source = dir.path().join("source.env");
+    let cache = dir.path().join("cache.env");
+    fs::write(
+        &source,
+        format!(
+            "ID={}\nPW=secret-password\n",
+            BASE64.encode(&protected_identity("secret-password"))
+        ),
+    )
+    .unwrap();
+    let config = manifest(&format!(
+        r#"
+[providers]
+source = "dotenv://{}"
+cache = "dotenv://{}"
+password = {{ fallback = ["source"], cache = {{ provider = "cache", max_age = "1h" }} }}
+[profiles.default]
+ID = {{ description = "identity", type = "x509_identity", credentials = {{ password = "PW" }}, providers = ["source"] }}
+PW = {{ description = "password", providers = ["password"] }}
+CERT = {{ description = "cert", type = "x509_certificate", from = "ID" }}
+"#,
+        source.display(),
+        cache.display()
+    ));
+    config.validate().unwrap();
+    let secrets = Secrets::new(config, None, None, None);
+    secrets.resolve_named_owned("CERT").unwrap();
+    let crate::secrets::OwnedNamedResolution::Value {
+        refresh_at_unix_ms: password_refresh,
+        ..
+    } = secrets.resolve_named_owned("PW").unwrap()
+    else {
+        panic!("the cached password must resolve to an inline value");
+    };
+    assert!(password_refresh.is_some());
+    for name in ["ID", "CERT"] {
+        let crate::secrets::OwnedNamedResolution::Value {
+            refresh_at_unix_ms, ..
+        } = secrets.resolve_named_owned(name).unwrap()
+        else {
+            panic!("{name} must resolve to an inline value");
+        };
+        assert_eq!(
+            refresh_at_unix_ms, password_refresh,
+            "{name} must preserve its hidden password refresh deadline"
+        );
+    }
+}

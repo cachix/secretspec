@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stored X.509 identities and their derived secrets retain credential expiry
+  and refresh deadlines so SDK consumers refresh them when their inputs change.
+
 - IPC v1 now keeps timestamps, durations, retry delays, expiry values, and
   counts within the JSON integer range that JavaScript clients can represent
   exactly. Values outside that range are rejected instead of being rounded.

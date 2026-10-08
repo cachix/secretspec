@@ -1930,6 +1930,26 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 .iter()
                 .all(|dependency| statuses.get(*dependency) == Some(&ResolutionStatus::Resolved));
 
+            if dependencies_resolved {
+                // Stored typed values depend on credentials just as derived
+                // values depend on their inputs. Preserve the earlier of the
+                // value's own deadline and every dependency's deadline.
+                for deadlines in [&mut self.secret_expiries, &mut self.refreshes] {
+                    if let Some(deadline) = planned
+                        .dependencies()
+                        .iter()
+                        .filter_map(|name| deadlines.get(*name))
+                        .copied()
+                        .min()
+                    {
+                        deadlines
+                            .entry(planned.name.clone())
+                            .and_modify(|existing| *existing = (*existing).min(deadline))
+                            .or_insert(deadline);
+                    }
+                }
+            }
+
             if planned.is_typed_stored() {
                 // The provider pass already recorded this secret. It stays
                 // resolved only while its credentials did: an archive whose
@@ -1966,24 +1986,6 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             }
 
             let status = if dependencies_resolved {
-                if let Some(expiry) = planned
-                    .dependencies()
-                    .iter()
-                    .filter_map(|name| self.secret_expiries.get(*name))
-                    .copied()
-                    .min()
-                {
-                    self.secret_expiries.insert(planned.name.clone(), expiry);
-                }
-                if let Some(refresh) = planned
-                    .dependencies()
-                    .iter()
-                    .filter_map(|name| self.refreshes.get(*name))
-                    .copied()
-                    .min()
-                {
-                    self.refreshes.insert(planned.name.clone(), refresh);
-                }
                 if self.materialize.values() {
                     if let Some(template) = planned.composition() {
                         let inputs = template
@@ -9821,5 +9823,71 @@ mod retry_policy_tests {
         assert_eq!(provider.0.unwrap().max_attempts(), 5);
         Secrets::new(config, None, None, None).apply_provider_context(&mut provider, None);
         assert_eq!(provider.0.unwrap(), crate::RetryPolicy::default());
+    }
+}
+
+#[cfg(test)]
+mod resolution_deadline_tests {
+    use super::*;
+
+    #[test]
+    fn typed_identity_and_projections_use_the_earliest_input_deadlines() {
+        let _env = crate::tests::scrub_resolution_env();
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "identity-deadlines"
+revision = "1.0"
+[profiles.default]
+ID = { description = "identity", type = "x509_identity", credentials = { password = "PW" } }
+PW = { description = "password" }
+CERT = { description = "certificate", type = "x509_certificate", from = "ID" }
+"#,
+        )
+        .unwrap();
+        let secrets = Secrets::new(config, None, Some("null://".into()), None);
+        let plan = secrets.build_plan(Some("default")).unwrap();
+
+        // Cover missing deadlines, either input expiring first, and expiry
+        // and refresh being governed by different inputs. The value-free
+        // pass uses the same provider metadata and dependency graph as reads.
+        for (identity_expiry, password_expiry, identity_refresh, password_refresh) in [
+            (None, Some(200), None, Some(400)),
+            (Some(100), Some(200), Some(300), Some(400)),
+            (Some(200), Some(100), Some(400), Some(300)),
+            (Some(100), Some(200), Some(400), Some(300)),
+            (Some(100), None, Some(300), None),
+            (None, None, None, None),
+        ] {
+            let mut execution =
+                ResolutionExecution::new(&secrets, &plan, Materialize::None, None, None);
+            execution.fetched_values = HashMap::from([
+                (
+                    "ID".into(),
+                    ProviderValue::new(SecretBytes::from_utf8("unused"), identity_expiry),
+                ),
+                (
+                    "PW".into(),
+                    ProviderValue::new(SecretBytes::from_utf8("password"), password_expiry),
+                ),
+            ]);
+            for (name, refresh) in [("ID", identity_refresh), ("PW", password_refresh)] {
+                if let Some(refresh) = refresh {
+                    execution.refreshes.insert(name.into(), refresh);
+                }
+            }
+            execution.resolve_provider_backed_values().unwrap();
+            execution.resolve_derived_values().unwrap();
+
+            let expected_expiry = identity_expiry.into_iter().chain(password_expiry).min();
+            let expected_refresh = identity_refresh.into_iter().chain(password_refresh).min();
+            for name in ["ID", "CERT"] {
+                assert_eq!(
+                    execution.secret_expiries.get(name).copied(),
+                    expected_expiry
+                );
+                assert_eq!(execution.refreshes.get(name).copied(), expected_refresh);
+            }
+        }
     }
 }

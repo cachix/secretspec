@@ -2333,9 +2333,11 @@ impl TryFrom<SecretSerde> for Secret {
             let hint = if field == "compose" {
                 " Did you mean `composed`?"
             } else {
-                " Check the spelling or whether this field requires a newer SecretSpec version."
+                " Check the spelling."
             };
-            eprintln!("warning: ignoring unknown secret field `{field}`.{hint}");
+            eprintln!(
+                "warning: ignoring unknown secret field `{field}`.{hint} This field may be supported in a newer version of SecretSpec."
+            );
         }
         if value.reference.is_some() && value.refs.is_some() {
             return Err("`ref` and `refs` cannot both be set; use `refs` for provider-scoped addresses or keep the legacy route-wide `ref`".into());

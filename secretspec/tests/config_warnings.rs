@@ -61,7 +61,16 @@ REPO_PATH = { description = "Repository path", default = "c:/ws/my-repo", provid
                 stderr.contains("ignoring unknown secret field `metadata`"),
                 "{stderr}"
             );
-            assert!(stderr.contains("newer SecretSpec version"), "{stderr}");
+            for warning in stderr
+                .lines()
+                .filter(|line| line.contains("unknown secret field"))
+            {
+                assert!(
+                    warning
+                        .contains("This field may be supported in a newer version of SecretSpec."),
+                    "{warning}"
+                );
+            }
             assert!(!stdout.contains("warning:"), "{stdout}");
         } else {
             assert!(!stderr.contains("unknown secret field"), "{stderr}");

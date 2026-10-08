@@ -232,9 +232,10 @@ it cannot see.
 #### Secret Variable Options
 
 <VersionCompatibility version="0.22" kind="changed">
-  Unknown fields in secret declarations now cause a configuration error. Earlier
-  versions silently ignored them. Use `composed`, not `compose`, for derived values,
-  and remove any extra metadata fields from secret declarations.
+  Unknown fields in secret declarations now produce a warning on standard error
+  and are ignored. Earlier versions silently ignored them. The warning suggests
+  `composed` when a declaration uses `compose`. Check other unknown fields for
+  typos or whether they require a newer SecretSpec version.
 </VersionCompatibility>
 
 Each secret variable is defined as a table with the following fields:

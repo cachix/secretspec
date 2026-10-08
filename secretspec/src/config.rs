@@ -2085,7 +2085,6 @@ struct RequiredGroups {
 /// Serde proxy that keeps the established Rust `Secret` API while presenting
 /// requiredness as one boolean-or-table field in TOML.
 #[derive(Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 #[schemars(extend("not" = {"required": ["ref", "refs"]}))]
 struct SecretSerde {
     /// Human-readable explanation of this secret.
@@ -2127,6 +2126,11 @@ struct SecretSerde {
     /// Whether an interactive caller may prompt for a missing secret.
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt: Option<bool>,
+    // Keep permissive parsing for manifests from newer versions, but make
+    // ignored fields visible without retaining or printing their values.
+    #[serde(flatten, skip_serializing)]
+    #[schemars(skip)]
+    unknown_fields: BTreeMap<String, serde::de::IgnoredAny>,
 }
 
 /// Text encoding used for a secret's stored representation.
@@ -2325,6 +2329,14 @@ impl TryFrom<SecretSerde> for Secret {
     type Error = String;
 
     fn try_from(value: SecretSerde) -> Result<Self, Self::Error> {
+        for field in value.unknown_fields.keys() {
+            let hint = if field == "compose" {
+                " Did you mean `composed`?"
+            } else {
+                " Check the spelling or whether this field requires a newer SecretSpec version."
+            };
+            eprintln!("warning: ignoring unknown secret field `{field}`.{hint}");
+        }
         if value.reference.is_some() && value.refs.is_some() {
             return Err("`ref` and `refs` cannot both be set; use `refs` for provider-scoped addresses or keep the legacy route-wide `ref`".into());
         }
@@ -2384,6 +2396,7 @@ impl From<Secret> for SecretSerde {
             secret_type: value.secret_type,
             generate: value.generate,
             prompt: value.prompt,
+            unknown_fields: BTreeMap::new(),
         }
     }
 }
@@ -3745,19 +3758,16 @@ ACCESS_TOKEN = { required = { at_least_one = "auth" } }
     }
 
     #[test]
-    fn secret_declarations_reject_unknown_fields() {
+    fn secret_declarations_ignore_unknown_fields() {
         for field in ["compose", "requred", "providerss", "metadata"] {
             let declaration = format!(
                 r#"description = "Temporary home"
 {field} = "${{REPO_PATH}}/.tmp""#
             );
-            let error = toml::from_str::<Secret>(&declaration)
-                .unwrap_err()
-                .to_string();
-            assert!(
-                error.contains(&format!("unknown field `{field}`")),
-                "{error}"
-            );
+            let secret = toml::from_str::<Secret>(&declaration).unwrap();
+            assert_eq!(secret.description.as_deref(), Some("Temporary home"));
+            assert!(secret.composed.is_none());
+            assert!(!toml::to_string(&secret).unwrap().contains(field));
 
             let manifest = format!(
                 r#"
@@ -3770,12 +3780,13 @@ REPO_PATH = {{ description = "Repository path", default = "c:/ws/my-repo", provi
 TEMP_HOME = {{ description = "Temporary home", {field} = "${{REPO_PATH}}/.tmp", providers = ["null"] }}
 "#
             );
-            let error = Config::parse_document(&manifest).unwrap_err().to_string();
+            let config = Config::parse_document(&manifest).unwrap();
+            config.validate().unwrap();
             assert!(
-                error.contains(&format!("unknown field `{field}`")),
-                "{error}"
+                config.profiles["development"].secrets["TEMP_HOME"]
+                    .composed
+                    .is_none()
             );
-            assert!(error.contains("expected one of"), "{error}");
         }
     }
 

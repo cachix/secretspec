@@ -1,0 +1,207 @@
+---
+title: SQLite Provider
+description: Store each secret as one row in a local SQLite database file, with an opt-in append-only history
+---
+
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.22" />
+
+The [SQLite](https://sqlite.org/) provider stores one row per secret in a
+local database file. It needs no external service or credential: the file's
+permissions are the only access control, which makes it a good fit for a
+single-user machine, a CI job's private workspace, or a store owned by a
+service user behind a privilege boundary.
+
+
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `sqlite` (0.22+) |
+| URI | `sqlite:PATH[?history=true]` |
+| Access | Read, write, delete, and batch reads |
+| Best for | A self-contained local store with optional audit history |
+| Authentication | Filesystem permissions |
+| Build feature | `sqlite` (on by default, 0.22+) |
+| Storage | Table `secrets`, row key `{project}/{profile}/{key}` |
+
+## Quick start
+
+Choose a database path, exclude it from version control, and route a
+declaration to it:
+
+```text title=".gitignore"
+/secrets.db
+```
+
+```toml title="secretspec.toml"
+[providers]
+local_db = "sqlite:./secrets.db"
+
+[profiles.development]
+API_TOKEN = { description = "Local API token", providers = ["local_db"] }
+```
+
+```bash
+$ secretspec set API_TOKEN --profile development
+
+$ secretspec get API_TOKEN --profile development
+
+$ secretspec run --profile development -- npm start
+```
+
+The first write creates `secrets.db` (and any missing parent directory) and
+stores the row `<project>/development/API_TOKEN`, where `<project>` is
+`[project].name` from the manifest. Reads of a database that does not exist
+yet report a missing value without creating the file.
+
+## Setup
+
+SQLite is compiled into the `secretspec` binary, so nothing has to be
+installed. The SecretSpec process needs read access to the database file for
+`get`, and write access to the file and its directory for `set`, generated
+values, imports, cache writes, and deletes.
+
+Relative paths resolve from the directory containing `secretspec.toml`, not
+from the shell's current directory. Every `sqlite` URI must include a path;
+the bare `sqlite` provider name is rejected.
+
+## Configuration
+
+### URI format
+
+```text
+sqlite:PATH[?history=true]
+```
+
+`PATH` is required and names the database file. It can be relative, absolute,
+or home-relative. The only accepted query parameter is `history`; user
+information and other options are rejected.
+
+### URI examples
+
+```text
+sqlite:./secrets.db                 # Beside secretspec.toml
+sqlite:///var/lib/app/secrets.db    # Absolute path
+sqlite:~/.local/share/app/secrets.db # Home-relative path
+sqlite:./secrets.db?history=true    # Keep an append-only history
+```
+
+SecretSpec percent-encodes the path when reporting the provider URI, so a
+path containing spaces round-trips.
+
+### Project configuration
+
+Check in the provider alias, but never the database file:
+
+```toml title="secretspec.toml"
+[providers]
+local_db = "sqlite:./secrets.db"
+
+[profiles.default]
+DATABASE_URL = { description = "Database connection string", providers = ["local_db"] }
+```
+
+## Storage model
+
+The database holds one table, `secrets`, with a text `item` key and a binary
+`value`. Convention addresses use this key:
+
+```text
+{project}/{profile}/{key}
+```
+
+Project and profile are therefore isolated even when one user-global
+database serves several projects. Values are arbitrary bytes and are read
+back exactly.
+
+Every write runs in one transaction. Deleting a row removes it and SQLite's
+`secure_delete` mode overwrites the freed page content, so a deleted value
+is not left readable in the file. Residue from before the provider owned
+the file is not rewritten retroactively; run `VACUUM` on the database if
+that matters.
+
+On Unix, SecretSpec creates a missing parent directory with mode `0700`,
+sets the database file to mode `0600`, and re-asserts that mode on every
+open in case the file pre-existed with looser permissions.
+
+## Use existing rows
+
+A native `ref.item` is the row key. It replaces the entire
+`{project}/{profile}/{key}` convention key:
+
+```toml title="secretspec.toml"
+[providers]
+shared_db = "sqlite:///var/lib/app/secrets.db"
+
+[profiles.production]
+DATABASE_PASSWORD = {
+  description = "Database password",
+  providers = ["shared_db"],
+  ref = { item = "shared/database-password" }
+}
+```
+
+`field`, `vault`, `section`, and `version` have no SQLite equivalent and are
+rejected.
+
+## History {/* #history-022 */}
+
+<VersionCompatibility version="0.22" />
+
+History is off by default. Appending `?history=true` to the URI makes every
+`set` and every effective `delete` also append one entry to a ledger inside
+the same database file:
+
+```toml title="secretspec.toml"
+[providers]
+audited_db = "sqlite:./secrets.db?history=true"
+```
+
+Each entry records the operation, a nanosecond timestamp, and a snapshot of
+every secret that is live after the operation, by key and SHA-256 digest.
+The bytes behind each digest are stored once per key, so an unchanged value
+captured in many snapshots costs one copy. Entries are hash-chained: each
+entry's hash covers the previous entry's hash and a canonical rendering of
+its own contents, so altering or removing an earlier entry breaks every hash
+after it.
+
+The ledger is append-only. Triggers refuse to delete a snapshot row, and a
+snapshot can be tombstoned exactly once by recording which later entry
+destroyed its value, which is what lets an operator remove the bytes of a
+compromised value while keeping the auditable record that it existed. The
+provider's own `get`, `set`, and `delete` never tombstone anything; that is
+left to tooling that opens the database directly.
+
+The history schema carries a version in `PRAGMA user_version`. A database
+written by a newer or older history layout is refused rather than silently
+written to in the wrong shape.
+
+A `?history=true` alias and a plain alias naming the same file address the
+same rows: history changes what a write records, not where the value lives.
+
+## CI/CD and containers
+
+Give each job a private database path and let `{project}/{profile}/{key}`
+keep jobs and environments separate. SecretSpec reads only the rows declared
+by the active profile; it does not enumerate or inject every row.
+
+## Security considerations
+
+:::danger[Plaintext storage]
+The SQLite provider does not encrypt values. Keep the database file out of
+version control, backups, build artifacts, container layers, and shared
+directories. Use an encrypted provider when the filesystem is not an
+acceptable trust boundary.
+:::
+
+The file mode is the entire access control. Protect the database with
+filesystem ownership and mount permissions, and do not let untrusted
+processes modify it while SecretSpec is running. The provider sets
+`trusted_schema=OFF` on every connection, so a tampered schema cannot run
+functions from triggers or views on the provider's behalf.
+
+With history enabled, the ledger retains the bytes of every value until an
+operator tombstones them, so an old, rotated value stays readable in the file
+until then. Enable history only where that retention is the point.

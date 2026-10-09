@@ -80,6 +80,9 @@ smallvec = "1"
 uuid = { version = "1", features = ["serde", "v4"] }
 data-encoding = "2"
 sha2 = "0.10"
+# `bundled` compiles SQLite into the binary so the provider needs no system
+# library, which keeps the Windows and cargo-dist builds self-contained.
+rusqlite = { version = "0.40", features = ["bundled"] }
 detect-coding-agent = "0.1"
 age = { version = "0.12", features = ["armor", "plugin", "ssh"] }
 ssh-key = { version = "0.6.7", features = ["crypto"] }

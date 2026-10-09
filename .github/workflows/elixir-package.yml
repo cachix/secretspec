@@ -1,0 +1,59 @@
+name: Elixir SDK
+
+on:
+  pull_request:
+    paths:
+      - "secretspec-ex/**"
+      - ".github/workflows/elixir-package.yml"
+  push:
+    tags: ["v**"]
+  workflow_call:
+    inputs:
+      pre_release:
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build and test Elixir package
+    if: >-
+      inputs.pre_release || github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28"
+          elixir-version: "1.19"
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+      - name: Build SecretSpec CLI executable
+        run: cargo build --release --bin secretspec --features cli
+      - name: Fetch Elixir dependencies
+        working-directory: secretspec-ex
+        run: mix deps.get
+      - name: Check formatting
+        working-directory: secretspec-ex
+        run: mix format --check-formatted
+      - name: Run tests
+        working-directory: secretspec-ex
+        run: mix test
+      - name: Build docs
+        working-directory: secretspec-ex
+        run: mix docs
+      - name: Validate package
+        working-directory: secretspec-ex
+        run: mix hex.build

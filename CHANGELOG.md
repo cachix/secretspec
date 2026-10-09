@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Replaced the Elixir SDK's embedded native resolver with a pure Elixir `secretspec.resolver/1` IPC client. The 0.21+ package launches `secretspec serve` directly and requires a compatible SecretSpec executable.
 
 - Provider reads now retry recognized transient failures with bounded exponential
   backoff, including CLI providers such as BWS. Set `[defaults.retry].max_attempts`
@@ -17,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `secretspec init` now adds the project schema directive to the top of new
   manifests, enabling editor autocomplete and structural validation.
+
+- **Elixir SDK (0.21+)** (`secretspec-ex`) is now a pure Elixir client for `secretspec.resolver/1`. It launches `secretspec serve` directly and requires a compatible SecretSpec executable instead of shipping native code or NIF archives.
 
 ### Fixed
 

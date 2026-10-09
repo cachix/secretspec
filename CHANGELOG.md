@@ -101,6 +101,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from another declared secret with `from` and `extract`. Dependencies resolve
   in order and scopes include hidden inputs without exposing their values.
 
+- A `sqlite` provider stores secrets in a local SQLite database file
+  (`sqlite:./secrets.db`), protected by filesystem permissions alone, with
+  read, write, delete, and batch reads. Appending `?history=true` turns on an
+  opt-in, append-only, hash-chained history of every write inside the same
+  file; history is off by default (0.22+).
+
 - Provider reads now retry recognized transient failures with bounded exponential
   backoff, including CLI providers such as BWS. Set `[defaults.retry].max_attempts`
   in user configuration or use `Secrets::with_retry_policy` in Rust to control

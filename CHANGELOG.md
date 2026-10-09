@@ -50,6 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   inside a current-thread Tokio runtime, such as
   `#[tokio::main(flavor = "current_thread")]` or `#[tokio::test]`.
 
+- `secretspec check` no longer leaves decrypted `as_path` secret files in the
+  temporary directory. It never printed their paths, so nothing could use
+  them.
+
 ## [0.21.1] - 2026-09-27
 
 ### Added

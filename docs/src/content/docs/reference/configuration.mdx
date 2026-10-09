@@ -780,7 +780,9 @@ exports require UTF-8.
 
 | Context | Behavior |
 |---------|----------|
-| CLI (`get`, `check`, `run`) | Files are persisted (not deleted after command exits) |
+| CLI `get`, `export` | Files are persisted (not deleted after command exits) because the path is printed |
+| CLI `run` | Files are deleted after the child process exits |
+| CLI `check` | Files are deleted when the command exits (0.22+; earlier versions left them behind) |
 | Rust SDK | Files cleaned up when `ValidatedSecrets` is dropped; use `keep_temp_files()` to persist |
 | Rust SDK types | `PathBuf` or `Option<PathBuf>` instead of `String` |
 

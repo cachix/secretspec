@@ -192,6 +192,7 @@ fn config_schemas_reject_invalid_shapes_and_typos() {
     for secret in [
         json!("not a table"),
         json!({"requred": true}),
+        json!({"compose": "${REPO_PATH}/.tmp"}),
         json!({"required": "yes"}),
         json!({"required": {}}),
         json!({"required": {"exactly_one": 1}}),

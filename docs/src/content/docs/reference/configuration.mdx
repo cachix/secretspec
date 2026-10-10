@@ -231,6 +231,13 @@ it cannot see.
 
 #### Secret Variable Options
 
+<VersionCompatibility version="0.22" kind="changed">
+  Unknown fields in secret declarations now produce a warning on standard error
+  and are ignored. Earlier versions silently ignored them. The warning suggests
+  `composed` when a declaration uses `compose`. Every warning also notes that
+  the field may be supported in a newer version of SecretSpec.
+</VersionCompatibility>
+
 Each secret variable is defined as a table with the following fields:
 
 | Field | Type | Required | Description |

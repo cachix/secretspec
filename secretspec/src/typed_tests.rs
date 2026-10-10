@@ -1570,16 +1570,16 @@ fn named_identity_and_certificate_inherit_password_refresh_deadline() {
     let config = manifest(&format!(
         r#"
 [providers]
-source = "dotenv://{}"
-cache = "dotenv://{}"
+source = {}
+cache = {}
 password = {{ fallback = ["source"], cache = {{ provider = "cache", max_age = "1h" }} }}
 [profiles.default]
 ID = {{ description = "identity", type = "x509_identity", credentials = {{ password = "PW" }}, providers = ["source"] }}
 PW = {{ description = "password", providers = ["password"] }}
 CERT = {{ description = "cert", type = "x509_certificate", from = "ID" }}
 "#,
-        source.display(),
-        cache.display()
+        toml::Value::String(format!("dotenv://{}", source.display())),
+        toml::Value::String(format!("dotenv://{}", cache.display()))
     ));
     config.validate().unwrap();
     let secrets = Secrets::new(config, None, None, None);

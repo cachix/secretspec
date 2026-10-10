@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - X.509 identity generation, validation, and PKCS#12 conversion no longer
-  require OpenSSL. PKCS#12 passwords currently support the Unicode Basic
+  build or require OpenSSL. PKCS#12 passwords currently support the Unicode Basic
   Multilingual Plane; unsupported characters produce a clear credential error.
 
 - Stored X.509 identities and their derived secrets retain credential expiry

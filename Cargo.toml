@@ -100,8 +100,8 @@ rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "
 x509-parser = { version = "0.18", features = ["verify-aws"] }
 pem = "3"
 time = "0.3"
-# Replace this Git pin with the crates.io release containing p12-keystore#13.
-p12-keystore = { version = "0.3.2", git = "https://github.com/ancwrd1/p12-keystore", rev = "baae350b8b5a144a37a3373d592cf91a5b0e9f4b" }
+# 0.4 includes the bag-preserving archive API from p12-keystore#13.
+p12-keystore = "0.4"
 
 # The profile that 'dist' will build with
 [profile.dist]

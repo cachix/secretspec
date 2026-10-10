@@ -45,6 +45,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [kdbx](/providers/kdbx/) (0.17+) | KeePass KDBX file (requires the `kdbx` build feature) | ✓ | KDBX 4 | ✓ | — |
 | [dotenv](/providers/dotenv/) | A `.env` file | ✓ | ✓ | ✗ | — |
 | [file](/providers/file/) (0.19+) | One plaintext byte file per secret (arbitrary bytes in 0.21+) | ✓ | ✓ | ✗ | — |
+| [sqlite](/providers/sqlite/) (0.22+) | Local SQLite database file with optional append-only history (requires the `sqlite` build feature) | ✓ | ✓ | ✗ | — |
 | [env](/providers/env/) | Current process environment | ✓ | ✗ | ✗ | — |
 | [ejson](/providers/ejson/) (0.20+) | EJSON encrypted file (requires the `ejson` build feature and EJSON CLI) | ✓ | ✗ | ✓ | — |
 | [null](/providers/null/) (0.19+) | No storage; uses a manifest default, ephemeral generation, or an ephemeral run prompt | ✗ | ✗ | N/A | — |

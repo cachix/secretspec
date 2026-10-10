@@ -232,6 +232,19 @@ metadata! {
 }
 
 metadata! {
+    SQLITE,
+    name: "sqlite",
+    description: "Local SQLite database, optional history (0.22+)",
+    schemes: ["sqlite"],
+    examples: [
+        "sqlite:./secrets.db",
+        "sqlite:///var/lib/secrets.db",
+        "sqlite:./secrets.db?history=true",
+    ],
+    deletes: true,
+}
+
+metadata! {
     VAULT,
     name: "vault",
     description: "HashiCorp Vault secret management",

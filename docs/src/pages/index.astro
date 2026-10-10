@@ -39,6 +39,7 @@ type ProviderMetadata = {
 const providerMetadata: ProviderMetadata[] = [
   { icon: 'apple', slug: 'keyring', label: 'macOS Keychain' },
   { slug: 'kdbx', label: 'KeePass KDBX' },
+  { icon: 'sqlite', slug: 'sqlite', label: 'SQLite (0.22+)' },
   { icon: '1password', slug: 'onepassword', label: '1Password' },
   { slug: 'keeper', label: 'Keeper Secrets Manager' },
   { slug: 'doppler', label: 'Doppler' },
@@ -544,6 +545,7 @@ const reelScriptData = {
 <span class="landing-provider-cursor" aria-hidden="true">›</span><a class="landing-provider-line is-selected" style="--provider-line-color: var(--syntax-blue)" href="/providers/keyring/"><span class="provider-name">keyring</span>: Uses system keychain (Recommended)</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/null/"><span class="provider-name">null</span>: Defaults, generation, or run prompts without storage</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/file/"><span class="provider-name">file</span>: Plaintext files, one per secret</a>
+<span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-cyan)" href="/providers/sqlite/"><span class="provider-name">sqlite</span>: Local SQLite database, optional history (0.22+)</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-red)" href="/providers/bw/"><span class="provider-name">bw</span>: Bitwarden Password Manager</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/kdbx/"><span class="provider-name">kdbx</span>: KeePass KDBX databases</a>
 <span class="landing-provider-slot" aria-hidden="true"> </span><a class="landing-provider-line" style="--provider-line-color: var(--syntax-yellow)" href="/providers/keeper/"><span class="provider-name">keeper</span>: Keeper Secrets Manager via official Rust SDK</a>

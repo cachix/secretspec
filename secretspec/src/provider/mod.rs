@@ -45,6 +45,7 @@
 //! - [`infisical::InfisicalProvider`]: Infisical integration (0.16+)
 //! - [`bw::BitwardenProvider`]: Bitwarden Password Manager (0.18+)
 //! - [`sops::SopsProvider`]: SOPS-encrypted file integration (0.17+)
+//! - [`sqlite::SqliteProvider`]: Local SQLite database with optional history (0.22+)
 //! - [`kubernetes::KubernetesProvider`]: Kubernetes integration (0.20+)
 //! - [`setec::SetecProvider`]: Tailscale Setec integration (0.21+)
 //!
@@ -57,6 +58,7 @@
 //! dotenv://.env.production
 //! null://  # Use defaults, generation, or run prompts without storage, 0.19+
 //! file:./.secrets  # One plaintext file per secret, 0.19+
+//! sqlite:./secrets.db  # Local SQLite database, 0.22+
 //! onepassword://vault
 //! lastpass://folder
 //! keeper://SHARED_FOLDER_UID  # Keeper, 0.18+
@@ -233,6 +235,8 @@ pub mod scaleway;
 pub mod setec;
 #[cfg(feature = "sops")]
 pub mod sops;
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
 pub mod systemd_credential;
 #[cfg(feature = "vault")]
 pub mod vault;

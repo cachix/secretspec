@@ -29,6 +29,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
   - [KeePass KDBX](https://secretspec.dev/providers/kdbx) (0.17+)
   - [.env](https://secretspec.dev/providers/dotenv)
   - [plaintext files](https://secretspec.dev/providers/file) (0.19+)
+  - [SQLite](https://secretspec.dev/providers/sqlite) (0.22+)
   - [1Password](https://secretspec.dev/providers/onepassword)
   - [Keeper Secrets Manager](https://secretspec.dev/providers/keeper) (0.18+)
   - [Doppler](https://secretspec.dev/providers/doppler) (0.21+)
@@ -94,6 +95,7 @@ $ secretspec config global init  # 0.17+
   doppler: Doppler secret management (0.21+)
   dotenv: Traditional .env files
   file: Plaintext files, one per secret (0.19+)
+  sqlite: Local SQLite database, optional history (0.22+)
   env: Read-only environment variables
   null: Use defaults, generation, or run prompts without storage (0.19+)
   systemd-credential: Read-only systemd service credentials (0.17+)
@@ -233,6 +235,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[KeePass KDBX](https://secretspec.dev/providers/kdbx)** (0.17+) - Local KeePass-compatible encrypted database
 - **[.env files](https://secretspec.dev/providers/dotenv)** - Traditional dotenv files
 - **[Plaintext files](https://secretspec.dev/providers/file)** (0.19+) - One UTF-8 file per secret in a local directory tree
+- **[SQLite](https://secretspec.dev/providers/sqlite)** (0.22+) - One row per secret in a local SQLite database file, with an opt-in append-only history
 - **[Environment variables](https://secretspec.dev/providers/env)** - Read-only for CI/CD
 - **[Null](https://secretspec.dev/providers/null)** (0.19+) - Use committed defaults, ephemeral generation, or ephemeral run prompts without secret storage
 - **[systemd credentials](https://secretspec.dev/providers/systemd-credential)** (0.17+) - Read-only credentials passed to the current service

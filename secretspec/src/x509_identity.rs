@@ -1,45 +1,29 @@
-//! X.509 identity generation, PKCS#12 decoding, and typed projections.
-//!
-//! An `x509_identity` is canonically a PKCS#12 archive holding one private key,
-//! its leaf certificate, and an optional issuer chain. This module generates
-//! such archives, opens stored ones (with the configured password or an empty
-//! one, never guessing), validates them strictly, and projects them into the
-//! `pkcs12`, `pkcs8_private_key`, `x509_certificate`, `x509_certificate_chain`,
-//! and `x509_issuer_chain` targets of the type registry.
+//! X.509 identity generation, bag-preserving PKCS#12 decoding, and projections.
+//! Rust certificate and archive APIs share the application's AWS-LC backend.
 
 use crate::SecretSpecError;
 use crate::config::{GenerateConfig, GenerateOptions};
 use crate::typed::{Format, Projection};
-use openssl::asn1::{Asn1Integer, Asn1Time};
-use openssl::bn::{BigNum, MsbOption};
-use openssl::ec::{EcGroup, EcKey};
-use openssl::error::ErrorStack;
-use openssl::hash::MessageDigest;
-use openssl::nid::Nid;
-use openssl::pkcs12::Pkcs12;
-use openssl::pkey::{PKey, Private};
-use openssl::stack::Stack;
-use openssl::x509::extension::{
-    BasicConstraints, ExtendedKeyUsage, KeyUsage, SubjectAlternativeName, SubjectKeyIdentifier,
+use p12_keystore::{
+    Certificate, EncryptionAlgorithm, KeyStore, KeyStoreEntry, MacAlgorithm, Pkcs12Archive,
+    PrivateKey, PrivateKeyChain,
 };
-use openssl::x509::{X509, X509NameBuilder};
+use rcgen::{
+    CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
+    KeyUsagePurpose, PublicKeyData, SanType,
+};
 use secrecy::zeroize::Zeroizing;
-use secrecy::{SecretSlice, SecretString};
-use std::cmp::Ordering;
+use secrecy::{ExposeSecret, SecretSlice, SecretString};
 use std::net::IpAddr;
-use std::time::{SystemTime, UNIX_EPOCH};
+use time::{Duration, OffsetDateTime};
+use x509_parser::prelude::{FromDer, X509Certificate};
 
 const MAX_IDENTITY_BYTES: usize = 10 * 1024 * 1024;
 const MAX_CHAIN_CERTIFICATES: usize = 16;
-// Current CA/Browser Forum TLS Baseline Requirements cap publicly trusted
-// subscriber certificates at 200 days (effective 2026-03-15). Self-signed
-// development certificates are outside that policy, but using the same ceiling
-// keeps generated lifetimes conservative.
 const MAX_VALID_DAYS: u32 = 200;
 const PFX_ITERATIONS: u32 = 100_000;
 const FRIENDLY_NAME: &str = "SecretSpec X.509 identity";
 
-/// A value projected from an identity: PEM text or DER/PFX bytes.
 pub(crate) enum ProjectedValue {
     Text(SecretString),
     Binary(SecretSlice<u8>),
@@ -55,17 +39,6 @@ fn decode_failed(name: &str, error: impl std::fmt::Display) -> SecretSpecError {
         encoding: "pkcs12",
         reason: error.to_string(),
     }
-}
-
-/// The first reason in an OpenSSL error stack, without the library, function,
-/// and file context of the full stack, which can echo caller-supplied data.
-fn short_reason(error: &ErrorStack) -> String {
-    error
-        .errors()
-        .first()
-        .and_then(|error| error.reason())
-        .unwrap_or("malformed data")
-        .to_string()
 }
 
 pub(crate) fn parse_valid_days(value: Option<&str>) -> Result<u32, String> {
@@ -131,37 +104,31 @@ fn options(config: &GenerateConfig) -> Result<&GenerateOptions, SecretSpecError>
     }
 }
 
-/// Serialize an identity as a PKCS#12 archive using one explicit modern
-/// profile: PBES2/PBKDF2 with HMAC-SHA-256, AES-256-CBC for key and
-/// certificate privacy, and HMAC-SHA-256 integrity, each with a fixed high
-/// iteration count. Never RC2, 3DES, or SHA-1, whatever OpenSSL's platform
-/// default is. An empty password yields an interchange container, not a
-/// security boundary; the caller decides which it needs.
+/// Emit the same modern encryption and integrity profile on every platform.
 fn build_archive(
-    key: &PKey<Private>,
-    certificate: &X509,
-    chain: &[X509],
+    key: &[u8],
+    certificate: &Certificate,
+    chain: &[Certificate],
     password: &str,
-) -> Result<SecretSlice<u8>, ErrorStack> {
-    let mut builder = Pkcs12::builder();
-    builder
-        .name(FRIENDLY_NAME)
-        .pkey(key)
-        .cert(certificate)
-        .key_algorithm(Nid::AES_256_CBC)
-        .cert_algorithm(Nid::AES_256_CBC)
-        .key_iter(PFX_ITERATIONS)
-        .mac_iter(PFX_ITERATIONS)
-        .mac_md(MessageDigest::sha256());
-    if !chain.is_empty() {
-        let mut issuers = Stack::new()?;
-        for issuer in chain {
-            issuers.push(issuer.clone())?;
-        }
-        builder.ca(issuers);
-    }
-    let archive = builder.build2(password)?;
-    let der = Zeroizing::new(archive.to_der()?);
+) -> Result<SecretSlice<u8>, p12_keystore::error::Error> {
+    let mut store = KeyStore::new();
+    store.add_entry(
+        FRIENDLY_NAME,
+        KeyStoreEntry::PrivateKeyChain(PrivateKeyChain::new(
+            "identity",
+            PrivateKey::from_der(key)?,
+            std::iter::once(certificate.clone()).chain(chain.iter().cloned()),
+        )),
+    );
+    let der = Zeroizing::new(
+        store
+            .writer(password)
+            .encryption_algorithm(EncryptionAlgorithm::PbeWithHmacSha256AndAes256)
+            .encryption_iterations(PFX_ITERATIONS)
+            .mac_algorithm(MacAlgorithm::HmacSha256)
+            .mac_iterations(PFX_ITERATIONS)
+            .write()?,
+    );
     Ok(der.as_slice().to_vec().into())
 }
 
@@ -169,145 +136,84 @@ pub(crate) fn generate(config: &GenerateConfig) -> crate::Result<SecretSlice<u8>
     let options = options(config)?;
     let valid_days = parse_valid_days(options.valid_for.as_deref())
         .map_err(SecretSpecError::GenerationFailed)?;
-    let sans = options.san.as_deref().ok_or_else(|| {
-        SecretSpecError::GenerationFailed("X.509 generation requires generate.san".to_string())
-    })?;
+    let sans = options
+        .san
+        .as_deref()
+        .filter(|sans| !sans.is_empty())
+        .ok_or_else(|| {
+            SecretSpecError::GenerationFailed("X.509 generation requires generate.san".into())
+        })?;
+    let mut params = CertificateParams::default();
     for san in sans {
         validate_san(san).map_err(SecretSpecError::GenerationFailed)?;
+        params
+            .subject_alt_names
+            .push(if let Some(dns) = san.strip_prefix("dns:") {
+                SanType::DnsName(
+                    dns.try_into()
+                        .map_err(|error| generation_failed("invalid DNS SAN", error))?,
+                )
+            } else {
+                SanType::IpAddress(
+                    san.strip_prefix("ip:")
+                        .expect("validated IP SAN")
+                        .parse()
+                        .expect("validated IP address"),
+                )
+            });
     }
-
-    let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1)
-        .map_err(|error| generation_failed("failed to select P-256", error))?;
-    let ec_key = EcKey::generate(&group)
-        .map_err(|error| generation_failed("failed to generate P-256 private key", error))?;
-    let private_key = PKey::from_ec_key(ec_key)
-        .map_err(|error| generation_failed("failed to prepare P-256 private key", error))?;
-
     let common_name = sans
         .iter()
         .find_map(|san| san.strip_prefix("dns:"))
         .filter(|name| name.len() <= 64)
         .unwrap_or("SecretSpec generated identity");
-    let mut subject = X509NameBuilder::new()
-        .map_err(|error| generation_failed("failed to create X.509 subject", error))?;
-    subject
-        .append_entry_by_nid(Nid::COMMONNAME, common_name)
-        .map_err(|error| generation_failed("failed to set X.509 common name", error))?;
-    let subject = subject.build();
-
-    let mut serial = BigNum::new()
-        .map_err(|error| generation_failed("failed to allocate X.509 serial", error))?;
-    serial
-        .rand(128, MsbOption::ONE, false)
-        .map_err(|error| generation_failed("failed to generate X.509 serial", error))?;
-    let serial = Asn1Integer::from_bn(&serial)
-        .map_err(|error| generation_failed("failed to encode X.509 serial", error))?;
-
-    let mut certificate = X509::builder()
-        .map_err(|error| generation_failed("failed to create X.509 certificate", error))?;
-    certificate
-        .set_version(2)
-        .and_then(|_| certificate.set_serial_number(&serial))
-        .and_then(|_| certificate.set_subject_name(&subject))
-        .and_then(|_| certificate.set_issuer_name(&subject))
-        .and_then(|_| certificate.set_pubkey(&private_key))
-        .map_err(|error| generation_failed("failed to initialize X.509 certificate", error))?;
-    // A small backdate tolerates clock skew between the generating machine and
-    // a local TLS peer without extending the requested total validity period.
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| generation_failed("system clock is before the Unix epoch", error))?
-        .as_secs();
-    let not_before_unix = now.saturating_sub(300);
-    let not_after_unix = not_before_unix + u64::from(valid_days) * 86_400;
-    let not_before = Asn1Time::from_unix(not_before_unix as i64)
-        .map_err(|error| generation_failed("failed to set X.509 start time", error))?;
-    let not_after = Asn1Time::from_unix(not_after_unix as i64)
-        .map_err(|error| generation_failed("failed to set X.509 expiry", error))?;
-    certificate
-        .set_not_before(&not_before)
-        .and_then(|_| certificate.set_not_after(&not_after))
-        .map_err(|error| generation_failed("failed to set X.509 validity", error))?;
-
-    let basic_constraints = BasicConstraints::new()
-        .critical()
-        .build()
-        .map_err(|error| generation_failed("failed to build basic constraints", error))?;
-    let key_usage = KeyUsage::new()
-        .critical()
-        .digital_signature()
-        .build()
-        .map_err(|error| generation_failed("failed to build key usage", error))?;
-    certificate
-        .append_extension(basic_constraints)
-        .and_then(|_| certificate.append_extension(key_usage))
-        .map_err(|error| generation_failed("failed to add X.509 key constraints", error))?;
-
+    params.distinguished_name = DistinguishedName::new();
+    params
+        .distinguished_name
+        .push(DnType::CommonName, common_name);
+    params.is_ca = IsCa::ExplicitNoCa;
+    params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     let default_usages = ["server_auth".to_string()];
-    let usages = options.usages.as_deref().unwrap_or(&default_usages);
-    let mut extended = ExtendedKeyUsage::new();
-    for usage in usages {
-        match usage.as_str() {
-            "server_auth" => {
-                extended.server_auth();
+    for usage in options.usages.as_deref().unwrap_or(&default_usages) {
+        params.extended_key_usages.push(match usage.as_str() {
+            "server_auth" => ExtendedKeyUsagePurpose::ServerAuth,
+            "client_auth" => ExtendedKeyUsagePurpose::ClientAuth,
+            _ => {
+                return Err(SecretSpecError::GenerationFailed(
+                    "invalid X.509 extended key usage".into(),
+                ));
             }
-            "client_auth" => {
-                extended.client_auth();
-            }
-            _ => unreachable!("generation options are validated before generation"),
-        }
+        });
     }
-    certificate
-        .append_extension(
-            extended
-                .build()
-                .map_err(|error| generation_failed("failed to build extended key usage", error))?,
-        )
-        .map_err(|error| generation_failed("failed to add extended key usage", error))?;
-
-    let mut san_extension = SubjectAlternativeName::new();
-    for san in sans {
-        if let Some(dns) = san.strip_prefix("dns:") {
-            san_extension.dns(dns);
-        } else if let Some(ip) = san.strip_prefix("ip:") {
-            san_extension.ip(ip);
-        }
-    }
-    {
-        let context = certificate.x509v3_context(None, None);
-        let san = san_extension.build(&context).map_err(|error| {
-            generation_failed("failed to build subject alternative names", error)
-        })?;
-        let subject_key = SubjectKeyIdentifier::new()
-            .build(&context)
-            .map_err(|error| generation_failed("failed to build subject key identifier", error))?;
-        certificate
-            .append_extension(san)
-            .and_then(|_| certificate.append_extension(subject_key))
-            .map_err(|error| generation_failed("failed to add X.509 extensions", error))?;
-    }
-    certificate
-        .sign(&private_key, MessageDigest::sha256())
+    let mut serial = [0u8; 16];
+    use rand_08::RngCore;
+    rand_08::rngs::OsRng
+        .try_fill_bytes(&mut serial)
+        .map_err(|error| generation_failed("failed to generate X.509 serial", error))?;
+    serial[0] |= 0x80;
+    params.serial_number = Some(rcgen::SerialNumber::from_slice(&serial));
+    params.not_before = OffsetDateTime::now_utc() - Duration::seconds(300);
+    params.not_after = params.not_before + Duration::days(i64::from(valid_days));
+    let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256)
+        .map_err(|error| generation_failed("failed to generate P-256 private key", error))?;
+    let generated = params
+        .self_signed(&key)
         .map_err(|error| generation_failed("failed to sign X.509 certificate", error))?;
-    let certificate = certificate.build();
-
-    // The canonical stored archive uses an empty password on purpose: the
-    // provider protects the identity at rest, and a consumer that needs a
-    // protected PFX derives one with `type = "pkcs12"` and its own password.
-    build_archive(&private_key, &certificate, &[], "")
+    let certificate = Certificate::from_der(generated.der())
+        .map_err(|error| generation_failed("failed to encode X.509 certificate", error))?;
+    // Empty-password storage relies on the provider's protection. Consumers
+    // derive a separately protected PKCS#12 archive when they need one.
+    build_archive(key.serialized_der(), &certificate, &[], "")
         .map_err(|error| generation_failed("failed to build PKCS#12 identity", error))
 }
 
-/// A decoded and validated identity: the private key, its leaf certificate,
-/// and the issuer chain in leaf-to-root order.
 pub(crate) struct Identity {
-    key: PKey<Private>,
-    certificate: X509,
-    chain: Vec<X509>,
+    key: SecretSlice<u8>,
+    certificate: Certificate,
+    chain: Vec<Certificate>,
 }
 
 impl std::fmt::Debug for Identity {
-    /// Never prints key or certificate material.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Identity")
             .field("chain_len", &self.chain.len())
@@ -315,11 +221,85 @@ impl std::fmt::Debug for Identity {
     }
 }
 
+/// x509-parser's dispatcher omits P-521 and some SHA-512 combinations.
+/// Verify those with the same AWS-LC backend, without accepting a failed
+/// signature under a different algorithm or ignoring its named curve.
+fn signature_valid(
+    certificate: &X509Certificate<'_>,
+    issuer: Option<&x509_parser::x509::SubjectPublicKeyInfo<'_>>,
+) -> bool {
+    use aws_lc_rs::signature;
+    if certificate.signature_algorithm != certificate.tbs_certificate.signature {
+        return false;
+    }
+    match certificate.verify_signature(issuer) {
+        Ok(()) => return true,
+        Err(x509_parser::error::X509Error::SignatureUnsupportedAlgorithm) => {}
+        Err(_) => return false,
+    }
+    let public_key = issuer.unwrap_or_else(|| certificate.public_key());
+    if public_key.algorithm.algorithm.to_id_string() != "1.2.840.10045.2.1" {
+        return false;
+    }
+    let Some(curve) = public_key
+        .algorithm
+        .parameters
+        .as_ref()
+        .and_then(|value| value.as_oid().ok())
+    else {
+        return false;
+    };
+    let algorithm: &dyn signature::VerificationAlgorithm = match (
+        curve.to_id_string().as_str(),
+        certificate
+            .signature_algorithm
+            .algorithm
+            .to_id_string()
+            .as_str(),
+    ) {
+        ("1.2.840.10045.3.1.7", "1.2.840.10045.4.1") => &signature::ECDSA_P256_SHA1_ASN1,
+        ("1.2.840.10045.3.1.7", "1.2.840.10045.4.3.4") => &signature::ECDSA_P256_SHA512_ASN1,
+        ("1.3.132.0.34", "1.2.840.10045.4.3.4") => &signature::ECDSA_P384_SHA512_ASN1,
+        ("1.3.132.0.35", "1.2.840.10045.4.1") => &signature::ECDSA_P521_SHA1_ASN1,
+        ("1.3.132.0.35", "1.2.840.10045.4.3.1") => &signature::ECDSA_P521_SHA224_ASN1,
+        ("1.3.132.0.35", "1.2.840.10045.4.3.2") => &signature::ECDSA_P521_SHA256_ASN1,
+        ("1.3.132.0.35", "1.2.840.10045.4.3.3") => &signature::ECDSA_P521_SHA384_ASN1,
+        ("1.3.132.0.35", "1.2.840.10045.4.3.4") => &signature::ECDSA_P521_SHA512_ASN1,
+        _ => return false,
+    };
+    signature::UnparsedPublicKey::new(algorithm, public_key.subject_public_key.data.as_ref())
+        .verify(
+            certificate.tbs_certificate.as_ref(),
+            certificate.signature_value.data.as_ref(),
+        )
+        .is_ok()
+}
+
+fn parsed_certificate<'a>(der: &'a [u8], name: &str) -> crate::Result<X509Certificate<'a>> {
+    let (remaining, certificate) = X509Certificate::from_der(der)
+        .map_err(|_| decode_failed(name, "invalid X.509 certificate"))?;
+    if !remaining.is_empty() {
+        return Err(decode_failed(name, "trailing data after X.509 certificate"));
+    }
+    Ok(certificate)
+}
+
+fn password_supported(password: Option<&str>, name: &str) -> crate::Result<()> {
+    if let Some(password) = password {
+        crate::typed::validate_credential_value("password", password).map_err(|reason| {
+            SecretSpecError::CredentialInvalid {
+                name: name.into(),
+                role: "password".into(),
+                reason,
+            }
+        })?;
+    }
+    Ok(())
+}
+
 impl Identity {
-    /// Open a PKCS#12 archive with the configured password, or the empty
-    /// password when none is configured. There is no fallback between the
-    /// two: a protected archive without a bound password fails, and so does a
-    /// wrong password.
+    /// MAC verification and decryption precede application key and chain checks.
+    /// No alternate password, linking policy, or certificate filtering is used.
     pub(crate) fn decode(bytes: &[u8], password: Option<&str>, name: &str) -> crate::Result<Self> {
         if bytes.is_empty() || bytes.len() > MAX_IDENTITY_BYTES {
             return Err(decode_failed(
@@ -327,40 +307,21 @@ impl Identity {
                 format!("PKCS#12 identity must be between 1 and {MAX_IDENTITY_BYTES} bytes"),
             ));
         }
-        let archive = Pkcs12::from_der(bytes).map_err(|error| {
-            decode_failed(
+        password_supported(password, name)?;
+        let mut archive = Pkcs12Archive::from_pkcs12(bytes, password.unwrap_or(""))
+            .map_err(|error| decode_failed(name, match error {
+                p12_keystore::error::Error::DerError(_) | p12_keystore::error::Error::InvalidVersion =>
+                    "invalid PKCS#12 identity",
+                _ if password.is_some() => "PKCS#12 identity could not be opened with the configured password",
+                _ => "PKCS#12 identity could not be opened with an empty password; bind its password with `credentials = { password = \"...\" }` if the archive is protected",
+            }))?;
+        if archive.keys.len() != 1 {
+            return Err(decode_failed(
                 name,
-                format!("invalid PKCS#12 identity: {}", short_reason(&error)),
-            )
-        })?;
-        let archive = archive
-            .parse2(password.unwrap_or(""))
-            .map_err(|_| {
-                decode_failed(
-                    name,
-                    if password.is_some() {
-                        "PKCS#12 identity could not be opened with the configured password"
-                    } else {
-                        "PKCS#12 identity could not be opened with an empty password; bind its password with `credentials = { password = \"...\" }` if the archive is protected"
-                    },
-                )
-            })?;
-        let key = archive
-            .pkey
-            .ok_or_else(|| decode_failed(name, "PKCS#12 identity has no private key"))?;
-        let certificate = archive
-            .cert
-            .ok_or_else(|| decode_failed(name, "PKCS#12 identity has no leaf certificate"))?;
-        let mut remaining: Vec<X509> = archive
-            .ca
-            .map(|certificates| {
-                certificates
-                    .into_iter()
-                    .map(|cert| cert.to_owned())
-                    .collect()
-            })
-            .unwrap_or_default();
-        if remaining.len() > MAX_CHAIN_CERTIFICATES {
+                "PKCS#12 identity must hold exactly one private key",
+            ));
+        }
+        if archive.certs.len() > MAX_CHAIN_CERTIFICATES + 1 {
             return Err(decode_failed(
                 name,
                 format!(
@@ -368,50 +329,63 @@ impl Identity {
                 ),
             ));
         }
-        let certificate_key = certificate.public_key().map_err(|error| {
-            decode_failed(
-                name,
-                format!("leaf certificate has no usable public key: {error}"),
-            )
-        })?;
-        if !certificate_key.public_eq(&key) {
+        let bag = archive.keys.pop().expect("exactly one private key");
+        let key: SecretSlice<u8> = bag.key.as_der().to_vec().into();
+        let public_key = KeyPair::try_from(key.expose_secret())
+            .map_err(|_| decode_failed(name, "unsupported or invalid PKCS#8 private key; supported keys are RSA, P-256, P-384, P-521, and Ed25519"))?;
+        let public_der = public_key.subject_public_key_info();
+        let (_, expected_public) =
+            x509_parser::x509::SubjectPublicKeyInfo::from_der(&public_der)
+                .map_err(|_| decode_failed(name, "invalid private key public component"))?;
+        let mut certificate_ders = std::collections::HashSet::new();
+        for certificate in &archive.certs {
+            if !certificate_ders.insert(certificate.cert.as_der()) {
+                return Err(decode_failed(
+                    name,
+                    "duplicate certificate bags do not form one unambiguous, coherent chain",
+                ));
+            }
+        }
+        let mut matching = Vec::new();
+        for (index, certificate) in archive.certs.iter().enumerate() {
+            let parsed = parsed_certificate(certificate.cert.as_der(), name)?;
+            if parsed.public_key().algorithm == expected_public.algorithm
+                && parsed.public_key().subject_public_key == expected_public.subject_public_key
+            {
+                matching.push(index);
+            }
+        }
+        // A CA and its leaf may reuse the same public key. The local key ID
+        // identifies the leaf in that case, but never substitutes for matching
+        // its actual public key or validating every remaining certificate bag.
+        if matching.len() > 1
+            && let Some(key_id) = &bag.local_key_id
+        {
+            matching.retain(|index| {
+                archive.certs[*index].local_key_id.as_deref() == Some(key_id.as_ref())
+            });
+        }
+        if matching.len() != 1 {
             return Err(decode_failed(
                 name,
-                "leaf certificate does not match the private key",
+                "PKCS#12 identity must hold one leaf certificate that matches the private key",
             ));
         }
-
-        let now = Asn1Time::days_from_now(0).map_err(|error| {
-            decode_failed(name, format!("failed to read current time: {error}"))
-        })?;
-        if certificate
-            .not_before()
-            .compare(&now)
-            .map_err(|error| decode_failed(name, error))?
-            == Ordering::Greater
-        {
+        let certificate = archive.certs.remove(matching[0]).cert;
+        let mut remaining: Vec<Certificate> =
+            archive.certs.into_iter().map(|bag| bag.cert).collect();
+        let leaf = parsed_certificate(certificate.as_der(), name)?;
+        let now = x509_parser::time::ASN1Time::now();
+        if leaf.validity().not_before > now {
             return Err(decode_failed(name, "leaf certificate is not valid yet"));
         }
-        if certificate
-            .not_after()
-            .compare(&now)
-            .map_err(|error| decode_failed(name, error))?
-            == Ordering::Less
-        {
+        if leaf.validity().not_after < now {
             return Err(decode_failed(name, "leaf certificate has expired"));
         }
-
-        for chain_certificate in &remaining {
-            if chain_certificate
-                .not_before()
-                .compare(&now)
-                .map_err(|error| decode_failed(name, error))?
-                == Ordering::Greater
-                || chain_certificate
-                    .not_after()
-                    .compare(&now)
-                    .map_err(|error| decode_failed(name, error))?
-                    == Ordering::Less
+        for issuer in &remaining {
+            if !parsed_certificate(issuer.as_der(), name)?
+                .validity()
+                .is_valid_at(now)
             {
                 return Err(decode_failed(
                     name,
@@ -419,37 +393,15 @@ impl Identity {
                 ));
             }
         }
-
-        // Certificate bags in PKCS#12 are a set, not an ordered chain.
-        // Reconstruct the leaf-to-root order by issuer/subject name and verify
-        // every signature; reject unrelated or ambiguous bags instead of
-        // silently exporting them.
-        let mut chain = Vec::with_capacity(remaining.len());
-        let mut child = certificate.clone();
+        let mut chain: Vec<Certificate> = Vec::with_capacity(remaining.len());
         while !remaining.is_empty() {
-            let child_issuer = child
-                .issuer_name()
-                .to_der()
-                .map_err(|error| decode_failed(name, error))?;
+            let child = parsed_certificate(chain.last().unwrap_or(&certificate).as_der(), name)?;
             let mut matching = Vec::new();
             for (index, candidate) in remaining.iter().enumerate() {
-                if candidate
-                    .subject_name()
-                    .to_der()
-                    .map_err(|error| decode_failed(name, error))?
-                    != child_issuer
+                let issuer = parsed_certificate(candidate.as_der(), name)?;
+                if issuer.subject() == child.issuer()
+                    && signature_valid(&child, Some(issuer.public_key()))
                 {
-                    continue;
-                }
-                let issuer_key = candidate.public_key().map_err(|error| {
-                    decode_failed(
-                        name,
-                        format!("chain certificate has no usable public key: {error}"),
-                    )
-                })?;
-                if child.verify(&issuer_key).map_err(|error| {
-                    decode_failed(name, format!("failed to verify certificate chain: {error}"))
-                })? {
                     matching.push(index);
                 }
             }
@@ -459,38 +411,14 @@ impl Identity {
                     "PKCS#12 certificate bags do not form one unambiguous, coherent chain",
                 ));
             }
-            child = remaining.remove(matching[0]);
-            chain.push(child.clone());
+            chain.push(remaining.remove(matching[0]));
         }
-
-        if certificate
-            .issuer_name()
-            .to_der()
-            .and_then(|issuer| {
-                certificate
-                    .subject_name()
-                    .to_der()
-                    .map(|subject| issuer == subject)
-            })
-            .map_err(|error| decode_failed(name, error))?
-        {
-            let leaf_key = certificate.public_key().map_err(|error| {
-                decode_failed(
-                    name,
-                    format!("leaf certificate has no usable public key: {error}"),
-                )
-            })?;
-            if !certificate
-                .verify(&leaf_key)
-                .map_err(|error| decode_failed(name, error))?
-            {
-                return Err(decode_failed(
-                    name,
-                    "self-signed leaf certificate has an invalid signature",
-                ));
-            }
+        if leaf.issuer() == leaf.subject() && !signature_valid(&leaf, None) {
+            return Err(decode_failed(
+                name,
+                "self-signed leaf certificate has an invalid signature",
+            ));
         }
-
         Ok(Self {
             key,
             certificate,
@@ -498,36 +426,26 @@ impl Identity {
         })
     }
 
-    /// Number of issuer certificates behind the leaf.
     #[cfg(test)]
     pub(crate) fn chain_len(&self) -> usize {
         self.chain.len()
     }
 
-    /// Repackage the identity as a PKCS#12 archive protected by `password`
-    /// (empty when `None`), keeping the complete issuer chain.
     pub(crate) fn to_pkcs12(
         &self,
         password: Option<&str>,
         name: &str,
     ) -> crate::Result<SecretSlice<u8>> {
+        password_supported(password, name)?;
         build_archive(
-            &self.key,
+            self.key.expose_secret(),
             &self.certificate,
             &self.chain,
             password.unwrap_or(""),
         )
-        .map_err(|error| {
-            decode_failed(
-                name,
-                format!("failed to build PKCS#12 archive: {}", short_reason(&error)),
-            )
-        })
+        .map_err(|_| decode_failed(name, "failed to build PKCS#12 archive"))
     }
 
-    /// Produce one registry target from this identity. `password` applies to
-    /// [`Projection::Pkcs12`] only; `format` selects PEM or DER where the
-    /// target offers both and defaults to PEM.
     pub(crate) fn project(
         &self,
         projection: Projection,
@@ -539,92 +457,98 @@ impl Identity {
         match projection {
             Projection::Pkcs12 => self.to_pkcs12(password, name).map(ProjectedValue::Binary),
             Projection::Pkcs8PrivateKey => match format {
-                Format::Der => self
-                    .key
-                    .private_key_to_pkcs8()
-                    .map(protected_binary)
-                    .map(ProjectedValue::Binary)
-                    .map_err(|error| {
-                        decode_failed(name, format!("failed to encode PKCS#8 DER: {error}"))
-                    }),
-                Format::Pem => self
-                    .key
-                    .private_key_to_pem_pkcs8()
-                    .map_err(|error| {
-                        decode_failed(name, format!("failed to encode PKCS#8 PEM: {error}"))
-                    })
-                    .and_then(|bytes| protected_text(bytes, name))
-                    .map(ProjectedValue::Text),
+                Format::Der => Ok(ProjectedValue::Binary(
+                    self.key.expose_secret().to_vec().into(),
+                )),
+                Format::Pem => Ok(ProjectedValue::Text(secret_pem(
+                    "PRIVATE KEY",
+                    self.key.expose_secret(),
+                ))),
             },
             Projection::Certificate => match format {
-                Format::Der => self
-                    .certificate
-                    .to_der()
-                    .map(protected_binary)
-                    .map(ProjectedValue::Binary)
-                    .map_err(|error| {
-                        decode_failed(name, format!("failed to encode certificate DER: {error}"))
-                    }),
-                Format::Pem => self
-                    .certificate
-                    .to_pem()
-                    .map_err(|error| {
-                        decode_failed(name, format!("failed to encode certificate PEM: {error}"))
-                    })
-                    .and_then(|bytes| protected_text(bytes, name))
-                    .map(ProjectedValue::Text),
+                Format::Der => Ok(ProjectedValue::Binary(
+                    self.certificate.as_der().to_vec().into(),
+                )),
+                Format::Pem => Ok(ProjectedValue::Text(secret_pem(
+                    "CERTIFICATE",
+                    self.certificate.as_der(),
+                ))),
             },
-            Projection::CertificateChain => {
-                let mut pem = self.certificate.to_pem().map_err(|error| {
-                    decode_failed(name, format!("failed to encode certificate PEM: {error}"))
-                })?;
-                pem.extend(self.issuer_pem(name)?);
-                protected_text(pem, name).map(ProjectedValue::Text)
-            }
-            Projection::IssuerChain => {
-                protected_text(self.issuer_pem(name)?, name).map(ProjectedValue::Text)
+            Projection::CertificateChain | Projection::IssuerChain => {
+                let mut output = Zeroizing::new(String::new());
+                if projection == Projection::CertificateChain {
+                    output.push_str(
+                        secret_pem("CERTIFICATE", self.certificate.as_der()).expose_secret(),
+                    );
+                }
+                for issuer in &self.chain {
+                    output.push_str(secret_pem("CERTIFICATE", issuer.as_der()).expose_secret());
+                }
+                Ok(ProjectedValue::Text(SecretString::new(
+                    output.as_str().into(),
+                )))
             }
         }
-    }
-
-    fn issuer_pem(&self, name: &str) -> crate::Result<Vec<u8>> {
-        let mut pem = Vec::new();
-        for certificate in &self.chain {
-            pem.extend(certificate.to_pem().map_err(|error| {
-                decode_failed(
-                    name,
-                    format!("failed to encode chain certificate PEM: {error}"),
-                )
-            })?);
-        }
-        Ok(pem)
     }
 }
 
-/// Validate a stored archive that no credential unlocks. Used where the value
-/// is inspected without resolving its dependencies, such as `import`.
 pub(crate) fn validate(bytes: &[u8], name: &str) -> crate::Result<()> {
     Identity::decode(bytes, None, name).map(|_| ())
 }
 
-fn protected_text(bytes: Vec<u8>, name: &str) -> crate::Result<SecretString> {
-    let bytes = Zeroizing::new(bytes);
-    let text = std::str::from_utf8(bytes.as_slice()).map_err(|error| {
-        decode_failed(name, format!("OpenSSL produced invalid PEM text: {error}"))
-    })?;
-    Ok(SecretString::new(text.to_owned().into()))
-}
-
-fn protected_binary(bytes: Vec<u8>) -> SecretSlice<u8> {
-    let bytes = Zeroizing::new(bytes);
-    bytes.as_slice().to_vec().into()
+fn secret_pem(label: &str, der: &[u8]) -> SecretString {
+    let encoded = Zeroizing::new(data_encoding::BASE64.encode(der));
+    let mut output = Zeroizing::new(format!("-----BEGIN {label}-----\n"));
+    for line in encoded.as_bytes().chunks(64) {
+        output.push_str(std::str::from_utf8(line).expect("Base64 is ASCII"));
+        output.push('\n');
+    }
+    output.push_str(&format!("-----END {label}-----\n"));
+    SecretString::new(output.as_str().into())
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    pub(crate) fn key_from_pem(bytes: &[u8]) -> Result<KeyPair, rcgen::Error> {
+        KeyPair::from_pem(std::str::from_utf8(bytes).unwrap())
+    }
+    pub(crate) fn cert_from_pem(bytes: &[u8]) -> Result<Certificate, p12_keystore::error::Error> {
+        let pem = pem::parse(bytes).unwrap();
+        Certificate::from_der(pem.contents())
+    }
+    pub(crate) fn pem_text(certificate: &Certificate) -> String {
+        secret_pem("CERTIFICATE", certificate.as_der())
+            .expose_secret()
+            .to_owned()
+    }
+    pub(crate) fn open_pfx(bytes: &[u8], password: &str) -> (KeyPair, Certificate) {
+        let mut archive = Pkcs12Archive::from_pkcs12(bytes, password).unwrap();
+        assert_eq!(archive.keys.len(), 1);
+        let key = KeyPair::try_from(archive.keys.remove(0).key.as_der()).unwrap();
+        let leaf = archive
+            .certs
+            .into_iter()
+            .find(|bag| {
+                parsed_certificate(bag.cert.as_der(), "fixture")
+                    .unwrap()
+                    .public_key()
+                    .subject_public_key
+                    .data
+                    .as_ref()
+                    == key.public_key_raw()
+            })
+            .unwrap()
+            .cert;
+        (key, leaf)
+    }
+}
+#[cfg(test)]
 mod tests {
+    use super::test_support::*;
     use super::*;
     use crate::config::GenerateOptions;
-    use openssl::x509::X509Name;
     use secrecy::ExposeSecret;
 
     fn config() -> GenerateConfig {
@@ -640,73 +564,60 @@ mod tests {
         })
     }
 
-    fn p256() -> PKey<Private> {
-        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
-        PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap()
+    fn p256() -> KeyPair {
+        KeyPair::generate().unwrap()
     }
 
-    fn name(common_name: &str) -> X509Name {
-        let mut builder = X509NameBuilder::new().unwrap();
-        builder
-            .append_entry_by_nid(Nid::COMMONNAME, common_name)
-            .unwrap();
-        builder.build()
-    }
-
-    /// A certificate for `subject`, signed by `issuer` (self-signed when
-    /// `None`), valid from `not_before` to `not_after` seconds relative to now.
     fn certificate(
         subject: &str,
-        key: &PKey<Private>,
-        issuer: Option<(&PKey<Private>, &X509)>,
+        key: &KeyPair,
+        issuer: Option<(&KeyPair, &Certificate)>,
         ca: bool,
         not_before: i64,
         not_after: i64,
-    ) -> X509 {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        let subject = name(subject);
-        let mut builder = X509::builder().unwrap();
-        builder.set_version(2).unwrap();
-        let mut serial = BigNum::new().unwrap();
-        serial.rand(64, MsbOption::ONE, false).unwrap();
-        builder
-            .set_serial_number(&Asn1Integer::from_bn(&serial).unwrap())
-            .unwrap();
-        builder.set_subject_name(&subject).unwrap();
-        builder
-            .set_issuer_name(issuer.map_or(&subject, |(_, cert)| cert.subject_name()))
-            .unwrap();
-        builder.set_pubkey(key).unwrap();
-        builder
-            .set_not_before(&Asn1Time::from_unix(now + not_before).unwrap())
-            .unwrap();
-        builder
-            .set_not_after(&Asn1Time::from_unix(now + not_after).unwrap())
-            .unwrap();
-        let mut constraints = BasicConstraints::new();
-        if ca {
-            constraints.ca();
-        }
-        builder
-            .append_extension(constraints.critical().build().unwrap())
-            .unwrap();
-        builder
-            .sign(issuer.map_or(key, |(key, _)| key), MessageDigest::sha256())
-            .unwrap();
-        builder.build()
+    ) -> Certificate {
+        let mut params = CertificateParams::default();
+        params.distinguished_name = DistinguishedName::new();
+        params.distinguished_name.push(DnType::CommonName, subject);
+        params.is_ca = if ca {
+            IsCa::Ca(rcgen::BasicConstraints::Unconstrained)
+        } else {
+            IsCa::ExplicitNoCa
+        };
+        let now = OffsetDateTime::now_utc();
+        params.not_before = now + Duration::seconds(not_before);
+        params.not_after = now + Duration::seconds(not_after);
+        let generated = if let Some((issuer_key, issuer_cert)) = issuer {
+            let parsed = parsed_certificate(issuer_cert.as_der(), "fixture").unwrap();
+            let common_name = parsed
+                .subject()
+                .iter_common_name()
+                .next()
+                .unwrap()
+                .as_str()
+                .unwrap();
+            let mut issuer_params = CertificateParams::default();
+            issuer_params.distinguished_name = DistinguishedName::new();
+            issuer_params
+                .distinguished_name
+                .push(DnType::CommonName, common_name);
+            params
+                .signed_by(key, &rcgen::Issuer::new(issuer_params, issuer_key))
+                .unwrap()
+        } else {
+            params.self_signed(key).unwrap()
+        };
+        Certificate::from_der(generated.der()).unwrap()
     }
 
     const DAY: i64 = 86_400;
 
     /// Root -> intermediate -> leaf, all currently valid.
     struct Chain {
-        root: X509,
-        intermediate: X509,
-        leaf_key: PKey<Private>,
-        leaf: X509,
+        root: Certificate,
+        intermediate: Certificate,
+        leaf_key: KeyPair,
+        leaf: Certificate,
     }
 
     fn chain() -> Chain {
@@ -738,8 +649,8 @@ mod tests {
         }
     }
 
-    fn archive(key: &PKey<Private>, leaf: &X509, bags: &[X509], password: &str) -> Vec<u8> {
-        build_archive(key, leaf, bags, password)
+    fn archive(key: &KeyPair, leaf: &Certificate, bags: &[Certificate], password: &str) -> Vec<u8> {
+        build_archive(key.serialized_der(), leaf, bags, password)
             .unwrap()
             .expose_secret()
             .to_vec()
@@ -773,8 +684,13 @@ mod tests {
         else {
             panic!("expected DER bytes")
         };
-        let from_der = PKey::private_key_from_pkcs8(key_der.expose_secret()).unwrap();
-        assert!(from_der.public_eq(&identity.key));
+        let from_der = KeyPair::try_from(key_der.expose_secret()).unwrap();
+        assert_eq!(
+            from_der.public_key_raw(),
+            KeyPair::try_from(identity.key.expose_secret())
+                .unwrap()
+                .public_key_raw()
+        );
 
         let ProjectedValue::Text(certificate) = identity
             .project(Projection::Certificate, None, None, "TLS_CERTIFICATE")
@@ -817,14 +733,13 @@ mod tests {
         }))
         .unwrap();
         let identity = Identity::decode(generated.expose_secret(), None, "TLS_IDENTITY").unwrap();
-        let common_name = identity
-            .certificate
-            .subject_name()
-            .entries_by_nid(Nid::COMMONNAME)
+        let parsed = parsed_certificate(identity.certificate.as_der(), "ID").unwrap();
+        let common_name = parsed
+            .subject()
+            .iter_common_name()
             .next()
             .unwrap()
-            .data()
-            .to_string()
+            .as_str()
             .unwrap();
         assert_eq!(common_name, "SecretSpec generated identity");
     }
@@ -844,10 +759,17 @@ mod tests {
             "PFX",
         )
         .unwrap();
-        assert!(reopened.key.public_eq(&identity.key));
         assert_eq!(
-            reopened.certificate.to_der().unwrap(),
-            identity.certificate.to_der().unwrap()
+            KeyPair::try_from(reopened.key.expose_secret())
+                .unwrap()
+                .public_key_raw(),
+            KeyPair::try_from(identity.key.expose_secret())
+                .unwrap()
+                .public_key_raw()
+        );
+        assert_eq!(
+            reopened.certificate.as_der().to_vec(),
+            identity.certificate.as_der().to_vec()
         );
 
         // Neither a wrong password nor a missing one falls back to guessing.
@@ -889,12 +811,12 @@ mod tests {
         let reopened = Identity::decode(rewrapped.expose_secret(), Some("fresh"), "NEW").unwrap();
         assert_eq!(reopened.chain_len(), 2);
         assert_eq!(
-            reopened.chain[0].to_der().unwrap(),
-            chain.intermediate.to_der().unwrap()
+            reopened.chain[0].as_der().to_vec(),
+            chain.intermediate.as_der().to_vec()
         );
         assert_eq!(
-            reopened.chain[1].to_der().unwrap(),
-            chain.root.to_der().unwrap()
+            reopened.chain[1].as_der().to_vec(),
+            chain.root.as_der().to_vec()
         );
     }
 
@@ -913,11 +835,11 @@ mod tests {
             identity
                 .chain
                 .iter()
-                .map(|cert| cert.to_der().unwrap())
+                .map(|cert| cert.as_der().to_vec())
                 .collect::<Vec<_>>(),
             vec![
-                chain.intermediate.to_der().unwrap(),
-                chain.root.to_der().unwrap()
+                chain.intermediate.as_der().to_vec(),
+                chain.root.as_der().to_vec()
             ]
         );
 
@@ -933,9 +855,9 @@ mod tests {
         else {
             panic!("expected PEM text")
         };
-        let leaf_pem = String::from_utf8(chain.leaf.to_pem().unwrap()).unwrap();
-        let intermediate_pem = String::from_utf8(chain.intermediate.to_pem().unwrap()).unwrap();
-        let root_pem = String::from_utf8(chain.root.to_pem().unwrap()).unwrap();
+        let leaf_pem = pem_text(&chain.leaf);
+        let intermediate_pem = pem_text(&chain.intermediate);
+        let root_pem = pem_text(&chain.root);
         assert_eq!(
             full.expose_secret(),
             format!("{leaf_pem}{intermediate_pem}{root_pem}")
@@ -1012,12 +934,13 @@ mod tests {
             .to_string();
         assert!(error.contains("not valid yet"), "{error}");
 
-        // OpenSSL's own builder refuses a leaf that does not match the key, so
-        // a mismatched archive can only come from another tool; the decoder's
-        // check stays as defense in depth and is exercised by the builder here.
         let other_key = p256();
         let mismatched = certificate("other.example", &other_key, None, false, -DAY, DAY);
-        assert!(build_archive(&key, &mismatched, &[], "").is_err());
+        let bytes = archive(&key, &mismatched, &[], "");
+        let error = Identity::decode(&bytes, None, "ID")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("matches the private key"), "{error}");
     }
 
     #[test]
@@ -1034,7 +957,7 @@ mod tests {
 
         // Seventeen issuer bags exceed the chain cap before any chain walk.
         let mut issuers = Vec::new();
-        let mut parent: Option<(PKey<Private>, X509)> = None;
+        let mut parent: Option<(KeyPair, Certificate)> = None;
         for index in 0..=MAX_CHAIN_CERTIFICATES {
             let key = p256();
             let cert = certificate(
@@ -1065,6 +988,17 @@ mod tests {
     }
 
     #[test]
+    fn local_key_id_identifies_a_leaf_that_reuses_its_issuers_key() {
+        let key = p256();
+        let root = certificate("Shared-key root", &key, None, true, -DAY, DAY);
+        let leaf = certificate("leaf.example", &key, Some((&key, &root)), false, -DAY, DAY);
+        let bytes = archive(&key, &leaf, &[root], "");
+        let identity = Identity::decode(&bytes, None, "ID").unwrap();
+        assert_eq!(identity.certificate.as_der(), leaf.as_der());
+        assert_eq!(identity.chain_len(), 1);
+    }
+
+    #[test]
     fn validates_san_and_validity_bounds() {
         assert!(validate_san("dns:*.example.com").is_ok());
         assert!(validate_san("ip:::1").is_ok());
@@ -1072,5 +1006,117 @@ mod tests {
         assert!(validate_san("dns:bad_name").is_err());
         assert!(parse_valid_days(Some("200d")).is_ok());
         assert!(parse_valid_days(Some("201d")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod interoperability_tests {
+    use super::*;
+
+    #[test]
+    fn imports_openssl_archives_and_preserves_every_supported_key_type() {
+        for (archive, expected_certificate) in [
+            (
+                include_bytes!("../tests/fixtures/x509/p256.pfx").as_slice(),
+                include_bytes!("../tests/fixtures/x509/p256.der").as_slice(),
+            ),
+            (
+                include_bytes!("../tests/fixtures/x509/p384.pfx").as_slice(),
+                include_bytes!("../tests/fixtures/x509/p384.der").as_slice(),
+            ),
+            (
+                include_bytes!("../tests/fixtures/x509/p521.pfx").as_slice(),
+                include_bytes!("../tests/fixtures/x509/p521.der").as_slice(),
+            ),
+            (
+                include_bytes!("../tests/fixtures/x509/rsa.pfx").as_slice(),
+                include_bytes!("../tests/fixtures/x509/rsa.der").as_slice(),
+            ),
+            (
+                include_bytes!("../tests/fixtures/x509/ed25519.pfx").as_slice(),
+                include_bytes!("../tests/fixtures/x509/ed25519.der").as_slice(),
+            ),
+            (
+                include_bytes!("../tests/fixtures/x509/legacy-3des.pfx").as_slice(),
+                include_bytes!("../tests/fixtures/x509/p256.der").as_slice(),
+            ),
+        ] {
+            let identity = Identity::decode(archive, Some("fixture-password"), "ID").unwrap();
+            assert_eq!(identity.certificate.as_der(), expected_certificate);
+            let rewrapped = identity.to_pkcs12(Some("päss漢字"), "PFX").unwrap();
+            let reopened =
+                Identity::decode(rewrapped.expose_secret(), Some("päss漢字"), "PFX").unwrap();
+            assert_eq!(reopened.certificate.as_der(), expected_certificate);
+            assert_eq!(reopened.key.expose_secret(), identity.key.expose_secret());
+        }
+    }
+
+    #[test]
+    fn bmp_passwords_interoperate_and_supplementary_passwords_fail_explicitly() {
+        Identity::decode(
+            include_bytes!("../tests/fixtures/x509/bmp-password.pfx"),
+            Some("päss漢字"),
+            "ID",
+        )
+        .unwrap();
+        let error = Identity::decode(
+            include_bytes!("../tests/fixtures/x509/supplementary-password.pfx"),
+            Some("päss🔑"),
+            "ID",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, SecretSpecError::CredentialInvalid { name, role, .. } if name == "ID" && role == "password")
+        );
+        assert!(error.to_string().contains("supplementary Unicode"));
+        assert!(!error.to_string().contains("päss"));
+        let identity = Identity::decode(
+            include_bytes!("../tests/fixtures/x509/p256.pfx"),
+            Some("fixture-password"),
+            "ID",
+        )
+        .unwrap();
+        assert!(matches!(
+            identity.to_pkcs12(Some("päss🔑"), "PFX"),
+            Err(SecretSpecError::CredentialInvalid { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_multiple_keys_and_invalid_self_signatures_without_filtering_bags() {
+        let archive = Pkcs12Archive::from_pkcs12(
+            include_bytes!("../tests/fixtures/x509/p256.pfx"),
+            "fixture-password",
+        )
+        .unwrap();
+        let key = archive.keys[0].key.clone();
+        let certificate = archive.certs[0].cert.clone();
+        let mut store = KeyStore::new();
+        store.add_entry(
+            "identity",
+            KeyStoreEntry::PrivateKeyChain(PrivateKeyChain::new(
+                "identity",
+                key.clone(),
+                [certificate.clone()],
+            )),
+        );
+        store.add_entry(
+            "extra key",
+            KeyStoreEntry::PrivateKeyChain(PrivateKeyChain::new("extra", key.clone(), [])),
+        );
+        let bytes = store.writer("").write().unwrap();
+        let error = Identity::decode(&bytes, None, "ID")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("exactly one private key"), "{error}");
+
+        let mut corrupt = certificate.as_der().to_vec();
+        *corrupt.last_mut().unwrap() ^= 1;
+        let corrupt = Certificate::from_der(&corrupt).unwrap();
+        let bytes = build_archive(key.as_der(), &corrupt, &[], "").unwrap();
+        let error = Identity::decode(bytes.expose_secret(), None, "ID")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("invalid signature"), "{error}");
     }
 }

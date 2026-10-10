@@ -759,9 +759,9 @@ mod tests {
 
     #[test]
     fn inline_spec_resolves_scoped_x509_conversions_with_hidden_credentials() {
+        use crate::x509_identity::test_support::{cert_from_pem, open_pfx};
         use data_encoding::BASE64;
-        use openssl::pkcs12::Pkcs12;
-        use openssl::x509::X509;
+        use p12_keystore::Pkcs12Archive;
 
         let _env = crate::tests::scrub_resolution_env();
         let dir = tempfile::TempDir::new().unwrap();
@@ -808,22 +808,17 @@ mod tests {
         let secrets = response["response"]["secrets"].as_object().unwrap();
         assert_eq!(secrets.len(), 2);
         let certificate =
-            X509::from_pem(secrets["CERT"]["value"].as_str().unwrap().as_bytes()).unwrap();
+            cert_from_pem(secrets["CERT"]["value"].as_str().unwrap().as_bytes()).unwrap();
         let archive = BASE64
             .decode(secrets["PFX"]["value"].as_str().unwrap().as_bytes())
             .unwrap();
-        let archive = Pkcs12::from_der(&archive).unwrap();
-        assert!(archive.parse2("").is_err());
-        let identity = archive.parse2("archive-password").unwrap();
+        assert!(Pkcs12Archive::from_pkcs12(&archive, "").is_err());
+        let (key, leaf) = open_pfx(&archive, "archive-password");
+        assert_eq!(certificate.as_der(), leaf.as_der());
+        let (_, parsed) = x509_parser::parse_x509_certificate(certificate.as_der()).unwrap();
         assert_eq!(
-            certificate.to_der().unwrap(),
-            identity.cert.unwrap().to_der().unwrap()
-        );
-        assert!(
-            identity
-                .pkey
-                .unwrap()
-                .public_eq(&certificate.public_key().unwrap())
+            key.public_key_raw(),
+            parsed.public_key().subject_public_key.data.as_ref()
         );
     }
 }

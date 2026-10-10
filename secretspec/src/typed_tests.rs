@@ -7,11 +7,11 @@ use crate::report::{Derivation, ResolutionStatus};
 use crate::resolve::ResolvedSource;
 use crate::tests::scrub_resolution_env;
 use crate::x509_identity::Identity;
+use crate::x509_identity::test_support::{cert_from_pem, key_from_pem, open_pfx};
 use crate::{Format, SecretSpecError, Secrets};
 use data_encoding::{BASE64, HEXLOWER};
-use openssl::pkcs12::Pkcs12;
-use openssl::pkey::PKey;
-use openssl::x509::X509;
+use p12_keystore::Pkcs12Archive;
+use rcgen::KeyPair;
 use secrecy::ExposeSecret;
 use std::fs;
 use tempfile::TempDir;
@@ -68,13 +68,6 @@ fn dotenv_spec(body: &str, env: &str) -> (TempDir, Secrets) {
 
 fn null_spec(body: &str) -> Secrets {
     Secrets::new(manifest(body), None, Some("null://".to_string()), None)
-}
-
-fn open_pfx(bytes: &[u8], password: &str) -> openssl::pkcs12::ParsedPkcs12_2 {
-    Pkcs12::from_der(bytes)
-        .unwrap()
-        .parse2(password)
-        .unwrap_or_else(|error| panic!("PFX must open with {password:?}: {error}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -786,8 +779,8 @@ fn generated_identity_derives_every_target_in_one_resolve() {
         .decode(secrets["TLS_IDENTITY"].value.as_deref().unwrap().as_bytes())
         .unwrap();
     let identity = open_pfx(&identity_bytes, "");
-    let key = identity.pkey.as_ref().unwrap();
-    let certificate = identity.cert.as_ref().unwrap();
+    let key = &identity.0;
+    let certificate = &identity.1;
     assert_eq!(secrets["TLS_IDENTITY"].source, ResolvedSource::Generated);
 
     // The protected archive opens only with the generated password and holds
@@ -802,13 +795,10 @@ fn generated_identity_derives_every_target_in_one_resolve() {
     assert!(secrets["TLS_PFX"].as_path);
     let pfx_bytes = fs::read(pfx_path).unwrap();
     let protected = open_pfx(&pfx_bytes, password);
-    assert!(protected.pkey.as_ref().unwrap().public_eq(key));
-    assert_eq!(
-        protected.cert.as_ref().unwrap().to_der().unwrap(),
-        certificate.to_der().unwrap()
-    );
+    assert!(protected.0.public_key_raw() == key.public_key_raw());
+    assert_eq!(protected.1.as_der().to_vec(), certificate.as_der().to_vec());
     assert!(
-        Pkcs12::from_der(&pfx_bytes).unwrap().parse2("").is_err(),
+        Pkcs12Archive::from_pkcs12(&pfx_bytes, "").is_err(),
         "protected archive must not open with an empty password"
     );
     #[cfg(unix)]
@@ -822,25 +812,21 @@ fn generated_identity_derives_every_target_in_one_resolve() {
     let inline_pfx = BASE64
         .decode(secrets["TLS_PFX_B64"].value.as_deref().unwrap().as_bytes())
         .unwrap();
-    assert!(open_pfx(&inline_pfx, password).pkey.unwrap().public_eq(key));
+    assert!(open_pfx(&inline_pfx, password).0.public_key_raw() == key.public_key_raw());
     let hex_pfx = HEXLOWER
         .decode(secrets["TLS_PFX_HEX"].value.as_deref().unwrap().as_bytes())
         .unwrap();
-    assert!(open_pfx(&hex_pfx, "").pkey.unwrap().public_eq(key));
+    assert!(open_pfx(&hex_pfx, "").0.public_key_raw() == key.public_key_raw());
     assert!(!secrets["TLS_PFX_B64"].as_path);
 
     // Key projections.
     let pem_key = secrets["TLS_KEY"].value.as_deref().unwrap();
     assert!(pem_key.starts_with("-----BEGIN PRIVATE KEY-----"));
-    assert!(
-        PKey::private_key_from_pem(pem_key.as_bytes())
-            .unwrap()
-            .public_eq(key)
-    );
+    assert!(key_from_pem(pem_key.as_bytes()).unwrap().public_key_raw() == key.public_key_raw());
     let der_path = secrets["TLS_KEY_DER"].path.as_deref().unwrap();
     assert!(der_path.ends_with(".der"), "{der_path}");
-    let der_key = PKey::private_key_from_pkcs8(&fs::read(der_path).unwrap()).unwrap();
-    assert!(der_key.public_eq(key));
+    let der_key = KeyPair::try_from(fs::read(der_path).unwrap().as_slice()).unwrap();
+    assert!(der_key.public_key_raw() == key.public_key_raw());
     let inline_der = BASE64
         .decode(
             secrets["TLS_KEY_DER_B64"]
@@ -851,9 +837,10 @@ fn generated_identity_derives_every_target_in_one_resolve() {
         )
         .unwrap();
     assert!(
-        PKey::private_key_from_pkcs8(&inline_der)
+        KeyPair::try_from(inline_der.as_slice())
             .unwrap()
-            .public_eq(key)
+            .public_key_raw()
+            == key.public_key_raw()
     );
 
     // Certificate projections.
@@ -861,14 +848,14 @@ fn generated_identity_derives_every_target_in_one_resolve() {
     assert!(cert_path.ends_with(".pem"), "{cert_path}");
     let cert_pem = fs::read(cert_path).unwrap();
     assert_eq!(
-        X509::from_pem(&cert_pem).unwrap().to_der().unwrap(),
-        certificate.to_der().unwrap()
+        cert_from_pem(&cert_pem).unwrap().as_der().to_vec(),
+        certificate.as_der().to_vec()
     );
     let cert_der_path = secrets["TLS_CERTIFICATE_DER"].path.as_deref().unwrap();
     assert!(cert_der_path.ends_with(".der"), "{cert_der_path}");
     assert_eq!(
         fs::read(cert_der_path).unwrap(),
-        certificate.to_der().unwrap()
+        certificate.as_der().to_vec()
     );
     assert_eq!(
         secrets["TLS_CHAIN"].value.as_deref().unwrap().as_bytes(),
@@ -929,14 +916,12 @@ SERVICE_CERTIFICATE = { description = "cert", type = "x509_certificate_chain", f
     assert_eq!(secrets["SERVICE_IDENTITY"].source, ResolvedSource::Provider);
 
     let expected = open_pfx(&archive, "correct horse battery staple");
-    let key =
-        PKey::private_key_from_pem(secrets["SERVICE_KEY"].value.as_deref().unwrap().as_bytes())
-            .unwrap();
-    assert!(expected.pkey.unwrap().public_eq(&key));
+    let key = key_from_pem(secrets["SERVICE_KEY"].value.as_deref().unwrap().as_bytes()).unwrap();
+    assert!(expected.0.public_key_raw() == key.public_key_raw());
     let chain = secrets["SERVICE_CERTIFICATE"].value.as_deref().unwrap();
     assert_eq!(
-        X509::from_pem(chain.as_bytes()).unwrap().to_der().unwrap(),
-        expected.cert.unwrap().to_der().unwrap()
+        cert_from_pem(chain.as_bytes()).unwrap().as_der().to_vec(),
+        expected.1.as_der().to_vec()
     );
     assert_eq!(secrets["SERVICE_KEY"].source, ResolvedSource::Composed);
 }
@@ -1065,6 +1050,7 @@ fn empty_nul_and_oversized_credential_values_are_rejected() {
     let cases = [
         ("", "empty"),
         ("with\u{0}nul", "NUL"),
+        ("with🔑emoji", "supplementary Unicode"),
         (&"x".repeat(1025), "exceeds 1024 bytes"),
     ];
     for (password, expected) in cases {
@@ -1136,7 +1122,7 @@ fn scopes_fetch_hidden_sources_and_credentials_without_exposing_them() {
     let response = spec.resolve().unwrap();
     assert!(response.is_ok());
     assert_eq!(response.secrets.keys().collect::<Vec<_>>(), vec!["TLS_KEY"]);
-    PKey::private_key_from_pem(
+    key_from_pem(
         response.secrets["TLS_KEY"]
             .value
             .as_deref()
@@ -1173,7 +1159,7 @@ PART_A = { description = "a", default = "alpha" }
         )
         .unwrap();
     let opened = open_pfx(&pfx, "alpha-beta");
-    let key = PKey::private_key_from_pem(
+    let key = key_from_pem(
         response.secrets["TLS_KEY"]
             .value
             .as_deref()
@@ -1181,7 +1167,7 @@ PART_A = { description = "a", default = "alpha" }
             .as_bytes(),
     )
     .unwrap();
-    assert!(opened.pkey.unwrap().public_eq(&key));
+    assert!(opened.0.public_key_raw() == key.public_key_raw());
 }
 
 #[test]
@@ -1257,15 +1243,10 @@ NEW_PFX = { description = "rewrapped", type = "pkcs12", from = "LEGACY_IDENTITY"
     let response = spec.resolve().unwrap();
     assert!(response.is_ok(), "{:?}", response.missing_required);
     let rewrapped = fs::read(response.secrets["NEW_PFX"].path.as_deref().unwrap()).unwrap();
-    assert!(
-        Pkcs12::from_der(&rewrapped)
-            .unwrap()
-            .parse2("legacy")
-            .is_err()
-    );
+    assert!(Pkcs12Archive::from_pkcs12(&rewrapped, "legacy").is_err());
     let opened = open_pfx(&rewrapped, "fresh");
     let original = open_pfx(&legacy, "legacy");
-    assert!(opened.pkey.unwrap().public_eq(&original.pkey.unwrap()));
+    assert!(opened.0.public_key_raw() == original.0.public_key_raw());
     assert_ne!(rewrapped, legacy, "a rewrapped archive is re-encrypted");
 }
 
@@ -1536,7 +1517,7 @@ UNRELATED = { description = "must not be resolved" }
         panic!("expected an owned certificate file")
     };
     let path = file.path().to_owned();
-    X509::from_pem(&fs::read(&path).unwrap()).unwrap();
+    cert_from_pem(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(path.extension().unwrap(), "pem");
     drop(file);
     assert!(!path.exists());
@@ -1568,7 +1549,7 @@ CERT = { description = "certificate", type = "x509_certificate", from = "IDENTIT
     );
     config.validate().unwrap();
     let result = Secrets::new(config, None, None, None).resolve().unwrap();
-    X509::from_pem(result.secrets["CERT"].value.as_ref().unwrap().as_bytes()).unwrap();
+    cert_from_pem(result.secrets["CERT"].value.as_ref().unwrap().as_bytes()).unwrap();
 }
 
 #[cfg(feature = "cli")]

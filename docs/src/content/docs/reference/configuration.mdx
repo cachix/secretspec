@@ -1077,7 +1077,8 @@ rather than a security boundary.
   `encoding` (`base64` by default; `base64url` and `hex` are accepted). This
   suits CI systems that take a Base64 PFX in an environment variable. A text
   target is exposed as is, and `encoding` is rejected on it.
-- Stored identities are validated once: the archive must be between 1 byte and
+- Stored identities support RSA, P-256, P-384, P-521, and Ed25519 private keys.
+  They are validated once: the archive must be between 1 byte and
   10 MiB, hold one private key and one matching leaf, carry at most 16 issuer
   certificates that form one unambiguous leaf-to-root chain with verified
   signatures, and be within every validity period. Unordered certificate bags
@@ -1086,7 +1087,10 @@ rather than a security boundary.
   for key and certificate privacy, and HMAC-SHA-256 integrity, each with
   100,000 iterations. RC2, 3DES, and SHA-1 are never emitted.
 - A bound password must be non-empty, contain no NUL, and be at most 1024
-  bytes; an empty value is an error rather than "no password".
+  bytes; an empty value is an error rather than "no password". Passwords
+  currently support characters in the Unicode Basic Multilingual Plane,
+  including accented letters. Supplementary characters, such as most emoji,
+  are rejected for both imported identities and derived PKCS#12 archives.
 
 #### Rules
 

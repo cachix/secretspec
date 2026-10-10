@@ -33,6 +33,26 @@ Before tagging 0.20:
 The detailed compatibility matrix is maintained in
 [`libsecretspec/README.md`](libsecretspec/README.md).
 
+## SecretSpec 0.22 X.509 dependency release
+
+The X.509 backend temporarily pins `p12-keystore` to Git commit
+`baae350b8b5a144a37a3373d592cf91a5b0e9f4b`, which contains the merged
+[bag-preserving archive API](https://github.com/ancwrd1/p12-keystore/pull/13).
+Before publishing 0.22:
+
+1. Replace the `p12-keystore` workspace dependency with the crates.io version
+   containing that API, removing `git` and `rev`, and update `Cargo.lock`.
+2. Run the Rust tests, SDK CI, and `cargo package -p secretspec` with the
+   published dependencies. Package verification cannot use the Git-only API
+   after Cargo rewrites a Git dependency to its registry version.
+3. Keep the documented BMP password restriction until
+   [RustCrypto/formats#2477](https://github.com/RustCrypto/formats/pull/2477)
+   ships and the `pkcs12` dependency resolves to that release. Then add
+   supplementary-Unicode interoperability coverage before lifting the check.
+
+The OpenSSL-generated test archives live in `secretspec/tests/fixtures/x509`.
+They allow the Rust test suite to check imports without compiling OpenSSL.
+
 ## After every release
 
 Once the release artifacts are available, update the `secretspec` package in

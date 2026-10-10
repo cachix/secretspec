@@ -95,7 +95,13 @@ async-trait = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }
 zeroize = { version = "1.8", features = ["derive"] }
 secretspec-ipc = { version = "0.21.1", path = "./secretspec-ipc" }
-openssl = { version = "0.10.81", features = ["vendored"] }
+aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }
+x509-parser = { version = "0.18", features = ["verify-aws"] }
+pem = "3"
+time = "0.3"
+# Replace this Git pin with the crates.io release containing p12-keystore#13.
+p12-keystore = { version = "0.3.2", git = "https://github.com/ancwrd1/p12-keystore", rev = "baae350b8b5a144a37a3373d592cf91a5b0e9f4b" }
 
 # The profile that 'dist' will build with
 [profile.dist]

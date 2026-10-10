@@ -125,7 +125,6 @@ jobs:
       - name: Install NASM (aws-lc-sys assembly)
         uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
       # Build the MSVC CLI before entering the MSYS2 build environment.
-      # Vendored OpenSSL requires a native Windows Perl for an MSVC target.
       - name: Build CLI for the test-suite
         run: cargo build -p secretspec
       # MINGW64 (msvcrt-based) matches the CRT the x86_64-pc-windows-gnu Rust
@@ -135,7 +134,7 @@ jobs:
         with:
           msystem: MINGW64
           path-type: inherit
-          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-binutils make perl
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-binutils
       - name: Install GHC and cabal
         uses: haskell-actions/setup@0f8e8c99d88aeb3fbfd523f1ef2c6f762d10d64d # v2.12.1
         with:
@@ -144,9 +143,6 @@ jobs:
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          # OpenSSL's MinGW build needs Unix paths from MSYS2 Perl. Select it
-          # explicitly because the inherited PATH also contains Windows Perl.
-          export OPENSSL_SRC_PERL="$(cygpath -w /usr/bin/perl.exe)"
           # The archive for GHC's MinGW linker; --crate-type overrides the
           # crate's list so the unused cdylib is never linked. Release like
           # the shipped artifacts: a debug archive carries sectionless .dwo

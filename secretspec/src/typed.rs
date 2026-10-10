@@ -245,6 +245,11 @@ pub(crate) fn validate_credential_value(role: &str, value: &str) -> Result<(), S
             "credential `{role}` exceeds {MAX_CREDENTIAL_BYTES} bytes"
         ));
     }
+    if value.chars().any(|character| u32::from(character) > 0xffff) {
+        return Err(format!(
+            "credential `{role}` contains a supplementary Unicode character; PKCS#12 passwords currently support only the Unicode Basic Multilingual Plane"
+        ));
+    }
     Ok(())
 }
 
@@ -317,6 +322,12 @@ mod tests {
     #[test]
     fn credential_values_are_bounded() {
         assert!(validate_credential_value("password", "correct horse").is_ok());
+        assert!(validate_credential_value("password", "päss漢字").is_ok());
+        assert!(
+            validate_credential_value("password", "päss🔑")
+                .unwrap_err()
+                .contains("supplementary Unicode")
+        );
         let empty = validate_credential_value("password", "").unwrap_err();
         assert!(empty.contains("empty"), "{empty}");
         let nul = validate_credential_value("password", "a\0b").unwrap_err();

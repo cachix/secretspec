@@ -70,6 +70,15 @@ FILE = { as_path = true, encoding = "base64", ref = { item = "file", field = "va
 EXTRACTED = { refs = { vault = { item = "data" } }, extract = { format = "json", pointer = "/token" } }
 PGP = { type = "openpgp_private_key", generate = { user_id = "Test <test@example.com>", algorithm = "rsa", bits = 3072, capabilities = ["sign"] } }
 SSH = { type = "ssh_private_key", generate = { comment = "test" } }
+PASSPHRASE = { type = "passphrase", generate = { words = 8, separator = "." } }
+MNEMONIC = { type = "mnemonic", generate = { algorithm = "bip39", language = "english", words = 24 } }
+WG = { type = "wireguard_private_key", generate = true }
+JWK = { type = "jwk_private_key", generate = { algorithm = "p256", kid = "service" } }
+AGE = { type = "age_identity", generate = true }
+IDENTITY = { type = "x509_identity", generate = { san = ["dns:localhost"], issuer = "self_signed", usages = ["server_auth"], valid_for = "30d" } }
+CERT = { type = "x509_certificate", from = "IDENTITY", format = "der", as_path = true }
+PFX = { type = "pkcs12", from = "IDENTITY", credentials = { password = "TOKEN" } }
+
 [profiles.production.defaults]
 inherit = false
 default = "production"

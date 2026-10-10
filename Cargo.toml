@@ -79,7 +79,12 @@ pgp = { version = "0.20", default-features = false }
 smallvec = "1"
 uuid = { version = "1", features = ["serde", "v4"] }
 data-encoding = "2"
-sha2 = "0.10"
+bip39 = { version = "2.2.2", default-features = false, features = ["zeroize"] }
+bech32 = "0.11"
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+p256 = { version = "0.13", default-features = false, features = ["arithmetic"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+sha2 = { version = "0.10", features = ["oid"] }
 detect-coding-agent = "0.1"
 age = { version = "0.12", features = ["armor", "plugin", "ssh"] }
 ssh-key = { version = "0.6.7", features = ["crypto"] }
@@ -90,6 +95,13 @@ async-trait = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }
 zeroize = { version = "1.8", features = ["derive"] }
 secretspec-ipc = { version = "0.21.1", path = "./secretspec-ipc" }
+aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }
+x509-parser = { version = "0.18", features = ["verify-aws"] }
+pem = "3"
+time = "0.3"
+# 0.4 includes the bag-preserving archive API from p12-keystore#13.
+p12-keystore = "0.4"
 
 # The profile that 'dist' will build with
 [profile.dist]

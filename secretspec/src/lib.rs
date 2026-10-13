@@ -66,12 +66,14 @@ mod secrets;
 mod serve;
 mod spec;
 mod spec_edit;
+pub(crate) mod typed;
 mod validation;
 /// Windows ACL helpers. Public only so the IPC conformance harness can build a
 /// directory the endpoint trust checks accept; not part of the stable API.
 #[cfg(windows)]
 #[doc(hidden)]
 pub mod windows_security;
+mod x509_identity;
 
 pub(crate) mod provider;
 
@@ -112,8 +114,8 @@ pub mod __private {
 
 // Public API exports
 pub use config::{
-    CredentialSource, ExtractFormat, NativeAddress, NativeAddressTemplate, ProviderAlias,
-    ProviderCache, RequireReason, SecretEncoding, SecretExtract,
+    CredentialBinding, CredentialSource, ExtractFormat, NativeAddress, NativeAddressTemplate,
+    ProviderAlias, ProviderCache, RequireReason, SecretEncoding, SecretExtract,
 };
 pub use error::{Result, SecretSpecError};
 pub use native::{
@@ -131,7 +133,8 @@ pub use provider::{
     providers,
 };
 pub use report::{
-    RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus, SecretResolution,
+    Derivation, RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus,
+    SecretResolution,
 };
 pub use resolve::{
     NamedResolution, RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource,
@@ -141,10 +144,14 @@ pub use secrets::ExportFormat;
 pub use secrets::Secrets;
 pub use secretspec_ipc::Revision;
 pub use spec::{
-    Generation, OpenPgpAlgorithm, OpenPgpCapability, PasswordCharset, Profile, Secret, Spec,
-    SpecBuilder, SshKeyAlgorithm,
+    Generation, JwkKeyAlgorithm, MnemonicAlgorithm, MnemonicLanguage, OpenPgpAlgorithm,
+    OpenPgpCapability, PasswordCharset, Profile, Secret, Spec, SpecBuilder, SshKeyAlgorithm,
+    X509Usage,
 };
+pub use typed::Format;
 pub use validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod typed_tests;

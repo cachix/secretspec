@@ -57,6 +57,34 @@ Before publishing 0.22:
 The OpenSSL-generated test archives live in `secretspec/tests/fixtures/x509`.
 They allow the Rust test suite to check imports without compiling OpenSSL.
 
+## Installer gateway
+
+`install.secretspec.dev` uses a Scarf file package to redirect to cargo-dist's
+published installer assets. Configure these routes on that domain:
+
+| Incoming path | Outgoing URL |
+| --- | --- |
+| `/` | `https://github.com/cachix/secretspec/releases/latest/download/secretspec-installer.sh` |
+| `/{version}` | `https://github.com/cachix/secretspec/releases/download/v{version}/secretspec-installer.sh` |
+
+The `version` variable is the release version without a leading `v`, for
+example `0.21.1`. Scarf substitutes it into the GitHub release URL. The selected
+release's installer retains its own platform detection, checksums, updater, and
+receipt. No installer rewriting or cargo-dist workflow customization is needed.
+
+Before publishing documentation for the versioned URL, activate the Scarf
+route and verify both redirects:
+
+```bash
+curl -fsSI https://install.secretspec.dev/
+curl -fsSI https://install.secretspec.dev/0.21.1
+```
+
+The first must still redirect to `releases/latest/download`; the second must
+redirect to `releases/download/v0.21.1/secretspec-installer.sh`. Also verify that
+the selected URL serves the same installer as the direct GitHub release URL.
+A version without an installer asset must fail rather than install latest.
+
 ## After every release
 
 Once the release artifacts are available, update the `secretspec` package in

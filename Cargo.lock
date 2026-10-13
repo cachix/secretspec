@@ -4870,7 +4870,7 @@ checksum = "d211803b9b6b570f68772237e415a029d5a50c65d382910b879fb19d3271f94d"
 [[package]]
 name = "p12-keystore"
 version = "0.4.0"
-source = "git+https://github.com/domenkozar/p12-keystore?rev=981a75e7d4e775f23c7226b6c68dd1a68f301fcf#981a75e7d4e775f23c7226b6c68dd1a68f301fcf"
+source = "git+https://github.com/ancwrd1/p12-keystore?rev=06bdb4da27c8b4696e1af1756a5765f21288787c#06bdb4da27c8b4696e1af1756a5765f21288787c"
 dependencies = [
  "cbc 0.2.1",
  "cms",

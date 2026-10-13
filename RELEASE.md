@@ -36,7 +36,7 @@ The detailed compatibility matrix is maintained in
 ## SecretSpec 0.22 X.509 dependency release
 
 The X.509 backend pins `p12-keystore` to commit
-`981a75e7d4e775f23c7226b6c68dd1a68f301fcf` for the
+`06bdb4da27c8b4696e1af1756a5765f21288787c` from upstream for the merged
 [Unicode certificate-label fix](https://github.com/ancwrd1/p12-keystore/pull/14).
 The published 0.4.0 release already includes the bag-preserving archive API,
 but cannot rewrap certificate subjects containing supplementary Unicode.

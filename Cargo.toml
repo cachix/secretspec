@@ -101,7 +101,7 @@ x509-parser = { version = "0.18", features = ["verify-aws"] }
 pem = "3"
 time = "0.3"
 # Return to crates.io after the Unicode certificate-label fix in p12-keystore#14 ships.
-p12-keystore = { version = "0.4", git = "https://github.com/domenkozar/p12-keystore", rev = "981a75e7d4e775f23c7226b6c68dd1a68f301fcf" }
+p12-keystore = { version = "0.4", git = "https://github.com/ancwrd1/p12-keystore", rev = "06bdb4da27c8b4696e1af1756a5765f21288787c" }
 
 # The profile that 'dist' will build with
 [profile.dist]

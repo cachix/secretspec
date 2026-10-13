@@ -517,7 +517,8 @@ Writing secret 'API_KEY' to keyring (profile: production)
 
 <VersionCompatibility version="0.22" kind="changed">
 Derived secrets declared with `from` appear as `converted from SOURCE` or
-`selected from SOURCE` in `--explain`. Reports check their dependencies without
+`selected from SOURCE` in `--explain`. Source names outside the selected scope
+are redacted. Reports check their dependencies without
 generating identities, converting certificates, or creating temporary files.
 </VersionCompatibility>
 

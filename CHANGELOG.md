@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Imported X.509 identities accept self-issued certificates signed by a distinct
+  issuer with the same name and preserve supplementary Unicode in certificate
+  subjects when exporting PKCS#12. Scoped explanations redact hidden derivation
+  source names.
+
 - X.509 identity generation, validation, and PKCS#12 conversion no longer
   build or require OpenSSL. PKCS#12 passwords currently support the Unicode Basic
   Multilingual Plane; unsupported characters produce a clear credential error.

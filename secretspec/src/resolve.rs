@@ -43,7 +43,7 @@ pub enum ResolvedSource {
     /// for wire compatibility.
     ///
     /// Template composition is available since SecretSpec 0.16; `from`
-    /// derivation is available since SecretSpec 0.21.
+    /// derivation is available since SecretSpec 0.22.
     Composed,
 }
 

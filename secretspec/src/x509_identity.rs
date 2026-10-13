@@ -413,7 +413,10 @@ impl Identity {
             }
             chain.push(remaining.remove(matching[0]));
         }
-        if leaf.issuer() == leaf.subject() && !signature_valid(&leaf, None) {
+        // Matching names make a certificate self-issued, not necessarily
+        // self-signed. A supplied issuer chain has already verified its
+        // signature with the issuer's key, which may differ from the leaf's.
+        if chain.is_empty() && leaf.issuer() == leaf.subject() && !signature_valid(&leaf, None) {
             return Err(decode_failed(
                 name,
                 "self-signed leaf certificate has an invalid signature",
@@ -721,6 +724,66 @@ mod tests {
             panic!("expected PEM text")
         };
         assert!(issuers.expose_secret().is_empty());
+    }
+
+    #[test]
+    fn self_issued_leaf_uses_its_distinct_issuers_key() {
+        let root_key = p256();
+        let root = certificate("same-name", &root_key, None, true, -DAY, 365 * DAY);
+        let leaf_key = p256();
+        let leaf = certificate(
+            "same-name",
+            &leaf_key,
+            Some((&root_key, &root)),
+            false,
+            -DAY,
+            30 * DAY,
+        );
+        let parsed = parsed_certificate(leaf.as_der(), "LEAF").unwrap();
+        assert_eq!(parsed.subject(), parsed.issuer());
+        assert!(!signature_valid(&parsed, None));
+        assert!(signature_valid(
+            &parsed,
+            Some(
+                parsed_certificate(root.as_der(), "ROOT")
+                    .unwrap()
+                    .public_key()
+            )
+        ));
+        let encoded = archive(&leaf_key, &leaf, std::slice::from_ref(&root), "pw");
+        let decoded = Identity::decode(&encoded, Some("pw"), "ID").unwrap();
+        assert_eq!(decoded.certificate.as_der(), leaf.as_der());
+        assert_eq!(decoded.chain_len(), 1);
+        assert_eq!(decoded.chain[0].as_der(), root.as_der());
+    }
+
+    #[test]
+    fn unicode_subjects_survive_rewrapping_in_every_chain_certificate() {
+        let root_key = p256();
+        let root = certificate("Root🚀", &root_key, None, true, -DAY, 365 * DAY);
+        let leaf_key = p256();
+        let leaf = certificate(
+            "Leaf🔑",
+            &leaf_key,
+            Some((&root_key, &root)),
+            false,
+            -DAY,
+            30 * DAY,
+        );
+        let encoded = archive(&leaf_key, &leaf, std::slice::from_ref(&root), "old");
+        let decoded = Identity::decode(&encoded, Some("old"), "ID").unwrap();
+        let rewrapped = decoded.to_pkcs12(Some("new"), "PFX").unwrap();
+        let reopened = Identity::decode(rewrapped.expose_secret(), Some("new"), "PFX").unwrap();
+        assert_eq!(reopened.key.expose_secret(), decoded.key.expose_secret());
+        assert_eq!(reopened.certificate.as_der(), leaf.as_der());
+        assert_eq!(reopened.chain_len(), 1);
+        assert_eq!(reopened.chain[0].as_der(), root.as_der());
+        let bags = Pkcs12Archive::from_pkcs12(rewrapped.expose_secret(), "new").unwrap();
+        assert!(bags.certs.iter().all(|bag| bag.friendly_name.is_none()));
+        assert_eq!(
+            bags.keys[0].local_key_id.as_ref().map(|id| id.as_ref()),
+            bags.certs[0].local_key_id.as_deref(),
+        );
     }
 
     #[test]

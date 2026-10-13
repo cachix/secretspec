@@ -1085,6 +1085,10 @@ rather than a security boundary.
   suits CI systems that take a Base64 PFX in an environment variable. A text
   target is exposed as is, and `encoding` is rejected on it.
 - Stored identities support RSA, P-256, P-384, P-521, and Ed25519 private keys.
+  Certificate subjects may contain supplementary Unicode characters even
+  though passwords currently require BMP characters. A self-issued leaf with
+  matching subject and issuer names may be signed by a distinct issuer key
+  when that issuer's certificate is included in its chain.
   They are validated once: the archive must be between 1 byte and
   10 MiB, hold one private key and one matching leaf, carry at most 16 issuer
   certificates that form one unambiguous leaf-to-root chain with verified

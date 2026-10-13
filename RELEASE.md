@@ -35,19 +35,26 @@ The detailed compatibility matrix is maintained in
 
 ## SecretSpec 0.22 X.509 dependency release
 
-The X.509 backend uses `p12-keystore` 0.4, which contains the merged
-[bag-preserving archive API](https://github.com/ancwrd1/p12-keystore/pull/13).
+The X.509 backend pins `p12-keystore` to commit
+`981a75e7d4e775f23c7226b6c68dd1a68f301fcf` for the
+[Unicode certificate-label fix](https://github.com/ancwrd1/p12-keystore/pull/14).
+The published 0.4.0 release already includes the bag-preserving archive API,
+but cannot rewrap certificate subjects containing supplementary Unicode.
 Before publishing 0.22:
 
-1. Align the workspace `secretspec-ipc` dependency with the release version
+1. Replace the Git pin with the crates.io version containing the certificate-label
+   fix and update `Cargo.lock`. Set that version as the minimum requirement.
+   Cargo replaces Git dependencies with their registry versions when packaging;
+   leaving the 0.4.0 requirement would silently lose this fix in the published crate.
+2. Align the workspace `secretspec-ipc` dependency with the release version
    and publish that crate before `secretspec`, as `publish.yml` already does.
    Current `main` uses `secretspec_ipc::MAX_JSON_INTEGER`, which the published
    0.21.1 IPC crate does not provide. Package verification against that older
-   registry crate fails even though the X.509 dependencies are available.
-2. Run the Rust tests, SDK CI, and `cargo package -p secretspec` with the
-   published dependencies. Verify the packaged manifest resolves the registry
-   archive API, without a Git override.
-3. Keep the documented BMP password restriction until
+   registry crate fails even though the archive API is available.
+3. Run the Rust tests, SDK CI, Unicode-subject interoperability checks, and
+   `cargo package -p secretspec` with the published dependencies. Verify the
+   packaged manifest resolves the fixed registry version without a Git override.
+4. Keep the documented BMP password restriction until
    [RustCrypto/formats#2477](https://github.com/RustCrypto/formats/pull/2477)
    ships and the `pkcs12` dependency resolves to that release. Then add
    supplementary-Unicode interoperability coverage before lifting the check.

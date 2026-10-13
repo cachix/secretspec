@@ -1,5 +1,5 @@
 //! End-to-end coverage for typed, converted, and password protected secrets
-//! (0.21+): `type`, `format`, `from`, and `credentials` across configuration
+//! (0.22+): `type`, `format`, `from`, and `credentials` across configuration
 //! validation, resolution, scopes, reports, and the read-only lifecycle.
 
 use crate::config::{Config, GenerateConfig, GenerateOptions};
@@ -1603,5 +1603,54 @@ CERT = {{ description = "cert", type = "x509_certificate", from = "ID" }}
             refresh_at_unix_ms, password_refresh,
             "{name} must preserve its hidden password refresh deadline"
         );
+    }
+}
+
+#[test]
+fn scoped_reports_redact_hidden_conversion_and_selection_sources() {
+    let _env = scrub_resolution_env();
+    let config = manifest(
+        r#"
+[profiles.default]
+HIDDEN_ID = { description = "identity", type = "x509_identity", generate = { san = ["dns:localhost"] } }
+CERT = { description = "certificate", type = "x509_certificate", from = "HIDDEN_ID" }
+HIDDEN_DOCUMENT = { description = "document", default = '{"field":"value"}' }
+FIELD = { description = "field", from = "HIDDEN_DOCUMENT", extract = { format = "json", pointer = "/field" } }
+[scopes.visible]
+secrets = ["CERT", "FIELD"]
+[scopes.all]
+secrets = ["HIDDEN_ID", "CERT", "HIDDEN_DOCUMENT", "FIELD"]
+"#,
+    );
+    config.validate().unwrap();
+    for scope in [Some("visible"), Some("all"), None] {
+        let mut secrets = Secrets::new(config.clone(), None, Some("null://".to_string()), None);
+        if let Some(scope) = scope {
+            secrets.set_scope(scope);
+        }
+        let report = secrets.report().unwrap();
+        let explanation = report.to_explain_string();
+        if scope == Some("visible") {
+            assert!(!explanation.contains("HIDDEN_ID"), "{explanation}");
+            assert!(!explanation.contains("HIDDEN_DOCUMENT"), "{explanation}");
+            assert_eq!(report.secrets.len(), 2);
+            assert!(explanation.contains(&format!(
+                "converted from {}",
+                crate::secrets::HIDDEN_SECRET_LABEL
+            )));
+            assert!(explanation.contains(&format!(
+                "selected from {}",
+                crate::secrets::HIDDEN_SECRET_LABEL
+            )));
+        } else {
+            assert!(
+                explanation.contains("converted from HIDDEN_ID"),
+                "{explanation}"
+            );
+            assert!(
+                explanation.contains("selected from HIDDEN_DOCUMENT"),
+                "{explanation}"
+            );
+        }
     }
 }

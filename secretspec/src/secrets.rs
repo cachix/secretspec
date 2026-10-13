@@ -2034,6 +2034,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             let derivation = if planned.is_composed() {
                 Derivation::Composed
             } else if let Some(source) = planned.from() {
+                let source = Secrets::diagnostic_secret_name(source, self.output_filter);
                 if planned.extract().is_some() {
                     Derivation::SelectedFrom(source.to_string())
                 } else {

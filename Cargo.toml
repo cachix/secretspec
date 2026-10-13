@@ -100,8 +100,8 @@ rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "
 x509-parser = { version = "0.18", features = ["verify-aws"] }
 pem = "3"
 time = "0.3"
-# Return to crates.io after the Unicode certificate-label fix in p12-keystore#14 ships.
-p12-keystore = { version = "0.4", git = "https://github.com/ancwrd1/p12-keystore", rev = "06bdb4da27c8b4696e1af1756a5765f21288787c" }
+# 0.4.1 preserves Unicode certificate subjects when rewrapping archives.
+p12-keystore = "0.4.1"
 
 # The profile that 'dist' will build with
 [profile.dist]

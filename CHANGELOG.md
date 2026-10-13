@@ -29,7 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Imported X.509 identities accept self-issued certificates signed by a distinct
   issuer with the same name and preserve supplementary Unicode in certificate
-  subjects for both leaf and issuer certificates when exporting PKCS#12.
+  subjects for both leaf and issuer certificates when exporting PKCS#12,
+  including in builds using published dependencies.
   Scoped explanations redact hidden derivation
   source names.
 

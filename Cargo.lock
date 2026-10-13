@@ -4869,8 +4869,9 @@ checksum = "d211803b9b6b570f68772237e415a029d5a50c65d382910b879fb19d3271f94d"
 
 [[package]]
 name = "p12-keystore"
-version = "0.4.0"
-source = "git+https://github.com/ancwrd1/p12-keystore?rev=06bdb4da27c8b4696e1af1756a5765f21288787c#06bdb4da27c8b4696e1af1756a5765f21288787c"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c2ed4fa0ec7ec58b657d4184680c57da9e203e97771d29a566028869a5193e0"
 dependencies = [
  "cbc 0.2.1",
  "cms",

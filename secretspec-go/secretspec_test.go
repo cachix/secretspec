@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -194,6 +195,80 @@ func TestMissingRequired(t *testing.T) {
 	}
 	if len(missing.Missing) != 1 || missing.Missing[0] != "DATABASE_URL" {
 		t.Fatalf("missing = %v", missing.Missing)
+	}
+}
+
+func TestReadOnly(t *testing.T) {
+	manifestPath, provider := writeProject(t, "TOKEN=stored-token\n")
+	if err := os.WriteFile(manifestPath, []byte(`
+[project]
+name = "go-read-only"
+revision = "1.0"
+[profiles.default]
+TOKEN = { description = "token", type = "password", generate = true }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	builder := New().WithPath(manifestPath).WithProvider(provider).
+		WithReadOnly(true).WithNoFiles(true).WithReason("go read-only test")
+	resolved, err := builder.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resolved.Close()
+	if resolved.Secrets["TOKEN"].Get() != "stored-token" {
+		t.Fatal("did not read the stored value")
+	}
+	envPath := filepath.Join(filepath.Dir(manifestPath), ".env")
+	if err := os.WriteFile(envPath, []byte("# unchanged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := builder.Report()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Secrets) != 1 || report.Secrets[0].Status != "missing_required" {
+		t.Fatalf("expected missing required secret in report, got %+v", report.Secrets)
+	}
+	// Report must not leave its mode on a reused builder.
+	_, err = builder.Load()
+	var native *Error
+	if !errors.As(err, &native) || native.Kind != "produced_value_write_refused" {
+		t.Fatalf("expected produced_value_write_refused, got %v", err)
+	}
+	content, err := os.ReadFile(envPath)
+	if err != nil || string(content) != "# unchanged\n" {
+		t.Fatalf("store changed after refusal: %q, %v", content, err)
+	}
+	// Clearing both restrictions restores the writable legacy request path.
+	generated, err := builder.WithReadOnly(false).WithNoFiles(false).Load()
+	if err != nil {
+		t.Fatalf("disabled restrictions should allow generation: %v", err)
+	}
+	defer generated.Close()
+	if generated.Secrets["TOKEN"].Get() == "" {
+		t.Fatal("expected a generated token")
+	}
+	content, err = os.ReadFile(envPath)
+	if err != nil || !strings.Contains(string(content), "TOKEN=") {
+		t.Fatalf("generated token was not stored: %v", err)
+	}
+}
+
+func TestNoFilesWithInlineSpec(t *testing.T) {
+	spec := map[string]any{
+		"project": map[string]any{"name": "go-no-files"},
+		"profiles": map[string]any{"default": map[string]any{
+			"secrets": map[string]any{
+				"FILE": map[string]any{"description": "file", "as_path": true, "default": "contents"},
+			},
+		}},
+	}
+	_, err := New().WithInlineSpec(spec, t.TempDir()).WithProvider("null://").
+		WithNoFiles(true).WithReason("go no files test").Load()
+	var native *Error
+	if !errors.As(err, &native) || native.Kind != "file_value_refused" {
+		t.Fatalf("expected file_value_refused, got %v", err)
 	}
 }
 

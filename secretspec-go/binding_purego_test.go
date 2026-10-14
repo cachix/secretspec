@@ -3,9 +3,37 @@
 package secretspec
 
 import (
+	"errors"
 	"runtime"
 	"testing"
 )
+
+func TestRestrictionsDoNotFallBackToLegacyResolver(t *testing.T) {
+	if err := ensureCallLoaded(); err != nil {
+		t.Fatal(err)
+	}
+	previousErr, previousResolve := callErr, cResolve
+	t.Cleanup(func() { callErr, cResolve = previousErr, previousResolve })
+	callErr = &Error{Kind: "capability", Message: "missing secretspec_call"}
+	cResolve = func(string) uintptr {
+		t.Fatal("restricted request used the legacy resolver")
+		return 0
+	}
+	for _, builder := range []*Builder{New().WithReadOnly(true), New().WithNoFiles(true)} {
+		_, err := builder.Load()
+		if !errors.Is(err, callErr) {
+			t.Fatalf("expected capability error, got %v", err)
+		}
+	}
+	cResolve = previousResolve
+	manifestPath, provider := writeProject(t, "DATABASE_URL=postgres://db\n")
+	resolved, err := New().WithPath(manifestPath).WithProvider(provider).
+		WithReadOnly(false).WithNoFiles(false).WithReason("compatibility test").Load()
+	if err != nil {
+		t.Fatalf("disabled restrictions must still work without secretspec_call: %v", err)
+	}
+	defer resolved.Close()
+}
 
 func TestLibraryNamesPreferLibsecretspecAndRetainPre020Fallback(t *testing.T) {
 	names := libNames()

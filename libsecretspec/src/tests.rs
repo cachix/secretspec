@@ -176,6 +176,196 @@ fn call_rejects_unknown_versions_operations_and_source_combinations() {
 }
 
 #[test]
+fn call_rejects_unknown_options_before_loading_the_manifest() {
+    let request = serde_json::json!({
+        "request_version": 1, "operation": "resolve",
+        "source": { "kind": "path", "path": "nonexistent.toml" },
+        "options": { "unknown_restriction": true }
+    });
+    let result = call(&request.to_string());
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["error"]["kind"], "invalid_request");
+}
+
+#[test]
+fn call_read_only_reads_stored_values_but_refuses_generated_writes() {
+    let dir = TempDir::new().unwrap();
+    let (path, provider) = write_project(
+        &dir,
+        r#"
+[project]
+name = "read-only-ffi"
+revision = "1.0"
+
+[profiles.default]
+TOKEN = { description = "token", type = "password", generate = true }
+"#,
+        "TOKEN=already-stored\n",
+    );
+    let request = serde_json::json!({
+        "request_version": 1, "operation": "resolve",
+        "source": { "kind": "path", "path": path },
+        "options": { "provider": provider, "read_only": true, "reason": "read-only test" }
+    });
+    let stored = call(&request.to_string());
+    assert_eq!(stored["ok"], true, "{stored}");
+    assert_eq!(
+        stored["response"]["secrets"]["TOKEN"]["value"],
+        "already-stored"
+    );
+    let env_path = dir.path().join(".env");
+    assert_eq!(
+        fs::read_to_string(&env_path).unwrap(),
+        "TOKEN=already-stored\n"
+    );
+
+    fs::write(&env_path, "# preserve this file\n").unwrap();
+    let missing = call(&request.to_string());
+    assert_eq!(missing["ok"], false, "{missing}");
+    assert_eq!(missing["error"]["kind"], "produced_value_write_refused");
+    assert_eq!(
+        fs::read_to_string(&env_path).unwrap(),
+        "# preserve this file\n"
+    );
+
+    // The same declaration can generate and save when the restriction is off.
+    let mut writable = request;
+    writable["options"]["read_only"] = false.into();
+    let generated = call(&writable.to_string());
+    assert_eq!(generated["ok"], true, "{generated}");
+    assert!(fs::read_to_string(&env_path).unwrap().contains("TOKEN="));
+}
+
+#[cfg(unix)]
+#[test]
+fn call_read_only_rejects_persisted_command_before_generation() {
+    let dir = TempDir::new().unwrap();
+    let marker = dir.path().join("generated");
+    let command = format!(
+        "printf ran > '{}'; printf generated-value",
+        marker.display().to_string().replace('\'', "'\\''")
+    );
+    let (path, provider) = write_project(
+        &dir,
+        &format!(
+            r#"
+[project]
+name = "read-only-command-ffi"
+revision = "1.0"
+
+[profiles.default.TOKEN]
+description = "token"
+type = "command"
+[profiles.default.TOKEN.generate]
+command = {}
+
+[profiles.default.COMPOSED]
+description = "composed"
+composed = "prefix:${{TOKEN}}"
+
+[scopes.composed]
+secrets = ["COMPOSED"]
+"#,
+            serde_json::to_string(&command).unwrap()
+        ),
+        "# unchanged\n",
+    );
+    let mut request = serde_json::json!({
+        "request_version": 1, "operation": "resolve",
+        "source": { "kind": "path", "path": path },
+        "options": { "provider": provider, "read_only": true, "reason": "read-only command test" }
+    });
+    for scope in [None, Some("composed")] {
+        request["options"]["scope"] = scope.into();
+        let refused = call(&request.to_string());
+        assert_eq!(refused["ok"], false, "{refused}");
+        assert_eq!(
+            refused["error"]["kind"], "produced_value_write_refused",
+            "{refused}"
+        );
+        assert_eq!(
+            refused["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("TOKEN"),
+            scope.is_none(),
+            "{refused}"
+        );
+        assert!(!marker.exists(), "the refused generator ran");
+    }
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".env")).unwrap(),
+        "# unchanged\n"
+    );
+
+    // The same generator remains allowed when its value is never stored.
+    request["options"]["provider"] = "null://".into();
+    request["options"]["scope"] = serde_json::Value::Null;
+    let generated = call(&request.to_string());
+    assert_eq!(generated["ok"], true, "{generated}");
+    assert_eq!(
+        generated["response"]["secrets"]["TOKEN"]["value"],
+        "generated-value"
+    );
+    assert_eq!(fs::read_to_string(marker).unwrap(), "ran");
+}
+
+#[test]
+fn call_no_files_checks_the_selected_dependency_closure_before_resolution() {
+    let dir = TempDir::new().unwrap();
+    let (path, provider) = write_project(
+        &dir,
+        r#"
+[project]
+name = "no-files-ffi"
+revision = "1.0"
+
+[profiles.default]
+FILE = { description = "file", type = "password", generate = true, as_path = true }
+PLAIN = { description = "plain", default = "inline-value" }
+COMPOSED = { description = "composed", composed = "prefix:${FILE}" }
+
+[scopes.plain]
+secrets = ["PLAIN"]
+[scopes.composed]
+secrets = ["COMPOSED"]
+"#,
+        "# unchanged\n",
+    );
+    let mut request = serde_json::json!({
+        "request_version": 1, "operation": "resolve",
+        "source": { "kind": "path", "path": path },
+        "options": { "provider": provider, "no_files": true, "reason": "no files test" }
+    });
+    for scope in [None, Some("composed")] {
+        request["options"]["scope"] = scope.into();
+        let result = call(&request.to_string());
+        assert_eq!(result["ok"], false, "{result}");
+        assert_eq!(result["error"]["kind"], "file_value_refused", "{result}");
+        assert_eq!(
+            result["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("FILE"),
+            scope.is_none(),
+            "{result}"
+        );
+        // Even generation preceding file materialization must not have run.
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".env")).unwrap(),
+            "# unchanged\n"
+        );
+    }
+    request["options"]["scope"] = "plain".into();
+    let plain = call(&request.to_string());
+    assert_eq!(plain["ok"], true, "{plain}");
+    assert_eq!(
+        plain["response"]["secrets"]["PLAIN"]["value"],
+        "inline-value"
+    );
+}
+
+#[test]
 fn call_rejects_unknown_inline_declaration_fields() {
     let request = serde_json::json!({
         "request_version": 1,

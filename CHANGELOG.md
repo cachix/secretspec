@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Pin static binary installations using a version in the installer URL, such
+  as `https://install.secretspec.dev/v0.21.1`. The URL without a version still
+  installs the latest release.
+
 - Generate passphrases, BIP-39 mnemonics, WireGuard private keys, signing JWKs,
   age identities, and self-signed P-256 X.509 identities. Derive keys,
   certificates, chains, and password-protected PKCS#12 archives from a declared

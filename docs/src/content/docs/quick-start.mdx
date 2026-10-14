@@ -19,8 +19,27 @@ $ curl -sSL https://install.secretspec.dev | sh
 SecretSpec 0.20+ provides static musl CLI binaries for x64 and arm64 Linux, so
 the installer works directly on Alpine without a glibc compatibility layer.
 
+### Install a specific version
+
+Put the release version in the installer URL to pin an installation:
+
+```bash
+$ curl -fsSL https://install.secretspec.dev/v0.21.1 | sh
+```
+
+Include the leading `v`. The URL redirects to that release's own
+installer, so it also works for older releases that include an installer asset.
+The URL without a version still installs the latest release. A missing release
+returns an error instead of falling back to the latest release.
+
+You can also fetch the release installer directly from GitHub:
+
+```bash
+$ curl -fsSL https://github.com/cachix/secretspec/releases/download/v0.21.1/secretspec-installer.sh | sh
+```
+
 The static installer also installs `secretspec-update`. Run it to install the
-latest SecretSpec release:
+latest SecretSpec release, even if the original installation was pinned:
 
 ```bash
 $ secretspec-update

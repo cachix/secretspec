@@ -65,10 +65,15 @@ published installer assets. Configure these routes on that domain:
 | Incoming path | Outgoing URL |
 | --- | --- |
 | `/` | `https://github.com/cachix/secretspec/releases/latest/download/secretspec-installer.sh` |
-| `/{version}` | `https://github.com/cachix/secretspec/releases/download/v{version}/secretspec-installer.sh` |
+| `/v{version}` | `https://github.com/cachix/secretspec/releases/download/v{version}/secretspec-installer.sh` |
 
 The `version` variable is the release version without a leading `v`, for
-example `0.21.1`. Scarf substitutes it into the GitHub release URL. The selected
+example `0.21.1`. The incoming pattern supplies the literal `v` prefix, so the
+public URL is `/v0.21.1`. Replace the old `/{version}` pattern rather than keeping
+both: the old pattern can match `/` with an empty version and interfere with the
+latest-release redirect. The literal prefix prevents that overlap.
+
+Scarf substitutes the captured version into the GitHub release URL. The selected
 release's installer retains its own platform detection, checksums, updater, and
 receipt. No installer rewriting or cargo-dist workflow customization is needed.
 
@@ -77,7 +82,7 @@ route and verify both redirects:
 
 ```bash
 curl -fsSI https://install.secretspec.dev/
-curl -fsSI https://install.secretspec.dev/0.21.1
+curl -fsSI https://install.secretspec.dev/v0.21.1
 ```
 
 The first must still redirect to `releases/latest/download`; the second must

@@ -24,10 +24,10 @@ the installer works directly on Alpine without a glibc compatibility layer.
 Put the release version in the installer URL to pin an installation:
 
 ```bash
-$ curl -fsSL https://install.secretspec.dev/0.21.1 | sh
+$ curl -fsSL https://install.secretspec.dev/v0.21.1 | sh
 ```
 
-Use the version without a leading `v`. The URL redirects to that release's own
+Include the leading `v`. The URL redirects to that release's own
 installer, so it also works for older releases that include an installer asset.
 The URL without a version still installs the latest release. A missing release
 returns an error instead of falling back to the latest release.

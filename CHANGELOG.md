@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- IPC writes of X.509 identities decode their declared text encoding before
+  storage, so protected and unprotected archives round-trip without corruption.
+
 - Imported X.509 identities accept self-issued certificates signed by a distinct
   issuer with the same name and preserve supplementary Unicode in certificate
   subjects for both leaf and issuer certificates when exporting PKCS#12,

@@ -7201,7 +7201,9 @@ impl Secrets {
     ) -> Result<StoredSecret> {
         with_ipc_audit_purpose(purpose, || {
             self.require_ipc_surface(AuditAction::Set, name)?;
-            self.store_secret_with_input(name, |_| Ok(SecretBytes::from_utf8(value)), false)
+            // IPC carries text, so typed binary values use their declared
+            // encoding just as they do in `set_text` and inline reads.
+            self.store_secret_with_input(name, |_| Ok(SecretBytes::from_utf8(value)), true)
         })
     }
 

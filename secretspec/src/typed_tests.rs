@@ -1492,6 +1492,67 @@ TEXT = { description = "encoded input", type = "x509_identity", as_path = true }
 }
 
 #[cfg(feature = "cli")]
+fn assert_ipc_identity_text_write_round_trip(body: &str, bytes: &[u8]) {
+    use crate::secrets::IpcAuditPurpose;
+
+    let encoded = BASE64.encode(bytes);
+    let (dir, spec) = dotenv_spec(body, &format!("ID={encoded}\n"));
+    let purpose = || IpcAuditPurpose {
+        consumer: "typed-test".into(),
+        operation: "set".into(),
+        host: None,
+        path: None,
+    };
+
+    // Text input may carry a trailing newline, but the stored representation
+    // must remain canonical and must never gain a second layer of encoding.
+    spec.store_named_for_ipc("ID", format!("{encoded}\r\n"), purpose())
+        .unwrap();
+    let response = spec.resolve().unwrap();
+    assert!(response.is_ok());
+    let value = response.secrets["ID"].value.as_deref().unwrap();
+    assert_eq!(value, encoded);
+    assert_eq!(BASE64.decode(value.as_bytes()).unwrap(), bytes);
+
+    // Invalid encoded text must fail before overwriting the valid archive,
+    // including when a password binding defers archive validation to reads.
+    let stored = fs::read(dir.path().join(".env")).unwrap();
+    let error = spec
+        .store_named_for_ipc("ID", "invalid%".to_string(), purpose())
+        .err()
+        .unwrap();
+    assert!(matches!(error, SecretSpecError::DecodeFailed { .. }));
+    assert_eq!(fs::read(dir.path().join(".env")).unwrap(), stored);
+}
+
+#[cfg(feature = "cli")]
+#[test]
+fn ipc_identity_text_writes_round_trip_unprotected_archives() {
+    let _env = scrub_resolution_env();
+    assert_ipc_identity_text_write_round_trip(
+        r#"
+[profiles.default]
+ID = { description = "identity", type = "x509_identity" }
+"#,
+        &generated_identity(),
+    );
+}
+
+#[cfg(feature = "cli")]
+#[test]
+fn ipc_identity_text_writes_round_trip_protected_archives() {
+    let _env = scrub_resolution_env();
+    assert_ipc_identity_text_write_round_trip(
+        r#"
+[profiles.default]
+ID = { description = "identity", type = "x509_identity", credentials = { password = "PW" } }
+PW = { description = "password", default = "fixture-password" }
+"#,
+        include_bytes!("../tests/fixtures/x509/p256.pfx"),
+    );
+}
+
+#[cfg(feature = "cli")]
 #[test]
 fn ipc_derived_identity_files_are_leased_and_persistent_generation_is_read_only() {
     use crate::secrets::{IpcAuditPurpose, OwnedNamedResolution};

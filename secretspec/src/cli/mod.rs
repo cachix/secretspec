@@ -420,6 +420,9 @@ enum Commands {
         /// Provider backend to import from (secrets will be imported to the default provider)
         #[arg(add = clap_complete::ArgValueCompleter::new(completion::providers))]
         from_provider: String,
+        /// Profile to import secrets into (0.22+)
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
+        profile: Option<String>,
         /// Delete a source value only after the destination contains the same value (0.18+)
         #[arg(long)]
         delete_source: bool,
@@ -1813,9 +1816,13 @@ pub fn main() -> Result<()> {
         // Import secrets from one provider to another
         Commands::Import {
             from_provider,
+            profile,
             delete_source,
         } => {
-            let app = load_secrets(&cli.file, &cli.reason, &caller)?;
+            let mut app = load_secrets(&cli.file, &cli.reason, &caller)?;
+            if let Some(profile) = profile {
+                app.set_profile(profile);
+            }
             if delete_source {
                 app.import_with_delete_source(&from_provider)
                     .into_diagnostic()
@@ -2864,6 +2871,7 @@ API_KEY = { description = "Existing" }
             Commands::Import {
                 from_provider,
                 delete_source: true,
+                ..
             } if from_provider == "dotenv://.env"
         ));
     }

@@ -57,6 +57,10 @@ struct Options {
     #[serde(default)]
     no_values: bool,
     #[serde(default)]
+    read_only: bool,
+    #[serde(default)]
+    no_files: bool,
+    #[serde(default)]
     mode: Mode,
 }
 
@@ -442,6 +446,12 @@ enum Source {
 }
 
 fn apply_options(mut app: Secrets, options: Options) -> serde_json::Value {
+    if options.read_only {
+        app.refuse_produced_writes();
+    }
+    if options.no_files {
+        app.refuse_file_values();
+    }
     if let Some(provider) = options.provider {
         app.set_provider(provider);
     }

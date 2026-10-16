@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Read existing manifests from Terraform using `secretspec_secrets` ephemeral
+  resources or data sources. Both refuse generated-value writeback and
+  `as_path` declarations. Go SDK callers can select these restrictions with
+  `WithReadOnly` and `WithNoFiles`; older native libraries fail without
+  resolving the request. Read-only resolution rejects generation that requires
+  storage before running the generator, including in `serve --read-only`.
+
 - Pin static binary installations using a version in the installer URL, such
   as `https://install.secretspec.dev/v0.21.1`. The URL without a version still
   installs the latest release.

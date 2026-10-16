@@ -1811,7 +1811,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                                 if materialize.values() {
                                     generated = true;
                                     let generated_value = manager
-                                        .try_generate_secret(planned, profile)?
+                                        .try_generate_secret(planned, profile, diagnostic_name)?
                                         .expect("compiled Generate policy has a generator");
                                     self.insert_generated(
                                         planned,
@@ -2630,6 +2630,8 @@ pub struct Secrets {
     /// operator withheld the mutation methods; see
     /// [`Secrets::refuse_produced_writes`].
     refuse_produced_writes: bool,
+    /// Reject file-valued declarations, including hidden dependencies.
+    refuse_file_values: bool,
 }
 
 /// Credential-free description of one provider write, computed after routing
@@ -2883,6 +2885,7 @@ impl Secrets {
             provider_credential_prompt: None,
             progress: true,
             refuse_produced_writes: false,
+            refuse_file_values: false,
         }
     }
 
@@ -3018,6 +3021,7 @@ impl Secrets {
             provider_credential_prompt: None,
             progress: true,
             refuse_produced_writes: false,
+            refuse_file_values: false,
         })
     }
 
@@ -3077,9 +3081,13 @@ impl Secrets {
     /// means those writes too, so this closes the paths that would otherwise
     /// let a read reach the store. It does not touch SecretSpec's own cache:
     /// populating a derived copy is not a change to the secret.
-    #[cfg(feature = "cli")]
     pub(crate) fn refuse_produced_writes(&mut self) {
         self.refuse_produced_writes = true;
+    }
+
+    /// Refuse resolutions requiring `as_path` files before any are created.
+    pub(crate) fn refuse_file_values(&mut self) {
+        self.refuse_file_values = true;
     }
 
     /// Rejects a produced value that would have to be stored, before it is
@@ -6674,6 +6682,7 @@ impl Secrets {
         &self,
         planned: &PlannedSecret,
         profile_name: &str,
+        diagnostic_name: &str,
     ) -> Result<Option<GeneratedValue>> {
         let name = planned.name.as_str();
         let gen_config = match &planned.config().generate {
@@ -6696,12 +6705,6 @@ impl Secrets {
             }
         };
 
-        let value = if secret_type == "x509_identity" {
-            GeneratedValue::Binary(crate::x509_identity::generate(gen_config)?)
-        } else {
-            GeneratedValue::Text(crate::generator::generate(secret_type, gen_config)?)
-        };
-
         // Store the generated value at the plan's address, through the plan's
         // write route: the same decisions every other write path executes.
         let route = planned
@@ -6716,8 +6719,22 @@ impl Secrets {
         )?;
         let addr = address.as_address();
         let backend = self.write_provider_for_route(route, Some(profile_name))?;
+        let persistence = backend.generated_value_persistence();
 
-        if backend.generated_value_persistence() == ProducedValuePersistence::Ephemeral {
+        // Reject a persisting resolution before generation: a command generator
+        // can itself have side effects. Ephemeral values never touch a store,
+        // so the caller's write restriction must not prevent their generation.
+        if persistence == ProducedValuePersistence::Persist {
+            self.ensure_produced_write_allowed(diagnostic_name)?;
+        }
+
+        let value = if secret_type == "x509_identity" {
+            GeneratedValue::Binary(crate::x509_identity::generate(gen_config)?)
+        } else {
+            GeneratedValue::Text(crate::generator::generate(secret_type, gen_config)?)
+        };
+
+        if persistence == ProducedValuePersistence::Ephemeral {
             if self.progress {
                 eprintln!(
                     "{} {} - generated for this resolution without provider storage (profile: {})",
@@ -6728,11 +6745,6 @@ impl Secrets {
             }
             return Ok(Some(value));
         }
-
-        // Checked only on the persisting branch: an ephemeral provider returned
-        // above without touching a store, and refusing that would deny a read
-        // that never wrote anything.
-        self.ensure_produced_write_allowed(name)?;
 
         // The provider states why a write is refused; wrapping it here would
         // only nest a second "Provider operation failed" prefix.
@@ -7938,6 +7950,13 @@ impl Secrets {
         output_filter: Option<&HashSet<String>>,
         read_addresses: Option<&mut HashMap<String, NativeAddress>>,
     ) -> ExecutionResult {
+        if self.refuse_file_values
+            && let Some(secret) = plan.secrets.iter().find(|secret| secret.as_path())
+        {
+            return Err(SecretSpecError::FileValueRefused(
+                Self::diagnostic_secret_name(&secret.name, output_filter).to_string(),
+            ));
+        }
         ResolutionExecution::new(self, plan, materialize, output_filter, read_addresses).run()
     }
 

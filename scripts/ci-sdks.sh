@@ -106,6 +106,9 @@ run_go() {
   echo "==> Go (default purego/dlopen path)"
   ( cd secretspec-go && go test ./... )
 
+  echo "==> Terraform provider"
+  ( cd secretspec-terraform && go test ./... )
+
   echo "==> Go (-tags static: cgo links the archive in)"
   # Stage the debug archive + header + generated cgo LDFLAGS, then exercise the
   # static binding. This is the glibc self-contained build; the fully-static musl

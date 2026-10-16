@@ -78,6 +78,24 @@ resolved, err := secretspec.New().WithScope("api").Load()
 `resolved.Close()` (e.g. `defer resolved.Close()`) when done so the secret files
 do not accumulate in the temp dir.
 
+## Resolution restrictions (unreleased)
+
+Use `WithReadOnly(true)` to refuse resolution that needs to save a generated
+or prompted value back to a provider. Stored values remain readable even when
+their declarations enable generation. This uses the same restriction as
+`secretspec serve --read-only`. Generation that requires storage is refused
+before the generator runs. Local caches, auditing, temporary files and provider
+commands remain enabled; generators that do not persist values may still run.
+
+Use `WithNoFiles(true)` when your integration cannot own temporary files.
+It rejects `as_path` declarations in the selected profile/scope, including
+hidden dependencies, before fetching values or creating files. Unselected
+declarations do not cause a refusal.
+
+The target release for these options has not been assigned. Use a native
+library built from the same checkout as the SDK. Older libraries reject
+restricted requests before resolution. Both options default to false.
+
 ## Value-free report
 
 `Report()` returns the inventory/preflight view: per-secret status and

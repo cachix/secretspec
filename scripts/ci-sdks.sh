@@ -191,6 +191,17 @@ run_jvm() {
   ( cd secretspec-jvm && ./gradlew build )
 }
 
+run_elixir() {
+  echo "==> Elixir"
+  (
+    cd secretspec-ex
+    mix local.hex --force
+    mix local.rebar --force
+    mix deps.get
+    mix test
+  )
+}
+
 run_php() {
   echo "==> PHP"
   # The PHP SDK has two native backends over the same resolver; exercise both.
@@ -243,6 +254,7 @@ start_suite Haskell run_haskell
 start_suite .NET run_dotnet
 start_suite JVM run_jvm
 start_suite PHP run_php
+start_suite Elixir run_elixir
 
 failed_suites=()
 for index in "${!suite_pids[@]}"; do

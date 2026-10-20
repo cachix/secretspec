@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- KDBX saves use the correct `DeletionTime` XML element, keeping databases
+  compatible with KeePass clients that strictly validate deletion metadata.
+
 - IPC writes of X.509 identities decode their declared text encoding before
   storage, so protected and unprotected archives round-trip without corruption.
 

@@ -1,6 +1,6 @@
 # SecretSpec Elixir SDK
 
-The Elixir SDK (0.21+) is a pure Elixir IPC client for a compatible `secretspec` executable (0.21+). It launches `secretspec serve` directly, negotiates `secretspec.resolver/1`, and resolves exact declared names. No Rust code, NIF, or downloaded native archive is included in the Hex package.
+The Elixir SDK (0.22+) is a pure Elixir IPC client for a compatible `secretspec` executable (0.21+). It launches `secretspec serve` directly, negotiates `secretspec.resolver/1`, and resolves exact declared names. No Rust code, NIF, or downloaded native archive is included in the Hex package.
 
 ```elixir
 {:ok, session} =

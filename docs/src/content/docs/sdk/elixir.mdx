@@ -5,15 +5,15 @@ description: Resolve SecretSpec secrets from Elixir
 
 import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
 
-<VersionCompatibility version="0.21" />
+<VersionCompatibility version="0.22" />
 
-The Elixir SDK (`secretspec`, 0.21+) is a pure Elixir client for the `secretspec.resolver/1` IPC protocol. It requires a compatible `secretspec` executable (0.21+) and launches `secretspec serve` directly, without a shell, NIF, native archive, or Rust code in the Hex package.
+The Elixir SDK (`secretspec`, 0.22+) is a pure Elixir client for the `secretspec.resolver/1` IPC protocol. It requires a compatible `secretspec` executable (0.21+) and launches `secretspec serve` directly, without a shell, NIF, native archive, or Rust code in the Hex package.
 
 ## Install
 
 ```elixir
 defp deps do
-  [{:secretspec, "~> 0.21"}]
+  [{:secretspec, "~> 0.22"}]
 end
 ```
 

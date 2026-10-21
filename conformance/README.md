@@ -1,7 +1,7 @@
 # Cross-language conformance suite
 
 Every SecretSpec SDK (Python, Go, Ruby, Node.js, Haskell, C#, PHP, Swift
-(0.18+), JVM (0.20+), and Elixir (0.21+)) is a thin client over the same
+(0.18+), JVM (0.20+), and Elixir (0.22+)) is a thin client over the same
 resolver contract. This suite proves
 they agree: each SDK resolves the same fixtures and must produce the identical
 **canonical** result.
@@ -67,4 +67,4 @@ relative to the repo root:
   staging the local XCFramework as described in `secretspec-swift/README.md`
 - JVM (0.20+):
   `cd secretspec-jvm && ./gradlew test`
-- Elixir (0.21+): `cd secretspec-ex && mix test test/conformance_test.exs`
+- Elixir (0.22+): `cd secretspec-ex && mix test test/conformance_test.exs`

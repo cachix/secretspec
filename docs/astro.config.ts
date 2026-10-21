@@ -437,7 +437,7 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
             {
               label: "Elixir",
               slug: "sdk/elixir",
-              badge: { text: "0.21+", variant: "note" },
+              badge: { text: "0.22+", variant: "note" },
             },
           ],
         },

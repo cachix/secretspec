@@ -324,6 +324,7 @@ protonpass://Work/{project}/{profile}/{key}        # Custom vault and title temp
 **Features**: Read/write, end-to-end encryption, cloud sync, vault organisation, PAT-based CI auth
 **Prerequisites**: `pass-cli`, authenticated with `pass-cli login` (or `pass-cli login --pat $PAT` for CI)
 **Storage**: Note item titled `{project}/{profile}/{key}` inside the configured vault
+**References**: `ref = { item = "<title>" }` reads an item's note; adding `field = "password"` (or any `pass-cli` field name) reads that field of any item type (0.22+)
 
 `pass-cli` ships backward incompatible changes in patch releases without
 advance notice, so a CLI upgrade can break secret resolution on its own.

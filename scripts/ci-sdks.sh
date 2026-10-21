@@ -198,7 +198,10 @@ run_elixir() {
     mix local.hex --force
     mix local.rebar --force
     mix deps.get
-    mix test
+    # Each fake resolver starts another BEAM VM. Keep their scheduler counts
+    # small and run test modules serially on the shared CI runner.
+    ERL_FLAGS="+S 1:1 +SDcpu 1 +SDio 1${ERL_FLAGS:+ $ERL_FLAGS}" \
+      mix test --max-cases 1
   )
 }
 
@@ -254,7 +257,6 @@ start_suite Haskell run_haskell
 start_suite .NET run_dotnet
 start_suite JVM run_jvm
 start_suite PHP run_php
-start_suite Elixir run_elixir
 
 failed_suites=()
 for index in "${!suite_pids[@]}"; do
@@ -262,6 +264,14 @@ for index in "${!suite_pids[@]}"; do
     failed_suites+=("${suite_names[$index]}")
   fi
 done
+
+# Resolver startup tests have short wall-clock deadlines. Run Elixir after
+# the other language builds finish so they cannot starve its child VMs.
+elixir_index="${#suite_pids[@]}"
+start_suite Elixir run_elixir
+if ! wait "${suite_pids[$elixir_index]}"; then
+  failed_suites+=("Elixir")
+fi
 
 for index in "${!suite_logs[@]}"; do
   echo "::group::${suite_names[$index]} SDK"

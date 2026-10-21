@@ -1789,9 +1789,9 @@ pub struct NativeAddress {
     /// service (keyring).
     #[schemars(length(min = 1))]
     pub item: String,
-    /// A component within the item: field label (1Password), KV field
-    /// (Vault), JSON key (AWS), account (keyring). Providers whose secrets
-    /// have no sub-components reject it.
+    /// A component within the item: field label (1Password), field name
+    /// (Proton Pass), KV field (Vault), JSON key (AWS), account (keyring).
+    /// Providers whose secrets have no sub-components reject it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
     /// 1Password only: the vault holding the item, overriding the store's

@@ -99,7 +99,7 @@
       "description": "Provider-native coordinates for one secret. Routing follows the selected provider chain; supported coordinates depend on the provider.",
       "properties": {
         "field": {
-          "description": "A component within the item: field label (1Password), KV field\n(Vault), JSON key (AWS), account (keyring). Providers whose secrets\nhave no sub-components reject it.",
+          "description": "A component within the item: field label (1Password), field name\n(Proton Pass), KV field (Vault), JSON key (AWS), account (keyring).\nProviders whose secrets have no sub-components reject it.",
           "type": [
             "string"
           ]

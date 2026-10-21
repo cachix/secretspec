@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Proton Pass refs accept `field` to read any field of an existing item, such
+  as `ref = { item = "test-item", field = "password" }` for a login's
+  password, a custom field, or `Section.field`. Refs with a `field` are
+  read-only, because `pass-cli` can only update a field by taking its value as
+  a command-line argument, visible to other local users in the process list.
+
 - Select the profile for `secretspec import` with `--profile` or `-P`,
   including when moving secrets with `--delete-source`.
 

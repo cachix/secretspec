@@ -4,7 +4,14 @@ name: "Python wheels"
 # version tag. The Rust resolver is statically linked into a compiled pyo3
 # extension (secretspec-py-native, see secretspec-py/Cargo.toml) -- there is no
 # separate cdylib bundled. The extension targets pyo3's abi3-py39 feature, so
-# one cp39-abi3 wheel per platform serves all CPython >= 3.9.
+# one cp39-abi3 wheel per platform serves all CPython >= 3.9 with the GIL.
+#
+# Free-threaded CPython (3.14t) cannot load abi3 extensions, so each platform
+# also gets a version-specific cp314t wheel: built against a free-threaded
+# interpreter, pyo3 drops abi3, and since pyo3 0.28 the bare #[pymodule]
+# declares free-threading support, so importing it keeps the GIL disabled.
+# An sdist is published too, so any interpreter without a matching wheel can
+# still build from source (it bundles the workspace crates it needs).
 #
 # Linux wheels are built via PyO3/maturin-action inside a manylinux container
 # (old glibc); maturin repairs the wheel itself, so no separate auditwheel step
@@ -45,7 +52,7 @@ permissions:
 
 jobs:
   linux:
-    name: wheel ${{ matrix.arch }} (manylinux)
+    name: wheel ${{ matrix.arch }} ${{ matrix.interpreter || 'abi3' }} (manylinux)
     if: >-
       inputs.pre_release ||
       github.event_name != 'pull_request' ||
@@ -57,6 +64,9 @@ jobs:
         include:
           - { arch: x86_64, target: x86_64-unknown-linux-gnu, runner: ubuntu-latest }
           - { arch: aarch64, target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm }
+          # Free-threaded: the manylinux image ships /opt/python/cp314-cp314t.
+          - { arch: x86_64, target: x86_64-unknown-linux-gnu, runner: ubuntu-latest, interpreter: python3.14t }
+          - { arch: aarch64, target: aarch64-unknown-linux-gnu, runner: ubuntu-24.04-arm, interpreter: python3.14t }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -73,14 +83,16 @@ jobs:
           # Compiler cache backed by the GitHub Actions cache; works inside
           # the manylinux container, where a host-level cargo cache cannot.
           sccache: true
-          args: --release --out ${{ github.workspace }}/wheelhouse
+          args: >-
+            --release --out ${{ github.workspace }}/wheelhouse
+            ${{ matrix.interpreter && format('--interpreter {0}', matrix.interpreter) || '' }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: wheels-linux-${{ matrix.arch }}
+          name: wheels-linux-${{ matrix.arch }}${{ matrix.interpreter && '-freethreaded' || '' }}
           path: wheelhouse/*.whl
 
   native:
-    name: wheel ${{ matrix.target }}
+    name: wheel ${{ matrix.target }} ${{ matrix.freethreaded && 'cp314t' || 'abi3' }}
     if: >-
       inputs.pre_release ||
       github.event_name != 'pull_request' ||
@@ -90,8 +102,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: macos-aarch64, runner: macos-latest }
-          - { target: windows-x86_64, runner: windows-latest }
+          - { target: macos-aarch64, runner: macos-latest, python: "3.11" }
+          - { target: windows-x86_64, runner: windows-latest, python: "3.11" }
+          - { target: macos-aarch64, runner: macos-latest, python: "3.14t", freethreaded: true }
+          - { target: windows-x86_64, runner: windows-latest, python: "3.14t", freethreaded: true }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -101,23 +115,50 @@ jobs:
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: python
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           working-directory: secretspec-py
           sccache: true
-          args: --release --out ${{ github.workspace }}/wheelhouse
+          args: >-
+            --release --out ${{ github.workspace }}/wheelhouse
+            ${{ matrix.freethreaded && format('--interpreter {0}', steps.python.outputs.python-path) || '' }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: wheels-${{ matrix.target }}
+          name: wheels-${{ matrix.target }}${{ matrix.freethreaded && '-freethreaded' || '' }}
           path: wheelhouse/*.whl
+
+  sdist:
+    name: sdist
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Sync SDK package versions
+        run: bash scripts/sync-sdk-versions.sh
+      - name: Build sdist
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: secretspec-py
+          command: sdist
+          args: --out ${{ github.workspace }}/wheelhouse
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sdist
+          path: wheelhouse/*.tar.gz
 
   publish:
     name: publish to PyPI
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, native]
+    needs: [linux, native, sdist]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

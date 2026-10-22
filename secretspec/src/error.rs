@@ -81,6 +81,8 @@ pub enum SecretSpecError {
         "Secret '{0}' would be produced and stored, and this session may not write to a provider"
     )]
     ProducedValueWriteRefused(String),
+    #[error("Secret '{0}' uses as_path, but this caller does not accept temporary files")]
+    FileValueRefused(String),
     #[error(
         "Composed secret '{0}' is derived from other secrets and has no stored value to change"
     )]
@@ -190,6 +192,7 @@ impl SecretSpecError {
             SecretSpecError::PromptUnavailable(_) => "prompt_unavailable",
             SecretSpecError::PromptValueEmpty(_) => "prompt_value_empty",
             SecretSpecError::ProducedValueWriteRefused(_) => "produced_value_write_refused",
+            SecretSpecError::FileValueRefused(_) => "file_value_refused",
             SecretSpecError::ComposedSecretReadOnly(_) => "composed_secret_read_only",
             SecretSpecError::ExtractedSecretReadOnly(_) => "extracted_secret_read_only",
             SecretSpecError::DerivedSecretReadOnly { .. } => "derived_secret_read_only",

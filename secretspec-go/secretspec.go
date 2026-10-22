@@ -198,8 +198,7 @@ func (b *Builder) set(key string, value any) *Builder {
 
 func (b *Builder) WithPath(path string) *Builder {
 	// Sources are a tagged union in the native request. Choosing a path after
-	// an inline source deliberately selects the legacy path source instead of
-	// serializing an ambiguous request.
+	// an inline source replaces it instead of serializing an ambiguous request.
 	b.inline = nil
 	return b.set("path", path)
 }
@@ -213,6 +212,18 @@ func (b *Builder) WithCaller(caller CallerContext) *Builder {
 	return b.set("caller", caller)
 }
 func (b *Builder) WithNoValues(v bool) *Builder { return b.set("no_values", v) }
+
+// WithReadOnly refuses resolutions that would write generated or prompted values
+// back to a provider. Existing values remain readable. This does not disable
+// local caches or as_path files. Older native libraries fail
+// instead of silently ignoring the restriction.
+// This option is unreleased; use a native library from the same checkout.
+func (b *Builder) WithReadOnly(v bool) *Builder { return b.set("read_only", v) }
+
+// WithNoFiles rejects as_path declarations in the selected profile/scope and
+// their dependencies before creating temporary files.
+// This option is unreleased; use a native library from the same checkout.
+func (b *Builder) WithNoFiles(v bool) *Builder { return b.set("no_files", v) }
 
 // WithInlineSpec resolves a strict, versioned inline declaration instead of a
 // filesystem manifest. `spec` is serialized as the native inline-spec v2 (0.21+)
@@ -402,9 +413,8 @@ func (b *Builder) Report() (*Report, error) {
 	}, nil
 }
 
-// execute keeps the legacy request exactly as it was for path/search callers.
-// Inline callers use the separate C symbol, making an old runtime's missing
-// capability an explicit load error instead of a filesystem fallback.
+// Restrictions use the strict native call format so older libraries reject them
+// before resolution instead of ignoring unknown legacy request fields.
 func (b *Builder) execute(mode string) (string, error) {
 	if b.req == nil {
 		b.req = map[string]any{}
@@ -416,7 +426,15 @@ func (b *Builder) execute(mode string) (string, error) {
 	if mode != "" {
 		options["mode"] = mode
 	}
-	if b.inline == nil {
+	readOnly, _ := options["read_only"].(bool)
+	noFiles, _ := options["no_files"].(bool)
+	if !readOnly {
+		delete(options, "read_only")
+	}
+	if !noFiles {
+		delete(options, "no_files")
+	}
+	if b.inline == nil && !readOnly && !noFiles {
 		if err := ensureLoaded(); err != nil {
 			return "", err
 		}
@@ -429,14 +447,22 @@ func (b *Builder) execute(mode string) (string, error) {
 	if err := ensureCallLoaded(); err != nil {
 		return "", err
 	}
+	source := map[string]any{"kind": "search"}
+	if path, ok := options["path"]; ok {
+		source = map[string]any{"kind": "path", "path": path}
+		delete(options, "path")
+	}
+	if b.inline != nil {
+		source = map[string]any{
+			"kind": "inline", "spec_version": 2,
+			"base_dir": b.inline.baseDir, "spec": b.inline.spec,
+		}
+	}
 	payload, err := json.Marshal(map[string]any{
 		"request_version": 1,
 		"operation":       "resolve",
-		"source": map[string]any{
-			"kind": "inline", "spec_version": 2,
-			"base_dir": b.inline.baseDir, "spec": b.inline.spec,
-		},
-		"options": options,
+		"source":          source,
+		"options":         options,
 	})
 	if err != nil {
 		return "", err

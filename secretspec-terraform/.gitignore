@@ -1,0 +1,5 @@
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate*
+*.tfplan
+terraform-provider-secretspec

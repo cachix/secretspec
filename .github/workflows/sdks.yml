@@ -61,7 +61,15 @@ jobs:
           name: devenv
       - name: Install devenv.sh
         run: nix profile install nixpkgs#devenv
+      - name: Install Terraform for provider acceptance tests
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          # Keep testing the minimum supported ephemeral-resource release series.
+          terraform_version: "1.10.5"
+          terraform_wrapper: false
       - name: Build cdylib and run all SDK suites
+        env:
+          TF_ACC: "1"
         run: devenv shell -- bash scripts/ci-sdks.sh
 
   swift:

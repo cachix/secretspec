@@ -118,9 +118,9 @@ func ensureLoaded() error {
 	return loadErr
 }
 
-// ensureCallLoaded binds the capability-gated call symbol only for SDKs that
-// request an inline declaration. Keeping it out of ensureLoaded preserves the
-// legacy path/search API for an older runtime that predates secretspec_call.
+// ensureCallLoaded binds the capability-gated call symbol for versioned requests.
+// Keeping it out of ensureLoaded preserves the legacy path/search API for an
+// older runtime that predates secretspec_call.
 func ensureCallLoaded() error {
 	if err := ensureLoaded(); err != nil {
 		return err
@@ -129,7 +129,7 @@ func ensureCallLoaded() error {
 		defer func() {
 			if r := recover(); r != nil {
 				callErr = &Error{Kind: "capability", Message: fmt.Sprintf(
-					"loaded libsecretspec does not support inline specs (missing secretspec_call): %v", r)}
+					"loaded libsecretspec does not support this request (missing secretspec_call): %v", r)}
 			}
 		}()
 		purego.RegisterLibFunc(&cCall, libHandle, "secretspec_call")

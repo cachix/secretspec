@@ -6,18 +6,36 @@
 //!
 //! # Authentication
 //!
-//! A machine identity's `client_id` and `client_secret` are exchanged for a
-//! short-lived access token via Universal Auth, cached for the life of the
-//! process. A `token` minted elsewhere is used directly instead, which is what
-//! CI usually has to hand. Credentials come from the provider alias or from
-//! `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET` / `INFISICAL_TOKEN`.
+//! The access token comes from the first source that is configured:
+//!
+//! 1. A `token` minted elsewhere, used directly; this is what CI usually has to
+//!    hand. Provider credential `token`, else `INFISICAL_TOKEN`.
+//! 2. A machine identity's `client_id` and `client_secret`, exchanged for a
+//!    short-lived access token via Universal Auth. Provider credentials, else
+//!    `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET`. Naming only one of the
+//!    pair is an error rather than a reason to fall through.
+//! 3. The logged-in Infisical CLI user (0.22+), read with
+//!    `infisical user get token --plain --silent --domain <endpoint>`. The
+//!    binary is `infisical` on `PATH`, or `SECRETSPEC_INFISICAL_PATH`;
+//!    `INFISICAL_PROFILE` / `INFISICAL_ORG` reach it through the environment.
+//!    Infisical CLI 0.44.0 or newer is required, checked with
+//!    `infisical --version`: older CLIs ignore `--domain` and would hand over
+//!    a session issued by another instance. With stdin on a terminal the CLI
+//!    inherits it and may take as long as a login needs; otherwise it gets no
+//!    stdin and is stopped after 30 seconds.
+//!
+//! A token or machine identity is resolved once per provider instance and kept
+//! for its life. A CLI session is shared by every instance in the process that
+//! would run the same CLI for the same instance, profile and organization: at
+//! most one run is in flight at a time, and its token is reused until it is
+//! within a minute of its expiry.
 //!
 //! Service tokens are not supported: Infisical deprecated them in favour of
 //! machine identities.
 //!
 //! # URI Format
 //!
-//! `infisical://[host]/{project-id}[?env=slug&path=/prefix&tls=false]`
+//! `infisical://[host]/{project-id}[?env=slug&path=/prefix&tls=false&personal=true]`
 //!
 //! The project is Infisical's own project UUID; its v4 API does not accept a
 //! project slug. Query parameters:
@@ -32,6 +50,14 @@
 //!   `/secretspec`).
 //! - `tls` -- enable TLS: `true` (default) or `false`, for self-hosted
 //!   instances served over plain HTTP.
+//! - `personal` (0.22+) -- `true` reads the user's personal overrides, which
+//!   win over the shared value, and makes `set` write a personal override
+//!   instead of the shared secret. Default `false`. Infisical keeps personal
+//!   overrides for users only, so this needs a user's token (the Infisical CLI
+//!   login or a user's `INFISICAL_TOKEN`), and an override can only be written
+//!   for a key whose shared secret already exists in the folder. A machine
+//!   identity reads shared values and cannot write. A `ref` pinning a
+//!   `version` reads the shared secret's history.
 //!
 //! When no host is given, falls back to `INFISICAL_DOMAIN`, then to Infisical's
 //! legacy `INFISICAL_API_URL`, then to `app.infisical.com`.
@@ -82,7 +108,8 @@ use crate::{Result, SecretSpecError};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, PoisonError};
+use std::time::{Duration, SystemTime};
 
 /// Default folder prefix holding SecretSpec's secrets.
 const DEFAULT_PATH: &str = "/secretspec";
@@ -96,12 +123,30 @@ const TOKEN: &str = "token";
 const INFISICAL_CLIENT_ID_ENV: &str = "INFISICAL_CLIENT_ID";
 const INFISICAL_CLIENT_SECRET_ENV: &str = "INFISICAL_CLIENT_SECRET";
 const INFISICAL_TOKEN_ENV: &str = "INFISICAL_TOKEN";
+/// Overrides the Infisical CLI binary used for the login-session fallback.
+const INFISICAL_CLI_PATH_ENV: &str = "SECRETSPEC_INFISICAL_PATH";
+const DEFAULT_CLI_BINARY: &str = "infisical";
 /// The environment variables naming the instance, in the Infisical CLI's own
 /// precedence order: `INFISICAL_DOMAIN` first, then the legacy
 /// `INFISICAL_API_URL` it superseded but still honours (`util.GetEnvDomain`).
 /// Reading only the current name would silently send an existing EU or
 /// self-hosted setup, configured with the legacy one, to US Cloud.
 const INFISICAL_DOMAIN_ENVS: [&str; 2] = ["INFISICAL_DOMAIN", "INFISICAL_API_URL"];
+/// The oldest Infisical CLI whose `--domain` refuses a session issued by
+/// another instance. Older ones replace the requested instance with the
+/// logged-in one, so their token would go to whichever instance SecretSpec
+/// asked for. They also predate `INFISICAL_PROFILE` and `INFISICAL_ORG`.
+const MIN_CLI_VERSION: (u64, u64, u64) = (0, 44, 0);
+/// The environment variables through which the Infisical CLI selects a login
+/// profile and organization. Each selects a different session, so each is
+/// part of a cached session's identity.
+const INFISICAL_CLI_SESSION_ENVS: [&str; 2] = ["INFISICAL_PROFILE", "INFISICAL_ORG"];
+/// How long a CLI run without a terminal may take. With no stdin to answer a
+/// login prompt, a CLI still running by then is waiting for a login nobody can
+/// complete.
+const CLI_DETACHED_TIMEOUT: Duration = Duration::from_secs(30);
+/// How close to its expiry a CLI token stops being reused.
+const CLI_TOKEN_EXPIRY_MARGIN: Duration = Duration::from_secs(60);
 
 /// Configuration for the Infisical provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +159,10 @@ pub struct InfisicalConfig {
     pub environment: Option<String>,
     /// Folder prefix holding SecretSpec's secrets.
     pub path: String,
+    /// Read the user's personal overrides, and write personal overrides
+    /// instead of shared secrets.
+    #[serde(default)]
+    pub personal_overrides: bool,
 }
 
 impl Default for InfisicalConfig {
@@ -123,6 +172,7 @@ impl Default for InfisicalConfig {
             project_id: String::new(),
             environment: None,
             path: DEFAULT_PATH.to_string(),
+            personal_overrides: false,
         }
     }
 }
@@ -251,11 +301,26 @@ impl TryFrom<&ProviderUrl> for InfisicalConfig {
             None => DEFAULT_PATH.to_string(),
         };
 
+        // Strict like `tls`: a typo must not silently write the shared value.
+        let personal_overrides = url
+            .query_pairs()
+            .find(|(k, _)| k == "personal")
+            .map(|(_, v)| match v.as_ref() {
+                "true" | "1" => Ok(true),
+                "false" | "0" => Ok(false),
+                other => Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "Unknown personal value '{other}'. Expected 'true' or 'false'."
+                ))),
+            })
+            .transpose()?
+            .unwrap_or(false);
+
         Ok(Self {
             endpoint,
             project_id,
             environment,
             path,
+            personal_overrides,
         })
     }
 }
@@ -276,15 +341,92 @@ enum SecretRead {
     NotFound,
 }
 
+/// Where a provider instance's access token comes from, decided on first use.
+enum Auth {
+    /// A configured token, or one exchanged for the machine identity's
+    /// credentials, kept for the instance's life.
+    Fixed(Arc<SecretBytes>),
+    /// The Infisical CLI user's session, shared process-wide.
+    Cli(Arc<CliSession>),
+}
+
+/// What makes two Infisical CLI runs interchangeable: the same binary, asked
+/// for the same instance, under the same profile and organization selection
+/// ([`INFISICAL_CLI_SESSION_ENVS`], in order).
+type CliSessionKey = (String, String, [Option<std::ffi::OsString>; 2]);
+
+/// The latest CLI run for one [`CliSessionKey`]: still in flight while its
+/// cell is empty, then its outcome. A failure is kept as the message every
+/// caller that waited on that run receives.
+type CliFlight = tokio::sync::OnceCell<std::result::Result<CliToken, String>>;
+
+/// One Infisical CLI session, shared by every provider instance in the process
+/// with the same [`CliSessionKey`].
+#[derive(Default)]
+struct CliSession {
+    /// Set once the binary's version is accepted, for the life of the process.
+    version_accepted: tokio::sync::OnceCell<()>,
+    /// The latest run; see [`CliFlight`].
+    flight: Mutex<Arc<CliFlight>>,
+}
+
+impl CliSession {
+    /// The session for `key`, created on first use.
+    fn shared(key: CliSessionKey) -> Arc<Self> {
+        static SESSIONS: LazyLock<Mutex<HashMap<CliSessionKey, Arc<CliSession>>>> =
+            LazyLock::new(Default::default);
+        let mut sessions = SESSIONS.lock().unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(sessions.entry(key).or_default())
+    }
+
+    /// The run a caller takes its token from: the one in flight, whatever its
+    /// outcome, or a finished one whose token is still fresh. Otherwise a new
+    /// run replaces it, so neither a failure nor an expiring token outlives
+    /// the callers that waited on it.
+    fn flight(&self) -> Arc<CliFlight> {
+        let mut flight = self.flight.lock().unwrap_or_else(PoisonError::into_inner);
+        let joinable = match flight.get() {
+            None => true,
+            Some(Ok(cli)) => cli.reusable_at(SystemTime::now()),
+            Some(Err(_)) => false,
+        };
+        if !joinable {
+            *flight = Arc::default();
+        }
+        Arc::clone(&flight)
+    }
+}
+
+/// A token the Infisical CLI printed.
+struct CliToken {
+    token: Arc<SecretBytes>,
+    /// The JWT's `exp`, when it carries a readable one.
+    expires_at: Option<SystemTime>,
+}
+
+impl CliToken {
+    /// Whether a later caller may reuse this token: its `exp` is readable and
+    /// more than [`CLI_TOKEN_EXPIRY_MARGIN`] away.
+    fn reusable_at(&self, now: SystemTime) -> bool {
+        self.expires_at.is_some_and(|expires_at| {
+            expires_at
+                .duration_since(now)
+                .is_ok_and(|left| left > CLI_TOKEN_EXPIRY_MARGIN)
+        })
+    }
+}
+
 /// Infisical provider.
 pub struct InfisicalProvider {
     retry_policy: super::RetryPolicy,
     config: InfisicalConfig,
     /// Credentials supplied by the provider alias.
     credentials: ProviderCredentials,
-    /// The Universal Auth access token, fetched once per process. Infisical's
+    /// How this instance authenticates, decided once. A configured token, or
+    /// the Universal Auth token, is kept for the instance's life: Infisical's
     /// tokens are short-lived (7200s by default), which outlives any single
-    /// SecretSpec invocation.
+    /// SecretSpec invocation. A CLI session is consulted on every call instead
+    /// (see [`cli_token`](Self::cli_token)), since it renews on expiry.
     ///
     /// Async, because the exchange itself must be serialized rather than merely
     /// its result: a batch read fetches distinct addresses concurrently, and a
@@ -292,7 +434,7 @@ pub struct InfisicalProvider {
     /// then discard all but one. Infisical supports client secrets with a
     /// one-use limit, for which the surplus exchanges are not just waste but a
     /// hard failure.
-    token: tokio::sync::OnceCell<SecretBytes>,
+    auth: tokio::sync::OnceCell<Auth>,
     /// One HTTP client for every request, so a run of secrets reuses the
     /// connection rather than building a pool per call.
     http: OnceLock<reqwest::Client>,
@@ -305,6 +447,14 @@ pub struct InfisicalProvider {
     /// [`storage_identity`](Provider::storage_identity), or the same store would
     /// take one identity per profile.
     profile: Mutex<Option<String>>,
+    /// The Infisical CLI consulted when no token or machine identity is
+    /// configured.
+    cli_binary_path: String,
+    /// Whether stdin is a terminal the CLI may prompt on. A field so tests do
+    /// not depend on the terminal `cargo test` was started from.
+    cli_stdin_is_terminal: fn() -> bool,
+    /// How long a CLI run without a terminal may take before it is stopped.
+    cli_timeout: Duration,
 }
 
 crate::register_provider! {
@@ -320,9 +470,13 @@ impl InfisicalProvider {
             config,
             credentials: ProviderCredentials::new(),
             retry_policy: super::RetryPolicy::default(),
-            token: tokio::sync::OnceCell::new(),
+            auth: tokio::sync::OnceCell::new(),
             http: OnceLock::new(),
             profile: Mutex::new(None),
+            cli_binary_path: std::env::var(INFISICAL_CLI_PATH_ENV)
+                .unwrap_or_else(|_| DEFAULT_CLI_BINARY.to_string()),
+            cli_stdin_is_terminal: || std::io::IsTerminal::is_terminal(&std::io::stdin()),
+            cli_timeout: CLI_DETACHED_TIMEOUT,
         }
     }
 
@@ -384,6 +538,9 @@ impl InfisicalProvider {
         }
         if let Some(path) = path.filter(|path| *path != DEFAULT_PATH) {
             query.push(format!("path={}", ProviderUrl::encode_query(path)));
+        }
+        if self.config.personal_overrides {
+            query.push("personal=true".to_string());
         }
         if plain_http {
             query.push("tls=false".to_string());
@@ -453,35 +610,44 @@ impl InfisicalProvider {
         })
     }
 
-    /// Resolves the access token, logging in at most once.
+    /// Resolves the access token, deciding how to authenticate at most once.
     ///
     /// An already-minted token is used directly; otherwise a machine
-    /// identity's credentials are exchanged for one. Infisical's tokens are
-    /// short-lived (7200s by default), which outlives any single SecretSpec
-    /// invocation, so the token is fetched once and never renewed.
+    /// identity's credentials are exchanged for one. Either is kept for the
+    /// instance's life: Infisical's tokens are short-lived (7200s by default),
+    /// which outlives any single SecretSpec invocation. Without either, every
+    /// call reads the Infisical CLI user's session through
+    /// [`cli_token`](Self::cli_token), which asks the CLI again only once its
+    /// token nears expiry.
     ///
     /// The login is awaited rather than blocked on: this runs inside the
     /// runtime that [`block_on`](super::block_on) already entered for the
     /// request, and blocking there would panic.
-    async fn resolve_token(&self) -> Result<&SecretBytes> {
+    async fn resolve_token(&self) -> Result<Arc<SecretBytes>> {
         // `get_or_try_init` runs one initializer at a time: a concurrent caller
         // waits for the in-flight exchange and takes its token rather than
         // starting a second one. On failure the cell stays empty, so a later
         // call retries instead of caching the error.
-        self.token
+        let auth = self
+            .auth
             .get_or_try_init(|| async {
                 // An absent credential permits login; an explicit value is
                 // always used, with validation at the request boundary.
                 match credential_or_env(&self.credentials, TOKEN, INFISICAL_TOKEN_ENV) {
-                    Some(token) => Ok(token),
+                    Some(token) => Ok(Auth::Fixed(Arc::new(token))),
                     None => self.login().await,
                 }
             })
-            .await
+            .await?;
+        match auth {
+            Auth::Fixed(token) => Ok(Arc::clone(token)),
+            Auth::Cli(session) => self.cli_token(session).await,
+        }
     }
 
-    /// Exchanges the machine identity's credentials for an access token.
-    async fn login(&self) -> Result<SecretBytes> {
+    /// Exchanges the machine identity's credentials for an access token, or,
+    /// when none are configured, selects the Infisical CLI user's session.
+    async fn login(&self) -> Result<Auth> {
         let client_id = credential_or_env(&self.credentials, CLIENT_ID, INFISICAL_CLIENT_ID_ENV);
         let client_secret = credential_or_env(
             &self.credentials,
@@ -490,16 +656,16 @@ impl InfisicalProvider {
         );
 
         // A half-specified identity is an error: falling back to an anonymous
-        // request would fail later with an opaque 401 instead.
+        // request, or to a different identity, would fail later with an opaque
+        // 401 or act as someone else.
         let (client_id, client_secret) = match (client_id, client_secret) {
             (Some(id), Some(secret)) => (id, secret),
             (None, None) => {
-                return Err(SecretSpecError::ProviderOperationFailed(format!(
-                    "No Infisical credentials found. Configure the {CLIENT_ID} and \
-                     {CLIENT_SECRET} provider credentials (or a ready-made {TOKEN}), or set \
-                     {INFISICAL_CLIENT_ID_ENV} and {INFISICAL_CLIENT_SECRET_ENV} (or \
-                     {INFISICAL_TOKEN_ENV})."
-                )));
+                return Ok(Auth::Cli(CliSession::shared((
+                    self.cli_binary_path.clone(),
+                    self.config.endpoint.clone(),
+                    INFISICAL_CLI_SESSION_ENVS.map(std::env::var_os),
+                ))));
             }
             (Some(_), None) => {
                 return Err(SecretSpecError::ProviderOperationFailed(format!(
@@ -561,7 +727,265 @@ impl InfisicalProvider {
             )
         })?;
 
-        Ok(SecretBytes::from_utf8(token.to_string()))
+        Ok(Auth::Fixed(Arc::new(SecretBytes::from_utf8(token))))
+    }
+
+    /// Reads the logged-in Infisical CLI user's access token.
+    ///
+    /// Runs are shared process-wide through `session`: a caller arriving while
+    /// a run is in flight waits for it and takes its outcome, success or
+    /// failure, rather than starting a second CLI, which could open a second
+    /// login. A token is then reused until its JWT `exp` is within
+    /// [`CLI_TOKEN_EXPIRY_MARGIN`]; one without a readable `exp` is not reused
+    /// past its own run. Nor is a failure, so a later call -- a long-running
+    /// `serve` after the user logs in -- asks the CLI again.
+    ///
+    /// The binary's version is checked before its first run and remembered
+    /// once accepted.
+    async fn cli_token(&self, session: &CliSession) -> Result<Arc<SecretBytes>> {
+        let flight = session.flight();
+        let outcome = flight
+            .get_or_init(|| async {
+                session
+                    .version_accepted
+                    .get_or_try_init(|| self.check_cli_version())
+                    .await?;
+                self.run_cli().await
+            })
+            .await;
+        match outcome {
+            Ok(cli) => Ok(Arc::clone(&cli.token)),
+            Err(message) => Err(SecretSpecError::ProviderOperationFailed(message.clone())),
+        }
+    }
+
+    /// Refuses an Infisical CLI older than [`MIN_CLI_VERSION`], or one whose
+    /// version cannot be read.
+    async fn check_cli_version(&self) -> std::result::Result<(), String> {
+        let path = &self.cli_binary_path;
+        let mut command = tokio::process::Command::new(path);
+        command
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true);
+        let output = match tokio::time::timeout(self.cli_timeout, command.output()).await {
+            Ok(Ok(output)) => output,
+            Ok(Err(error)) => return Err(Self::cli_spawn_error(path, &error)),
+            Err(_) => {
+                return Err(format!(
+                    "The Infisical CLI ('{path} --version') did not report its version within \
+                     {} seconds.",
+                    self.cli_timeout.as_secs_f64()
+                ));
+            }
+        };
+        if !output.status.success() {
+            return Err(format!(
+                "Failed to read the Infisical CLI version ('{path} --version' exited with {}).",
+                output.status
+            ));
+        }
+
+        let printed = String::from_utf8_lossy(&output.stdout);
+        let reported = printed
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or_default();
+        if Self::supported_cli_version(reported) {
+            return Ok(());
+        }
+        let (major, minor, patch) = MIN_CLI_VERSION;
+        Err(format!(
+            "The Infisical CLI '{path}' reported '{reported}' for its version, but SecretSpec \
+             needs Infisical CLI {major}.{minor}.{patch} or newer to use its login session: older \
+             CLIs ignore `--domain` and would hand over a session issued by another Infisical \
+             instance. Upgrade the Infisical CLI, or configure a token or machine identity \
+             credentials."
+        ))
+    }
+
+    /// Whether `infisical --version`'s output (`infisical version 0.44.0`)
+    /// names [`MIN_CLI_VERSION`] or later. A pre-release of the minimum is
+    /// older than the release, and output without a version is refused.
+    fn supported_cli_version(reported: &str) -> bool {
+        let version = reported.split_whitespace().find_map(|word| {
+            let word = word.strip_prefix('v').unwrap_or(word);
+            let (core, prerelease) = match word.split_once('-') {
+                Some((core, _)) => (core, true),
+                None => (word, false),
+            };
+            let core = core.split_once('+').map_or(core, |(core, _build)| core);
+            let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
+            match (parts.next(), parts.next(), parts.next(), parts.next()) {
+                (Some(Some(major)), Some(Some(minor)), Some(Some(patch)), None) => {
+                    Some(((major, minor, patch), prerelease))
+                }
+                _ => None,
+            }
+        });
+        version.is_some_and(|(version, prerelease)| {
+            version > MIN_CLI_VERSION || (version == MIN_CLI_VERSION && !prerelease)
+        })
+    }
+
+    /// Runs `infisical user get token` for the token it prints.
+    ///
+    /// `--domain` makes the CLI refuse a session issued by another instance
+    /// (from 0.44.0, which [`check_cli_version`](Self::check_cli_version)
+    /// enforces). Stderr is inherited so the CLI's own errors and login
+    /// prompts show live. Stdout is never quoted in an error: it may hold a
+    /// token.
+    ///
+    /// The CLI logs in on the way when its session is missing or expired. With
+    /// stdin on a terminal it inherits stdin, for its paste-a-token prompt, and
+    /// may take as long as the user does. Otherwise -- `secretspec serve`
+    /// speaks over stdin, and CI or an agent has nobody to answer -- it gets no
+    /// stdin, and a run still going after [`cli_timeout`](Self::cli_timeout)
+    /// is waiting for a login nobody can complete, so it is stopped together
+    /// with the `infisical login` it spawned.
+    async fn run_cli(&self) -> std::result::Result<CliToken, String> {
+        use tokio::io::AsyncReadExt;
+
+        let path = &self.cli_binary_path;
+        let endpoint = &self.config.endpoint;
+        let interactive = (self.cli_stdin_is_terminal)();
+        let mut command = tokio::process::Command::new(path);
+        command
+            .args([
+                "user",
+                "get",
+                "token",
+                "--plain",
+                "--silent",
+                "--domain",
+                endpoint.as_str(),
+            ])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .kill_on_drop(true);
+        if interactive {
+            command.stdin(std::process::Stdio::inherit());
+        } else {
+            command.stdin(std::process::Stdio::null());
+            // Its own process group, so stopping it reaches the login it
+            // spawns as well. Not with a terminal, where it has to stay in the
+            // foreground group to read from it.
+            #[cfg(unix)]
+            command.process_group(0);
+        }
+        let mut child = command
+            .spawn()
+            .map_err(|error| Self::cli_spawn_error(path, &error))?;
+        let pid = child.id();
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| format!("Failed to read the output of the Infisical CLI '{path}'."))?;
+
+        let mut printed = Vec::new();
+        let run = async {
+            let (status, _) = tokio::try_join!(child.wait(), stdout.read_to_end(&mut printed))?;
+            Ok::<_, std::io::Error>(status)
+        };
+        let finished = if interactive {
+            Some(run.await)
+        } else {
+            tokio::time::timeout(self.cli_timeout, run).await.ok()
+        };
+        let Some(status) = finished else {
+            Self::stop_cli(&mut child, pid).await;
+            return Err(format!(
+                "The Infisical CLI ('{path} user get token') was stopped after {} seconds without \
+                 providing a login session: its session for {endpoint} is missing or expired, \
+                 and with no terminal on stdin it cannot log you in. Run `infisical login \
+                 --domain {endpoint}` interactively, or configure a token or machine identity \
+                 credentials.",
+                self.cli_timeout.as_secs_f64()
+            ));
+        };
+        let status = status
+            .map_err(|error| format!("Failed to execute the Infisical CLI '{path}': {error}"))?;
+
+        if !status.success() {
+            return Err(format!(
+                "The Infisical CLI could not provide a login session ('{path} user get token' \
+                 exited with {status}; its output is shown above). Run `infisical login --domain \
+                 {endpoint}`, or configure a token or machine identity credentials."
+            ));
+        }
+
+        // A login the CLI ran on the way can leave earlier lines on stdout;
+        // the token is the last thing it prints.
+        let stdout = String::from_utf8_lossy(&printed);
+        match stdout.lines().map(str::trim).rfind(|line| !line.is_empty()) {
+            Some(line) if Self::looks_like_jwt(line) => Ok(CliToken {
+                expires_at: Self::jwt_expiry(line),
+                token: Arc::new(SecretBytes::from_utf8(line)),
+            }),
+            _ => Err(format!(
+                "The Infisical CLI ('{path} user get token --plain') did not print an access token."
+            )),
+        }
+    }
+
+    /// Stops a CLI run that outlived its timeout, along with any
+    /// `infisical login` it spawned.
+    async fn stop_cli(child: &mut tokio::process::Child, pid: Option<u32>) {
+        #[cfg(unix)]
+        {
+            if let Some(group) = pid.and_then(|pid| libc::pid_t::try_from(pid).ok()) {
+                // SAFETY: plain signal delivery to the group the child leads.
+                // Its ID cannot have been reused: either the child is not yet
+                // reaped, or a descendant still holds stdout open, which keeps
+                // the group alive.
+                unsafe { libc::kill(-group, libc::SIGKILL) };
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = pid;
+        // Reaps the child, killing it first wherever the group signal did not.
+        let _ = child.kill().await;
+    }
+
+    /// Explains a CLI that could not be started; a missing one lists every way
+    /// to authenticate.
+    fn cli_spawn_error(path: &str, error: &std::io::Error) -> String {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            format!(
+                "No Infisical credentials found. Configure the {CLIENT_ID} and {CLIENT_SECRET} \
+                 provider credentials (or a ready-made {TOKEN}), set {INFISICAL_CLIENT_ID_ENV} \
+                 and {INFISICAL_CLIENT_SECRET_ENV} (or {INFISICAL_TOKEN_ENV}), or install the \
+                 Infisical CLI and run `infisical login`. The Infisical CLI was looked up as \
+                 '{path}'; set {INFISICAL_CLI_PATH_ENV} if it is installed elsewhere."
+            )
+        } else {
+            format!("Failed to execute the Infisical CLI '{path}': {error}")
+        }
+    }
+
+    /// A JWT's `exp` claim, read without verifying the token: it only decides
+    /// when to ask the CLI again, and the server still checks the token.
+    fn jwt_expiry(token: &str) -> Option<SystemTime> {
+        let payload = token.split('.').nth(1)?;
+        let payload = data_encoding::BASE64URL_NOPAD
+            .decode(payload.as_bytes())
+            .ok()?;
+        let claims: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+        let exp = Duration::try_from_secs_f64(claims["exp"].as_f64()?).ok()?;
+        SystemTime::UNIX_EPOCH.checked_add(exp)
+    }
+
+    /// Three non-empty base64url segments separated by dots.
+    fn looks_like_jwt(s: &str) -> bool {
+        let segments: Vec<&str> = s.split('.').collect();
+        segments.len() == 3
+            && segments.iter().all(|segment| {
+                !segment.is_empty()
+                    && segment
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            })
     }
 
     /// Infisical's error envelope carries a human-readable `message`; the
@@ -756,7 +1180,13 @@ impl InfisicalProvider {
         secret_path: &str,
     ) -> Result<Option<HashMap<String, SecretBytes>>> {
         let url = format!("{}/api/v4/secrets", self.config.endpoint);
-        let query = self.read_query(environment, secret_path);
+        let mut query = self.read_query(environment, secret_path);
+        // The server answers one entry per key, the user's override winning,
+        // imports included. Not in `read_query`: the single-secret endpoint
+        // gives `type` its own meaning and must not receive it.
+        if self.config.personal_overrides {
+            query.push(("includePersonalOverrides", "true"));
+        }
 
         let response = self.send(reqwest::Method::GET, &url, &query, None).await?;
         let status = response.status();
@@ -826,6 +1256,29 @@ impl InfisicalProvider {
     /// chosen from the status of the one before it, so updating an existing
     /// secret costs a single call, and only a new secret costs more.
     async fn set_async(&self, loc: &Location, value: &SecretBytes) -> Result<()> {
+        // A personal override sits on an existing shared secret, so a missing
+        // folder means there is nothing to override: no folder is created.
+        if self.config.personal_overrides {
+            if self
+                .write_secret(reqwest::Method::PATCH, loc, value)
+                .await?
+            {
+                return Ok(());
+            }
+            if self.write_secret(reqwest::Method::POST, loc, value).await? {
+                return Ok(());
+            }
+            // A missing environment answers the same 404 as a missing shared
+            // secret; report it as such rather than blame the shared secret.
+            self.ensure_environment_exists_async(&loc.environment)
+                .await?;
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Infisical has no shared secret '{}' in environment '{}', folder '{}' to \
+                 override. Create the shared secret first (through an alias without \
+                 `?personal=true`), then set the personal override.",
+                loc.key, loc.environment, loc.secret_path
+            )));
+        }
         // A secret that is merely absent, and a folder that is absent, both
         // answer 404 here.
         if self
@@ -871,12 +1324,7 @@ impl InfisicalProvider {
     ) -> Result<bool> {
         let value = super::require_utf8("infisical", value)?;
         let url = self.secret_url(&loc.key)?;
-        let body = serde_json::json!({
-            "projectId": self.config.project_id,
-            "environment": loc.environment,
-            "secretPath": loc.secret_path,
-            "secretValue": value,
-        });
+        let body = self.write_body(loc, value);
 
         let response = self.send(method, &url, &[], Some(body)).await?;
         let status = response.status();
@@ -884,11 +1332,58 @@ impl InfisicalProvider {
             return Ok(false);
         }
         let body = Self::response_body(response).await?;
+        if self.config.personal_overrides
+            && status == StatusCode::BAD_REQUEST
+            && let Some(refusal) = self.personal_refusal(loc, &Self::error_message(&body))
+        {
+            return Err(refusal);
+        }
         if status.is_success() {
             Self::written(&body, &loc.key)?;
             return Ok(true);
         }
         Err(self.http_error(status, &body, "writing a secret"))
+    }
+
+    /// Explains a 400 from a personal write, but only when Infisical's message
+    /// names one of the refusals particular to personal overrides: no shared
+    /// secret to override, or a writer that is not a user. Any other 400 is
+    /// reported by [`http_error`](Self::http_error) without a cause attached.
+    fn personal_refusal(&self, loc: &Location, message: &str) -> Option<SecretSpecError> {
+        let lowered = message.to_ascii_lowercase();
+        let cause = if lowered.contains("shared secret") {
+            "A personal override needs an existing shared secret with the same key in that \
+             folder; create it first, through an alias without `?personal=true`."
+                .to_string()
+        } else if lowered.contains("must be user") {
+            format!(
+                "Infisical keeps personal overrides for users only, so this needs a user's token \
+                 (the Infisical CLI login or a user's {INFISICAL_TOKEN_ENV}), not a machine \
+                 identity."
+            )
+        } else {
+            return None;
+        };
+        Some(SecretSpecError::ProviderOperationFailed(format!(
+            "Infisical refused the personal override of '{}' in environment '{}', folder '{}': \
+             {message}. {cause}",
+            loc.key, loc.environment, loc.secret_path
+        )))
+    }
+
+    /// The JSON body of a create or update. Shared writes omit `type`, which
+    /// Infisical defaults to `shared`.
+    fn write_body(&self, loc: &Location, value: &str) -> serde_json::Value {
+        let mut body = serde_json::json!({
+            "projectId": self.config.project_id,
+            "environment": loc.environment,
+            "secretPath": loc.secret_path,
+            "secretValue": value,
+        });
+        if self.config.personal_overrides {
+            body["type"] = serde_json::Value::from("personal");
+        }
+        body
     }
 
     /// Confirms a write that answered 200 actually stored the value.
@@ -1020,11 +1515,12 @@ impl InfisicalProvider {
         match status {
             StatusCode::UNAUTHORIZED => SecretSpecError::ProviderOperationFailed(format!(
                 "Infisical authentication failed (401) while {action}: {message}. \
-                 Check the machine identity's {CLIENT_ID}/{CLIENT_SECRET}."
+                 Check the Infisical token, the machine identity's {CLIENT_ID}/{CLIENT_SECRET}, \
+                 or the Infisical CLI login (`infisical login`)."
             )),
             StatusCode::FORBIDDEN => SecretSpecError::ProviderOperationFailed(format!(
-                "Infisical denied access (403) while {action}: {message}. Check the machine \
-                 identity's permissions on project {}.",
+                "Infisical denied access (403) while {action}: {message}. Check the identity's \
+                 permissions on project {}.",
                 self.config.project_id
             )),
             StatusCode::TOO_MANY_REQUESTS => SecretSpecError::ProviderOperationFailed(format!(
@@ -1064,10 +1560,15 @@ impl Provider for InfisicalProvider {
     fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
         let loc = self.locate(addr)?;
         Ok(format!(
-            "environment {}, {}/{}",
+            "environment {}, {}/{}{}",
             loc.environment,
             loc.secret_path.trim_end_matches('/'),
-            loc.key
+            loc.key,
+            if self.config.personal_overrides {
+                " (personal override)"
+            } else {
+                ""
+            }
         ))
     }
 
@@ -1190,6 +1691,12 @@ impl Provider for InfisicalProvider {
             Address::Native(native) => native.version.as_deref(),
             Address::Convention { .. } => None,
         };
+        // The single-secret endpoint neither falls back from a personal
+        // override to the shared value nor resolves imports like the list
+        // does, so a personal read goes through the batch path.
+        if self.config.personal_overrides && version.is_none() {
+            return Ok(self.get_many(&[(loc.key.as_str(), addr)])?.remove(&loc.key));
+        }
         super::block_on(async {
             let read = self.get_async(&loc, version).await?;
             if matches!(&read, SecretRead::NotFound) {
@@ -1540,6 +2047,29 @@ mod tests {
     fn response_server_with_lengths(
         responses: Vec<(&'static str, &'static str, usize)>,
     ) -> (SocketAddr, std::thread::JoinHandle<Vec<String>>) {
+        serve_responses(responses, |request_line, _request_body| request_line)
+    }
+
+    /// As [`response_server`], recording each request's body beside its
+    /// request line.
+    fn body_recording_server(
+        responses: Vec<(&'static str, &'static str)>,
+    ) -> (SocketAddr, std::thread::JoinHandle<Vec<(String, String)>>) {
+        serve_responses(
+            responses
+                .into_iter()
+                .map(|(status, body)| (status, body, body.len()))
+                .collect(),
+            |request_line, request_body| (request_line, request_body),
+        )
+    }
+
+    /// Serves `responses` in order, one connection each, keeping what
+    /// `record` makes of every request line and body.
+    fn serve_responses<T: Send + 'static>(
+        responses: Vec<(&'static str, &'static str, usize)>,
+        record: fn(String, String) -> T,
+    ) -> (SocketAddr, std::thread::JoinHandle<Vec<T>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
@@ -1549,14 +2079,25 @@ mod tests {
                 let mut reader = BufReader::new(&mut stream);
                 let mut request_line = String::new();
                 reader.read_line(&mut request_line).unwrap();
+                let mut request_length = 0;
                 loop {
                     let mut line = String::new();
                     reader.read_line(&mut line).unwrap();
                     if line == "\r\n" || line.is_empty() {
                         break;
                     }
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                    {
+                        request_length = value.trim().parse().unwrap();
+                    }
                 }
-                requests.push(request_line.trim_end().to_string());
+                let mut request_body = vec![0; request_length];
+                reader.read_exact(&mut request_body).unwrap();
+                requests.push(record(
+                    request_line.trim_end().to_string(),
+                    String::from_utf8(request_body).unwrap(),
+                ));
                 write!(
                     stream,
                     "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: \
@@ -2013,6 +2554,7 @@ mod tests {
         for spec in [
             format!("infisical://app.infisical.com/{PROJECT}"),
             format!("infisical://app.infisical.com/{PROJECT}?env=prod"),
+            format!("infisical://app.infisical.com/{PROJECT}?env=prod&personal=true"),
             format!("infisical://app.infisical.com/{PROJECT}?env=prod&path=/team"),
             format!("infisical://localhost:8080/{PROJECT}?tls=false"),
             format!("infisical://localhost:8080/{PROJECT}?env=dev&tls=false"),
@@ -2368,5 +2910,679 @@ mod tests {
     #[test]
     fn no_domain_variable_is_not_an_error() {
         assert_eq!(InfisicalConfig::pick_domain(|_| None), None);
+    }
+
+    /// A provider authenticated with a plain token, in personal mode.
+    fn personal_provider_with_token(
+        endpoint: SocketAddr,
+        environment: Option<&str>,
+    ) -> InfisicalProvider {
+        let environment =
+            environment.map_or_else(String::new, |environment| format!("&env={environment}"));
+        let mut provider = provider(&format!(
+            "infisical://{endpoint}/{PROJECT}?tls=false&personal=true{environment}"
+        ));
+        provider.with_credentials(ProviderCredentials::from([(
+            TOKEN.to_string(),
+            SecretBytes::from_utf8("test-token"),
+        )]));
+        provider
+    }
+
+    /// Clears every Infisical credential the environment could supply. The
+    /// returned guards must outlive the test body; the caller holds the lock.
+    fn without_infisical_env() -> [crate::tests::EnvVarGuard; 3] {
+        [
+            crate::tests::EnvVarGuard::remove(INFISICAL_TOKEN_ENV),
+            crate::tests::EnvVarGuard::remove(INFISICAL_CLIENT_ID_ENV),
+            crate::tests::EnvVarGuard::remove(INFISICAL_CLIENT_SECRET_ENV),
+        ]
+    }
+
+    /// A provider whose CLI fallback is `script`, installed in `directory`. It
+    /// runs as it would without a terminal, so these tests do not depend on
+    /// how `cargo test` was started.
+    #[cfg(unix)]
+    fn provider_with_cli_script(directory: &std::path::Path, script: &str) -> InfisicalProvider {
+        let binary = directory.join("infisical");
+        crate::fake_executable::install(&binary, script);
+        let mut provider = provider(&format!("infisical://localhost:8080/{PROJECT}?tls=false"));
+        provider.cli_binary_path = binary.to_string_lossy().into_owned();
+        provider.cli_stdin_is_terminal = || false;
+        provider
+    }
+
+    /// A provider whose CLI fallback is an Infisical CLI 0.44.0 running `body`
+    /// for `user get token`, with `$dir` naming its directory. Each version
+    /// check appends a line to `versions` there, and each token run to `runs`.
+    #[cfg(unix)]
+    fn provider_with_cli(directory: &std::path::Path, body: &str) -> InfisicalProvider {
+        provider_with_cli_script(
+            directory,
+            &format!(
+                "#!/bin/sh\ndir=\"$(dirname \"$0\")\"\nif [ \"$1\" = --version ]; then\n  echo \
+                 version >> \"$dir/versions\"\n  echo 'infisical version 0.44.0'\n  exit 0\nfi\n\
+                 echo run >> \"$dir/runs\"\n{body}"
+            ),
+        )
+    }
+
+    /// Another provider instance running the same CLI against the same
+    /// Infisical instance as `original`, so the two share a CLI session.
+    #[cfg(unix)]
+    fn same_cli(original: &InfisicalProvider) -> InfisicalProvider {
+        let mut other = provider(&format!("infisical://localhost:8080/{PROJECT}?tls=false"));
+        other.cli_binary_path = original.cli_binary_path.clone();
+        other.cli_stdin_is_terminal = original.cli_stdin_is_terminal;
+        other
+    }
+
+    /// How many lines the fake CLI in `directory` appended to `log`.
+    #[cfg(unix)]
+    fn cli_calls(directory: &std::path::Path, log: &str) -> usize {
+        std::fs::read_to_string(directory.join(log)).map_or(0, |calls| calls.lines().count())
+    }
+
+    /// An unsigned JWT whose `exp` claim is `exp`.
+    fn jwt_expiring_at(exp: u64) -> String {
+        let claims = format!(r#"{{"exp":{exp}}}"#);
+        let claims = data_encoding::BASE64URL_NOPAD.encode(claims.as_bytes());
+        format!("eyJhbGciOiJIUzI1NiJ9.{claims}.c2lnbmF0dXJl")
+    }
+
+    fn unix_now() -> u64 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    fn token_error(provider: &InfisicalProvider) -> String {
+        super::super::block_on(provider.resolve_token())
+            .map(|_| ())
+            .expect_err("authentication must fail")
+            .to_string()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_cli_session_is_the_fallback_without_credentials() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = without_infisical_env();
+        let directory = tempfile::tempdir().unwrap();
+        let provider = provider_with_cli(
+            directory.path(),
+            "printf '%s' \"$*\" > \"$dir/args\"\nprintf 'notice\\naaa.bbb.ccc\\n'\n",
+        );
+
+        let token = super::super::block_on(provider.resolve_token()).unwrap();
+        assert_eq!(token.expose_secret(), b"aaa.bbb.ccc");
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("args")).unwrap(),
+            "user get token --plain --silent --domain http://localhost:8080"
+        );
+    }
+
+    #[test]
+    fn an_explicit_token_never_runs_the_cli() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = without_infisical_env();
+        let _token = crate::tests::EnvVarGuard::set(INFISICAL_TOKEN_ENV, "env-token");
+        let mut provider = provider(&format!("infisical://localhost:8080/{PROJECT}?tls=false"));
+        provider.cli_binary_path = "/must-not-run-infisical".into();
+
+        let token = super::super::block_on(provider.resolve_token()).unwrap();
+        assert_eq!(token.expose_secret(), b"env-token");
+    }
+
+    #[test]
+    fn a_half_specified_identity_never_runs_the_cli() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = without_infisical_env();
+        let _id = crate::tests::EnvVarGuard::set(INFISICAL_CLIENT_ID_ENV, "client");
+        let mut provider = provider(&format!("infisical://localhost:8080/{PROJECT}?tls=false"));
+        provider.cli_binary_path = "/must-not-run-infisical".into();
+
+        let error = token_error(&provider);
+        assert!(error.contains("client_secret is missing"), "{error}");
+    }
+
+    #[test]
+    fn a_lone_client_secret_never_runs_the_cli() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = without_infisical_env();
+        let _secret = crate::tests::EnvVarGuard::set(INFISICAL_CLIENT_SECRET_ENV, "secret");
+        let mut provider = provider(&format!("infisical://localhost:8080/{PROJECT}?tls=false"));
+        provider.cli_binary_path = "/must-not-run-infisical".into();
+
+        let error = token_error(&provider);
+        assert!(error.contains("client_id is missing"), "{error}");
+    }
+
+    #[test]
+    fn a_half_specified_credential_identity_never_runs_the_cli() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = without_infisical_env();
+        let mut provider = provider(&format!("infisical://localhost:8080/{PROJECT}?tls=false"));
+        provider.with_credentials(ProviderCredentials::from([(
+            CLIENT_ID.to_string(),
+            SecretBytes::from_utf8("client"),
+        )]));
+        provider.cli_binary_path = "/must-not-run-infisical".into();
+
+        let error = token_error(&provider);
+        assert!(error.contains("client_secret is missing"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_cli_names_infisical_login() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = without_infisical_env();
+        let directory = tempfile::tempdir().unwrap();
+        let provider =
+            provider_with_cli(directory.path(), "printf 'secret-ish.out.put\\n'\nexit 1\n");
+
+        let error = token_error(&provider);
+        assert!(error.contains("infisical login --domain"), "{error}");
+        assert!(!error.contains("secret-ish"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_output_without_a_token_is_refused() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = without_infisical_env();
+        let directory = tempfile::tempdir().unwrap();
+        let provider = provider_with_cli(directory.path(), "printf 'not a token\\n'\n");
+
+        let error = token_error(&provider);
+        assert!(error.contains("did not print an access token"), "{error}");
+        assert!(!error.contains("not a token"), "{error}");
+    }
+
+    #[test]
+    fn a_missing_cli_lists_every_auth_option() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = without_infisical_env();
+        let directory = tempfile::tempdir().unwrap();
+        let mut provider = provider(&format!("infisical://localhost:8080/{PROJECT}?tls=false"));
+        provider.cli_binary_path = directory
+            .path()
+            .join("no-such-infisical")
+            .to_string_lossy()
+            .into_owned();
+
+        let error = token_error(&provider);
+        assert!(error.contains("INFISICAL_TOKEN"), "{error}");
+        assert!(error.contains("infisical login"), "{error}");
+        assert!(error.contains("SECRETSPEC_INFISICAL_PATH"), "{error}");
+    }
+
+    /// Before 0.44.0 the CLI ignores `--domain`, so asking it for a token could
+    /// hand over another instance's session: it is never asked.
+    #[cfg(unix)]
+    #[test]
+    fn an_old_cli_is_refused_before_it_is_asked_for_a_token() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = without_infisical_env();
+        let directory = tempfile::tempdir().unwrap();
+        let provider = provider_with_cli_script(
+            directory.path(),
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'infisical version 0.43.99'; exit 0; \
+             fi\necho run >> \"$(dirname \"$0\")/runs\"\nprintf 'aaa.bbb.ccc\\n'\n",
+        );
+
+        let error = token_error(&provider);
+        assert!(error.contains("0.43.99"), "{error}");
+        assert!(error.contains("0.44.0 or newer"), "{error}");
+        assert!(error.contains("--domain"), "{error}");
+        assert_eq!(cli_calls(directory.path(), "runs"), 0);
+    }
+
+    #[test]
+    fn cli_versions_are_compared_as_versions() {
+        for supported in [
+            "infisical version 0.44.0",
+            "infisical version 0.44.12",
+            "infisical version 0.45.0-rc.1",
+            "infisical version 1.0.0",
+            "infisical version 0.44.0+build.5",
+            "v0.44.0",
+        ] {
+            assert!(
+                InfisicalProvider::supported_cli_version(supported),
+                "{supported}"
+            );
+        }
+        for unsupported in [
+            "infisical version 0.43.99",
+            "infisical version 0.9.100",
+            "infisical version 0.44.0-rc.1",
+            "infisical version 0.44",
+            "infisical version devel",
+            "",
+        ] {
+            assert!(
+                !InfisicalProvider::supported_cli_version(unsupported),
+                "{unsupported}"
+            );
+        }
+    }
+
+    /// Two instances asking at once share one CLI run, which could otherwise
+    /// open two logins. The token has no `exp`, so it is not reused past its
+    /// run: one run proves the callers shared it.
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_instances_share_one_cli_run() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = without_infisical_env();
+        let directory = tempfile::tempdir().unwrap();
+        let first = provider_with_cli(directory.path(), "sleep 1\nprintf 'aaa.bbb.ccc\\n'\n");
+        let second = same_cli(&first);
+
+        let (first_token, second_token) = super::super::block_on(async {
+            tokio::join!(first.resolve_token(), second.resolve_token())
+        });
+        assert_eq!(first_token.unwrap().expose_secret(), b"aaa.bbb.ccc");
+        assert_eq!(second_token.unwrap().expose_secret(), b"aaa.bbb.ccc");
+        assert_eq!(cli_calls(directory.path(), "runs"), 1);
+    }
+
+    /// Callers waiting on a failed run share its failure rather than each
+    /// running the CLI again, but the failure is not remembered: a later call,
+    /// once the user has logged in, asks the CLI again.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_cli_run_is_shared_but_not_remembered() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = without_infisical_env();
+        let directory = tempfile::tempdir().unwrap();
+        let first = provider_with_cli(
+            directory.path(),
+            "sleep 1\nif [ -f \"$dir/logged-in\" ]; then printf 'aaa.bbb.ccc\\n'; else exit 1; fi\n",
+        );
+        let second = same_cli(&first);
+
+        let (first_token, second_token) = super::super::block_on(async {
+            tokio::join!(first.resolve_token(), second.resolve_token())
+        });
+        for token in [first_token, second_token] {
+            let error = token.map(|_| ()).unwrap_err().to_string();
+            assert!(error.contains("infisical login --domain"), "{error}");
+        }
+        assert_eq!(cli_calls(directory.path(), "runs"), 1);
+
+        std::fs::write(directory.path().join("logged-in"), "").unwrap();
+        let token = super::super::block_on(second.resolve_token()).unwrap();
+        assert_eq!(token.expose_secret(), b"aaa.bbb.ccc");
+        assert_eq!(cli_calls(directory.path(), "runs"), 2);
+    }
+
+    /// A token well before its `exp` is reused, by other instances too, and
+    /// the version check is not repeated.
+    #[cfg(unix)]
+    #[test]
+    fn a_fresh_cli_token_is_reused() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = without_infisical_env();
+        let directory = tempfile::tempdir().unwrap();
+        let token = jwt_expiring_at(unix_now() + 3600);
+        let first = provider_with_cli(directory.path(), &format!("printf '%s\\n' '{token}'\n"));
+        let second = same_cli(&first);
+
+        for provider in [&first, &second, &first] {
+            let resolved = super::super::block_on(provider.resolve_token()).unwrap();
+            assert_eq!(resolved.expose_secret(), token.as_bytes());
+        }
+        assert_eq!(cli_calls(directory.path(), "runs"), 1);
+        assert_eq!(cli_calls(directory.path(), "versions"), 1);
+    }
+
+    /// An expired token, or one within a minute of its `exp`, is fetched again
+    /// on the next call; the accepted version is remembered across runs.
+    #[cfg(unix)]
+    #[test]
+    fn an_expiring_cli_token_is_fetched_again() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = without_infisical_env();
+        for exp in [1, unix_now() + 30] {
+            let directory = tempfile::tempdir().unwrap();
+            let token = jwt_expiring_at(exp);
+            let provider =
+                provider_with_cli(directory.path(), &format!("printf '%s\\n' '{token}'\n"));
+
+            for _ in 0..2 {
+                let resolved = super::super::block_on(provider.resolve_token()).unwrap();
+                assert_eq!(resolved.expose_secret(), token.as_bytes());
+            }
+            assert_eq!(cli_calls(directory.path(), "runs"), 2, "exp {exp}");
+            assert_eq!(cli_calls(directory.path(), "versions"), 1, "exp {exp}");
+        }
+    }
+
+    #[test]
+    fn a_cli_token_is_reused_only_with_a_distant_exp() {
+        let now = SystemTime::now();
+        let token = |raw: &str| CliToken {
+            token: Arc::new(SecretBytes::from_utf8(raw)),
+            expires_at: InfisicalProvider::jwt_expiry(raw),
+        };
+
+        assert_eq!(
+            InfisicalProvider::jwt_expiry(&jwt_expiring_at(1)),
+            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+        );
+        assert!(token(&jwt_expiring_at(unix_now() + 3600)).reusable_at(now));
+        assert!(!token(&jwt_expiring_at(unix_now() + 30)).reusable_at(now));
+        assert!(!token(&jwt_expiring_at(1)).reusable_at(now));
+        assert!(!token("aaa.bbb.ccc").reusable_at(now));
+    }
+
+    /// Without a terminal nobody can answer a login, so a CLI still running
+    /// at the timeout is stopped, together with what it spawned (here a
+    /// stand-in for `infisical login`).
+    #[cfg(unix)]
+    #[test]
+    fn a_cli_without_a_terminal_is_stopped_at_the_timeout() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = without_infisical_env();
+        let directory = tempfile::tempdir().unwrap();
+        let mut provider = provider_with_cli(
+            directory.path(),
+            "sleep 60 &\necho $! > \"$dir/descendant\"\nwait\n",
+        );
+        provider.cli_timeout = Duration::from_secs(1);
+
+        let started = std::time::Instant::now();
+        let error = token_error(&provider);
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert!(error.contains("missing or expired"), "{error}");
+        assert!(
+            error.contains("infisical login --domain http://localhost:8080"),
+            "{error}"
+        );
+
+        let pid: libc::pid_t = std::fs::read_to_string(directory.path().join("descendant"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            // SAFETY: signal 0 only probes a PID recorded by the test child.
+            if unsafe { libc::kill(pid, 0) } == -1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // SAFETY: same non-mutating existence probe as above.
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    }
+
+    #[test]
+    fn personal_is_parsed_strictly() {
+        assert!(
+            config(&format!(
+                "infisical://app.infisical.com/{PROJECT}?personal=true"
+            ))
+            .personal_overrides
+        );
+        assert!(!config(&format!("infisical://app.infisical.com/{PROJECT}")).personal_overrides);
+        let error = InfisicalConfig::try_from(&ProviderUrl::new(
+            Url::parse(&format!(
+                "infisical://app.infisical.com/{PROJECT}?personal=banana"
+            ))
+            .unwrap(),
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("Unknown personal value"), "{error}");
+    }
+
+    #[test]
+    fn personal_reads_list_with_overrides() {
+        let (endpoint, server) = response_server(vec![(
+            "200 OK",
+            r#"{"secrets":[{"secretKey":"API_KEY","secretValue":"mine"}]}"#,
+        )]);
+        let provider = personal_provider_with_token(endpoint, Some("development"));
+
+        let value = provider
+            .get(Address::convention("myapp", "development", "API_KEY"))
+            .unwrap()
+            .expect("the override must be read");
+        assert_eq!(value.expose_secret(), b"mine");
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1, "{requests:#?}");
+        assert!(
+            requests[0].starts_with("GET /api/v4/secrets?"),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[0].contains("includePersonalOverrides=true"),
+            "{}",
+            requests[0]
+        );
+    }
+
+    #[test]
+    fn shared_reads_never_request_overrides() {
+        let (endpoint, server) = response_server(vec![(
+            "200 OK",
+            r#"{"secrets":[{"secretKey":"API_KEY","secretValue":"shared"}]}"#,
+        )]);
+        let provider = provider_with_token(endpoint, Some("development"));
+        provider.get_many(&one_convention_request()).unwrap();
+
+        let requests = server.join().unwrap();
+        assert!(
+            !requests[0].contains("includePersonalOverrides"),
+            "{}",
+            requests[0]
+        );
+    }
+
+    #[test]
+    fn a_personal_override_without_a_shared_secret_is_refused() {
+        let (endpoint, server) = response_server(vec![
+            (
+                "404 Not Found",
+                r#"{"message":"Personal secret with name API_KEY not found"}"#,
+            ),
+            (
+                "400 Bad Request",
+                r#"{"message":"Failed to create personal secret override for no corresponding shared secret"}"#,
+            ),
+        ]);
+        let provider = personal_provider_with_token(endpoint, Some("development"));
+
+        let error = provider
+            .set(
+                Address::convention("myapp", "development", "API_KEY"),
+                &SecretBytes::from_utf8("local"),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("no corresponding shared secret"), "{error}");
+        assert!(error.contains("existing shared secret"), "{error}");
+        assert!(!error.contains("machine identity"), "{error}");
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2, "{requests:#?}");
+        assert!(requests[0].starts_with("PATCH /api/v4/secrets/API_KEY"));
+        assert!(requests[1].starts_with("POST /api/v4/secrets/API_KEY"));
+    }
+
+    #[test]
+    fn a_personal_override_never_creates_folders() {
+        let (endpoint, server) = response_server(vec![
+            ("404 Not Found", r#"{"message":"not found"}"#),
+            ("404 Not Found", r#"{"message":"not found"}"#),
+            // The environment probe: it exists, so the shared secret is missing.
+            ("200 OK", r#"{"secrets":[]}"#),
+        ]);
+        let provider = personal_provider_with_token(endpoint, Some("development"));
+
+        let error = provider
+            .set(
+                Address::convention("myapp", "development", "API_KEY"),
+                &SecretBytes::from_utf8("local"),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("has no shared secret"), "{error}");
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 3, "{requests:#?}");
+        assert!(requests[2].contains("secretPath=%2F"), "{}", requests[2]);
+        assert!(
+            requests
+                .iter()
+                .all(|request| !request.contains("/api/v2/folders")),
+            "{requests:#?}"
+        );
+    }
+
+    /// Infisical answers a missing environment with the same 404 as a missing
+    /// shared secret; the root probe tells them apart.
+    #[test]
+    fn a_personal_override_in_a_missing_environment_names_the_environment() {
+        let (endpoint, server) = response_server(vec![
+            ("404 Not Found", r#"{"message":"not found"}"#),
+            ("404 Not Found", r#"{"message":"not found"}"#),
+            ("404 Not Found", r#"{"message":"not found"}"#),
+        ]);
+        let provider = personal_provider_with_token(endpoint, None);
+
+        let error = provider
+            .set(
+                Address::convention("myapp", "development", "API_KEY"),
+                &SecretBytes::from_utf8("local"),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("could not find environment 'development'"),
+            "{error}"
+        );
+        assert!(error.contains("active SecretSpec profile"), "{error}");
+        assert!(!error.contains("shared secret"), "{error}");
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 3, "{requests:#?}");
+        assert!(
+            requests[2].starts_with("GET /api/v4/secrets?"),
+            "{}",
+            requests[2]
+        );
+        assert!(requests[2].contains("secretPath=%2F"), "{}", requests[2]);
+    }
+
+    /// A 400 is put down to a missing shared secret or a non-user writer only
+    /// when Infisical says so.
+    #[test]
+    fn an_unrelated_personal_400_is_reported_plainly() {
+        let (endpoint, server) = response_server(vec![(
+            "400 Bad Request",
+            r#"{"message":"secretValue: Expected string, received number"}"#,
+        )]);
+        let provider = personal_provider_with_token(endpoint, Some("development"));
+
+        let error = provider
+            .set(
+                Address::convention("myapp", "development", "API_KEY"),
+                &SecretBytes::from_utf8("local"),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("HTTP 400"), "{error}");
+        assert!(error.contains("Expected string"), "{error}");
+        assert!(!error.contains("shared secret"), "{error}");
+        assert!(!error.contains("machine identity"), "{error}");
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_personal_write_by_a_non_user_names_the_cause() {
+        let (endpoint, server) = response_server(vec![(
+            "400 Bad Request",
+            r#"{"message":"Must be user to create personal secret"}"#,
+        )]);
+        let provider = personal_provider_with_token(endpoint, Some("development"));
+
+        let error = provider
+            .set(
+                Address::convention("myapp", "development", "API_KEY"),
+                &SecretBytes::from_utf8("local"),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Must be user"), "{error}");
+        assert!(error.contains("users only"), "{error}");
+        assert!(!error.contains("shared secret"), "{error}");
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    /// Both requests of a personal write -- the update, then the create it
+    /// falls back to -- carry `type: personal` on the wire.
+    #[test]
+    fn personal_writes_send_the_personal_type() {
+        let (endpoint, server) = body_recording_server(vec![
+            (
+                "404 Not Found",
+                r#"{"message":"Personal secret with name API_KEY not found"}"#,
+            ),
+            (
+                "200 OK",
+                r#"{"secret":{"secretKey":"API_KEY","version":1}}"#,
+            ),
+        ]);
+        let provider = personal_provider_with_token(endpoint, Some("development"));
+
+        provider
+            .set(
+                Address::convention("myapp", "development", "API_KEY"),
+                &SecretBytes::from_utf8("local"),
+            )
+            .unwrap();
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2, "{requests:#?}");
+        for ((line, body), method) in requests.iter().zip(["PATCH", "POST"]) {
+            assert!(
+                line.starts_with(&format!("{method} /api/v4/secrets/API_KEY")),
+                "{line}"
+            );
+            let body: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!(body["type"], "personal", "{line}: {body}");
+            assert_eq!(body["secretValue"], "local", "{line}: {body}");
+        }
+    }
+
+    #[test]
+    fn shared_writes_send_no_type() {
+        let (endpoint, server) = body_recording_server(vec![(
+            "200 OK",
+            r#"{"secret":{"secretKey":"API_KEY","version":2}}"#,
+        )]);
+        let provider = provider_with_token(endpoint, Some("development"));
+
+        provider
+            .set(
+                Address::convention("myapp", "development", "API_KEY"),
+                &SecretBytes::from_utf8("local"),
+            )
+            .unwrap();
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1, "{requests:#?}");
+        let (line, body) = &requests[0];
+        assert!(line.starts_with("PATCH /api/v4/secrets/API_KEY"), "{line}");
+        let body: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert!(body.get("type").is_none(), "{body}");
     }
 }

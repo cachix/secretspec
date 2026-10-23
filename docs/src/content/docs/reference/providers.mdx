@@ -715,7 +715,7 @@ selects the null label
 
 Available since SecretSpec 0.16.
 
-**URI**: `infisical://[HOST]/PROJECT_ID[?env=SLUG][&path=/PREFIX][&tls=false]` - Stores secrets in Infisical
+**URI**: `infisical://[HOST]/PROJECT_ID[?env=SLUG][&path=/PREFIX][&tls=false][&personal=true]` - Stores secrets in Infisical. `personal=true` (0.22+) reads and writes the user's personal overrides; SecretSpec before 0.22 ignores it and writes the shared secret, so pin teammates to 0.22+.
 
 ```text
 infisical://app.infisical.com/7e2f1a4c-...            # Infisical Cloud (US)
@@ -728,9 +728,9 @@ The project is Infisical's project **UUID** (Project Settings → Project ID); i
 accept the project slug. Without a host, the provider reads `INFISICAL_DOMAIN`, then Infisical's
 legacy `INFISICAL_API_URL`, then defaults to Infisical Cloud.
 
-**Features**: Read/write, cloud sync, profiles, machine-identity (Universal Auth) or token auth, secret references, version-pinned refs
-**Prerequisites**: An Infisical project, a machine identity with access to it, build with `--features infisical`
-**Authentication**: `INFISICAL_CLIENT_ID` + `INFISICAL_CLIENT_SECRET` (Universal Auth), or a ready-made `INFISICAL_TOKEN`. Service tokens are not supported; Infisical deprecated them in favour of machine identities.
+**Features**: Read/write, cloud sync, profiles, machine-identity (Universal Auth) or token auth, Infisical CLI login (0.22+), personal overrides (0.22+), secret references, version-pinned refs
+**Prerequisites**: An Infisical project, a machine identity or access token with access to it, or an Infisical CLI login (0.22+, Infisical CLI 0.44.0+), build with `--features infisical`
+**Authentication**: `INFISICAL_CLIENT_ID` + `INFISICAL_CLIENT_SECRET` (Universal Auth), or a ready-made `INFISICAL_TOKEN`. With neither configured, the logged-in Infisical CLI user's session is used (0.22+), via `infisical user get token --domain <endpoint>`; SecretSpec refuses Infisical CLIs older than 0.44.0, which ignore `--domain`. Without a terminal on stdin, the CLI is stopped after 30 seconds. Service tokens are not supported; Infisical deprecated them in favour of machine identities.
 **Storage**: Secret `{key}` in folder `/secretspec/{project}/{profile}`, in the environment named by the profile (or by `?env=`). Keys are stored verbatim.
 
 By default the SecretSpec profile names the Infisical environment, so a `production` profile reads

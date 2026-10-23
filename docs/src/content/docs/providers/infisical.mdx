@@ -21,7 +21,7 @@ both Infisical Cloud and self-hosted instances.
 | URI | `infisical://[host]/PROJECT_ID[?options]` |
 | Access | Read and write; version-pinned references are read-only |
 | Best for | Infisical Cloud or self-hosted Infisical deployments |
-| Authentication | Universal Auth machine identity or access token |
+| Authentication | Universal Auth machine identity or access token, or the Infisical CLI login (0.22+, Infisical CLI 0.44.0+) |
 | Availability | SecretSpec 0.16+; requires the `infisical` build feature |
 | Default storage | Key `{key}` in `{path}/{project}/{profile}` |
 
@@ -46,7 +46,8 @@ per folder rather than one per secret.
 ### Prerequisites
 
 - An Infisical project
-- A machine identity with access to it
+- A machine identity or access token with access to it, or an Infisical CLI login (0.22+,
+  Infisical CLI 0.44.0+)
 - Build with `--features infisical`
 
 ### Universal Auth machine identity
@@ -72,6 +73,54 @@ $ export INFISICAL_TOKEN=...
 Service tokens are not supported: Infisical deprecated them in favour of
 machine identities.
 
+### Infisical CLI login
+
+<VersionCompatibility version="0.22" />
+
+Without any configured credentials, the provider uses the user logged in to the
+[Infisical CLI](https://infisical.com/docs/cli/overview) 0.44.0 or newer:
+
+```bash
+$ infisical login --domain https://app.infisical.com
+
+$ secretspec run --provider "infisical://app.infisical.com/7e2f1a4c-...?env=dev" -- npm start
+```
+
+The access token comes from the first source that is configured, so CI with
+explicit credentials is unaffected:
+
+1. `token`, or `INFISICAL_TOKEN`
+2. `client_id` and `client_secret`, or `INFISICAL_CLIENT_ID` and `INFISICAL_CLIENT_SECRET`
+3. The Infisical CLI session
+
+For the last step SecretSpec runs:
+
+```bash
+infisical user get token --plain --silent --domain <endpoint>
+```
+
+SecretSpec runs it at most once at a time per instance and reuses the token until it expires;
+callers resolving in parallel share that run and its result. A failed attempt is not remembered,
+so a long-running `secretspec serve` picks up a login made after the failure.
+
+`<endpoint>` is the instance the URI names, e.g. `https://app.infisical.com`. Infisical CLI 0.44.0
+and newer refuse to hand over a session issued by a different instance, so log in against the same
+one (`infisical login --domain <endpoint>`). Older CLIs ignore `--domain` and would hand over
+another instance's session, so SecretSpec checks `infisical --version` first and refuses a CLI
+older than 0.44.0, including its pre-releases, or one whose version it cannot read.
+`INFISICAL_PROFILE` and `INFISICAL_ORG` (Infisical CLI 0.44.0+) select which CLI login and
+organization are used; they reach the CLI through the environment.
+
+When SecretSpec's standard input is a terminal, it is passed to the CLI, so an expired session
+can start the CLI's own browser login, or its prompt to paste a token, with its prompts on stderr.
+Otherwise, as in CI, agents, or pipes, the CLI gets no input and is stopped after 30 seconds with
+an error saying the session is missing or expired: run `infisical login --domain <endpoint>`
+interactively, or configure a token or machine identity.
+Set `SECRETSPEC_INFISICAL_PATH` when the binary is not `infisical` on `PATH`.
+
+A half-configured machine identity — only `client_id` or only `client_secret` — is still an error
+rather than a reason to fall back to the CLI login.
+
 ### Credentials from another provider
 
 A machine identity's credentials can live in another store rather than in the
@@ -89,8 +138,9 @@ client_secret = "keyring"
 
 The provider declares `client_id` and `client_secret` for Universal Auth, and
 `token` for a ready-made access token. Each falls back to its corresponding
-environment variable when it is not declared. Use
-`secretspec config provider login infisical` to store declared credentials.
+environment variable when it is not declared; with none of them set, the
+provider falls back to the [Infisical CLI login](#infisical-cli-login) (0.22+).
+Use `secretspec config provider login infisical` to store declared credentials.
 
 ## Provider credentials
 
@@ -101,7 +151,7 @@ environment variable when it is not declared. Use
 ### URI format
 
 ```
-infisical://[host]/{project-id}[?env=slug&path=/prefix&tls=false]
+infisical://[host]/{project-id}[?env=slug&path=/prefix&tls=false&personal=true]
 ```
 
 - `host`: the Infisical instance (falls back to `INFISICAL_DOMAIN`, then the legacy
@@ -110,6 +160,8 @@ infisical://[host]/{project-id}[?env=slug&path=/prefix&tls=false]
 - `?env=`: environment slug. Without it, the SecretSpec profile names the environment
 - `?path=`: folder prefix holding SecretSpec's secrets (default: `/secretspec`)
 - `?tls=false`: disable TLS, for self-hosted instances served over plain HTTP
+- `?personal=true` (0.22+): read your personal overrides and write personal overrides (see
+  [Personal overrides](#personal-overrides))
 
 Infisical's API addresses a project by UUID, not by the slug shown in its UI.
 
@@ -260,6 +312,38 @@ $ secretspec run --provider "infisical:///7e2f1a4c-..." -- npm start
 
 Infisical's legacy `INFISICAL_API_URL` is honoured too, so an instance already configured for
 their CLI works unchanged. `INFISICAL_DOMAIN` wins when both are set, matching the CLI.
+
+### Personal overrides
+
+<VersionCompatibility version="0.22" />
+
+Infisical lets a user override a shared secret with a personal value only they see. With
+`?personal=true`, reads return your personal override where one exists and the shared value
+otherwise, and `secretspec set` writes a personal override instead of changing the shared secret.
+
+```toml
+[providers]
+infisical = "infisical://app.infisical.com/7e2f1a4c-...?env=dev"
+infisical_me = "infisical://app.infisical.com/7e2f1a4c-...?env=dev&personal=true"
+```
+
+```bash
+$ secretspec set DATABASE_URL --provider infisical_me
+```
+
+- Infisical keeps personal overrides for users only, so this needs a user's token: the
+  [Infisical CLI login](#infisical-cli-login) or a user's `INFISICAL_TOKEN`. A machine identity
+  reads shared values only, and its personal writes are refused.
+- A shared secret with the same key must already exist in the folder. Create it first through an
+  alias without `?personal=true`; a personal write never creates folders.
+- Version-pinned refs read the shared secret's history.
+- Requires an Infisical version with personal overrides on its v4 API.
+
+:::caution[Pin teammates to SecretSpec 0.22+]
+SecretSpec before 0.22 ignores `personal=true`: it reads the shared value and `secretspec set`
+overwrites the team's shared secret instead of writing a personal override. Make sure everyone
+using a manifest with a `personal=true` alias runs SecretSpec 0.22 or newer.
+:::
 
 ### Approval policies
 

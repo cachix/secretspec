@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Infisical falls back to the logged-in Infisical CLI user (`infisical login`)
+  when no token or machine identity credentials are configured. This requires
+  Infisical CLI 0.44.0 or newer, because older CLIs ignore `--domain` and could
+  hand over another instance's session. Without a terminal on stdin, the CLI
+  is stopped after 30 seconds instead of waiting for a browser login. A new
+  `?personal=true` URI option reads the user's personal overrides and makes
+  `secretspec set` write a personal override instead of the shared secret.
+  Earlier SecretSpec versions ignore `?personal=true` and write the shared
+  secret, so everyone using such an alias needs 0.22 or newer.
+
 - Proton Pass refs accept `field` to read any field of an existing item, such
   as `ref = { item = "test-item", field = "password" }` for a login's
   password, a custom field, or `Section.field`. Refs with a `field` are

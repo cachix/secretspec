@@ -57,6 +57,7 @@ pub(crate) mod ini_field;
 pub(crate) mod json_field;
 mod native;
 mod plan;
+mod redaction;
 mod report;
 mod resolve;
 mod revision;
@@ -133,6 +134,7 @@ pub use provider::{
     Provider, ProviderBase, ProviderCredentials, ProviderInfo, ProviderValue, RetryOperation,
     RetryOwnership, SyncProviderAdapter, providers,
 };
+pub use redaction::{RedactionStream, Redactor};
 pub use report::{
     Derivation, RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus,
     SecretResolution,

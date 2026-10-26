@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `secretspec run` now masks exact secret values in command stdout and stderr
+  automatically, including file contents for `as_path` secrets. Filtering uses
+  pipes, which can change terminal detection and buffering in interactive programs.
+  Rust embedders can use `Redactor` and independent `RedactionStream`s to filter
+  their own output. `ValidatedSecrets::redactor` builds a filter from the same
+  validation snapshot, including original file contents and hidden inputs.
+
 - Rust integrations can implement the awaitable `AsyncProvider` trait or use
   `AsyncProviderAdapter` to call existing providers without blocking async tasks.
   `SyncProviderAdapter` exposes native async backends to the existing sync API;

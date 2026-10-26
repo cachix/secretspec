@@ -194,6 +194,8 @@ fn config_schemas_reject_invalid_shapes_and_typos() {
         json!({"requred": true}),
         json!({"compose": "${REPO_PATH}/.tmp"}),
         json!({"required": "yes"}),
+        json!({"redact": true}),
+        json!({"redact": false}),
         json!({"required": {}}),
         json!({"required": {"exactly_one": 1}}),
         json!({"encoding": "rot13"}),

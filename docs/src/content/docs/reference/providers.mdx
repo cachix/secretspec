@@ -633,7 +633,7 @@ configure the CLI themselves and SecretSpec verifies the setting matches before
 each operation. See the [provider guide](/providers/bw/#self-hosted-servers).
 
 **Features**: Read/write, all vault item types (logins, cards, identities, SSH keys, secure notes), organization/collection addressing by name or ID, field selection, `ref = { item, field }` mapping in `secretspec.toml`, declaration discovery through `init --from` (0.18+)
-**Prerequisites**: Bitwarden CLI (`bw`), signed in and unlocked (`BW_SESSION` env var), self-hosted servers set with `bw config server` before login, build with `--features bw`
+**Prerequisites**: Bitwarden CLI (`bw`), signed in and unlocked (`BW_SESSION` env var or a [`session` provider credential](/providers/bw/#provider-credentials) in 0.22+), self-hosted servers set with `bw config server` before login, build with `--features bw`
 **Storage**: One vault item per secret; convention title `secretspec/{project}/{profile}/{key}` (0.20+, customizable with `?folder=`), with per-type default fields unless `?field=` or a `ref` mapping selects one
 
 ## Bitwarden Secrets Manager Provider

@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+- Bitwarden Password Manager can load its `session` credential from another
+  provider, such as keyring, instead of requiring `BW_SESSION` in the shell.
+
 - Proton Pass refs accept `field` to read any field of an existing item, such
   as `ref = { item = "test-item", field = "password" }` for a login's
   password, a custom field, or `Section.field`. Refs with a `field` are

@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a compatible SecretSpec executable.
 
 ### Fixed
+- Scaleway: `secretspec set` on a secret that already exists adds a new version
+  instead of failing with HTTP 400 "cannot have same secret name in same path".
 
 - KDBX saves use the correct `DeletionTime` XML element, keeping databases
   compatible with KeePass clients that strictly validate deletion metadata.

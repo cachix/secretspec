@@ -393,6 +393,16 @@ impl ScalewayProvider {
                 self.lookup_secret_id(client, project_id, secret_path, secret_name)
                     .await
             }
+            // Scaleway answers a name that is already taken with 400, not 409.
+            400 => {
+                let body = read_body(response).await;
+                if is_duplicate_name(&body) {
+                    self.lookup_secret_id(client, project_id, secret_path, secret_name)
+                        .await
+                } else {
+                    Err(status_error("creating secret", 400, &body))
+                }
+            }
             status => Err(http_error("creating secret", status, response).await),
         }
     }
@@ -460,16 +470,43 @@ fn decode_payload(item: &str, data: &str) -> Result<SecretBytes> {
 
 /// Builds an error for a non-success HTTP response, including the body.
 async fn http_error(action: &str, status: u16, response: reqwest::Response) -> SecretSpecError {
-    let body = match response.text().await {
+    status_error(action, status, &read_body(response).await)
+}
+
+fn status_error(action: &str, status: u16, body: &str) -> SecretSpecError {
+    SecretSpecError::ProviderOperationFailed(format!(
+        "Scaleway returned HTTP {status} while {action}: {body}"
+    ))
+}
+
+async fn read_body(response: reqwest::Response) -> String {
+    match response.text().await {
         Ok(body) => body,
         Err(error) => format!(
             "<failed to read response body: {}>",
             crate::error::display_error_chain(&error)
         ),
-    };
-    SecretSpecError::ProviderOperationFailed(format!(
-        "Scaleway returned HTTP {status} while {action}: {body}"
-    ))
+    }
+}
+
+/// Whether a create-secret 400 is Scaleway's "name already taken in this path".
+fn is_duplicate_name(body: &str) -> bool {
+    #[derive(Deserialize)]
+    struct InvalidArguments {
+        #[serde(default)]
+        details: Vec<ArgumentError>,
+    }
+    #[derive(Deserialize)]
+    struct ArgumentError {
+        argument_name: String,
+        help_message: String,
+    }
+    serde_json::from_str::<InvalidArguments>(body).is_ok_and(|error| {
+        error.details.iter().any(|detail| {
+            detail.argument_name == "name"
+                && detail.help_message.contains("cannot have same secret name")
+        })
+    })
 }
 
 impl Provider for ScalewayProvider {
@@ -559,6 +596,17 @@ mod tests {
 
     fn config(spec: &str) -> ScalewayConfig {
         ScalewayConfig::try_from(&ProviderUrl::new(Url::parse(spec).unwrap())).unwrap()
+    }
+
+    #[test]
+    fn duplicate_name_is_recognized() {
+        // verbatim from Scaleway, setting a secret that already exists
+        let taken = r#"{"details":[{"argument_name":"name","help_message":"cannot have same secret name in same path","reason":"format"}],"message":"invalid argument(s)","type":"invalid_arguments"}"#;
+        assert!(is_duplicate_name(taken));
+
+        let bad_path = r#"{"details":[{"argument_name":"path","help_message":"must start with /","reason":"format"}],"message":"invalid argument(s)","type":"invalid_arguments"}"#;
+        assert!(!is_duplicate_name(bad_path));
+        assert!(!is_duplicate_name("not json"));
     }
 
     #[test]

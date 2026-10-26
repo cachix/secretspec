@@ -2,12 +2,12 @@ use crate::{Result, SecretBytes, SecretSpecError};
 use std::collections::HashMap;
 use std::ffi::OsStr;
 
-/// Credentials handed to a provider at construction.
+/// Credentials handed to a provider at construction (0.22+).
 ///
 /// Maps semantic provider-specific names (for example `access_token`) to
 /// secret values. Providers may retain environment-variable fallback for
 /// standalone compatibility, but environment names are not part of this API.
-pub(crate) type ProviderCredentials = HashMap<String, SecretBytes>;
+pub type ProviderCredentials = HashMap<String, SecretBytes>;
 
 /// Resolves a semantic provider credential, falling back to the provider's
 /// conventional environment variable when no explicit credential was supplied.

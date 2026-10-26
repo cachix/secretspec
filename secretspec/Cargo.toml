@@ -68,6 +68,7 @@ azure_security_keyvault_secrets = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["io-std", "io-util", "macros", "process", "sync", "time"] }
 secretspec-ipc.workspace = true
 async-trait.workspace = true
+futures-util.workspace = true
 reqwest = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 rand.workspace = true

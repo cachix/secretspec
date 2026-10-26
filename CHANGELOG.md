@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Rust integrations can implement the awaitable `AsyncProvider` trait or use
+  `AsyncProviderAdapter` to call existing providers without blocking async tasks.
+  `SyncProviderAdapter` exposes native async backends to the existing sync API;
+  `ProviderBase` carries their shared configuration and identity.
+  Async SDK, HTTP, and external IPC providers implement the trait directly,
+  retaining batch reads, metadata, authentication, and retry behavior. The
+  async URI factory selects native implementations automatically.
+
 - Bitwarden Password Manager can load its `session` credential from another
   provider, such as keyring, instead of requiring `BW_SESSION` in the shell.
 

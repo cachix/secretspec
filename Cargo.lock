@@ -6331,6 +6331,7 @@ dependencies = [
  "dunce",
  "ed25519-dalek",
  "etcetera",
+ "futures-util",
  "google-cloud-gax",
  "google-cloud-secretmanager-v1",
  "http 1.4.0",

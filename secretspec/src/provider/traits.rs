@@ -72,7 +72,9 @@ impl ProviderValue {
 
 /// Trait defining the interface for secret storage providers.
 ///
-/// All secret storage backends must implement this trait to integrate with SecretSpec.
+/// Synchronous storage backends implement this trait directly. Native async
+/// backends implement [`super::AsyncProvider`] and [`super::ProviderBase`];
+/// [`super::SyncProviderAdapter`] exposes them to the synchronous resolver.
 /// The trait is designed to be flexible enough to support various storage mechanisms
 /// while maintaining a consistent interface.
 ///

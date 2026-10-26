@@ -129,8 +129,9 @@ pub use provider::external::{
     ProviderDiscovery, ProviderEndpoint, RegistrationScope, set_provider_discovery,
 };
 pub use provider::{
-    Address, DiscoveryContext, ProducedValuePersistence, Provider, ProviderInfo, ProviderValue,
-    providers,
+    Address, AsyncProvider, AsyncProviderAdapter, DiscoveryContext, ProducedValuePersistence,
+    Provider, ProviderBase, ProviderCredentials, ProviderInfo, ProviderValue, RetryOperation,
+    RetryOwnership, SyncProviderAdapter, providers,
 };
 pub use report::{
     Derivation, RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus,

@@ -4,7 +4,7 @@
 
 use super::{
     Address, DiscoveryContext, ProducedValuePersistence, Provider, ProviderCredentials,
-    ProviderUrl, ProviderValue, exists_each, get_each_with,
+    ProviderUrl, ProviderValue,
 };
 use crate::SecretBytes;
 use crate::config::NativeAddress;
@@ -951,18 +951,41 @@ impl ExternalState {
 /// Endpoint startup is lazy so project/profile context, `with_base_dir`, the
 /// credential broker, and the initial `set_reason` are applied to immutable
 /// initialization state first.
-pub struct ExternalProvider {
+/// Synchronous external-provider facade. Use `as_async()` for native async I/O.
+pub type ExternalProvider = super::SyncProviderAdapter<ExternalBackend>;
+
+impl super::SyncProviderAdapter<ExternalBackend> {
+    pub fn new(endpoint: ProviderEndpoint, uri: &str) -> Result<Self> {
+        ExternalBackend::new(endpoint, uri).map(Self::from_async)
+    }
+    pub(crate) fn from_url(endpoint: ProviderEndpoint, url: &ProviderUrl) -> Self {
+        Self::from_async(ExternalBackend::from_url(endpoint, url))
+    }
+    #[cfg(any(feature = "cli", test))]
+    pub(crate) fn initialize(&self) -> Result<()> {
+        super::block_on(self.as_async().initialize_async())
+    }
+    pub fn exists(&self, address: Address<'_>) -> Result<bool> {
+        Provider::exists(self, address)
+    }
+    pub fn clear(&self, scope: wire::ClearScope) -> Result<usize> {
+        super::block_on(self.as_async().clear_async(scope))
+    }
+}
+
+pub struct ExternalBackend {
     endpoint: ProviderEndpoint,
     scheme: String,
     configured_uri: String,
     state: Mutex<ExternalState>,
     /// Serializes endpoint startup. Held instead of `state` while an endpoint
     /// initializes, because initialization may wait on a credential prompt.
-    launch: Mutex<()>,
+    launch: tokio::sync::Mutex<()>,
     metadata: OnceLock<wire::Metadata>,
+    retry_policy: Option<super::RetryPolicy>,
 }
 
-impl ExternalProvider {
+impl ExternalBackend {
     /// Constructs a provider from an explicit endpoint and configured URI.
     /// The executable is canonicalized and checked before it is retained.
     pub fn new(endpoint: ProviderEndpoint, uri: &str) -> Result<Self> {
@@ -1002,8 +1025,9 @@ impl ExternalProvider {
                 session: None,
                 generation: 0,
             }),
-            launch: Mutex::new(()),
+            launch: tokio::sync::Mutex::new(()),
             metadata: OnceLock::new(),
+            retry_policy: None,
         }
     }
 
@@ -1031,9 +1055,12 @@ impl ExternalProvider {
         }
     }
 
-    #[cfg(any(feature = "cli", test))]
-    pub(crate) fn initialize(&self) -> Result<()> {
-        self.ensure_session().map(|_| ())
+    /// Negotiates endpoint capabilities without blocking the caller (0.22+).
+    ///
+    /// Async capability accessors report the last negotiated capabilities;
+    /// call this before inspecting them without performing a storage operation.
+    pub async fn initialize_async(&self) -> Result<()> {
+        self.ensure_session_async().await.map(|_| ())
     }
 
     /// The absolute deadline for a request that may trigger credential
@@ -1047,24 +1074,21 @@ impl ExternalProvider {
         })
     }
 
-    fn ensure_session(&self) -> Result<Arc<ProviderSession>> {
-        if let Some(session) = self.live_session()? {
+    async fn ensure_session_async(&self) -> Result<Arc<ProviderSession>> {
+        if let Some(session) = self.live_session().await? {
             return Ok(session);
         }
         // Serialize startup under a dedicated lock so `state` stays free while
         // the endpoint initializes: initialization may wait on a credential
         // prompt, and setters or other accessors must not block behind it.
-        let _launch = self
-            .launch
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _launch = self.launch.lock().await;
         loop {
             // Another caller may have finished starting the endpoint while
             // this one waited for the launch lock.
-            if let Some(session) = self.live_session()? {
+            if let Some(session) = self.live_session().await? {
                 return Ok(session);
             }
-            if let Some(session) = self.launch_session()? {
+            if let Some(session) = self.launch_session().await? {
                 return Ok(session);
             }
             // Initialization inputs changed while the endpoint started, so
@@ -1074,7 +1098,7 @@ impl ExternalProvider {
     }
 
     /// The current usable session, detaching one that has closed.
-    fn live_session(&self) -> Result<Option<Arc<ProviderSession>>> {
+    async fn live_session(&self) -> Result<Option<Arc<ProviderSession>>> {
         let stale = {
             let mut state = self.state();
             if let Some(message) = state.configuration_error() {
@@ -1087,44 +1111,52 @@ impl ExternalProvider {
             }
         };
         if let Some(stale) = stale {
-            close_live_session(stale);
+            close_live_session_async(stale).await;
         }
         Ok(None)
     }
 
     /// Starts one endpoint from a snapshot of the initialization inputs.
     /// Returns `None` when those inputs changed during startup.
-    fn launch_session(&self) -> Result<Option<Arc<ProviderSession>>> {
-        let state = self.state();
-        let generation = state.generation;
-        let interactive = state.credential_broker.interactive();
-        let credential_error = state.credential_error.clone();
-        let application = InitializeApplication {
-            scheme: self.scheme.clone(),
-            uri: self.configured_uri.clone(),
-            context: ApplicationContext {
-                project: state.project.clone(),
-                profile: state.profile.clone(),
-                base_dir: state
-                    .base_dir
-                    .as_ref()
-                    .map(|path| path.to_string_lossy().into_owned()),
-                reason: state.reason.clone(),
-                requested_authorization_duration_ms: state
-                    .requested_authorization_duration
-                    .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)),
-            },
+    async fn launch_session(&self) -> Result<Option<Arc<ProviderSession>>> {
+        let (generation, interactive, credential_error, application, responder) = {
+            let state = self.state();
+            let generation = state.generation;
+            let interactive = state.credential_broker.interactive();
+            let credential_error = state.credential_error.clone();
+            let application = InitializeApplication {
+                scheme: self.scheme.clone(),
+                uri: self.configured_uri.clone(),
+                context: ApplicationContext {
+                    project: state.project.clone(),
+                    profile: state.profile.clone(),
+                    base_dir: state
+                        .base_dir
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().into_owned()),
+                    reason: state.reason.clone(),
+                    requested_authorization_duration_ms: state
+                        .requested_authorization_duration
+                        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)),
+                },
+            };
+            let responder = Arc::new(ExternalCredentialResponder {
+                principal: ProviderCredentialPrincipal::new(&self.scheme, &self.configured_uri),
+                explicit: state.credentials.clone(),
+                broker: state.credential_broker.clone(),
+                names: Mutex::new(HashSet::new()),
+                broker_error: credential_error.clone(),
+            });
+            (
+                generation,
+                interactive,
+                credential_error,
+                application,
+                responder,
+            )
         };
-        let responder = Arc::new(ExternalCredentialResponder {
-            principal: ProviderCredentialPrincipal::new(&self.scheme, &self.configured_uri),
-            explicit: state.credentials.clone(),
-            broker: state.credential_broker.clone(),
-            names: Mutex::new(HashSet::new()),
-            broker_error: credential_error.clone(),
-        });
-        drop(state);
         let launch = self.launch_options(std::env::vars_os());
-        let launched = super::block_on(ProviderSession::launch_with_credential_broker(
+        let launched = ProviderSession::launch_with_credential_broker(
             launch,
             Product {
                 name: "secretspec".to_string(),
@@ -1137,7 +1169,8 @@ impl ExternalProvider {
             application,
             self.request_deadline(interactive, STARTUP_TIMEOUT),
             Some(responder.clone()),
-        ));
+        )
+        .await;
         let session = match launched {
             Ok(session) => session,
             Err(error) => {
@@ -1159,24 +1192,27 @@ impl ExternalProvider {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
         let session = Arc::new(session);
-        {
+        let accepted = {
             let mut state = self.state();
-            if state.generation == generation {
-                if let Some(existing) = self.metadata.get() {
-                    if existing != session.metadata() {
-                        drop(state);
-                        close_live_session(session);
-                        return Err(discovery_error("provider metadata changed after reconnect"));
-                    }
-                } else {
-                    let _ = self.metadata.set(session.metadata().clone());
-                }
+            if state.generation != generation {
+                Ok(false)
+            } else if self
+                .metadata
+                .get()
+                .is_some_and(|existing| existing != session.metadata())
+            {
+                Err(discovery_error("provider metadata changed after reconnect"))
+            } else {
+                let _ = self.metadata.set(session.metadata().clone());
                 state.session = Some(session.clone());
-                return Ok(Some(session));
+                Ok(true)
             }
+        };
+        if matches!(accepted, Ok(true)) {
+            return Ok(Some(session));
         }
-        close_live_session(session);
-        Ok(None)
+        close_live_session_async(session).await;
+        accepted.map(|_| None)
     }
 
     /// Launch options for this endpoint, with the child environment filtered
@@ -1197,21 +1233,8 @@ impl ExternalProvider {
         }
     }
 
-    /// Endpoint-reported metadata, starting the session if it has not run yet.
-    ///
-    /// Only for accessors that are allowed to contact the store. The identity
-    /// accessors deliberately do not use this: `Secrets` reconstructs canonical
-    /// URIs and storage identities from a freshly built, *uncredentialed*
-    /// provider while planning, and that path is documented as touching no
-    /// store. Launching an endpoint there would both break that contract and
-    /// derive an identity from a session that never received its credentials.
-    fn endpoint_metadata(&self) -> Option<&wire::Metadata> {
-        let _ = self.ensure_session();
-        self.metadata.get()
-    }
-
-    fn require(&self, method: &str) -> Result<Arc<ProviderSession>> {
-        let session = self.ensure_session()?;
+    async fn require(&self, method: &str) -> Result<Arc<ProviderSession>> {
+        let session = self.ensure_session_async().await?;
         if session.supports(method) {
             Ok(session)
         } else {
@@ -1222,20 +1245,49 @@ impl ExternalProvider {
         }
     }
 
-    fn call<M>(&self, params: &M::Params) -> Result<M::Result>
+    async fn call_async<M>(&self, params: &M::Params) -> Result<M::Result>
     where
         M: wire::method::Method,
         M::Params: Sync,
         M::Result: Send,
     {
-        let session = self.require(M::NAME)?;
+        let Some(policy) = self.retry_policy else {
+            return self.call_once_async::<M>(params).await;
+        };
+        if matches!(
+            M::NAME,
+            wire::method::GET
+                | wire::method::GET_MANY
+                | wire::method::EXISTS
+                | wire::method::RESOLVE_ADDRESS
+                | wire::method::CHECK_WRITABLE
+                | wire::method::CHECK_DELETABLE
+                | wire::method::DESCRIBE_WRITE_TARGET
+                | wire::method::REFLECT
+        ) {
+            policy
+                .run_async(&self.scheme, || self.call_once_async::<M>(params))
+                .await
+        } else {
+            self.call_once_async::<M>(params).await
+        }
+    }
+
+    async fn call_once_async<M>(&self, params: &M::Params) -> Result<M::Result>
+    where
+        M: wire::method::Method,
+        M::Params: Sync,
+        M::Result: Send,
+    {
+        let session = self.require(M::NAME).await?;
         // Endpoints may request a credential again mid-operation, for example
         // to refresh a token, so an interactive broker widens this deadline too.
         let interactive = self.state().credential_broker.interactive();
-        let result = super::block_on(session.execute::<M>(
+        let result = (session.execute::<M>(
             params,
             self.request_deadline(interactive, OPERATION_TIMEOUT),
-        ));
+        ))
+        .await;
         if result.is_err() && session.is_closed() {
             let stale = {
                 let mut state = self.state();
@@ -1250,7 +1302,7 @@ impl ExternalProvider {
                 }
             };
             if let Some(stale) = stale {
-                close_live_session(stale);
+                close_live_session_async(stale).await;
             }
         }
         match result {
@@ -1278,53 +1330,40 @@ impl ExternalProvider {
         }
     }
 
-    fn resolve_remote(&self, address: Address<'_>) -> Result<NativeAddress> {
-        let result = self.call::<wire::method::ResolveAddress>(&AddressParams {
-            address: to_wire_address(address),
-        })?;
+    async fn resolve_remote(&self, address: Address<'_>) -> Result<NativeAddress> {
+        let result = self
+            .call_async::<wire::method::ResolveAddress>(&AddressParams {
+                address: to_wire_address(address),
+            })
+            .await?;
         from_wire_coordinates(result.coordinates)
     }
 
-    /// Optional protocol presence check, without exposing a value.
-    pub fn exists(&self, address: Address<'_>) -> Result<bool> {
-        // Probe the capability set once. Re-acquiring the session per branch
-        // would let the capability check and the call it guards observe two
-        // different endpoints if the session were replaced in between.
-        let session = self.ensure_session()?;
-        if session.supports(wire::method::EXISTS) {
-            let result = self.call::<wire::method::Exists>(&AddressParams {
-                address: to_wire_address(address),
-            })?;
-            Ok(result.exists)
-        } else if session.supports(wire::method::GET) {
-            Ok(self.get(address)?.is_some())
-        } else {
-            Err(discovery_error(
-                "external provider cannot perform a presence check",
-            ))
-        }
-    }
-
-    /// Optional bounded protocol cache clear. This is deliberately not
-    /// emulated through reflection.
-    pub fn clear(&self, scope: wire::ClearScope) -> Result<usize> {
-        let result = self.call::<wire::method::Clear>(&wire::ClearParams { scope })?;
+    async fn clear_async(&self, scope: wire::ClearScope) -> Result<usize> {
+        let result = self
+            .call_async::<wire::method::Clear>(&wire::ClearParams { scope })
+            .await?;
         Ok(result.cleared)
     }
 }
 
-impl Provider for ExternalProvider {
-    fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
-        self.resolve_remote(Address::Convention {
-            project,
-            profile,
-            key,
-        })
+impl super::ProviderBase for ExternalBackend {
+    fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
+        self.retry_policy = Some(policy);
+    }
+
+    fn retry_ownership(&self) -> super::RetryOwnership {
+        if self.retry_policy.is_some() {
+            super::RetryOwnership::Managed
+        } else {
+            super::RetryOwnership::Shared
+        }
     }
 
     fn supports_coord(&self, name: &str) -> bool {
-        self.ensure_session()
-            .ok()
+        self.state()
+            .session
+            .as_ref()
             .and_then(|_| self.metadata.get())
             .is_some_and(|metadata| {
                 metadata
@@ -1335,33 +1374,18 @@ impl Provider for ExternalProvider {
     }
 
     fn supports_read(&self) -> bool {
-        // Initialization errors must surface from the attempted operation, not
-        // be misreported by core workflows as a healthy write-only endpoint.
-        // Until negotiation succeeds, preserve the trait's readable default.
-        self.ensure_session().map_or(true, |session| {
+        self.state().session.as_ref().is_none_or(|session| {
             session.supports(wire::method::GET) || session.supports(wire::method::GET_MANY)
         })
     }
 
-    fn exists(&self, addr: Address<'_>) -> Result<bool> {
-        ExternalProvider::exists(self, addr)
-    }
-
     fn supports_delete(&self) -> bool {
-        self.ensure_session()
-            .is_ok_and(|session| session.supports(wire::method::DELETE))
+        self.state()
+            .session
+            .as_ref()
+            .is_some_and(|session| session.supports(wire::method::DELETE))
     }
 
-    fn resolve_coords<'a>(&self, addr: Address<'a>) -> Result<std::borrow::Cow<'a, NativeAddress>> {
-        self.resolve_remote(addr).map(std::borrow::Cow::Owned)
-    }
-
-    /// Planning compares entries before any cache hit and must not start the
-    /// endpoint (which may prompt for credentials). A native address is
-    /// already the endpoint's coordinates. A convention address is compiled
-    /// only by the endpoint, so without contacting it the address is
-    /// identified by its logical coordinates under a marker no native `item`
-    /// can contain.
     fn configured_entry_coordinates<'a>(
         &self,
         addr: Address<'a>,
@@ -1379,182 +1403,10 @@ impl Provider for ExternalProvider {
         })
     }
 
-    fn entry_coordinates<'a>(
-        &self,
-        addr: Address<'a>,
-    ) -> Result<std::borrow::Cow<'a, NativeAddress>> {
-        self.resolve_remote(addr).map(std::borrow::Cow::Owned)
-    }
-
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
-        self.get_with_metadata(addr)
-            .map(|value| value.map(|value| value.value))
-    }
-
-    fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<ProviderValue>> {
-        let result = self.call::<wire::method::Get>(&AddressParams {
-            address: to_wire_address(addr),
-        })?;
-        Ok(match result {
-            GetResult::Found {
-                value,
-                expires_at_unix_ms,
-                revision,
-            } => Some(
-                ProviderValue::new(SecretBytes::from_utf8(value), expires_at_unix_ms)
-                    .with_revision(revision),
-            ),
-            GetResult::Missing => None,
-        })
-    }
-
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
-        self.get_many_with_metadata(requests).map(|values| {
-            values
-                .into_iter()
-                .map(|(name, value)| (name, value.value))
-                .collect()
-        })
-    }
-
-    fn get_many_with_metadata(
-        &self,
-        requests: &[(&str, Address<'_>)],
-    ) -> Result<HashMap<String, ProviderValue>> {
-        if !self.ensure_session()?.supports(wire::method::GET_MANY) {
-            return get_each_with(requests, |address| self.get_with_metadata(address));
-        }
-        let params = GetManyParams {
-            requests: requests
-                .iter()
-                .map(|(name, address)| NamedRequest {
-                    name: (*name).to_string(),
-                    address: to_wire_address(*address),
-                })
-                .collect(),
-        };
-        let result = self.call::<wire::method::GetMany>(&params)?;
-        if result.results.len() != requests.len()
-            || result
-                .results
-                .iter()
-                .zip(requests)
-                .any(|(actual, (expected, _))| actual.name != *expected)
-        {
-            return Err(discovery_error(
-                "provider batch response did not preserve request names",
-            ));
-        }
-        Ok(result
-            .results
-            .into_iter()
-            .filter_map(|item| match item.outcome {
-                GetResult::Found {
-                    value,
-                    expires_at_unix_ms,
-                    revision,
-                } => Some((
-                    item.name,
-                    ProviderValue::new(SecretBytes::from_utf8(value), expires_at_unix_ms)
-                        .with_revision(revision),
-                )),
-                GetResult::Missing => None,
-            })
-            .collect())
-    }
-
-    fn exists_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashSet<String>> {
-        if self.ensure_session()?.supports(wire::method::EXISTS) {
-            return exists_each(self, requests);
-        }
-        self.get_many(requests)
-            .map(|values| values.into_keys().collect())
-    }
-
-    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
-        self.check_writable(addr)?;
-        let result = self.call::<wire::method::Set>(&SetParams {
-            address: to_wire_address(addr),
-            value: value
-                .try_as_utf8_for(match addr {
-                    Address::Convention { key, .. } => key,
-                    Address::Native(native) => &native.item,
-                })?
-                .to_owned(),
-        })?;
-        if result.stored {
-            Ok(())
-        } else {
-            Err(discovery_error("provider did not confirm the write"))
-        }
-    }
-
-    fn set_expiring(
-        &self,
-        addr: Address<'_>,
-        value: &SecretBytes,
-        max_age: Duration,
-    ) -> Result<()> {
-        if !self.ensure_session()?.supports(wire::method::SET_EXPIRING) {
-            return self.set(addr, value);
-        }
-        self.check_writable(addr)?;
-        let ttl_ms = wire_ttl_ms(max_age);
-        if ttl_ms == 0 {
-            return Err(discovery_error("external provider expiry must be positive"));
-        }
-        let result = self.call::<wire::method::SetExpiring>(&SetExpiringParams {
-            address: to_wire_address(addr),
-            value: value
-                .try_as_utf8_for(match addr {
-                    Address::Convention { key, .. } => key,
-                    Address::Native(native) => &native.item,
-                })?
-                .to_owned(),
-            ttl_ms,
-        })?;
-        if result.stored {
-            Ok(())
-        } else {
-            Err(discovery_error(
-                "provider did not confirm the expiring write",
-            ))
-        }
-    }
-
-    fn delete(&self, addr: Address<'_>) -> Result<bool> {
-        self.check_deletable(addr)?;
-        let result = self.call::<wire::method::Delete>(&AddressParams {
-            address: to_wire_address(addr),
-        })?;
-        Ok(result.deleted)
-    }
-
-    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
-        let session = self.require(wire::method::SET)?;
-        if !session.supports(wire::method::CHECK_WRITABLE) {
-            return Ok(());
-        }
-        self.call::<wire::method::CheckWritable>(&AddressParams {
-            address: to_wire_address(addr),
-        })
-        .map(|_| ())
-    }
-
-    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
-        let session = self.require(wire::method::DELETE)?;
-        if !session.supports(wire::method::CHECK_DELETABLE) {
-            return Ok(());
-        }
-        self.call::<wire::method::CheckDeletable>(&AddressParams {
-            address: to_wire_address(addr),
-        })
-        .map(|_| ())
-    }
-
     fn generated_value_persistence(&self) -> ProducedValuePersistence {
-        self.ensure_session()
-            .ok()
+        self.state()
+            .session
+            .as_ref()
             .and_then(|_| self.metadata.get())
             .map_or(ProducedValuePersistence::Persist, |metadata| {
                 map_persistence(metadata.generated_value_persistence)
@@ -1562,26 +1414,13 @@ impl Provider for ExternalProvider {
     }
 
     fn prompted_value_persistence(&self) -> ProducedValuePersistence {
-        self.ensure_session()
-            .ok()
+        self.state()
+            .session
+            .as_ref()
             .and_then(|_| self.metadata.get())
             .map_or(ProducedValuePersistence::Persist, |metadata| {
                 map_persistence(metadata.prompted_value_persistence)
             })
-    }
-
-    fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
-        if self
-            .ensure_session()?
-            .supports(wire::method::DESCRIBE_WRITE_TARGET)
-        {
-            let result = self.call::<wire::method::DescribeWriteTarget>(&AddressParams {
-                address: to_wire_address(addr),
-            })?;
-            Ok(result.description)
-        } else {
-            Ok(self.resolve_remote(addr)?.render())
-        }
     }
 
     fn auth_scope_key(&self) -> Option<String> {
@@ -1596,12 +1435,6 @@ impl Provider for ExternalProvider {
     fn name(&self) -> &str {
         &self.scheme
     }
-
-    // The three identity accessors below never start a session, because route
-    // planning derives canonical URIs and storage identities from a freshly
-    // built, uncredentialed provider and is documented as touching no store.
-    // They report the endpoint's own spelling once a session exists for another
-    // reason, and the configured URI until then.
 
     fn uri(&self) -> String {
         self.metadata
@@ -1624,8 +1457,6 @@ impl Provider for ExternalProvider {
             .unwrap_or_else(|| self.storage_identity())
     }
 
-    /// Known only from the endpoint, so planning sees it once a session has
-    /// reported it and otherwise compares configured identities.
     fn configured_physical_store_path(&self) -> Option<&Path> {
         self.metadata
             .get()
@@ -1634,7 +1465,8 @@ impl Provider for ExternalProvider {
     }
 
     fn physical_store_path(&self) -> Option<&Path> {
-        self.endpoint_metadata()
+        self.metadata
+            .get()
             .and_then(|metadata| metadata.physical_store_path.as_deref())
             .map(Path::new)
     }
@@ -1726,11 +1558,248 @@ impl Provider for ExternalProvider {
         }
     }
 
-    fn reflect(&self, context: DiscoveryContext<'_>) -> Result<HashMap<String, Secret>> {
-        let result = self.call::<wire::method::Reflect>(&ReflectParams {
-            project: context.project.to_string(),
-            profile: context.profile.to_string(),
-        })?;
+    fn requires_initialization(&self) -> bool {
+        true
+    }
+}
+
+#[async_trait::async_trait]
+impl super::AsyncProvider for ExternalBackend {
+    async fn exists(&self, addr: Address<'_>) -> Result<bool> {
+        // Probe the capability set once. Re-acquiring the session per branch
+        // would let the capability check and the call it guards observe two
+        // different endpoints if the session were replaced in between.
+        let session = self.ensure_session_async().await?;
+        if session.supports(wire::method::EXISTS) {
+            let result = self
+                .call_async::<wire::method::Exists>(&AddressParams {
+                    address: to_wire_address(addr),
+                })
+                .await?;
+            Ok(result.exists)
+        } else if session.supports(wire::method::GET) {
+            Ok(super::AsyncProvider::get(self, addr).await?.is_some())
+        } else {
+            Err(discovery_error(
+                "external provider cannot perform a presence check",
+            ))
+        }
+    }
+
+    async fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
+        super::AsyncProvider::get_with_metadata(self, addr)
+            .await
+            .map(|value| value.map(|value| value.value))
+    }
+
+    async fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<ProviderValue>> {
+        let result = self
+            .call_async::<wire::method::Get>(&AddressParams {
+                address: to_wire_address(addr),
+            })
+            .await?;
+        Ok(match result {
+            GetResult::Found {
+                value,
+                expires_at_unix_ms,
+                revision,
+            } => Some(
+                ProviderValue::new(SecretBytes::from_utf8(value), expires_at_unix_ms)
+                    .with_revision(revision),
+            ),
+            GetResult::Missing => None,
+        })
+    }
+
+    async fn get_many(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, SecretBytes>> {
+        super::AsyncProvider::get_many_with_metadata(self, requests)
+            .await
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|(name, value)| (name, value.value))
+                    .collect()
+            })
+    }
+
+    async fn get_many_with_metadata(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, ProviderValue>> {
+        if !self
+            .ensure_session_async()
+            .await?
+            .supports(wire::method::GET_MANY)
+        {
+            return super::async_provider::get_each_with(requests, |address| {
+                super::AsyncProvider::get_with_metadata(self, address)
+            })
+            .await;
+        }
+        let params = GetManyParams {
+            requests: requests
+                .iter()
+                .map(|(name, address)| NamedRequest {
+                    name: (*name).to_string(),
+                    address: to_wire_address(*address),
+                })
+                .collect(),
+        };
+        let result = self.call_async::<wire::method::GetMany>(&params).await?;
+        if result.results.len() != requests.len()
+            || result
+                .results
+                .iter()
+                .zip(requests)
+                .any(|(actual, (expected, _))| actual.name != *expected)
+        {
+            return Err(discovery_error(
+                "provider batch response did not preserve request names",
+            ));
+        }
+        Ok(result
+            .results
+            .into_iter()
+            .filter_map(|item| match item.outcome {
+                GetResult::Found {
+                    value,
+                    expires_at_unix_ms,
+                    revision,
+                } => Some((
+                    item.name,
+                    ProviderValue::new(SecretBytes::from_utf8(value), expires_at_unix_ms)
+                        .with_revision(revision),
+                )),
+                GetResult::Missing => None,
+            })
+            .collect())
+    }
+
+    async fn exists_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashSet<String>> {
+        if self
+            .ensure_session_async()
+            .await?
+            .supports(wire::method::EXISTS)
+        {
+            return Ok(
+                super::async_provider::get_each_with(requests, |address| async move {
+                    Ok(super::AsyncProvider::exists(self, address)
+                        .await?
+                        .then_some(()))
+                })
+                .await?
+                .into_keys()
+                .collect(),
+            );
+        }
+        super::AsyncProvider::get_many(self, requests)
+            .await
+            .map(|values| values.into_keys().collect())
+    }
+
+    async fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        super::AsyncProvider::check_writable(self, addr).await?;
+        let result = self
+            .call_async::<wire::method::Set>(&SetParams {
+                address: to_wire_address(addr),
+                value: value
+                    .try_as_utf8_for(match addr {
+                        Address::Convention { key, .. } => key,
+                        Address::Native(native) => &native.item,
+                    })?
+                    .to_owned(),
+            })
+            .await?;
+        if result.stored {
+            Ok(())
+        } else {
+            Err(discovery_error("provider did not confirm the write"))
+        }
+    }
+
+    async fn set_expiring(
+        &self,
+        addr: Address<'_>,
+        value: &SecretBytes,
+        max_age: Duration,
+    ) -> Result<()> {
+        if !self
+            .ensure_session_async()
+            .await?
+            .supports(wire::method::SET_EXPIRING)
+        {
+            return super::AsyncProvider::set(self, addr, value).await;
+        }
+        super::AsyncProvider::check_writable(self, addr).await?;
+        let ttl_ms = wire_ttl_ms(max_age);
+        if ttl_ms == 0 {
+            return Err(discovery_error("external provider expiry must be positive"));
+        }
+        let result = self
+            .call_async::<wire::method::SetExpiring>(&SetExpiringParams {
+                address: to_wire_address(addr),
+                value: value
+                    .try_as_utf8_for(match addr {
+                        Address::Convention { key, .. } => key,
+                        Address::Native(native) => &native.item,
+                    })?
+                    .to_owned(),
+                ttl_ms,
+            })
+            .await?;
+        if result.stored {
+            Ok(())
+        } else {
+            Err(discovery_error(
+                "provider did not confirm the expiring write",
+            ))
+        }
+    }
+
+    async fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        super::AsyncProvider::check_deletable(self, addr).await?;
+        let result = self
+            .call_async::<wire::method::Delete>(&AddressParams {
+                address: to_wire_address(addr),
+            })
+            .await?;
+        Ok(result.deleted)
+    }
+
+    async fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+        let session = self.require(wire::method::SET).await?;
+        if !session.supports(wire::method::CHECK_WRITABLE) {
+            return Ok(());
+        }
+        self.call_async::<wire::method::CheckWritable>(&AddressParams {
+            address: to_wire_address(addr),
+        })
+        .await
+        .map(|_| ())
+    }
+
+    async fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        let session = self.require(wire::method::DELETE).await?;
+        if !session.supports(wire::method::CHECK_DELETABLE) {
+            return Ok(());
+        }
+        self.call_async::<wire::method::CheckDeletable>(&AddressParams {
+            address: to_wire_address(addr),
+        })
+        .await
+        .map(|_| ())
+    }
+
+    async fn reflect(&self, context: DiscoveryContext<'_>) -> Result<HashMap<String, Secret>> {
+        let result = self
+            .call_async::<wire::method::Reflect>(&ReflectParams {
+                project: context.project.to_string(),
+                profile: context.profile.to_string(),
+            })
+            .await?;
         if result.schema_version != 1 {
             return Err(discovery_error(
                 "provider reflection schema version is unsupported",
@@ -1751,9 +1820,44 @@ impl Provider for ExternalProvider {
             })
             .collect()
     }
+
+    async fn resolve_address<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<std::borrow::Cow<'a, NativeAddress>> {
+        self.resolve_remote(addr).await.map(std::borrow::Cow::Owned)
+    }
+
+    async fn entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<std::borrow::Cow<'a, NativeAddress>> {
+        self.resolve_remote(addr).await.map(std::borrow::Cow::Owned)
+    }
+
+    async fn write_target(&self, addr: Address<'_>) -> Result<String> {
+        if self
+            .ensure_session_async()
+            .await?
+            .supports(wire::method::DESCRIBE_WRITE_TARGET)
+        {
+            let result = self
+                .call_async::<wire::method::DescribeWriteTarget>(&AddressParams {
+                    address: to_wire_address(addr),
+                })
+                .await?;
+            Ok(result.description)
+        } else {
+            Ok(self.resolve_remote(addr).await?.render())
+        }
+    }
+
+    async fn initialize(&self) -> Result<()> {
+        self.initialize_async().await
+    }
 }
 
-impl Drop for ExternalProvider {
+impl Drop for ExternalBackend {
     fn drop(&mut self) {
         if let Some(session) = self
             .state
@@ -1765,6 +1869,12 @@ impl Drop for ExternalProvider {
             close_live_session(session);
         }
     }
+}
+
+async fn close_live_session_async(session: Arc<ProviderSession>) {
+    let _ = session
+        .close(deadline_unix_ms_after(Duration::from_secs(2)))
+        .await;
 }
 
 fn close_live_session(session: Arc<ProviderSession>) {
@@ -1929,6 +2039,49 @@ mod tests {
         let huge = Duration::from_secs(999_999_999 * 7 * 24 * 60 * 60);
         assert_eq!(wire_ttl_ms(huge), secretspec_ipc::MAX_JSON_INTEGER);
         assert_eq!(wire_ttl_ms(Duration::MAX), secretspec_ipc::MAX_JSON_INTEGER);
+    }
+
+    #[test]
+    fn stale_metadata_does_not_restore_capabilities_without_a_live_session() {
+        let provider = ExternalBackend::from_url(
+            ProviderEndpoint {
+                scheme: "example".into(),
+                executable: "must-not-run-provider".into(),
+                arguments: Vec::new(),
+                environment: Vec::new(),
+            },
+            &ProviderUrl::new(url::Url::parse("example://store").unwrap()),
+        );
+        // Session invalidation retains identities for planning, but old
+        // capability and persistence declarations must not authorize operations.
+        assert!(
+            provider
+                .metadata
+                .set(wire::Metadata {
+                    name: "example".into(),
+                    display_uri: "example://store".into(),
+                    supported_coordinates: vec![wire::CoordinateName::Field],
+                    generated_value_persistence: Persistence::Ephemeral,
+                    prompted_value_persistence: Persistence::Ephemeral,
+                    storage_identity: "example://store".into(),
+                    entry_container_identity: "example://store".into(),
+                    physical_store_path: None,
+                })
+                .is_ok()
+        );
+        use crate::ProviderBase;
+        assert_eq!(provider.storage_identity(), "example://store");
+        assert!(!provider.supports_coord("field"));
+        assert!(!provider.supports_delete());
+        assert!(provider.supports_read());
+        assert_eq!(
+            provider.generated_value_persistence(),
+            ProducedValuePersistence::Persist
+        );
+        assert_eq!(
+            provider.prompted_value_persistence(),
+            ProducedValuePersistence::Persist
+        );
     }
 
     fn endpoint(directory: &Path, name: &str, argument: &str) -> ProviderEndpoint {
@@ -2680,8 +2833,8 @@ mod tests {
     /// The child really starts with the filtered environment: a variable the
     /// test process has but the base set excludes never reaches it.
     #[cfg(unix)]
-    #[test]
-    fn a_launched_endpoint_does_not_see_undeclared_parent_variables() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_async_endpoint_does_not_see_undeclared_parent_variables() {
         use std::os::unix::fs::PermissionsExt;
         // Cargo sets both for the test process. One is excluded; the other is
         // declared by the endpoint and must pass through.
@@ -2711,7 +2864,7 @@ mod tests {
         );
         provider.with_credential_broker(Arc::new(NoCredentials));
         assert!(
-            provider.initialize().is_err(),
+            provider.initialize_async().await.is_err(),
             "the script is not an endpoint"
         );
 

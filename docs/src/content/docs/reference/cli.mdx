@@ -822,9 +822,9 @@ $ secretspec run [OPTIONS] -- <COMMAND>
 # Run npm with secrets available as environment variables
 $ secretspec run --profile production -- npm run deploy
 
-# Verify secrets are injected
+# Verify secrets are injected (values are redacted in SecretSpec 0.22+)
 $ secretspec run -- env | grep DATABASE_URL
-DATABASE_URL=postgresql://localhost/mydb
+DATABASE_URL=[REDACTED]
 
 # Inject only the `api` scope's secrets (SecretSpec 0.17+); secrets the
 # scope excludes are removed from the child even if the parent exported them
@@ -879,7 +879,7 @@ $ secretspec run -- echo $DATABASE_URL
 
 # This works - variable expansion happens in the subprocess
 $ secretspec run -- sh -c 'echo $DATABASE_URL'
-# Output: postgresql://localhost/mydb
+# Output in SecretSpec 0.22+: [REDACTED]
 ```
 
 For most use cases, simply run your application and it will read secrets from its environment:
@@ -887,6 +887,21 @@ For most use cases, simply run your application and it will read secrets from it
 $ secretspec run -- node app.js  # app.js reads process.env.DATABASE_URL
 ```
 :::
+
+#### Output redaction
+
+<VersionCompatibility version="0.22" kind="changed">
+Child stdout and stderr now automatically mask exact secret values; earlier
+versions passed output through unchanged. No configuration is required.
+</VersionCompatibility>
+
+Secret values are replaced with `[REDACTED]` in child stdout and stderr.
+File-backed secrets mask their contents. See
+[output redaction](/reference/configuration/#output-redaction) for details. This protects against accidental output disclosure;
+programs can still expose transformed values or use other output channels.
+Filtering uses pipes, which changes terminal detection and can affect buffering
+and interactive prompts. See the configuration reference for limits and shutdown
+behavior. Other commands, including `get` and `export`, still return values.
 
 ### export
 Resolve every secret for the active profile and write it to stdout in a chosen format, without running a command. Unlike `run`, it never prompts and exits non-zero when a required secret is missing, so CI can gate on it.

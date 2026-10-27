@@ -1395,6 +1395,7 @@ struct ResolutionExecution<'secrets, 'plan, 'filter, 'addresses> {
     output_filter: Option<&'filter HashSet<String>>,
     read_addresses: Option<&'addresses mut HashMap<String, NativeAddress>>,
     values: HashMap<String, SecretBytes>,
+    redactions: Option<Vec<SecretBytes>>,
     missing_required: Vec<String>,
     missing_optional: Vec<String>,
     with_defaults: Vec<(String, String)>,
@@ -1434,6 +1435,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             output_filter,
             read_addresses,
             values: HashMap::new(),
+            redactions: materialize.values().then(Vec::new),
             missing_required: Vec::new(),
             missing_optional: Vec::new(),
             with_defaults: Vec::new(),
@@ -1469,6 +1471,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
         self.manager.insert_resolved(
             &mut self.values,
             &mut self.temp_files,
+            &mut self.redactions,
             planned,
             diagnostic_name,
             value,
@@ -1489,6 +1492,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             GeneratedValue::Text(value) => self.manager.insert_resolved(
                 &mut self.values,
                 &mut self.temp_files,
+                &mut self.redactions,
                 planned,
                 diagnostic_name,
                 value,
@@ -1510,6 +1514,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 with_defaults: Vec::new(),
                 resolution: Vec::new(),
                 temp_files: Vec::new(),
+                redactions: Vec::new(),
                 secret_expiries: HashMap::new(),
                 refreshes: HashMap::new(),
                 revisions: HashMap::new(),
@@ -1793,6 +1798,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                                     manager.insert_resolved(
                                         &mut self.values,
                                         &mut self.temp_files,
+                                        &mut self.redactions,
                                         planned,
                                         diagnostic_name,
                                         prompted,
@@ -1840,6 +1846,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                                     manager.insert_resolved(
                                         &mut self.values,
                                         &mut self.temp_files,
+                                        &mut self.redactions,
                                         planned,
                                         diagnostic_name,
                                         SecretBytes::from_utf8(default_value),
@@ -2005,6 +2012,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                         self.manager.insert_resolved(
                             &mut self.values,
                             &mut self.temp_files,
+                            &mut self.redactions,
                             planned,
                             Secrets::diagnostic_secret_name(&planned.name, self.output_filter),
                             SecretBytes::from_utf8(rendered),
@@ -2115,6 +2123,12 @@ impl<'secrets, 'plan, 'filter, 'addresses>
     /// encoding. This is the delivery contract for registry-typed binary
     /// values, stored or derived.
     fn deliver_bytes(&mut self, planned: &PlannedSecret, bytes: &[u8]) -> Result<()> {
+        if planned.as_path()
+            && let Some(redactions) = &mut self.redactions
+            && !bytes.is_empty()
+        {
+            redactions.push(SecretBytes::from_slice(bytes));
+        }
         if planned.as_path() {
             let (owner, path) = self
                 .manager
@@ -2130,6 +2144,12 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 planned.name.clone(),
                 Secrets::encode_logical_bytes(encoding, bytes),
             );
+            if let Some(redactions) = &mut self.redactions {
+                let value = &self.values[&planned.name];
+                if !value.expose_secret().is_empty() {
+                    redactions.push(value.clone());
+                }
+            }
         }
         Ok(())
     }
@@ -2203,6 +2223,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             return self.manager.insert_resolved(
                 &mut self.values,
                 &mut self.temp_files,
+                &mut self.redactions,
                 planned,
                 diagnostic_name,
                 value,
@@ -2234,6 +2255,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             crate::x509_identity::ProjectedValue::Text(value) => self.manager.insert_resolved(
                 &mut self.values,
                 &mut self.temp_files,
+                &mut self.redactions,
                 planned,
                 diagnostic_name,
                 SecretBytes::from_utf8(value.expose_secret()),
@@ -2364,6 +2386,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 with_defaults: self.with_defaults,
                 resolution: self.resolution,
                 temp_files: self.temp_files,
+                redactions: self.redactions.unwrap_or_default(),
                 secret_expiries: self.secret_expiries,
                 refreshes: self.refreshes,
                 revisions: self.revisions,
@@ -4265,6 +4288,7 @@ impl Secrets {
         diagnostic_name: &str,
         value: SecretBytes,
         representation: ResolvedRepresentation,
+        redactions: &mut Option<Vec<SecretBytes>>,
     ) -> Result<PreparedSecret> {
         let decoded = match (representation, planned.encoding()) {
             (ResolvedRepresentation::Stored, Some(encoding)) => {
@@ -4305,6 +4329,16 @@ impl Secrets {
             _ => None,
         };
 
+        if let Some(redactions) = redactions {
+            let bytes = extracted
+                .as_ref()
+                .or_else(|| decoded.as_ref().map(|(_, value)| value))
+                .unwrap_or(&value);
+            if !bytes.expose_secret().is_empty() {
+                redactions.push(bytes.clone());
+            }
+        }
+
         if planned.as_path() {
             let bytes = extracted
                 .as_ref()
@@ -4328,16 +4362,18 @@ impl Secrets {
     /// boundary, then transparently materializing an `as_path` value to an
     /// owner-only temp file whose lifetime is tied to `temp_files`. Shared by
     /// every resolution branch so stored-value transforms cannot drift.
+    #[allow(clippy::too_many_arguments)]
     fn insert_resolved(
         &self,
         secrets: &mut HashMap<String, SecretBytes>,
         temp_files: &mut Vec<tempfile::NamedTempFile>,
+        redactions: &mut Option<Vec<SecretBytes>>,
         planned: &PlannedSecret,
         diagnostic_name: &str,
         value: SecretBytes,
         representation: ResolvedRepresentation,
     ) -> Result<()> {
-        match self.prepare_resolved(planned, diagnostic_name, value, representation)? {
+        match self.prepare_resolved(planned, diagnostic_name, value, representation, redactions)? {
             PreparedSecret::Inline(value) => {
                 secrets.insert(planned.name.clone(), value);
             }
@@ -7947,6 +7983,9 @@ impl Secrets {
     ///
     /// This method validates that all required secrets are present, then runs
     /// the specified command with all secrets injected as environment variables.
+    /// Starting in 0.22, exact secret values are masked in child stdout and stderr
+    /// automatically for every resolved secret.
+    /// Filtering uses pipes and may change terminal detection and buffering.
     ///
     /// # Arguments
     ///
@@ -7957,7 +7996,8 @@ impl Secrets {
     /// # Returns
     ///
     /// This method executes the command and exits with the command's exit code.
-    /// It only returns an error if validation fails or the command cannot be started.
+    /// Returns an error if validation fails, the command cannot be started, or
+    /// output filtering or forwarding fails.
     ///
     /// # Errors
     ///
@@ -7965,6 +8005,7 @@ impl Secrets {
     /// - No command is specified
     /// - Required secrets are missing
     /// - The command cannot be executed
+    /// - Child output cannot be filtered or forwarded (0.22+)
     ///
     /// # Example
     ///
@@ -8002,7 +8043,9 @@ impl Secrets {
         let resolution = self
             .validate_audited(false, Materialize::Run)
             .and_then(|result| result.map_err(validation_failure))
-            .and_then(|validated| {
+            .and_then(|mut validated| {
+                let matcher =
+                    crate::redaction::Matcher::new(std::mem::take(&mut validated.redactions))?;
                 let values = validated
                     .resolved
                     .secrets
@@ -8013,9 +8056,9 @@ impl Secrets {
                             .map(|value| (key.clone(), value.to_owned()))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Ok((validated, child_env_from(env::vars_os(), values)))
+                Ok((validated, child_env_from(env::vars_os(), values), matcher))
             });
-        let (validation_result, env_vars) = match resolution {
+        let (validation_result, env_vars, matcher) = match resolution {
             Ok(v) => v,
             Err(e) => {
                 // Record the attempt even when validation fails and the command
@@ -8070,6 +8113,31 @@ impl Secrets {
         // and any signal received in a post-spawn setup window would be lost.
         #[cfg(unix)]
         let mut signal_forwarder = ChildSignalForwarder::prepare()?;
+
+        if let Some(matcher) = matcher {
+            let status = crate::redaction::run(cmd, matcher, |spawned| {
+                self.record(
+                    AuditAction::Run,
+                    &validation_result.resolved.profile,
+                    if spawned.is_ok() {
+                        AuditOutcome::Started
+                    } else {
+                        AuditOutcome::Error
+                    },
+                    AuditFields {
+                        keys: &keys,
+                        command: Some(&command[0]),
+                        error_kind: spawned.as_ref().err().map(|_| "io"),
+                        ..Default::default()
+                    },
+                );
+                #[cfg(unix)]
+                if let Ok(pid) = spawned {
+                    signal_forwarder.start(pid);
+                }
+            })?;
+            return Ok(command_exit_code(status));
+        }
 
         // Spawn (rather than `status`) so the Run event is recorded the moment the
         // child starts, before the potentially long-running wait. A long-lived
@@ -9892,5 +9960,195 @@ CERT = { description = "certificate", type = "x509_certificate", from = "ID" }
                 assert_eq!(execution.refreshes.get(name).copied(), expected_refresh);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod output_redaction_tests {
+    use super::*;
+    use crate::config::{GenerateConfig, GenerateOptions, Secret};
+
+    #[test]
+    fn sdk_redactor_captures_files_and_hidden_inputs_in_one_resolution() {
+        let _env = crate::tests::scrub_resolution_env();
+        let config: Config = toml::from_str(
+            r#"
+[project]
+name = "redactor-sdk"
+revision = "1.0"
+require_reason = false
+[profiles.default]
+TOKEN = { description = "hidden input", default = "token-fixture" }
+FILE = { description = "file", default = "file-fixture", as_path = true }
+URL = { description = "derived", composed = "prefix:${TOKEN}:suffix" }
+[scopes.shell]
+secrets = ["URL", "FILE"]
+"#,
+        )
+        .unwrap();
+        let mut spec = Secrets::new(config, None, Some("null://".into()), None);
+        spec.set_scope("shell");
+        let validated = spec.validate().unwrap().unwrap();
+        assert!(!validated.resolved.secrets.contains_key("TOKEN"));
+        assert_eq!(
+            validated.resolved.secrets["URL"].expose_secret(),
+            b"prefix:token-fixture:suffix"
+        );
+        let path = validated.resolved.secrets["FILE"]
+            .try_as_utf8()
+            .unwrap()
+            .to_owned();
+        assert_eq!(std::fs::read(&path).unwrap(), b"file-fixture");
+        // Patterns come from resolution, not a later read of a mutable file.
+        // Materialized secrets are read-only; replace the file as its owner.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"changed").unwrap();
+        let redactor = validated.redactor().unwrap();
+        assert_eq!(
+            redactor.redact(b"file-fixture token-fixture prefix:token-fixture:suffix"),
+            b"[REDACTED] [REDACTED] [REDACTED]"
+        );
+        drop(validated);
+        assert!(!std::path::Path::new(&path).exists());
+        assert_eq!(redactor.redact(b"file-fixture"), b"[REDACTED]");
+    }
+
+    #[test]
+    fn sdk_redactor_limit_does_not_affect_validation() {
+        let _env = crate::tests::scrub_resolution_env();
+        let value = "x".repeat(64 * 1024 + 1);
+        let config = crate::tests::resolve_test_config(HashMap::from([(
+            "VALUE".into(),
+            Secret {
+                description: Some("large secret".into()),
+                providers: Some(vec!["null".into()]),
+                default: Some(value.clone()),
+                ..Default::default()
+            },
+        )]));
+        let spec = Secrets::new(config, None, None, None);
+        let validated = spec.validate().unwrap().unwrap();
+        assert_eq!(
+            validated.resolved.secrets["VALUE"].expose_secret(),
+            value.as_bytes()
+        );
+        assert!(validated.redactor().is_err());
+        assert_eq!(
+            validated.resolved.secrets["VALUE"].expose_secret(),
+            value.as_bytes()
+        );
+    }
+
+    #[test]
+    fn sdk_redactor_preserves_validation_errors_without_prompting() {
+        let _env = crate::tests::scrub_resolution_env();
+        let config = crate::tests::resolve_test_config(HashMap::from([(
+            "VALUE".into(),
+            Secret {
+                description: Some("missing value".into()),
+                providers: Some(vec!["null".into()]),
+                prompt: Some(true),
+                ..Default::default()
+            },
+        )]));
+        let mut config = config;
+        for name in ["PASSWORD", "ACCESS_TOKEN"] {
+            config.profiles.get_mut("default").unwrap().secrets.insert(
+                name.into(),
+                Secret {
+                    description: Some("alternative credential".into()),
+                    providers: Some(vec!["null".into()]),
+                    at_least_one: Some(vec!["auth".into()]),
+                    ..Default::default()
+                },
+            );
+        }
+        let mut spec = Secrets::new(config, None, None, None);
+        spec.set_prompt_reader(|_, _, _| panic!("ordinary SDK resolution must not prompt"));
+        let errors = match spec.validate().unwrap() {
+            Ok(_) => panic!("missing required secret must fail validation"),
+            Err(errors) => errors,
+        };
+        assert_eq!(errors.missing_required, vec!["VALUE"]);
+        assert_eq!(errors.constraint_violations.len(), 1);
+        assert_eq!(errors.constraint_violations[0].group, "auth");
+        assert_eq!(
+            errors.constraint_violations[0].secrets,
+            vec!["ACCESS_TOKEN", "PASSWORD"]
+        );
+    }
+
+    #[test]
+    fn run_captures_generated_text_and_binary_delivery_before_materialization() {
+        let _env = crate::tests::scrub_resolution_env();
+        for binary in [false, true] {
+            for as_path in [false, true] {
+                let secret = Secret {
+                    description: Some("generated value".into()),
+                    providers: Some(vec!["null".into()]),
+                    secret_type: Some(if binary { "x509_identity" } else { "password" }.into()),
+                    generate: Some(if binary {
+                        GenerateConfig::Options(GenerateOptions {
+                            san: Some(vec!["dns:localhost".into()]),
+                            ..Default::default()
+                        })
+                    } else {
+                        GenerateConfig::Bool(true)
+                    }),
+                    as_path: Some(as_path),
+                    ..Default::default()
+                };
+                let config =
+                    crate::tests::resolve_test_config(HashMap::from([("VALUE".into(), secret)]));
+                let spec = Secrets::new(config, None, None, None);
+                let ordinary = spec
+                    .validate_audited(false, Materialize::Values)
+                    .unwrap()
+                    .unwrap();
+                let original = if as_path {
+                    std::fs::read(ordinary.resolved.secrets["VALUE"].try_as_utf8().unwrap())
+                        .unwrap()
+                } else {
+                    ordinary.resolved.secrets["VALUE"].expose_secret().to_vec()
+                };
+                assert_eq!(
+                    ordinary.redactor().unwrap().redact(&original),
+                    b"[REDACTED]"
+                );
+                let run = spec
+                    .validate_audited(false, Materialize::Run)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(run.redactions.len(), 1);
+                let delivered = &run.resolved.secrets["VALUE"];
+                let expected = if as_path {
+                    std::fs::read(delivered.try_as_utf8().unwrap()).unwrap()
+                } else {
+                    delivered.expose_secret().to_vec()
+                };
+                assert_eq!(run.redactions[0].expose_secret(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn run_captures_prompted_values() {
+        let _env = crate::tests::scrub_resolution_env();
+        let config = crate::tests::resolve_test_config(HashMap::from([(
+            "VALUE".into(),
+            Secret {
+                description: Some("prompted value".into()),
+                providers: Some(vec!["null".into()]),
+                prompt: Some(true),
+                ..Default::default()
+            },
+        )]));
+        let mut spec = Secrets::new(config, None, None, None);
+        spec.set_prompt_reader(|_, _, _| Ok(SecretBytes::from_utf8("synthetic-prompt-value")));
+        let run = spec
+            .validate_audited(false, Materialize::Run)
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.redactions[0].expose_secret(), b"synthetic-prompt-value");
     }
 }

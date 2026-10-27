@@ -233,6 +233,100 @@ pub trait AsyncProvider: super::ProviderBase {
     }
 }
 
+#[async_trait]
+impl<T: AsyncProvider + ?Sized> AsyncProvider for Box<T> {
+    async fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
+        (**self).get(addr).await
+    }
+
+    async fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<ProviderValue>> {
+        (**self).get_with_metadata(addr).await
+    }
+
+    async fn exists(&self, addr: Address<'_>) -> Result<bool> {
+        (**self).exists(addr).await
+    }
+
+    async fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        (**self).set(addr, value).await
+    }
+
+    async fn set_expiring(
+        &self,
+        addr: Address<'_>,
+        value: &SecretBytes,
+        max_age: Duration,
+    ) -> Result<()> {
+        (**self).set_expiring(addr, value, max_age).await
+    }
+
+    async fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        (**self).delete(addr).await
+    }
+
+    async fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        (**self).check_deletable(addr).await
+    }
+
+    async fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+        (**self).check_writable(addr).await
+    }
+
+    async fn reflect(
+        &self,
+        context: DiscoveryContext<'_>,
+    ) -> Result<HashMap<String, crate::Secret>> {
+        (**self).reflect(context).await
+    }
+
+    async fn get_many(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, SecretBytes>> {
+        (**self).get_many(requests).await
+    }
+
+    async fn get_many_with_metadata(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, ProviderValue>> {
+        (**self).get_many_with_metadata(requests).await
+    }
+
+    async fn exists_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashSet<String>> {
+        (**self).exists_many(requests).await
+    }
+
+    async fn initialize(&self) -> Result<()> {
+        (**self).initialize().await
+    }
+
+    async fn resolve_address<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<std::borrow::Cow<'a, crate::NativeAddress>> {
+        (**self).resolve_address(addr).await
+    }
+
+    async fn entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<std::borrow::Cow<'a, crate::NativeAddress>> {
+        (**self).entry_coordinates(addr).await
+    }
+
+    async fn entry_coordinates_many(
+        &self,
+        addrs: &[Address<'_>],
+    ) -> Result<Vec<crate::NativeAddress>> {
+        (**self).entry_coordinates_many(addrs).await
+    }
+
+    async fn write_target(&self, addr: Address<'_>) -> Result<String> {
+        (**self).write_target(addr).await
+    }
+}
+
 /// Runs a synchronous [`Provider`] on Tokio's blocking pool (0.22+).
 ///
 /// Requires an active Tokio runtime when awaiting I/O methods. Configure the

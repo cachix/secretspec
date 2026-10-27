@@ -372,3 +372,124 @@ pub trait ProviderBase: Send + Sync {
     /// [`with_base_dir`]: Provider::with_base_dir
     fn with_credentials(&mut self, _credentials: ProviderCredentials) {}
 }
+
+impl<T: ProviderBase + ?Sized> ProviderBase for Box<T> {
+    fn requires_initialization(&self) -> bool {
+        (**self).requires_initialization()
+    }
+
+    fn set_retry_policy(&mut self, _policy: super::RetryPolicy) {
+        (**self).set_retry_policy(_policy);
+    }
+
+    fn retry_ownership(&self) -> super::RetryOwnership {
+        (**self).retry_ownership()
+    }
+
+    fn retry_safe(&self, _operation: super::RetryOperation, _addr: Address<'_>) -> bool {
+        (**self).retry_safe(_operation, _addr)
+    }
+
+    fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
+        (**self).convention_address(project, profile, key)
+    }
+
+    fn supported_coords(&self) -> &'static [&'static str] {
+        (**self).supported_coords()
+    }
+
+    fn supports_coord(&self, name: &str) -> bool {
+        (**self).supports_coord(name)
+    }
+
+    fn resolve_coords<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
+        (**self).resolve_coords(addr)
+    }
+
+    fn configured_entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<Cow<'a, NativeAddress>> {
+        (**self).configured_entry_coordinates(addr)
+    }
+
+    fn supports_read(&self) -> bool {
+        (**self).supports_read()
+    }
+
+    fn supports_delete(&self) -> bool {
+        (**self).supports_delete()
+    }
+
+    fn deletion_unsupported(&self) -> SecretSpecError {
+        (**self).deletion_unsupported()
+    }
+
+    fn generated_value_persistence(&self) -> ProducedValuePersistence {
+        (**self).generated_value_persistence()
+    }
+
+    fn prompted_value_persistence(&self) -> ProducedValuePersistence {
+        (**self).prompted_value_persistence()
+    }
+
+    fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
+        (**self).describe_write_target(addr)
+    }
+
+    fn auth_scope_key(&self) -> Option<String> {
+        (**self).auth_scope_key()
+    }
+
+    fn name(&self) -> &str {
+        (**self).name()
+    }
+
+    fn uri(&self) -> String {
+        (**self).uri()
+    }
+
+    fn storage_identity(&self) -> String {
+        (**self).storage_identity()
+    }
+
+    fn entry_container_identity(&self) -> String {
+        (**self).entry_container_identity()
+    }
+
+    fn physical_store_path(&self) -> Option<&std::path::Path> {
+        (**self).physical_store_path()
+    }
+
+    fn configured_physical_store_path(&self) -> Option<&std::path::Path> {
+        (**self).configured_physical_store_path()
+    }
+
+    fn set_reason(&self, _reason: Option<String>) {
+        (**self).set_reason(_reason)
+    }
+
+    fn set_requested_authorization_duration(&self, _duration: Option<std::time::Duration>) {
+        (**self).set_requested_authorization_duration(_duration)
+    }
+
+    fn set_caller(&self, _caller: Option<crate::CallerContext>) {
+        (**self).set_caller(_caller)
+    }
+
+    fn set_project(&self, _project: &str) {
+        (**self).set_project(_project)
+    }
+
+    fn set_profile(&self, _profile: &str) {
+        (**self).set_profile(_profile)
+    }
+
+    fn with_base_dir(&mut self, _base_dir: &std::path::Path) {
+        (**self).with_base_dir(_base_dir);
+    }
+
+    fn with_credentials(&mut self, _credentials: ProviderCredentials) {
+        (**self).with_credentials(_credentials);
+    }
+}

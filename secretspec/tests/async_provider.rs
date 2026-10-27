@@ -487,7 +487,8 @@ fn sync_adapter_runs_native_async_storage_and_preserves_batch_deduplication() {
 
 #[test]
 fn adapters_preserve_overrides_in_both_directions() {
-    let provider = SyncProviderAdapter::from_async(AsyncProviderAdapter::new(Arc::new(Overrides)));
+    let backend: Box<dyn AsyncProvider> = Box::new(AsyncProviderAdapter::new(Arc::new(Overrides)));
+    let provider = SyncProviderAdapter::from_async(backend);
     let reference = native("remote");
     let addr = Address::Native(&reference);
     let requests = [("KEY", addr)];
@@ -532,4 +533,22 @@ fn adapters_preserve_overrides_in_both_directions() {
             .len(),
         1
     );
+}
+
+#[test]
+fn boxed_async_factory_composes_with_sync_adapter_and_forwards_configuration() {
+    let directory = tempfile::tempdir().unwrap();
+    let backend = Box::<dyn AsyncProvider>::try_from("dotenv://.env").unwrap();
+    let mut provider = SyncProviderAdapter::from_async(backend);
+    Provider::with_base_dir(&mut provider, directory.path());
+    let addr = Address::convention("app", "default", "TOKEN");
+    Provider::set(&provider, addr, &"value".into()).unwrap();
+    assert_eq!(
+        Provider::get(&provider, addr)
+            .unwrap()
+            .unwrap()
+            .expose_secret(),
+        b"value"
+    );
+    assert!(directory.path().join(".env").exists());
 }

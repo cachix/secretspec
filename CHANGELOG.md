@@ -15,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ProviderBase` carries their shared configuration and identity.
   Async SDK, HTTP, and external IPC providers implement the trait directly,
   retaining batch reads, metadata, authentication, and retry behavior. The
-  async URI factory selects native implementations automatically.
+  async URI factory selects native implementations automatically, and its boxed
+  providers can be passed to `SyncProviderAdapter`. External IPC sessions remain
+  usable across async and sync calls and after the caller's runtime is dropped.
 
 - Bitwarden Password Manager can load its `session` credential from another
   provider, such as keyring, instead of requiring `BW_SESSION` in the shell.

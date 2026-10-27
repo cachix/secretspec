@@ -258,6 +258,10 @@ For a manually constructed async backend, use
 `SyncProviderAdapter::from_async(backend)` to expose the synchronous interface.
 Its `as_async()` accessor borrows the backend directly, and `into_async()`
 returns ownership of it. Configure the provider before sharing it.
+Boxed providers returned by the async URI factory can also be passed directly
+to `SyncProviderAdapter::from_async`. External IPC sessions run their background
+tasks on the shared provider runtime, so the same instance supports async and
+sync calls even after the runtime that initialized it has been dropped.
 
 Synchronous backends use `AsyncProviderAdapter` through their existing
 registration and preflight checks. To exercise an existing provider instance

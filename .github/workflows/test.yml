@@ -126,7 +126,7 @@ jobs:
         rustup toolchain install
         rustup component add rustfmt clippy
     - name: Cache Rust builds
-      uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
       with:
         key: ${{ matrix.os }}
     # libsecretspec-resolver takes yyjson from the system rather than vendoring
@@ -187,7 +187,7 @@ jobs:
     - name: Install Rust
       run: rustup toolchain install stable --profile minimal
     - name: Cache Rust builds
-      uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
     - name: Check each provider feature standalone
       run: |
         set -euo pipefail
@@ -245,7 +245,7 @@ jobs:
     - name: Install Rust
       run: rustup toolchain install stable --profile minimal
     - name: Cache Rust builds
-      uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
     # This runner has no pkg-config, so the script also exports the explicit
     # YYJSON_INCLUDE_DIR / YYJSON_LIB_DIR pair that the conformance build script
     # falls back to.

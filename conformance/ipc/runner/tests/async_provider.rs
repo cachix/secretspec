@@ -125,6 +125,56 @@ async fn native_ipc_crud_batches_and_metadata() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn native_ipc_can_switch_between_async_and_sync_calls() {
+    let (_directory, provider) = provider(1);
+    let token = address("TOKEN");
+    provider
+        .as_async()
+        .set(token, &"async".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        Provider::get(&provider, token)
+            .unwrap()
+            .unwrap()
+            .expose_secret(),
+        b"async"
+    );
+    Provider::set(&provider, token, &"sync".into()).unwrap();
+    assert_eq!(
+        provider
+            .as_async()
+            .get(token)
+            .await
+            .unwrap()
+            .unwrap()
+            .expose_secret(),
+        b"sync"
+    );
+}
+
+#[test]
+fn native_ipc_session_survives_the_initial_callers_runtime() {
+    let (_directory, provider) = provider(1);
+    let token = address("TOKEN");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(provider.as_async().set(token, &"persistent session".into()))
+        .unwrap();
+    drop(runtime);
+    assert_eq!(
+        Provider::get(&provider, token)
+            .unwrap()
+            .unwrap()
+            .expose_secret(),
+        b"persistent session"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn native_ipc_retry_backoff_yields_to_the_callers_runtime() {
     let (_directory, provider) = provider(3);
     provider.initialize_async().await.unwrap();

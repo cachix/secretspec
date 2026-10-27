@@ -1156,7 +1156,11 @@ impl ExternalBackend {
             )
         };
         let launch = self.launch_options(std::env::vars_os());
-        let launched = ProviderSession::launch_with_credential_broker(
+        let deadline = self.request_deadline(interactive, STARTUP_TIMEOUT);
+        // IPC transport and child-monitor tasks must stay driven when a caller
+        // switches from the async backend to the synchronous facade, or drops
+        // the runtime that first initialized this provider.
+        let launched = super::runtime::run_async(ProviderSession::launch_with_credential_broker(
             launch,
             Product {
                 name: "secretspec".to_string(),
@@ -1167,9 +1171,9 @@ impl ExternalBackend {
                 max_in_flight: 16,
             },
             application,
-            self.request_deadline(interactive, STARTUP_TIMEOUT),
+            deadline,
             Some(responder.clone()),
-        )
+        ))
         .await;
         let session = match launched {
             Ok(session) => session,

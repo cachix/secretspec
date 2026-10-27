@@ -172,8 +172,109 @@ extension of the provider trait.
 1. **Create provider module** in `src/provider/mybackend.rs`
 2. **Define config struct** with `Serialize`, `Deserialize`, `Default`, and `TryFrom<&Url>`
 3. **Implement provider struct** and use the `register_provider!` macro for automatic registration
-4. **Implement Provider trait** for your provider struct
+4. **Implement the storage interface**: `Provider` for sync backends, or follow
+   [Async backends](#async-backends) for async SDKs (0.22+)
 5. **Export from mod.rs**: Add `pub mod mybackend;`
+
+## Async backends
+
+<VersionCompatibility version="0.22" />
+
+Each backend implements its native storage interface once: `Provider` for
+synchronous backends, or `AsyncProvider` with `#[async_trait::async_trait]` for
+async SDKs and HTTP clients. Async backends also implement `ProviderBase` for
+configuration, naming, capabilities, credentials, and storage identity. Supply
+`name` and `uri` there, and `get` and `set` in `AsyncProvider`. Define the
+store's convention layout with `ProviderBase::convention_address`, or override
+`AsyncProvider::resolve_address` when compiling an address requires async I/O.
+
+The shared adapters expose either kind of backend to either kind of caller:
+
+| Backend | Synchronous caller | Async caller |
+| --- | --- | --- |
+| `Provider` | Direct call | `AsyncProviderAdapter` with `spawn_blocking` |
+| `AsyncProvider` + `ProviderBase` | `SyncProviderAdapter` with `block_on` | Direct await |
+
+The `Secrets` resolver, CLI, and existing synchronous provider implementations
+keep using `Provider`. Native async backends do not implement that trait or
+write their own sync bridges. Registration installs `SyncProviderAdapter` for
+the synchronous registry and exposes the native backend to async callers.
+Methods accept the same borrowed `Address` and arbitrary `SecretBytes` values.
+Text-only stores must reject non-UTF-8 bytes without including the value in an
+error.
+
+Register a native async factory alongside the synchronous one using the shared
+catalog form of the registration macro:
+
+```rust
+crate::register_provider! {
+    struct: YourProvider,
+    config: YourConfig,
+    metadata: &super::catalog::YOUR_PROVIDER,
+    native_async: true,
+}
+```
+
+The async URI factory reuses the configuration parser, injects credentials, and
+sets the default retry policy before returning the provider. URI parsing,
+credential rejection, and disabled-feature errors follow the synchronous
+factory. Native providers own their SDK or HTTP retry handling.
+
+Await backend I/O directly. Use async mutexes for gates held during I/O and
+async subprocess APIs for credential commands. Default batch reads deduplicate
+addresses and poll futures with the existing provider concurrency cap. Override
+`get_many` for a backend's bulk API, and both `get_with_metadata` and
+`get_many_with_metadata` when the backend reports expiry or revision metadata.
+
+Read-only providers must reject writes in both `set` and `check_writable`.
+Write-only providers must override `supports_read` and implement value-free
+`exists`. Deletion is opt-in: override both `delete` and `supports_delete`,
+and validate address restrictions in `check_deletable`.
+
+Exercise the native registration in tests through `Box<dyn AsyncProvider>`.
+For example, with the `awsps` Cargo feature enabled, run this inside an async
+function on a Tokio runtime:
+
+```rust
+use secretspec::{Address, AsyncProvider};
+
+let provider = Box::<dyn AsyncProvider>::try_from("awsps://us-east-1")?;
+let value = provider
+    .get(Address::convention("myapp", "default", "API_KEY"))
+    .await?;
+```
+
+Include tests on a current-thread runtime to verify that another task can make
+progress while the provider awaits I/O or retry backoff. Check that the shared
+adapter preserves write policies, batch results, and metadata.
+
+For external IPC providers, `initialize_async().await` negotiates capabilities
+before inspecting `supports_read` or `supports_delete` on the backend returned
+by `as_async()`. Storage operations also
+initialize lazily; the async capability accessors report cached capabilities
+without starting an endpoint.
+
+For a manually constructed async backend, use
+`SyncProviderAdapter::from_async(backend)` to expose the synchronous interface.
+Its `as_async()` accessor borrows the backend directly, and `into_async()`
+returns ownership of it. Configure the provider before sharing it.
+
+Synchronous backends use `AsyncProviderAdapter` through their existing
+registration and preflight checks. To exercise an existing provider instance
+through the async interface:
+
+```rust
+use secretspec::{AsyncProviderAdapter, Provider};
+use std::sync::Arc;
+
+let provider = Box::<dyn Provider>::try_from("dotenv://.env")?;
+let provider = AsyncProviderAdapter::new(Arc::from(provider));
+```
+
+The adapter runs storage operations, preflight, and retries on Tokio's blocking
+pool, preserving batch and metadata overrides. Configure provider credentials,
+paths, and policies before sharing an instance. Dropping a future does not stop
+an operation that has already started; writes may complete after cancellation.
 
 ## Documentation and Release Visibility
 

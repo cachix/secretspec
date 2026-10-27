@@ -84,8 +84,11 @@
 //! ```
 
 mod address;
+mod async_provider;
+mod base;
 mod catalog;
 mod credentials;
+mod sync_provider;
 // Every item inside is cfg-gated out in an all-features build.
 #[allow(unused_imports, unused_macros)]
 mod disabled;
@@ -115,12 +118,16 @@ mod url;
 
 // Public provider API.
 pub use address::Address;
+pub use async_provider::{AsyncProvider, AsyncProviderAdapter};
+pub use base::ProviderBase;
+pub use credentials::ProviderCredentials;
 pub use macros::{
     PROVIDER_REGISTRY, ProviderMetadata, ProviderRegistration, declared_flag,
     declared_read_capability,
 };
 pub use registry::ProviderInfo;
 pub use registry::providers;
+pub use sync_provider::SyncProviderAdapter;
 #[cfg(test)]
 pub(crate) use traits::get_each;
 pub use traits::{DiscoveryContext, ProducedValuePersistence, Provider, ProviderValue};
@@ -152,9 +159,7 @@ pub(crate) use address::{OwnedAddress, flat_item};
     feature = "vault"
 ))]
 pub(crate) use credentials::preferred_env;
-pub(crate) use credentials::{
-    ProviderCredentials, credential_env_value, credential_or_env, credential_or_envs,
-};
+pub(crate) use credentials::{credential_env_value, credential_or_env, credential_or_envs};
 pub(crate) use factory::{
     external_provider_from_spec, provider_from_spec, provider_url_from_spec, reject_uri_credential,
 };
@@ -172,7 +177,7 @@ pub(crate) use registry::{
 pub(crate) use runtime::block_on;
 #[cfg(test)]
 pub(crate) use traits::GET_EACH_CONCURRENCY_ENV;
-pub(crate) use traits::exists_each;
+#[cfg(test)]
 pub(crate) use traits::get_each_with;
 pub(crate) use traits::{
     get_each_concurrency, map_concurrently, same_configured_entries, same_storage_container,

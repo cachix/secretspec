@@ -2,6 +2,7 @@ use crate::config::{Config, GlobalConfig, GlobalDefaults, Profile as ConfigProfi
 #[cfg(feature = "kubernetes")]
 use crate::provider::kubernetes::{KubernetesKind, KubernetesProvider};
 use crate::provider::{Provider, providers, spec_names_known_provider};
+use crate::secrets::ConfigEnv;
 use crate::spec_edit::{
     add_description as add_secret_to_spec, validate_secret_name as validate_add_secret_name,
 };
@@ -326,6 +327,9 @@ enum Commands {
         /// secrets are removed from the child environment even if inherited.
         #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE", add = clap_complete::ArgValueCompleter::new(completion::scopes))]
         scope: Option<String>,
+        /// Child configuration overrides: inherit ambient values or clear them (0.22+)
+        #[arg(long, value_enum, default_value = "inherit")]
+        config_env: ConfigEnv,
         /// Command and arguments to run
         #[arg(trailing_var_arg = true, value_hint = ValueHint::CommandWithArguments, add = clap_complete::ArgValueCompleter::new(completion::RunCompleter))]
         command: Vec<String>,
@@ -1725,6 +1729,7 @@ pub fn main() -> Result<()> {
             provider,
             profile,
             scope,
+            config_env,
         } => {
             let mut app = load_secrets(&cli.file, &cli.reason, &caller)?;
             if let Some(p) = provider {
@@ -1734,7 +1739,7 @@ pub fn main() -> Result<()> {
                 app.set_profile(p);
             }
             apply_scope(&mut app, scope);
-            app.run(command)
+            app.run_with_config_env(command, config_env)
                 .into_diagnostic()
                 .wrap_err("Failed to run command")?;
             Ok(())

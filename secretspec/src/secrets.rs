@@ -3017,7 +3017,34 @@ impl Secrets {
                 .unwrap_or_default(),
         )
         .map(Arc::new);
-        Ok(Self {
+        let mut secrets = Self::from_config_parts(
+            config,
+            manifest,
+            config_dir,
+            global_config,
+            use_ambient_session,
+        );
+        secrets.audit = audit;
+        Ok(secrets)
+    }
+
+    /// Build the normal selection context without initializing audit or providers.
+    /// Configuration inspection must work even when access requires a reason.
+    #[cfg(feature = "cli")]
+    pub(crate) fn for_config_display(spec: Spec, global_config: Option<GlobalConfig>) -> Self {
+        let config_dir = spec.base_dir.clone().unwrap_or_else(|| PathBuf::from("."));
+        let (config, manifest) = spec.into_parts();
+        Self::from_config_parts(config, manifest, config_dir, global_config, true)
+    }
+
+    fn from_config_parts(
+        config: Config,
+        manifest: CompiledSpec,
+        config_dir: PathBuf,
+        global_config: Option<GlobalConfig>,
+        use_ambient_session: bool,
+    ) -> Self {
+        Self {
             require_reason: config.project.require_reason.unwrap_or_default(),
             config,
             manifest,
@@ -3033,7 +3060,7 @@ impl Secrets {
             reason: use_ambient_session.then(env_reason).flatten(),
             requested_authorization_duration: None,
             caller: None,
-            audit,
+            audit: None,
             provider_credentials_cache: ProviderCredentialsCache::default(),
             external_delete_capability: Mutex::new(HashMap::new()),
             write_target_reporter: None,
@@ -3041,7 +3068,7 @@ impl Secrets {
             provider_credential_prompt: None,
             progress: true,
             refuse_produced_writes: false,
-        })
+        }
     }
 
     #[cfg(any(feature = "cli", test))]

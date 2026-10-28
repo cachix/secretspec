@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `secretspec config show` displays computed project and global configuration,
+  including CLI and environment overrides, each setting's source, and merged
+  provider aliases. Use `--json` for structured output. No secrets are fetched;
+  `config global show` continues to display saved user-global configuration.
+
 - `secretspec run` now masks exact secret values in command stdout and stderr
   automatically, including file contents for `as_path` secrets. Filtering uses
   pipes, which can change terminal detection and buffering in interactive programs.

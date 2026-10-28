@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 
 mod claude;
 mod completion;
+mod config_show;
 mod docker;
 mod git;
 
@@ -191,6 +192,7 @@ pub(crate) struct TypedArgs {
     pub(crate) profile: bool,
     pub(crate) provider: bool,
     pub(crate) reason: bool,
+    pub(crate) scope: bool,
 }
 
 impl TypedArgs {
@@ -203,6 +205,7 @@ impl TypedArgs {
                 ("profile", &mut typed.profile),
                 ("provider", &mut typed.provider),
                 ("reason", &mut typed.reason),
+                ("scope", &mut typed.scope),
             ] {
                 if matches.ids().any(|known| known.as_str() == id)
                     && matches.value_source(id) == Some(ValueSource::CommandLine)
@@ -510,9 +513,24 @@ enum ConfigAction {
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles_or_none))]
         profile: Option<String>,
     },
-    /// Show current configuration
-    #[command(hide = true)]
-    Show,
+    /// Show computed configuration and where each setting comes from (0.22+)
+    Show {
+        /// Provider override to inspect
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER", add = clap_complete::ArgValueCompleter::new(completion::providers))]
+        provider: Option<String>,
+        /// Profile to inspect
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
+        profile: Option<String>,
+        /// Scope to inspect; an empty value selects the whole profile
+        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE", add = clap_complete::ArgValueCompleter::new(completion::scopes))]
+        scope: Option<String>,
+        /// Print computed configuration as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    // Internal target for `config global show`, kept separate from computed show.
+    #[command(skip)]
+    GlobalShow,
     /// Store project-scoped provider credentials
     #[command(subcommand)]
     Provider(ProviderAction),
@@ -605,7 +623,7 @@ impl From<GlobalConfigAction> for ConfigAction {
     fn from(action: GlobalConfigAction) -> Self {
         match action {
             GlobalConfigAction::Init { provider, profile } => Self::Init { provider, profile },
-            GlobalConfigAction::Show => Self::Show,
+            GlobalConfigAction::Show => Self::GlobalShow,
             GlobalConfigAction::Provider(action) => Self::Provider(action.into()),
         }
     }
@@ -1297,6 +1315,20 @@ pub fn main() -> Result<()> {
         // Handle configuration management commands
         Commands::Config { action } => match normalize_config_action(action) {
             ConfigAction::Global { .. } => unreachable!("global action was normalized"),
+            ConfigAction::Show {
+                provider,
+                profile,
+                scope,
+                json,
+            } => config_show::run(
+                &cli.file,
+                &cli.reason,
+                provider,
+                profile,
+                scope,
+                json,
+                typed,
+            ),
             // Initialize user configuration, prompting only for omitted values.
             ConfigAction::Init { provider, profile } => {
                 let provider = select_config_init_provider(provider)?;
@@ -1318,7 +1350,7 @@ pub fn main() -> Result<()> {
                 Ok(())
             }
             // Display current user configuration
-            ConfigAction::Show => {
+            ConfigAction::GlobalShow => {
                 match GlobalConfig::load().into_diagnostic()? {
                     Some(config) => {
                         println!(

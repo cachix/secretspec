@@ -121,9 +121,50 @@ $ secretspec config global init --provider env --profile default
 ✓ Configuration saved to ~/.config/secretspec/config.toml
 ```
 
+### config show
+
+<VersionCompatibility version="0.22" kind="changed">
+`config show` now displays computed configuration. In earlier releases it was
+an alias for `config global show`, which still displays saved global settings.
+</VersionCompatibility>
+
+Display the effective configuration for the current project after applying CLI
+flags, environment overrides, user-global defaults, and built-in defaults. Each
+setting includes its source. Provider aliases are merged with project entries
+taking precedence over user-global entries.
+
+```bash
+$ secretspec config show # 0.22+
+$ secretspec config show --profile production --scope api # 0.22+
+$ secretspec --file ../other/secretspec.toml config show --json # 0.22+
+```
+
+| Option | Description |
+|--------|-------------|
+| `-p, --provider <PROVIDER>` | Inspect a provider override. Env: `SECRETSPEC_PROVIDER` |
+| `-P, --profile <PROFILE>` | Inspect a profile selection. Env: `SECRETSPEC_PROFILE` |
+| `-S, --scope <SCOPE>` | Inspect a scope; an empty value clears an inherited scope. Env: `SECRETSPEC_SCOPE` |
+| `--json` | Print computed values, sources, provider aliases, and selection errors as JSON |
+
+The global `--file` and `--reason` options are also honored. A project manifest
+is required. The command reads configuration without fetching secrets,
+constructing providers, prompting for credentials, or initializing audit logging.
+It does not require an access reason. Credentials embedded in provider URIs
+are redacted, and secret defaults and values are not printed.
+
+The provider field identifies an override or a default; individual secrets may
+select different provider routes. Project alias sources include configurations
+loaded through `extends`.
+
+When an inherited manifest overrides discovery from the current directory, the
+text view shows the discovered path as overridden. JSON includes the selected
+`manifest` and the independently `discovered_manifest` path. Invalid profile or
+scope selections are printed with their sources and an error, then the command
+exits nonzero. In JSON mode stdout remains a JSON object, including `errors`.
+
 ### config global show
 Display current user-global configuration. The explicit namespace is available
-in SecretSpec 0.17+; `secretspec config show` remains a hidden alias.
+in SecretSpec 0.17+.
 
 ```bash
 $ secretspec config global show # 0.17+

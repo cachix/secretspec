@@ -857,6 +857,7 @@ $ secretspec run [OPTIONS] -- <COMMAND>
 - `-p, --provider <PROVIDER>` - Provider backend to use
 - `-P, --profile <PROFILE>` - Profile to use
 - `-S, --scope <SCOPE>` - Inject only a `[scopes]` subset of the profile (SecretSpec 0.17+)
+- `--config-env <inherit|clear>` - Preserve or remove the five configuration overrides from the child environment; defaults to `inherit` (SecretSpec 0.22+)
 
 **Examples:**
 ```bash
@@ -928,6 +929,35 @@ For most use cases, simply run your application and it will read secrets from it
 $ secretspec run -- node app.js  # app.js reads process.env.DATABASE_URL
 ```
 :::
+
+#### Child configuration environment
+
+<VersionCompatibility version="0.22" />
+
+By default, `run` forwards ambient configuration variables to the child. It does
+not export configuration selected through CLI flags: for example, an inherited
+`SECRETSPEC_PROFILE=development` remains `development` in the child even when the
+outer command selects `--profile production`.
+
+Use `--config-env=clear` when launching an editor, shell, or other program whose
+nested SecretSpec invocations should discover their own project configuration:
+
+```bash
+$ secretspec run --config-env=clear -- zed . # 0.22+
+$ secretspec run --config-env=inherit -- make deploy # 0.22+
+```
+
+`clear` removes exactly `SECRETSPEC_FILE`, `SECRETSPEC_PROFILE`,
+`SECRETSPEC_PROVIDER`, `SECRETSPEC_SCOPE`, and `SECRETSPEC_REASON` from the spawned
+child's environment, even if those names are declared as application secrets.
+It leaves other environment variables and injected application secrets available.
+Scope-excluded secrets continue to be removed in both modes.
+
+The outer invocation still honors its CLI flags and environment while resolving
+secrets, enforcing access-reason requirements, and contacting providers. This
+option changes only the spawned child's environment; it does not clear the
+parent shell's variables or change stored configuration. Nested invocations
+still apply user-global defaults and their own discovered project settings.
 
 #### Output redaction
 

@@ -2731,6 +2731,34 @@ where
     env
 }
 
+/// How `run` handles configuration overrides in its child's environment.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+pub(crate) enum ConfigEnv {
+    /// Preserve ambient configuration overrides (the default).
+    #[default]
+    Inherit,
+    /// Remove manifest, profile, provider, scope, and reason overrides.
+    #[cfg(feature = "cli")]
+    Clear,
+}
+
+impl ConfigEnv {
+    fn removed_names(self) -> &'static [&'static str] {
+        match self {
+            Self::Inherit => &[],
+            #[cfg(feature = "cli")]
+            Self::Clear => &[
+                "SECRETSPEC_FILE",
+                "SECRETSPEC_PROFILE",
+                "SECRETSPEC_PROVIDER",
+                "SECRETSPEC_SCOPE",
+                "SECRETSPEC_REASON",
+            ],
+        }
+    }
+}
+
 /// The id of the detected coding agent (e.g. `"claude-code"`), or `None`.
 ///
 /// Routes through [`detect_with_env`](detect_coding_agent::detect_with_env) with a
@@ -8043,9 +8071,22 @@ impl Secrets {
     /// spec.run(vec!["npm".to_string(), "start".to_string()]).unwrap();
     /// ```
     pub fn run(&self, command: Vec<String>) -> Result<()> {
+        self.run_with_config_env(command, ConfigEnv::Inherit)
+    }
+
+    pub(crate) fn run_with_config_env(
+        &self,
+        command: Vec<String>,
+        config_env: ConfigEnv,
+    ) -> Result<()> {
         self.ensure_reason_for(AuditAction::Run, None)?;
-        let exit_code = self.run_command(command)?;
+        let exit_code = self.run_command_with_config_env(command, config_env)?;
         std::process::exit(exit_code);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn run_command(&self, command: Vec<String>) -> Result<i32> {
+        self.run_command_with_config_env(command, ConfigEnv::Inherit)
     }
 
     /// Runs a command with secrets injected and returns its exit code.
@@ -8053,7 +8094,11 @@ impl Secrets {
     /// Splitting this out from [`Self::run`] ensures that any temporary files
     /// backing `as_path` secrets are dropped (and removed from disk) before
     /// `std::process::exit` is called — `exit` does not run destructors.
-    pub(crate) fn run_command(&self, command: Vec<String>) -> Result<i32> {
+    fn run_command_with_config_env(
+        &self,
+        command: Vec<String>,
+        config_env: ConfigEnv,
+    ) -> Result<i32> {
         if command.is_empty() {
             return Err(SecretSpecError::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -8112,13 +8157,19 @@ impl Secrets {
         // already validated the scope (`ensure_secrets` above), so this cannot
         // fail on an unknown scope here.
         let excluded = self.scope_excluded_names()?;
+        let config_excluded = config_env.removed_names();
         // Record which secrets were injected into which command (argv[0] only —
         // arguments may contain secrets). Keys are computed before the spawn but
         // the event is emitted after it so the outcome reflects whether the
         // command actually started.
         let keys: Vec<String> = if self.audit.is_some() {
-            let mut keys: Vec<String> =
-                validation_result.resolved.secrets.keys().cloned().collect();
+            let mut keys: Vec<String> = validation_result
+                .resolved
+                .secrets
+                .keys()
+                .filter(|key| !config_excluded.contains(&key.as_str()))
+                .cloned()
+                .collect();
             keys.sort();
             keys
         } else {
@@ -8132,6 +8183,12 @@ impl Secrets {
         // parent exported is unset in the child rather than merely left out of
         // the overlay. No-ops when no scope is active (`excluded` is empty).
         for key in &excluded {
+            cmd.env_remove(key);
+        }
+        // Apply after the secret overlay so these names are absent even when
+        // declared as application secrets. Only the spawned child is changed;
+        // this invocation and provider subprocesses retain their configuration.
+        for key in config_excluded {
             cmd.env_remove(key);
         }
 

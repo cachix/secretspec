@@ -134,7 +134,7 @@ pub use provider::{
     Provider, ProviderBase, ProviderCredentials, ProviderInfo, ProviderValue, RetryOperation,
     RetryOwnership, SyncProviderAdapter, providers,
 };
-pub use redaction::{RedactionStream, Redactor};
+pub use redaction::{RedactionStream, Redactor, TerminalRedactionStream};
 pub use report::{
     Derivation, RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus,
     SecretResolution,

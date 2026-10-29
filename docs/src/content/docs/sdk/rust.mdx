@@ -397,8 +397,13 @@ macOS keeper can leave its RAM disk attached; a subsequent macOS lease recovers
 journals belonging to dead keepers, checking process birth times and volume
 identity first. Setup is journaled before attachment starts; a short-lived
 setup worker completes or rolls back attachment, formatting, and mounting even
-if the keeper dies. Recovery waits for in-flight setup work and can clean up
-partially formatted or mounted volumes. Journals under `~/Library/Application Support/secretspec/file-leases`
+if the keeper dies. Busy setup locks are skipped, so a stopped worker cannot
+block unrelated leases. A random identifier is journaled before attachment and
+stored on the IOKit device, allowing recovery even if the setup worker dies
+before recording its device path. In-flight attachment retains the setup lock
+until `hdiutil` exits. Unidentified attachments keep their metadata for a later
+recovery attempt rather than losing the record. Recovery handles partially
+formatted or mounted volumes. Journals under `~/Library/Application Support/secretspec/file-leases`
 contain only process and volume metadata. Secret contents are written only into
 the mounted RAM disk. Consumer exit, including `SIGKILL`, normally causes the
 keeper to remove paths, unmount, and detach without elevated privileges.

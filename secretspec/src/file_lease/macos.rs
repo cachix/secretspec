@@ -1,3 +1,4 @@
+use super::macos_registry as registry;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, OpenOptions},
@@ -121,6 +122,8 @@ fn device_identity(metadata: &fs::Metadata) -> [u64; 4] {
 struct Journal {
     keeper: u32,
     birth: [u64; 2],
+    #[serde(default)]
+    lease_id: Option<uuid::Uuid>,
     device: String,
     mount: PathBuf,
     filesystem: Option<u64>,
@@ -128,6 +131,26 @@ struct Journal {
 }
 
 impl Journal {
+    fn identify_device(&mut self, directory: &Path) -> io::Result<()> {
+        if self.device.is_empty() {
+            let device = self
+                .lease_id
+                .map(registry::device)
+                .transpose()?
+                .flatten()
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "RAM-disk attachment has not been identified yet",
+                    )
+                })?;
+            self.device_identity = Some(device_identity(&fs::metadata(&device)?));
+            self.device = device;
+            self.save(directory)?;
+        }
+        Ok(())
+    }
+
     fn read(directory: &Path) -> io::Result<Self> {
         let file = OpenOptions::new()
             .read(true)
@@ -177,13 +200,21 @@ impl Journal {
 
     fn cleanup(&self) -> io::Result<()> {
         if self.device.is_empty() {
-            return Ok(());
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Cannot discard an unfinished RAM-disk attachment",
+            ));
         }
         let metadata = match fs::metadata(&self.device) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error),
         };
+        if let Some(id) = self.lease_id
+            && registry::device(id)?.as_deref() != Some(self.device.as_str())
+        {
+            return Err(io::Error::other("RAM-disk lease identifier changed"));
+        }
         if Some(device_identity(&metadata)) != self.device_identity {
             return Err(io::Error::other("RAM-disk device identity changed"));
         }
@@ -234,22 +265,9 @@ fn recover_orphans(root: &Path) -> io::Result<()> {
         }
         // The setup worker inherits this lock, so killing the keeper
         // cannot expose an attached device before its identity is journaled.
-        let lock = match OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(directory.path().join("setup.lock"))
-        {
-            Ok(lock) => lock,
-            Err(_) => continue,
-        };
-        if lock.metadata()?.uid() != unsafe { libc::geteuid() } {
+        let Ok(Some(_lock)) = try_setup_lock(&directory.path()) else {
             continue;
-        }
-        flock(&lock)?;
+        };
         if let Ok(updated) = Journal::read(&directory.path()) {
             journal = updated;
         } else {
@@ -257,7 +275,11 @@ fn recover_orphans(root: &Path) -> io::Result<()> {
         }
         // Another recovery process may win the race. A failed recovery remains
         // journaled for the next lease instead of causing a disk-file fallback.
-        if journal.cleanup().is_ok() {
+        if journal
+            .identify_device(&directory.path())
+            .and_then(|_| journal.cleanup())
+            .is_ok()
+        {
             let _ = fs::remove_dir(&journal.mount);
             // Also remove atomic-write remnants left by an interrupted setup.
             for entry in fs::read_dir(directory.path())? {
@@ -274,12 +296,39 @@ fn recover_orphans(root: &Path) -> io::Result<()> {
 
 const SETUP_ENV: &str = "_SECRETSPEC_FILE_SETUP_DIRECTORY";
 
-fn flock(file: &fs::File) -> io::Result<()> {
+fn try_setup_lock(directory: &Path) -> io::Result<Option<fs::File>> {
+    let lock = match OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(directory.join("setup.lock"))
+    {
+        Ok(lock) => lock,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if lock.metadata()?.uid() != unsafe { libc::geteuid() } {
+        return Ok(None);
+    }
+    if lock_exclusive(&lock, libc::LOCK_NB)? {
+        Ok(Some(lock))
+    } else {
+        Ok(None)
+    }
+}
+
+fn lock_exclusive(file: &fs::File, flags: i32) -> io::Result<bool> {
     loop {
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
-            return Ok(());
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | flags) } == 0 {
+            return Ok(true);
         }
         let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::WouldBlock {
+            return Ok(false);
+        }
         if error.kind() != io::ErrorKind::Interrupted {
             return Err(error);
         }
@@ -295,29 +344,57 @@ fn setup_device(directory: &Path) -> io::Result<()> {
     let mut journal = Journal::read(directory)?;
     // stdout holds the inherited setup lock until this worker exits. It must
     // finish or roll back setup even if the keeper is killed meanwhile.
-    let output = command(
-        "/usr/bin/hdiutil",
-        &[
-            "attach".as_ref(),
-            "-nomount".as_ref(),
-            "ram://131072".as_ref(),
-        ],
-    )?;
-    let device = String::from_utf8(output)
-        .map_err(io::Error::other)?
-        .split_whitespace()
-        .next()
-        .ok_or_else(|| io::Error::other("RAM-disk attachment returned no device"))?
-        .to_owned();
-    if !device.strip_prefix("/dev/disk").is_some_and(|digits| {
-        !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
-    }) {
-        return Err(io::Error::other(
-            "RAM-disk attachment returned an invalid device",
-        ));
+    let id = journal
+        .lease_id
+        .ok_or_else(|| io::Error::other("Missing file lease identifier"))?;
+    // hdiutil inherits the setup lock through stdout. If this worker dies
+    // while attachment is in flight, recovery skips it until hdiutil exits.
+    // The identifier was journaled before launching either process and is
+    // attached to the IOKit device independently of this worker's output.
+    let attach = Command::new("/usr/bin/hdiutil")
+        .args([
+            "attach",
+            "-nomount",
+            "-drivekey",
+            &format!("{}={id}", registry::LEASE_KEY),
+            "ram://131072",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    checkpoint("attaching", directory, "")?;
+    let output = attach.wait_with_output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "hdiutil attach: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
     }
-    journal.device_identity = Some(device_identity(&fs::metadata(&device)?));
-    journal.device = device;
+    match registry::device(id)? {
+        Some(device) => {
+            journal.device_identity = Some(device_identity(&fs::metadata(&device)?));
+            journal.device = device;
+        }
+        None => {
+            // Fail closed on systems without drive-key support, but detach the
+            // device reported directly by our completed attachment command.
+            let output = fs::read_to_string(directory.join("setup.lock"))?;
+            if let Some(device) = output.split_whitespace().find(|value| {
+                value.strip_prefix("/dev/disk").is_some_and(|digits| {
+                    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+                })
+            }) {
+                command(
+                    "/usr/bin/hdiutil",
+                    &["detach".as_ref(), "-force".as_ref(), device.as_ref()],
+                )?;
+            }
+            return Err(io::Error::other(
+                "RAM-disk lease identifier was not registered",
+            ));
+        }
+    }
     let mount = journal.mount.clone();
     let uid = unsafe { libc::geteuid() }.to_string();
     let gid = unsafe { libc::getegid() }.to_string();
@@ -385,7 +462,7 @@ fn checkpoint(stage: &str, directory: &Path, device: &str) -> io::Result<()> {
         if fs::read_to_string(test.join("stage"))? == stage {
             fs::write(
                 test.join("ready"),
-                serde_json::to_vec(&(directory, device))?,
+                serde_json::to_vec(&(directory, device, std::process::id()))?,
             )?;
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             while !test.join("resume").exists() {
@@ -417,6 +494,7 @@ impl Volume {
         let journal = Journal {
             keeper: std::process::id(),
             birth: [process.pbi_start_tvsec, process.pbi_start_tvusec],
+            lease_id: Some(uuid::Uuid::new_v4()),
             device: String::new(),
             mount: mount.clone(),
             filesystem: None,
@@ -428,7 +506,7 @@ impl Volume {
             .create_new(true)
             .mode(0o600)
             .open(directory.path().join("setup.lock"))?;
-        flock(&lock)?;
+        lock_exclusive(&lock, 0)?;
         journal.save(directory.path())?;
         let setup = (|| -> io::Result<Journal> {
             let mut worker = Command::new(std::env::current_exe()?);
@@ -444,14 +522,20 @@ impl Volume {
             }
             Journal::read(directory.path())
         })();
+        drop(lock);
         match setup {
             Ok(journal) => Ok(Self { directory, journal }),
             Err(error) => {
                 // Keep a recoverable record if detachment itself fails.
-                if Journal::read(directory.path())
-                    .and_then(|journal| journal.cleanup())
-                    .is_err()
-                {
+                let cleanup = (|| -> io::Result<()> {
+                    let _lock = try_setup_lock(directory.path())?.ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::WouldBlock, "Attachment is still in flight")
+                    })?;
+                    let mut journal = Journal::read(directory.path())?;
+                    journal.identify_device(directory.path())?;
+                    journal.cleanup()
+                })();
+                if cleanup.is_err() {
                     let _ = directory.keep();
                 }
                 Err(error)
@@ -512,20 +596,22 @@ impl Drop for Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
+    use std::{
+        process::Child,
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
 
-    #[test]
-    fn create_entry() {
-        if std::env::var_os("_SECRETSPEC_FILE_CREATE_TEST").is_some() {
-            let _volume = Volume::create().unwrap();
-            // The parent test kills this process at a setup checkpoint.
-            panic!("setup checkpoint was not reached");
-        }
+    struct PausedSetup {
+        test: tempfile::TempDir,
+        keeper: Child,
+        directory: PathBuf,
+        device: String,
+        worker: u32,
+        id: uuid::Uuid,
     }
-
-    #[test]
-    fn keeper_death_during_setup_is_recoverable() {
-        for stage in ["attached", "formatted", "mounted"] {
+    impl PausedSetup {
+        fn start(stage: &str) -> Self {
             let test = tempfile::tempdir().unwrap();
             fs::write(test.path().join("stage"), stage).unwrap();
             let mut keeper = Command::new(std::env::current_exe().unwrap())
@@ -542,7 +628,7 @@ mod tests {
                 .spawn()
                 .unwrap();
             let deadline = Instant::now() + Duration::from_secs(30);
-            let (directory, device): (PathBuf, String) = loop {
+            let (directory, device, worker): (PathBuf, String, u32) = loop {
                 if let Ok(bytes) = fs::read(test.path().join("ready"))
                     && let Ok(ready) = serde_json::from_slice(&bytes)
                 {
@@ -555,17 +641,95 @@ mod tests {
                 }
                 std::thread::sleep(Duration::from_millis(10));
             };
-            assert!(Path::new(&device).exists());
-            keeper.kill().unwrap();
-            keeper.wait().unwrap();
-            fs::write(test.path().join("resume"), "").unwrap();
-            // Recovery waits for an in-flight attachment to journal its device.
-            recover_orphans(&runtime_root().unwrap()).unwrap();
-            assert!(
-                !Path::new(&device).exists(),
-                "{stage}: device survived recovery"
-            );
-            assert!(!directory.exists(), "{stage}: journal survived recovery");
+            let id = Journal::read(&directory).unwrap().lease_id.unwrap();
+            Self {
+                test,
+                keeper,
+                directory,
+                device,
+                worker,
+                id,
+            }
         }
+        fn resume(&self) {
+            unsafe {
+                libc::kill(self.worker as _, libc::SIGCONT);
+            }
+            fs::write(self.test.path().join("resume"), "").unwrap();
+        }
+        fn recover(&self) {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while self.directory.exists() && Instant::now() < deadline {
+                recover_orphans(&runtime_root().unwrap()).unwrap();
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(!self.directory.exists(), "journal survived recovery");
+            assert!(self.device.is_empty() || !Path::new(&self.device).exists());
+            assert!(registry::device(self.id).unwrap().is_none());
+        }
+    }
+    impl Drop for PausedSetup {
+        fn drop(&mut self) {
+            unsafe {
+                libc::kill(self.worker as _, libc::SIGCONT);
+            }
+            let _ = fs::write(self.test.path().join("resume"), "");
+            let _ = self.keeper.kill();
+            let _ = self.keeper.wait();
+        }
+    }
+
+    #[test]
+    fn create_entry() {
+        if std::env::var_os("_SECRETSPEC_FILE_CREATE_TEST").is_some() {
+            let _volume = Volume::create().unwrap();
+            panic!("setup checkpoint was not interrupted");
+        }
+    }
+
+    #[test]
+    fn keeper_death_during_setup_is_recoverable() {
+        for stage in ["attaching", "attached", "formatted", "mounted"] {
+            let mut paused = PausedSetup::start(stage);
+            paused.keeper.kill().unwrap();
+            paused.keeper.wait().unwrap();
+            paused.resume();
+            paused.recover();
+        }
+    }
+
+    #[test]
+    fn worker_death_during_setup_is_recoverable() {
+        for stage in ["attaching", "attached", "formatted", "mounted"] {
+            let mut paused = PausedSetup::start(stage);
+            assert_eq!(unsafe { libc::kill(paused.worker as _, libc::SIGKILL) }, 0);
+            assert!(!paused.keeper.wait().unwrap().success());
+            paused.recover();
+        }
+    }
+
+    #[test]
+    fn stopped_setup_worker_does_not_block_other_leases() {
+        let mut paused = PausedSetup::start("attached");
+        assert_eq!(unsafe { libc::kill(paused.worker as _, libc::SIGSTOP) }, 0);
+        paused.keeper.kill().unwrap();
+        paused.keeper.wait().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            let lease = crate::FileLease::new(std::process::id());
+            let result = lease
+                .materialize(b"independent-lease", None)
+                .map(|path| (lease, path));
+            let _ = sender.send(result);
+        });
+        let result = receiver.recv_timeout(Duration::from_secs(8));
+        // Release the old worker even when a regression blocked the new lease.
+        paused.resume();
+        thread.join().unwrap();
+        paused.recover();
+        let (_lease, path) = result
+            .expect("a busy orphan blocked an unrelated lease")
+            .unwrap();
+        assert_eq!(fs::read(path).unwrap(), b"independent-lease");
     }
 }

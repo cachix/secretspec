@@ -14,6 +14,8 @@ use std::{
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_registry;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[path = "unix.rs"]
 mod platform;

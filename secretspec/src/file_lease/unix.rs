@@ -35,6 +35,19 @@ fn valid_pid(pid: u32) -> io::Result<()> {
     }
 }
 
+// Descriptors inherited through exec must not collide with child stdio setup.
+fn above_stdio<T: Into<OwnedFd> + From<OwnedFd>>(descriptor: T) -> io::Result<T> {
+    let descriptor = descriptor.into();
+    if descriptor.as_raw_fd() >= 3 {
+        return Ok(descriptor.into());
+    }
+    let duplicate = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
+    if duplicate < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(duplicate) }.into())
+}
+
 impl Keeper {
     #[cfg(test)]
     pub(super) fn pid(&self) -> u32 {
@@ -48,8 +61,10 @@ impl Keeper {
         #[cfg(target_os = "macos")]
         let owner_arg = owner.to_string();
         #[cfg(target_os = "linux")]
-        let owner = watch_owner(owner)?;
-        let (mut stream, remote) = UnixStream::pair()?;
+        let owner = above_stdio(watch_owner(owner)?)?;
+        let (stream, remote) = UnixStream::pair()?;
+        let mut stream = above_stdio(stream)?;
+        let remote = above_stdio(remote)?;
         let socket_fd = remote.as_raw_fd();
         #[cfg(target_os = "linux")]
         let owner_fd = owner.as_raw_fd();

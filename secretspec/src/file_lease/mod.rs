@@ -97,8 +97,7 @@ impl FileLease {
 }
 
 /// Private executable entry point. Embedding applications do not call this.
-#[doc(hidden)]
-pub fn maybe_run_keeper() -> Option<i32> {
+pub(crate) fn maybe_run_keeper() -> Option<i32> {
     platform::maybe_run_keeper()
 }
 

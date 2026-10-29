@@ -5,6 +5,7 @@ on:
     paths:
       - secretspec/src/file_lease/**
       - secretspec/src/cli/mod.rs
+      - secretspec/tests/file_lease_cli.rs
       - .github/workflows/file-leases.yml
   workflow_dispatch:
 
@@ -35,3 +36,4 @@ jobs:
       - name: Test storage, ownership transfer, and orphan recovery
         run: |
           cargo test -p secretspec --no-default-features --features cli --lib file_lease:: -- --test-threads=1
+          cargo test -p secretspec --no-default-features --features cli --test file_lease_cli

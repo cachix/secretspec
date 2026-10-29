@@ -234,10 +234,18 @@ fn run_keeper(socket: &str) -> io::Result<()> {
     }
     // This descriptor is inherited exclusively by the keeper executable.
     let mut stream = unsafe { UnixStream::from_raw_fd(socket) };
+    // macOS storage starts system tools. Do not let them inherit the private
+    // control channel or keep its EOF alive in a DiskImages helper.
+    if unsafe { libc::fcntl(socket, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
     #[cfg(target_os = "linux")]
     let owner = {
         if owner < 3 || socket == owner {
             return Err(io::Error::other("Invalid file keeper owner descriptor"));
+        }
+        if unsafe { libc::fcntl(owner, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+            return Err(io::Error::last_os_error());
         }
         unsafe { OwnedFd::from_raw_fd(owner) }
     };

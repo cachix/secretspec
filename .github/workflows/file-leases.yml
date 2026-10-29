@@ -33,4 +33,5 @@ jobs:
         with:
           key: file-leases
       - name: Test storage, ownership transfer, and orphan recovery
-        run: cargo test -p secretspec --no-default-features --features cli --lib file_lease:: -- --test-threads=1
+        run: |
+          cargo test -p secretspec --no-default-features --features cli --lib file_lease:: -- --test-threads=1

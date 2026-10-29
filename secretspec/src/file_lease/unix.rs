@@ -43,10 +43,18 @@ impl Keeper {
 
     pub(super) fn spawn(owner: u32, executable: Option<&Path>) -> io::Result<Self> {
         valid_pid(owner)?;
+        #[cfg(target_os = "macos")]
+        let owner_info = super::macos::process_info(owner)?;
+        #[cfg(target_os = "macos")]
+        let owner_arg = owner.to_string();
+        #[cfg(target_os = "linux")]
         let owner = watch_owner(owner)?;
         let (mut stream, remote) = UnixStream::pair()?;
         let socket_fd = remote.as_raw_fd();
+        #[cfg(target_os = "linux")]
         let owner_fd = owner.as_raw_fd();
+        #[cfg(target_os = "linux")]
+        let owner_arg = owner_fd.to_string();
         let executable = match executable {
             Some(path) => path.to_path_buf(),
             None => {
@@ -68,16 +76,29 @@ impl Keeper {
         let mut command = Command::new(executable);
         command
             .env(SOCKET_ENV, socket_fd.to_string())
-            .env(OWNER_ENV, owner_fd.to_string())
+            .env(OWNER_ENV, owner_arg)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .process_group(0);
-        // Only the forked child inherits these two control descriptors.
+        #[cfg(target_os = "macos")]
+        command.env(
+            "_SECRETSPEC_FILE_OWNER_BIRTH",
+            format!(
+                "{}:{}",
+                owner_info.pbi_start_tvsec, owner_info.pbi_start_tvusec
+            ),
+        );
+        // kqueues are not inherited across fork. macOS registers its exit
+        // watcher inside the new helper and validates the process birth time.
+        #[cfg(target_os = "linux")]
+        let inherited = vec![socket_fd, owner_fd];
+        #[cfg(target_os = "macos")]
+        let inherited = vec![socket_fd];
         unsafe {
             command.pre_exec(move || {
-                for fd in [socket_fd, owner_fd] {
-                    if libc::fcntl(fd, libc::F_SETFD, 0) < 0 {
+                for fd in &inherited {
+                    if libc::fcntl(*fd, libc::F_SETFD, 0) < 0 {
                         return Err(io::Error::last_os_error());
                     }
                 }
@@ -90,6 +111,7 @@ impl Keeper {
             .stderr(Stdio::inherit());
         let mut child = command.spawn()?;
         drop(remote);
+        #[cfg(target_os = "linux")]
         drop(owner);
         let mut ready = [0; 4];
         if let Err(error) = stream.read_exact(&mut ready) {
@@ -207,12 +229,36 @@ fn run_keeper(socket: &str) -> io::Result<()> {
         .map_err(io::Error::other)?
         .parse()
         .map_err(io::Error::other)?;
-    if socket < 3 || owner < 3 || socket == owner {
-        return Err(io::Error::other("Invalid file keeper descriptors"));
+    if socket < 3 {
+        return Err(io::Error::other("Invalid file keeper socket"));
     }
-    // These descriptors are inherited exclusively by the keeper executable.
+    // This descriptor is inherited exclusively by the keeper executable.
     let mut stream = unsafe { UnixStream::from_raw_fd(socket) };
-    let owner = unsafe { OwnedFd::from_raw_fd(owner) };
+    #[cfg(target_os = "linux")]
+    let owner = {
+        if owner < 3 || socket == owner {
+            return Err(io::Error::other("Invalid file keeper owner descriptor"));
+        }
+        unsafe { OwnedFd::from_raw_fd(owner) }
+    };
+    #[cfg(target_os = "macos")]
+    let owner = {
+        valid_pid(owner as u32)?;
+        let expected = std::env::var("_SECRETSPEC_FILE_OWNER_BIRTH").map_err(io::Error::other)?;
+        let verify = || -> io::Result<()> {
+            let info = super::macos::process_info(owner as u32)?;
+            if format!("{}:{}", info.pbi_start_tvsec, info.pbi_start_tvusec) != expected {
+                return Err(io::Error::other(
+                    "File lease owner process changed during startup",
+                ));
+            }
+            Ok(())
+        };
+        verify()?;
+        let watch = watch_owner(owner as u32)?;
+        verify()?;
+        watch
+    };
     let mut limit = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,

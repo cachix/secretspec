@@ -158,3 +158,7 @@ pub use validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, Vali
 mod tests;
 #[cfg(test)]
 mod typed_tests;
+
+/// Process-owned file delivery (0.22+).
+pub mod file_lease;
+pub use file_lease::FileLease;

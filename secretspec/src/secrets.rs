@@ -2133,7 +2133,9 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             let (owner, path) = self
                 .manager
                 .write_secret_to_temp_file(bytes, planned.config().file_suffix())?;
-            self.temp_files.push(owner);
+            if let Some(owner) = owner {
+                self.temp_files.push(owner);
+            }
             self.values
                 .insert(planned.name.clone(), SecretBytes::from_utf8(path));
         } else {
@@ -2381,7 +2383,8 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                     self.values,
                     report_provider_uri,
                     self.plan.profile.clone(),
-                ),
+                )
+                .with_as_path_materializer(self.manager.as_path_materializer.clone()),
                 missing_optional: self.missing_optional,
                 with_defaults: self.with_defaults,
                 resolution: self.resolution,
@@ -2401,7 +2404,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
 enum PreparedSecret {
     Inline(SecretBytes),
     File {
-        owner: tempfile::NamedTempFile,
+        owner: Option<tempfile::NamedTempFile>,
         path: String,
     },
 }
@@ -2558,6 +2561,9 @@ fn find_config_file_from(start: PathBuf) -> Result<PathBuf> {
     }
 }
 
+pub(crate) type AsPathMaterializer =
+    dyn Fn(&[u8], Option<&str>) -> io::Result<PathBuf> + Send + Sync;
+
 /// The main entry point for the secretspec library
 ///
 /// `Secrets` manages the loading, validation, and retrieval of secrets
@@ -2587,6 +2593,7 @@ pub struct Secrets {
     /// Optional global user configuration
     global_config: Option<GlobalConfig>,
     retry_policy: Option<crate::provider::RetryPolicy>,
+    as_path_materializer: Option<Arc<AsPathMaterializer>>,
     /// The provider to use (if set via builder)
     provider: Option<String>,
     /// Resolver sessions fix provider selection at initialization and must not
@@ -2916,6 +2923,7 @@ impl Secrets {
             config_dir: PathBuf::from("."),
             global_config,
             retry_policy: None,
+            as_path_materializer: None,
             provider,
             ignore_ambient_provider: false,
             profile,
@@ -3079,6 +3087,7 @@ impl Secrets {
             config_dir,
             global_config,
             retry_policy: None,
+            as_path_materializer: None,
             provider: None,
             ignore_ambient_provider: !use_ambient_session,
             profile: None,
@@ -3180,6 +3189,24 @@ impl Secrets {
     #[cfg(feature = "cli")]
     pub(crate) fn silence_progress(&mut self) {
         self.progress = false;
+    }
+
+    /// Override `as_path` materialization (0.22+).
+    ///
+    /// The callback receives logical bytes after decoding and extraction, before
+    /// any temporary file is created. Its absolute UTF-8 path is also used when
+    /// composing dependent secrets. Captured owners remain alive with the
+    /// validation result and any typed or cloned [`crate::Resolved`] values.
+    ///
+    /// Use this with [`Self::validate`] or an owned command session. APIs that
+    /// detach paths from their owners, such as [`Self::resolve`] and
+    /// [`Self::export`], cannot persist custom resources and return an error.
+    /// A callback failure never falls back to writing a temporary file.
+    pub fn set_as_path_materializer<F>(&mut self, materializer: F)
+    where
+        F: Fn(&[u8], Option<&str>) -> io::Result<PathBuf> + Send + Sync + 'static,
+    {
+        self.as_path_materializer = Some(Arc::new(materializer));
     }
 
     /// Sets the provider to use for secret operations
@@ -4433,7 +4460,9 @@ impl Secrets {
                 secrets.insert(planned.name.clone(), value);
             }
             PreparedSecret::File { owner, path } => {
-                temp_files.push(owner);
+                if let Some(owner) = owner {
+                    temp_files.push(owner);
+                }
                 secrets.insert(planned.name.clone(), SecretBytes::from_utf8(path));
             }
         }
@@ -7018,8 +7047,26 @@ impl Secrets {
         &self,
         secret: &[u8],
         suffix: Option<&str>,
-    ) -> Result<(tempfile::NamedTempFile, String)> {
+    ) -> Result<(Option<tempfile::NamedTempFile>, String)> {
         use std::io::Write;
+
+        if let Some(materialize) = &self.as_path_materializer {
+            let path = materialize(secret, suffix)?;
+            if !path.is_absolute() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Custom as_path materializer must return an absolute path",
+                )
+                .into());
+            }
+            let path = path.into_os_string().into_string().map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Custom as_path materializer must return a UTF-8 path",
+                )
+            })?;
+            return Ok((None, path));
+        }
 
         let mut temp_file = tempfile::Builder::new()
             .suffix(suffix.unwrap_or(""))
@@ -7059,7 +7106,7 @@ impl Secrets {
             })?
             .to_string();
 
-        Ok((temp_file, path_str))
+        Ok((Some(temp_file), path_str))
     }
 
     /// Validates all secrets in the specification
@@ -7344,6 +7391,15 @@ impl Secrets {
         surface: Surface,
         convert: impl FnOnce(&str, SecretBytes) -> Result<T>,
     ) -> Result<NamedResolution<T>> {
+        if self.as_path_materializer.is_some() {
+            // Named compositions can contain paths from hidden dependencies.
+            // NamedResolution cannot retain the callback that owns those paths.
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Custom as_path resources require a live owner and cannot be persisted",
+            )
+            .into());
+        }
         self.resolve_named_owned_within(name, surface, Materialize::Values, convert)?
             .into_embedded()
     }

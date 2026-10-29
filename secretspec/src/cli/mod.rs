@@ -1136,6 +1136,9 @@ fn caller_context(cli: &Cli) -> Result<Option<CallerContext>> {
 /// * `Err` - If any error occurred during execution
 #[doc(hidden)]
 pub fn main() -> Result<()> {
+    if let Some(code) = crate::file_lease::maybe_run_keeper() {
+        std::process::exit(code);
+    }
     completion::complete();
     let matches = Cli::command().get_matches();
     let typed = TypedArgs::from_matches(&matches);

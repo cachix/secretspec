@@ -6325,6 +6325,7 @@ dependencies = [
  "clap_complete",
  "clap_complete_nushell",
  "colored",
+ "core-foundation 0.10.1",
  "data-encoding",
  "detect-coding-agent",
  "dotenv-ng",

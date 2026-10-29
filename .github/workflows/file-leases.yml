@@ -1,0 +1,42 @@
+name: File lease lifecycle
+
+on:
+  pull_request:
+    paths:
+      - secretspec/src/file_lease/**
+      - secretspec/src/cli/mod.rs
+      - secretspec/tests/file_lease_cli.rs
+      - secretspec/tests/as_path_materializer.rs
+      - secretspec/src/secrets.rs
+      - .github/workflows/file-leases.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: file-leases-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lifecycle:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-15, macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        with:
+          key: file-leases
+      - name: Test storage, ownership transfer, and orphan recovery
+        run: |
+          cargo test -p secretspec --no-default-features --features cli --lib file_lease:: -- --test-threads=1
+          cargo test -p secretspec --no-default-features --features cli --test file_lease_cli
+          cargo test -p secretspec --no-default-features --features cli --test as_path_materializer

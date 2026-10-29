@@ -98,6 +98,14 @@ impl ValidatedSecrets {
     ///
     /// Returns an error if any file cannot be persisted
     pub fn keep_temp_files(&mut self) -> Result<Vec<std::path::PathBuf>, std::io::Error> {
+        // A visible composition may refer to a hidden as_path dependency,
+        // so the visible resolution entries cannot determine ownership.
+        if self.resolved.has_as_path_materializer() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Custom as_path resources require a live owner and cannot be persisted",
+            ));
+        }
         let mut paths = Vec::new();
         let temp_files = std::mem::take(&mut self.temp_files);
 

@@ -358,3 +358,20 @@ to declare native retry ownership and mutation replay safety. The default reject
 mutation replay. Set the policy before first provider I/O and before sharing an
 `Arc` provider. See [transient failures](/concepts/providers/#transient-failures)
 for batching, authentication, and native SDK behavior.
+
+## Custom file lifetimes
+
+<VersionCompatibility version="0.22" />
+
+`Secrets::set_as_path_materializer` lets an embedding application deliver
+`as_path` values directly to its own storage, such as anonymous memory-backed
+files. The callback receives logical bytes after decoding and extraction and
+returns an absolute UTF-8 path. No temporary file is created first, and callback
+errors never fall back to filesystem storage. Composed secrets use the returned
+path too.
+
+Capture the resource owner in the callback. SecretSpec retains it with the
+validation result and with typed or cloned `Resolved` values. Resources must
+remain valid while any consumer uses their paths. Use `validate` for this owned
+flow; detached exports such as `resolve` and `export` cannot persist custom
+resources and return an error.

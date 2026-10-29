@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Rust embedders can supply an `as_path` materializer to deliver secret bytes
+  directly into process-owned resources without creating temporary files.
+  Composed values use the custom paths, and resolved values retain their owners.
+
 - `secretspec config show` displays computed project and global configuration,
   including CLI and environment overrides, each setting's source, and merged
   provider aliases. Use `--json` for structured output. No secrets are fetched;

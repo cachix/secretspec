@@ -3813,6 +3813,8 @@ pub struct Resolved<T> {
     /// Resources whose lifetime must match the resolved secret values.
     #[serde(skip)]
     _resources: Option<Arc<ResolvedResources>>,
+    #[serde(skip)]
+    as_path_materializer: Option<Arc<crate::secrets::AsPathMaterializer>>,
 }
 
 /// Owns temporary files referenced by typed `as_path` fields.
@@ -3847,6 +3849,7 @@ impl<T> Resolved<T> {
             provider,
             profile,
             _resources: None,
+            as_path_materializer: None,
         }
     }
 
@@ -3856,7 +3859,20 @@ impl<T> Resolved<T> {
             provider: self.provider,
             profile: self.profile,
             _resources: self._resources,
+            as_path_materializer: self.as_path_materializer,
         }
+    }
+
+    pub(crate) fn with_as_path_materializer(
+        mut self,
+        materializer: Option<Arc<crate::secrets::AsPathMaterializer>>,
+    ) -> Self {
+        self.as_path_materializer = materializer;
+        self
+    }
+
+    pub(crate) fn has_as_path_materializer(&self) -> bool {
+        self.as_path_materializer.is_some()
     }
 
     pub(crate) fn with_temp_files(mut self, temp_files: Vec<NamedTempFile>) -> Self {

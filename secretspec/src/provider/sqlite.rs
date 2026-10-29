@@ -19,7 +19,7 @@ use super::{Address, Provider, ProviderUrl};
 use crate::SecretBytes;
 use crate::config::{NativeAddress, expand_tilde};
 use crate::{Result, SecretSpecError};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -165,7 +165,7 @@ impl SqliteProvider {
             })?;
         }
 
-        let conn = Connection::open(&self.config.path).map_err(|error| {
+        let mut conn = Connection::open(&self.config.path).map_err(|error| {
             operation_error(format!(
                 "failed to open sqlite database '{}': {error}",
                 self.config.path.display()
@@ -211,13 +211,32 @@ impl SqliteProvider {
         })?;
         if self.config.history {
             check_history_version(&conn)?;
-            conn.execute_batch(HISTORY_POST_MIGRATION)
+            // `HISTORY_POST_MIGRATION` drops then recreates triggers so their
+            // bodies stay authoritative. Without a reserved write lock, two
+            // openers can interleave drop/create and the second create fails
+            // with "already exists". BEGIN IMMEDIATE serialises the whole
+            // batch behind `busy_timeout`; dropping the transaction without
+            // commit rolls back a partial trigger set.
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(|error| {
                     operation_error(format!(
-                        "failed to finish history schema on '{}': {error}",
+                        "failed to start history schema transaction on '{}': {error}",
                         self.config.path.display()
                     ))
                 })?;
+            tx.execute_batch(HISTORY_POST_MIGRATION).map_err(|error| {
+                operation_error(format!(
+                    "failed to finish history schema on '{}': {error}",
+                    self.config.path.display()
+                ))
+            })?;
+            tx.commit().map_err(|error| {
+                operation_error(format!(
+                    "failed to commit history schema on '{}': {error}",
+                    self.config.path.display()
+                ))
+            })?;
         }
         Self::restrict_file(&self.config.path)?;
         Ok(conn)
@@ -1119,6 +1138,62 @@ mod tests {
                 .unwrap()
                 .expose_secret(),
             b"two"
+        );
+    }
+
+    /// Every history-enabled open re-applies [`HISTORY_POST_MIGRATION`] so the
+    /// trigger bodies stay authoritative. Without a write lock around that
+    /// drop-then-create pair, two openers can interleave and the second
+    /// `CREATE TRIGGER` fails with "already exists".
+    #[test]
+    fn concurrent_history_opens_finish_schema_without_trigger_races() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("secrets.db");
+        let provider = std::sync::Arc::new(SqliteProvider::new(SqliteConfig {
+            path: path.clone(),
+            history: true,
+        }));
+        // Seed so every racing open hits the post-migration path on an
+        // existing file, matching concurrent clients of the same store.
+        provider.connection().expect("seed open");
+
+        let errors = std::sync::Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            for _ in 0..16 {
+                let provider = std::sync::Arc::clone(&provider);
+                let errors = &errors;
+                scope.spawn(move || {
+                    for _ in 0..20 {
+                        if let Err(error) = provider.connection() {
+                            errors.lock().unwrap().push(error.to_string());
+                        }
+                    }
+                });
+            }
+        });
+        let errors = errors.into_inner().unwrap();
+        assert!(
+            errors.is_empty(),
+            "concurrent history opens failed ({}): {:?}",
+            errors.len(),
+            errors.into_iter().take(5).collect::<Vec<_>>()
+        );
+
+        let conn = provider.connection().expect("final open");
+        let trigger_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type = 'trigger' AND name IN ( \
+                     'captured_values_destroyed_by_is_write_once', \
+                     'captured_values_is_append_only' \
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            trigger_count, 2,
+            "both history triggers must exist after concurrent opens"
         );
     }
 

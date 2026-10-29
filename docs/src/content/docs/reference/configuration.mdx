@@ -1279,6 +1279,7 @@ entry declares neither, it inherits whichever form `[profiles.default]` uses.
 | [keyring](/providers/keyring/#use-existing-secrets) | Service | Account (defaults to the current system username) | Current user's entry | ✅ |
 | [dotenv](/providers/dotenv/#use-existing-secrets) | `.env` key | Rejected | Reads the key | ✅ |
 | [file (0.19+)](/providers/file/#use-existing-files) | Relative file path beneath the configured root | Rejected | Reads the complete file as arbitrary bytes (0.21+) | ✅ |
+| [SQLite (0.22+)](/providers/sqlite/#use-existing-rows) | Row key in the configured database | Rejected | Reads the complete value as arbitrary bytes | ✅ |
 | [env](/providers/env/#use-existing-secrets) | Variable name | Rejected | Reads the variable | — (read-only) |
 | [EJSON (0.20+)](/providers/ejson/#use-existing-secrets) | RFC 6901 JSON Pointer | Rejected | Reads the selected JSON string | — (read-only) |
 | [systemd credentials (0.17+)](/providers/systemd-credential/#use-an-existing-credential-name) | Credential filename | Rejected | Reads arbitrary credential bytes (0.21+) | — (read-only) |

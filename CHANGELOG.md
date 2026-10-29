@@ -105,7 +105,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`sqlite:./secrets.db`), protected by filesystem permissions alone, with
   read, write, delete, and batch reads. Appending `?history=true` turns on an
   opt-in, append-only, hash-chained history of every write inside the same
-  file; history is off by default (0.22+).
+  file; history is off by default (0.22+). Concurrent history-enabled opens
+  serialize schema setup to avoid trigger creation races.
 
 - Provider reads now retry recognized transient failures with bounded exponential
   backoff, including CLI providers such as BWS. Set `[defaults.retry].max_attempts`

@@ -13,7 +13,6 @@ permissions are the only access control, which makes it a good fit for a
 single-user machine, a CI job's private workspace, or a store owned by a
 service user behind a privilege boundary.
 
-
 ## At a glance
 
 | | |
@@ -59,9 +58,9 @@ yet report a missing value without creating the file.
 ## Setup
 
 SQLite is compiled into the `secretspec` binary, so nothing has to be
-installed. The SecretSpec process needs read access to the database file for
-`get`, and write access to the file and its directory for `set`, generated
-values, imports, cache writes, and deletes.
+installed. Opening an existing database reasserts its file permissions and
+prepares its schema, including for reads. The SecretSpec process needs read
+and write access to the database file and write access to its directory.
 
 Relative paths resolve from the directory containing `secretspec.toml`, not
 from the shell's current directory. Every `sqlite` URI must include a path;

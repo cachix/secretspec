@@ -971,7 +971,9 @@ File-backed secrets mask their contents. See
 [output redaction](/reference/configuration/#output-redaction) for details. This protects against accidental output disclosure;
 programs can still expose transformed values or use other output channels.
 Filtering uses pipes, which changes terminal detection and can affect buffering
-and interactive prompts. See the configuration reference for limits and shutdown
+and interactive prompts. Terminal destinations use terminal-aware filtering
+(0.22+) to preserve ANSI control syntax while masking text and string payloads.
+See the configuration reference for limits and shutdown
 behavior. Other commands, including `get` and `export`, still return values.
 
 ### export

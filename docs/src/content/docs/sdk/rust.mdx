@@ -359,6 +359,53 @@ mutation replay. Set the policy before first provider I/O and before sharing an
 `Arc` provider. See [transient failures](/concepts/providers/#transient-failures)
 for batching, authentication, and native SDK behavior.
 
+## Process-owned file lifetimes
+
+<VersionCompatibility version="0.22" />
+
+`FileLease` supplies memory-backed file delivery on Linux and macOS. Install a
+lease before validating, then retain the validation result while using its paths:
+
+```rust
+let mut spec = secretspec::Secrets::load()?;
+let lease = secretspec::FileLease::new(std::process::id());
+lease.install(&mut spec);
+let validated = spec.validate()??;
+// Use validated.resolved.secrets. File contents have not been written to disk.
+```
+
+Linux uses sealed, read-only `memfd` objects reachable through the keeper's
+`/proc` descriptors. macOS uses read-only files inside a private RAM disk, with
+ownership honored. The keeper watches its consumer through a Linux PID
+file descriptor or a macOS process-exit event.
+
+Dropping the final owned result and lease releases the resources. Before an
+exporter exits or an application replaces itself with `exec`, call
+`lease.handoff()?` to keep paths alive until the consuming PID exits. To transfer
+an existing lease to a detached manager, call `lease.handoff_to(manager_pid)?`.
+Each resolution can have an independent lease, so reloads and profiles never
+overwrite existing file contents. The application selects its consuming PID;
+`file_lease::ProcessInfo` provides process metadata for integrations.
+
+The matching `secretspec` executable runs the keeper. Install it next to the
+embedding executable or on PATH, or select its packaged location with
+`FileLease::with_keeper_executable`. Embedding applications do not add a helper
+entry point. No user shell setup or PID environment variable is required.
+
+A killed Linux keeper releases its anonymous files in the kernel. A killed
+macOS keeper can leave its RAM disk attached; a subsequent macOS lease recovers
+journals belonging to dead keepers, checking process birth times and volume
+identity first. Journals under `~/Library/Application Support/secretspec/file-leases`
+contain only process and volume metadata. Secret contents are written only into
+the mounted RAM disk. Consumer exit, including `SIGKILL`, normally causes the
+keeper to remove paths, unmount, and detach without elevated privileges.
+
+The request size limit is 64 MiB. macOS leases use a 64 MiB volume, including
+filesystem overhead, so available capacity can be lower. Linux file suffix
+hints are unsupported. Other platforms and storage errors fail explicitly;
+there is no disk-file fallback. Owned leases use `validate`; detached
+`resolve`/`export` APIs cannot retain a custom lease and return an error.
+
 ## Custom file lifetimes
 
 <VersionCompatibility version="0.22" />

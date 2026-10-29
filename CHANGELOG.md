@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Rust embedders can use `FileLease` to keep file secrets in process-owned
+  memory-backed storage on Linux and macOS, hand ownership to commands or
+  detached managers, and automatically recover orphaned macOS RAM disks.
+  No user PID configuration or application helper entry point is required.
+
 - Rust embedders can supply an `as_path` materializer to deliver secret bytes
   directly into process-owned resources without creating temporary files.
   Composed values use the custom paths, and resolved values retain their owners.

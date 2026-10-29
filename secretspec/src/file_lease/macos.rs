@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, OpenOptions},
-    io::{self, Read},
+    io::{self, Read, Write},
     mem::MaybeUninit,
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd},
@@ -238,6 +238,7 @@ fn recover_orphans(root: &Path) -> io::Result<()> {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW)
             .open(directory.path().join("setup.lock"))

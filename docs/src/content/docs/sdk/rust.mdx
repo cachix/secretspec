@@ -396,8 +396,8 @@ A killed Linux keeper releases its anonymous files in the kernel. A killed
 macOS keeper can leave its RAM disk attached; a subsequent macOS lease recovers
 journals belonging to dead keepers, checking process birth times and volume
 identity first. Setup is journaled before attachment starts; a short-lived
-attachment worker completes the device record even if the keeper dies during
-attachment. Recovery waits for in-flight attachment work and can clean up
+setup worker completes or rolls back attachment, formatting, and mounting even
+if the keeper dies. Recovery waits for in-flight setup work and can clean up
 partially formatted or mounted volumes. Journals under `~/Library/Application Support/secretspec/file-leases`
 contain only process and volume metadata. Secret contents are written only into
 the mounted RAM disk. Consumer exit, including `SIGKILL`, normally causes the

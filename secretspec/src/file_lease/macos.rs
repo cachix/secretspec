@@ -232,7 +232,7 @@ fn recover_orphans(root: &Path) -> io::Result<()> {
             }
             _ => {}
         }
-        // The attachment worker inherits this lock, so killing the keeper
+        // The setup worker inherits this lock, so killing the keeper
         // cannot expose an attached device before its identity is journaled.
         let lock = match OpenOptions::new()
             .read(true)
@@ -272,7 +272,7 @@ fn recover_orphans(root: &Path) -> io::Result<()> {
     Ok(())
 }
 
-const ATTACH_ENV: &str = "_SECRETSPEC_FILE_ATTACH_DIRECTORY";
+const SETUP_ENV: &str = "_SECRETSPEC_FILE_SETUP_DIRECTORY";
 
 fn flock(file: &fs::File) -> io::Result<()> {
     loop {
@@ -286,15 +286,15 @@ fn flock(file: &fs::File) -> io::Result<()> {
     }
 }
 
-pub(super) fn maybe_run_attachment() -> Option<io::Result<()>> {
-    let directory = std::env::var_os(ATTACH_ENV)?;
-    Some(attach_device(Path::new(&directory)))
+pub(super) fn maybe_run_setup() -> Option<io::Result<()>> {
+    let directory = std::env::var_os(SETUP_ENV)?;
+    Some(setup_device(Path::new(&directory)))
 }
 
-fn attach_device(directory: &Path) -> io::Result<()> {
+fn setup_device(directory: &Path) -> io::Result<()> {
     let mut journal = Journal::read(directory)?;
     // stdout holds the inherited setup lock until this worker exits. It must
-    // finish recording the attachment even if the keeper is killed meanwhile.
+    // finish or roll back setup even if the keeper is killed meanwhile.
     let output = command(
         "/usr/bin/hdiutil",
         &[
@@ -318,8 +318,58 @@ fn attach_device(directory: &Path) -> io::Result<()> {
     }
     journal.device_identity = Some(device_identity(&fs::metadata(&device)?));
     journal.device = device;
-    let result =
-        checkpoint("attached", directory, &journal.device).and_then(|_| journal.save(directory));
+    let mount = journal.mount.clone();
+    let uid = unsafe { libc::geteuid() }.to_string();
+    let gid = unsafe { libc::getegid() }.to_string();
+    let result = (|| -> io::Result<()> {
+        checkpoint("attached", directory, &journal.device)?;
+        journal.save(directory)?;
+        let device = &journal.device;
+        command(
+            "/sbin/newfs_hfs",
+            &[
+                "-U".as_ref(),
+                uid.as_ref(),
+                "-G".as_ref(),
+                gid.as_ref(),
+                "-M".as_ref(),
+                "700".as_ref(),
+                "-v".as_ref(),
+                "SecretSpec".as_ref(),
+                device.as_ref(),
+            ],
+        )?;
+        checkpoint("formatted", directory, device)?;
+        command(
+            "/sbin/mount",
+            &[
+                "-t".as_ref(),
+                "hfs".as_ref(),
+                "-o".as_ref(),
+                "owners,nobrowse,nodev,nosuid,noexec".as_ref(),
+                device.as_ref(),
+                mount.as_os_str(),
+            ],
+        )?;
+        let info = mount_info(&mount)?;
+        // MNT_UNKNOWNPERMISSIONS: the filesystem must honor ownership.
+        if info.f_flags & libc::MNT_IGNORE_OWNERSHIP as u32 != 0 {
+            return Err(io::Error::other("RAM disk does not honor file ownership"));
+        }
+        checkpoint("mounted", directory, device)?;
+        journal.filesystem = Some(fs::metadata(&mount)?.dev());
+        if !journal.validate_mount()? {
+            return Err(io::Error::other("RAM-disk mount did not appear"));
+        }
+        let metadata = fs::metadata(&mount)?;
+        if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o777 != 0o700 {
+            return Err(io::Error::other(
+                "RAM-disk root permissions are not private",
+            ));
+        }
+        journal.save(directory)?;
+        Ok(())
+    })();
     let owner_alive = process_info(journal.keeper)
         .is_ok_and(|info| [info.pbi_start_tvsec, info.pbi_start_tvusec] == journal.birth);
     if result.is_err() || !owner_alive {
@@ -380,66 +430,19 @@ impl Volume {
             .open(directory.path().join("setup.lock"))?;
         flock(&lock)?;
         journal.save(directory.path())?;
-        let uid = unsafe { libc::geteuid() }.to_string();
-        let gid = unsafe { libc::getegid() }.to_string();
         let setup = (|| -> io::Result<Journal> {
             let mut worker = Command::new(std::env::current_exe()?);
             worker
-                .env(ATTACH_ENV, directory.path())
+                .env(SETUP_ENV, directory.path())
                 .stdin(Stdio::null())
                 .stdout(Stdio::from(lock.try_clone()?))
                 .stderr(Stdio::null());
             #[cfg(test)]
             worker.args(["--exact", "file_lease::tests::keeper_entry", "--nocapture"]);
             if !worker.status()?.success() {
-                return Err(io::Error::other("RAM-disk attachment worker failed"));
+                return Err(io::Error::other("RAM-disk setup worker failed"));
             }
-            let mut journal = Journal::read(directory.path())?;
-            let device = &journal.device;
-            command(
-                "/sbin/newfs_hfs",
-                &[
-                    "-U".as_ref(),
-                    uid.as_ref(),
-                    "-G".as_ref(),
-                    gid.as_ref(),
-                    "-M".as_ref(),
-                    "700".as_ref(),
-                    "-v".as_ref(),
-                    "SecretSpec".as_ref(),
-                    device.as_ref(),
-                ],
-            )?;
-            checkpoint("formatted", directory.path(), device)?;
-            command(
-                "/sbin/mount",
-                &[
-                    "-t".as_ref(),
-                    "hfs".as_ref(),
-                    "-o".as_ref(),
-                    "owners,nobrowse,nodev,nosuid,noexec".as_ref(),
-                    device.as_ref(),
-                    mount.as_os_str(),
-                ],
-            )?;
-            let info = mount_info(&mount)?;
-            // MNT_UNKNOWNPERMISSIONS: the filesystem must honor ownership.
-            if info.f_flags & libc::MNT_IGNORE_OWNERSHIP as u32 != 0 {
-                return Err(io::Error::other("RAM disk does not honor file ownership"));
-            }
-            checkpoint("mounted", directory.path(), device)?;
-            journal.filesystem = Some(fs::metadata(&mount)?.dev());
-            if !journal.validate_mount()? {
-                return Err(io::Error::other("RAM-disk mount did not appear"));
-            }
-            let metadata = fs::metadata(&mount)?;
-            if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o777 != 0o700 {
-                return Err(io::Error::other(
-                    "RAM-disk root permissions are not private",
-                ));
-            }
-            journal.save(directory.path())?;
-            Ok(journal)
+            Journal::read(directory.path())
         })();
         match setup {
             Ok(journal) => Ok(Self { directory, journal }),

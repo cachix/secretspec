@@ -395,7 +395,10 @@ entry point. No user shell setup or PID environment variable is required.
 A killed Linux keeper releases its anonymous files in the kernel. A killed
 macOS keeper can leave its RAM disk attached; a subsequent macOS lease recovers
 journals belonging to dead keepers, checking process birth times and volume
-identity first. Journals under `~/Library/Application Support/secretspec/file-leases`
+identity first. Setup is journaled before attachment starts; a short-lived
+attachment worker completes the device record even if the keeper dies during
+attachment. Recovery waits for in-flight attachment work and can clean up
+partially formatted or mounted volumes. Journals under `~/Library/Application Support/secretspec/file-leases`
 contain only process and volume metadata. Secret contents are written only into
 the mounted RAM disk. Consumer exit, including `SIGKILL`, normally causes the
 keeper to remove paths, unmount, and detach without elevated privileges.
@@ -404,7 +407,8 @@ The request size limit is 64 MiB. macOS leases use a 64 MiB volume, including
 filesystem overhead, so available capacity can be lower. Linux file suffix
 hints are unsupported. Other platforms and storage errors fail explicitly;
 there is no disk-file fallback. Owned leases use `validate`; detached
-`resolve`/`export` APIs cannot retain a custom lease and return an error.
+`resolve`, `resolve_named`, `get`, and `export` APIs cannot retain a custom
+lease and return an error, including for compositions containing file paths.
 
 ## Custom file lifetimes
 

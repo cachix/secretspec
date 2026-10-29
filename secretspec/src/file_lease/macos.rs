@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, OpenOptions},
-    io::{self, Read, Write},
+    io::{self, Read},
     mem::MaybeUninit,
     os::{
-        fd::{FromRawFd, OwnedFd},
+        fd::{AsRawFd, FromRawFd, OwnedFd},
         unix::{
             ffi::OsStrExt,
             fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -123,11 +123,32 @@ struct Journal {
     birth: [u64; 2],
     device: String,
     mount: PathBuf,
-    filesystem: u64,
-    device_identity: [u64; 4],
+    filesystem: Option<u64>,
+    device_identity: Option<[u64; 4]>,
 }
 
 impl Journal {
+    fn read(directory: &Path) -> io::Result<Self> {
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(directory.join("lease.json"))?;
+        if file.metadata()?.uid() != unsafe { libc::geteuid() } {
+            return Err(io::Error::other("File lease journal is not user-owned"));
+        }
+        serde_json::from_reader(file.take(16384)).map_err(io::Error::other)
+    }
+
+    fn save(&self, directory: &Path) -> io::Result<()> {
+        // Keep the previous complete record if a writer dies during an update.
+        let mut file = tempfile::NamedTempFile::new_in(directory)?;
+        serde_json::to_writer(&mut file, self).map_err(io::Error::other)?;
+        file.as_file().sync_all()?;
+        file.persist(directory.join("lease.json"))
+            .map_err(|error| error.error)?;
+        fs::File::open(directory)?.sync_all()
+    }
+
     fn validate_mount(&self) -> io::Result<bool> {
         if !self.device.strip_prefix("/dev/disk").is_some_and(|digits| {
             !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
@@ -142,7 +163,9 @@ impl Journal {
         }
         if c_string(&info.f_fstypename) != b"hfs"
             || c_string(&info.f_mntfromname) != self.device.as_bytes()
-            || fs::metadata(&self.mount)?.dev() != self.filesystem
+            || self.filesystem.is_some_and(|device| {
+                fs::metadata(&self.mount).map_or(true, |metadata| metadata.dev() != device)
+            })
             || info.f_owner != unsafe { libc::geteuid() }
         {
             return Err(io::Error::other(
@@ -153,12 +176,15 @@ impl Journal {
     }
 
     fn cleanup(&self) -> io::Result<()> {
+        if self.device.is_empty() {
+            return Ok(());
+        }
         let metadata = match fs::metadata(&self.device) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error),
         };
-        if device_identity(&metadata) != self.device_identity {
+        if Some(device_identity(&metadata)) != self.device_identity {
             return Err(io::Error::other("RAM-disk device identity changed"));
         }
         if !self.validate_mount()? {
@@ -192,19 +218,7 @@ fn recover_orphans(root: &Path) -> io::Result<()> {
         if !directory.file_type()?.is_dir() {
             continue;
         }
-        let journal_path = directory.path().join("lease.json");
-        let file = match OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&journal_path)
-        {
-            Ok(file) => file,
-            Err(_) => continue,
-        };
-        if file.metadata()?.uid() != unsafe { libc::geteuid() } {
-            continue;
-        }
-        let journal: Journal = match serde_json::from_reader(file.take(16384)) {
+        let mut journal = match Journal::read(&directory.path()) {
             Ok(journal) => journal,
             Err(_) => continue,
         };
@@ -218,14 +232,120 @@ fn recover_orphans(root: &Path) -> io::Result<()> {
             }
             _ => {}
         }
+        // The attachment worker inherits this lock, so killing the keeper
+        // cannot expose an attached device before its identity is journaled.
+        let lock = match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(directory.path().join("setup.lock"))
+        {
+            Ok(lock) => lock,
+            Err(_) => continue,
+        };
+        if lock.metadata()?.uid() != unsafe { libc::geteuid() } {
+            continue;
+        }
+        flock(&lock)?;
+        if let Ok(updated) = Journal::read(&directory.path()) {
+            journal = updated;
+        } else {
+            continue;
+        }
         // Another recovery process may win the race. A failed recovery remains
         // journaled for the next lease instead of causing a disk-file fallback.
         if journal.cleanup().is_ok() {
-            let _ = fs::remove_file(journal_path);
             let _ = fs::remove_dir(&journal.mount);
+            // Also remove atomic-write remnants left by an interrupted setup.
+            for entry in fs::read_dir(directory.path())? {
+                let entry = entry?;
+                if entry.file_type()?.is_file() {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
             let _ = fs::remove_dir(directory.path());
         }
     }
+    Ok(())
+}
+
+const ATTACH_ENV: &str = "_SECRETSPEC_FILE_ATTACH_DIRECTORY";
+
+fn flock(file: &fs::File) -> io::Result<()> {
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+pub(super) fn maybe_run_attachment() -> Option<io::Result<()>> {
+    let directory = std::env::var_os(ATTACH_ENV)?;
+    Some(attach_device(Path::new(&directory)))
+}
+
+fn attach_device(directory: &Path) -> io::Result<()> {
+    let mut journal = Journal::read(directory)?;
+    // stdout holds the inherited setup lock until this worker exits. It must
+    // finish recording the attachment even if the keeper is killed meanwhile.
+    let output = command(
+        "/usr/bin/hdiutil",
+        &[
+            "attach".as_ref(),
+            "-nomount".as_ref(),
+            "ram://131072".as_ref(),
+        ],
+    )?;
+    let device = String::from_utf8(output)
+        .map_err(io::Error::other)?
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| io::Error::other("RAM-disk attachment returned no device"))?
+        .to_owned();
+    if !device.strip_prefix("/dev/disk").is_some_and(|digits| {
+        !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+    }) {
+        return Err(io::Error::other(
+            "RAM-disk attachment returned an invalid device",
+        ));
+    }
+    journal.device_identity = Some(device_identity(&fs::metadata(&device)?));
+    journal.device = device;
+    let result =
+        checkpoint("attached", directory, &journal.device).and_then(|_| journal.save(directory));
+    let owner_alive = process_info(journal.keeper)
+        .is_ok_and(|info| [info.pbi_start_tvsec, info.pbi_start_tvusec] == journal.birth);
+    if result.is_err() || !owner_alive {
+        journal.cleanup()?;
+    }
+    result
+}
+
+fn checkpoint(stage: &str, directory: &Path, device: &str) -> io::Result<()> {
+    #[cfg(test)]
+    if let Some(test) = std::env::var_os("_SECRETSPEC_FILE_SETUP_TEST") {
+        let test = PathBuf::from(test);
+        if fs::read_to_string(test.join("stage"))? == stage {
+            fs::write(
+                test.join("ready"),
+                serde_json::to_vec(&(directory, device))?,
+            )?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !test.join("resume").exists() {
+                if std::time::Instant::now() >= deadline {
+                    return Err(io::Error::other("Setup checkpoint timed out"));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+    }
+    let _ = (stage, directory, device);
     Ok(())
 }
 
@@ -242,31 +362,39 @@ impl Volume {
             .tempdir_in(&root)?;
         let mount = directory.path().join("memory");
         fs::DirBuilder::new().mode(0o700).create(&mount)?;
-        // This is a RAM-backed block device. No disk image file is created.
-        let output = command(
-            "/usr/bin/hdiutil",
-            &[
-                "attach".as_ref(),
-                "-nomount".as_ref(),
-                "ram://131072".as_ref(),
-            ],
-        )?;
-        let device = String::from_utf8(output)
-            .map_err(io::Error::other)?
-            .split_whitespace()
-            .next()
-            .ok_or_else(|| io::Error::other("RAM-disk attachment returned no device"))?
-            .to_owned();
-        if !device.strip_prefix("/dev/disk").is_some_and(|digits| {
-            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
-        }) {
-            return Err(io::Error::other(
-                "RAM-disk attachment returned an invalid device",
-            ));
-        }
+        let process = process_info(std::process::id())?;
+        let journal = Journal {
+            keeper: std::process::id(),
+            birth: [process.pbi_start_tvsec, process.pbi_start_tvusec],
+            device: String::new(),
+            mount: mount.clone(),
+            filesystem: None,
+            device_identity: None,
+        };
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(directory.path().join("setup.lock"))?;
+        flock(&lock)?;
+        journal.save(directory.path())?;
         let uid = unsafe { libc::geteuid() }.to_string();
         let gid = unsafe { libc::getegid() }.to_string();
         let setup = (|| -> io::Result<Journal> {
+            let mut worker = Command::new(std::env::current_exe()?);
+            worker
+                .env(ATTACH_ENV, directory.path())
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(lock.try_clone()?))
+                .stderr(Stdio::null());
+            #[cfg(test)]
+            worker.args(["--exact", "file_lease::tests::keeper_entry", "--nocapture"]);
+            if !worker.status()?.success() {
+                return Err(io::Error::other("RAM-disk attachment worker failed"));
+            }
+            let mut journal = Journal::read(directory.path())?;
+            let device = &journal.device;
             command(
                 "/sbin/newfs_hfs",
                 &[
@@ -281,6 +409,7 @@ impl Volume {
                     device.as_ref(),
                 ],
             )?;
+            checkpoint("formatted", directory.path(), device)?;
             command(
                 "/sbin/mount",
                 &[
@@ -297,15 +426,8 @@ impl Volume {
             if info.f_flags & libc::MNT_IGNORE_OWNERSHIP as u32 != 0 {
                 return Err(io::Error::other("RAM disk does not honor file ownership"));
             }
-            let process = process_info(std::process::id())?;
-            let journal = Journal {
-                keeper: std::process::id(),
-                birth: [process.pbi_start_tvsec, process.pbi_start_tvusec],
-                device: device.clone(),
-                mount: mount.clone(),
-                filesystem: fs::metadata(&mount)?.dev(),
-                device_identity: device_identity(&fs::metadata(&device)?),
-            };
+            checkpoint("mounted", directory.path(), device)?;
+            journal.filesystem = Some(fs::metadata(&mount)?.dev());
             if !journal.validate_mount()? {
                 return Err(io::Error::other("RAM-disk mount did not appear"));
             }
@@ -315,28 +437,19 @@ impl Volume {
                     "RAM-disk root permissions are not private",
                 ));
             }
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(directory.path().join("lease.json"))?;
-            serde_json::to_writer(&mut file, &journal).map_err(io::Error::other)?;
-            file.sync_all()?;
+            journal.save(directory.path())?;
             Ok(journal)
         })();
         match setup {
             Ok(journal) => Ok(Self { directory, journal }),
             Err(error) => {
-                // Setup has not received or written any secret bytes yet.
-                if let Ok(info) = mount_info(&mount)
-                    && c_string(&info.f_mntonname) == mount.as_os_str().as_bytes()
+                // Keep a recoverable record if detachment itself fails.
+                if Journal::read(directory.path())
+                    .and_then(|journal| journal.cleanup())
+                    .is_err()
                 {
-                    let _ = command("/sbin/umount", &["-f".as_ref(), mount.as_os_str()]);
+                    let _ = directory.keep();
                 }
-                let _ = command(
-                    "/usr/bin/hdiutil",
-                    &["detach".as_ref(), "-force".as_ref(), device.as_ref()],
-                );
                 Err(error)
             }
         }
@@ -389,5 +502,66 @@ impl Storage {
 impl Drop for Storage {
     fn drop(&mut self) {
         let _ = self.cleanup();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn create_entry() {
+        if std::env::var_os("_SECRETSPEC_FILE_CREATE_TEST").is_some() {
+            let _volume = Volume::create().unwrap();
+            // The parent test kills this process at a setup checkpoint.
+            panic!("setup checkpoint was not reached");
+        }
+    }
+
+    #[test]
+    fn keeper_death_during_setup_is_recoverable() {
+        for stage in ["attached", "formatted", "mounted"] {
+            let test = tempfile::tempdir().unwrap();
+            fs::write(test.path().join("stage"), stage).unwrap();
+            let mut keeper = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "file_lease::macos::tests::create_entry",
+                    "--nocapture",
+                ])
+                .env("_SECRETSPEC_FILE_CREATE_TEST", "1")
+                .env("_SECRETSPEC_FILE_SETUP_TEST", test.path())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let (directory, device): (PathBuf, String) = loop {
+                if let Ok(bytes) = fs::read(test.path().join("ready"))
+                    && let Ok(ready) = serde_json::from_slice(&bytes)
+                {
+                    break ready;
+                }
+                if Instant::now() >= deadline || keeper.try_wait().unwrap().is_some() {
+                    let _ = keeper.kill();
+                    let _ = keeper.wait();
+                    panic!("did not reach {stage} setup checkpoint");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            assert!(Path::new(&device).exists());
+            keeper.kill().unwrap();
+            keeper.wait().unwrap();
+            fs::write(test.path().join("resume"), "").unwrap();
+            // Recovery waits for an in-flight attachment to journal its device.
+            recover_orphans(&runtime_root().unwrap()).unwrap();
+            assert!(
+                !Path::new(&device).exists(),
+                "{stage}: device survived recovery"
+            );
+            assert!(!directory.exists(), "{stage}: journal survived recovery");
+        }
     }
 }

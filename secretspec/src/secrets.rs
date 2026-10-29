@@ -7391,6 +7391,15 @@ impl Secrets {
         surface: Surface,
         convert: impl FnOnce(&str, SecretBytes) -> Result<T>,
     ) -> Result<NamedResolution<T>> {
+        if self.as_path_materializer.is_some() {
+            // Named compositions can contain paths from hidden dependencies.
+            // NamedResolution cannot retain the callback that owns those paths.
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Custom as_path resources require a live owner and cannot be persisted",
+            )
+            .into());
+        }
         self.resolve_named_owned_within(name, surface, Materialize::Values, convert)?
             .into_embedded()
     }

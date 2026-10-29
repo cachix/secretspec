@@ -6,6 +6,8 @@ on:
       - secretspec/src/file_lease/**
       - secretspec/src/cli/mod.rs
       - secretspec/tests/file_lease_cli.rs
+      - secretspec/tests/as_path_materializer.rs
+      - secretspec/src/secrets.rs
       - .github/workflows/file-leases.yml
   workflow_dispatch:
 
@@ -37,3 +39,4 @@ jobs:
         run: |
           cargo test -p secretspec --no-default-features --features cli --lib file_lease:: -- --test-threads=1
           cargo test -p secretspec --no-default-features --features cli --test file_lease_cli
+          cargo test -p secretspec --no-default-features --features cli --test as_path_materializer

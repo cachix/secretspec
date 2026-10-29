@@ -114,3 +114,30 @@ fn scoped_compositions_cannot_detach_hidden_file_dependencies() {
             .contains("cannot be persisted")
     );
 }
+
+#[test]
+fn named_compositions_cannot_detach_custom_file_dependencies() {
+    let root = tempfile::tempdir().unwrap();
+    let mut spec = project(root.path());
+    spec.set_as_path_materializer(|_, _| Ok("/custom/key".into()));
+    for result in [spec.resolve_named("ARGS"), spec.resolve_named("KEY")] {
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("cannot be persisted")
+        );
+    }
+    assert!(
+        spec.resolve_named_bytes("ARGS")
+            .unwrap_err()
+            .to_string()
+            .contains("cannot be persisted")
+    );
+    assert!(
+        spec.get("ARGS")
+            .unwrap_err()
+            .to_string()
+            .contains("cannot be persisted")
+    );
+}

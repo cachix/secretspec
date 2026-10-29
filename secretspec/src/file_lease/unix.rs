@@ -213,6 +213,10 @@ impl Drop for Keeper {
 }
 
 pub(super) fn maybe_run_keeper() -> Option<i32> {
+    #[cfg(target_os = "macos")]
+    if let Some(result) = super::macos::maybe_run_attachment() {
+        return Some(result.map_or_else(|_| 1, |_| 0));
+    }
     let socket = std::env::var(SOCKET_ENV).ok()?;
     Some(run_keeper(&socket).map_or_else(
         |error| {

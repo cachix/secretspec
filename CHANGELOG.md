@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `secretspec add` accepts `--optional` and `--required` (0.22+) to override
+  profile defaults when declaring a secret. Omitting both keeps the defaults.
+
 - `secretspec config show` displays computed project and global configuration,
   including CLI and environment overrides, each setting's source, and merged
   provider aliases. Use `--json` for structured output. No secrets are fetched;

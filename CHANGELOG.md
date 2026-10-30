@@ -75,6 +75,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a compatible SecretSpec executable.
 
 ### Fixed
+
+- Undeclared secrets in `set`, `delete`, and `cache clear NAME` now report the
+  profile and available secrets without a duplicated "Secret ... not found"
+  wrapper. Rust callers receive `SecretSpecError::SecretNotDefined` for these
+  errors; their `kind()` remains `secret_not_found`.
+
 - Scaleway: `secretspec set` on a secret that already exists adds a new version
   instead of failing with HTTP 400 "cannot have same secret name in same path".
 

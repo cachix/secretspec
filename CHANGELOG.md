@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scope, and reason environment overrides from the spawned child. The default,
   `--config-env=inherit`, preserves existing inheritance behavior.
 
+- Terminal output redaction preserves ANSI control syntax so numeric secrets
+  do not break colors or shell modes. Window titles and hyperlink payloads remain
+  masked; Rust embedders can select this behavior with `Redactor::terminal_stream`.
+  Interrupted controls resume text masking, and ignored control bytes preserve
+  valid escape sequences.
+
 - `secretspec run` now masks exact secret values in command stdout and stderr
   automatically, including file contents for `as_path` secrets. Filtering uses
   pipes, which can change terminal detection and buffering in interactive programs.

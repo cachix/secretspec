@@ -1,0 +1,88 @@
+---
+title: BeyondTrust Password Safe Provider
+description: Retrieve managed account passwords from BeyondTrust Password Safe
+---
+
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
+
+:::note[Version compatibility]
+Available since SecretSpec 0.19.
+:::
+
+The BeyondTrust Password Safe provider retrieves a managed account password
+through the Password Safe Public API. It is read-only.
+
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `bt-pws` |
+| URI | `bt-pws://HOST` |
+| Access | Read-only |
+| Authentication | API key and run-as user, optionally with a personal access token or MFA; OAuth client credentials |
+| Availability | SecretSpec 0.19+; requires the `bt-pws` build feature |
+
+## Setup
+
+Configure the Password Safe host and use a `ref` to name the managed account
+and system:
+
+```toml title="secretspec.toml"
+[providers]
+beyondtrust = "bt-pws://passwordsafe.example.com"
+
+[profiles.default]
+DATABASE_PASSWORD = { description = "Database password", ref = { item = "database-user", field = "database-server" }, providers = ["beyondtrust"] }
+```
+
+`item` is the managed account name and `field` is the managed system name.
+
+### API key and run-as user
+
+```bash
+export BTPWS_AUTH_KEY=...
+export BTPWS_RUNAS=service-account@example.com
+```
+
+### Personal access token
+
+To include a Password Safe personal access token in the `PS-Auth` header, also
+set:
+
+```bash
+export BTPWS_PERSONAL_ACCESS_TOKEN=...
+```
+
+### MFA
+
+When Password Safe responds with an MFA challenge, SecretSpec prompts for the
+one-time password without echoing it. MFA requires an interactive terminal and
+is supported with API-key authentication in SecretSpec 0.19+.
+
+### OAuth client credentials
+
+OAuth machine clients use a client-credentials exchange, then sign in with the
+returned Bearer token:
+
+```bash
+export BTPWS_CLIENT_ID=...
+export BTPWS_CLIENT_SECRET=...
+```
+
+When both OAuth variables are present, OAuth takes precedence over API-key
+authentication. The access token is held only for the current resolution.
+
+## Provider credentials
+
+<ProviderCredentials provider="bt-pws" />
+
+## Use existing managed accounts
+
+```bash
+secretspec run --provider beyondtrust -- your-command
+```
+
+The provider creates a five-minute `View` request with reason `SecretSpec`,
+retrieves the resulting credential, and signs out. The Password Safe account
+must be authorized to view and request access to the referenced managed
+account.

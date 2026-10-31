@@ -287,13 +287,13 @@ pub mod akv;
 pub mod awsps;
 #[cfg(feature = "awssm")]
 pub mod awssm;
+#[cfg(feature = "bt-pws")]
+#[path = "bt-pws.rs"]
+pub mod bt_pws;
 #[cfg(feature = "bw")]
 pub mod bw;
 #[cfg(feature = "bws")]
 pub mod bws;
-#[cfg(feature = "bt-pws")]
-#[path = "bt-pws.rs"]
-pub mod bt_pws;
 pub mod dashlane;
 pub mod dotenv;
 pub mod env;

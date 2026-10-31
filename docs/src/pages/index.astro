@@ -57,6 +57,7 @@ const providerMetadata: ProviderMetadata[] = [
   { icon: 'googlecloud', slug: 'gcsm', label: 'Google Cloud Secret Manager' },
   { icon: 'microsoftazure', slug: 'akv', label: 'Azure Key Vault' },
   { slug: 'infisical', label: 'Infisical' },
+  { slug: 'bt-pws', label: 'BeyondTrust Password Safe (0.19+)' },
   { slug: 'age', label: 'age (0.17+)' },
   { slug: 'gopass', label: 'Gopass' },
   { slug: 'protonpass', label: 'Proton Pass' },
@@ -160,6 +161,7 @@ $ secretspec config global init
   kdbx: KeePass KDBX databases (0.17+)
   keeper: Keeper Secrets Manager (0.18+) via official Rust SDK
   infisical: Infisical secret management
+  bt-pws: BeyondTrust Password Safe (0.19+)
   openbao: OpenBao secret management (0.17+)
   age: age-encrypted file (0.17+)
   sops: SOPS encrypted files (0.17+)
@@ -247,6 +249,7 @@ $ secretspec run --profile production -- npm start
   kdbx: KeePass KDBX databases (0.17+)
   keeper: Keeper Secrets Manager (0.18+) via official Rust SDK
   infisical: Infisical secret management
+  bt-pws: BeyondTrust Password Safe (0.19+)
   openbao: OpenBao secret management (0.17+)
   age: age-encrypted file (0.17+)
   sops: SOPS encrypted files (0.17+)

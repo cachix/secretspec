@@ -95,6 +95,7 @@ $ secretspec config global init  # 0.17+
   infisical: Infisical secret management (0.16+)
   age: age-encrypted file (0.17+)
   sops: SOPS encrypted files (0.17+)
+  bt-pws: BeyondTrust Password Safe (0.19+)
 ? Select your default profile:
 > development
   default
@@ -191,6 +192,7 @@ SecretSpec supports multiple storage backends for secrets:
 - **[Bitwarden Secrets Manager](https://secretspec.dev/providers/bws)** - Bitwarden Secrets Manager integration (official `bws` CLI required in SecretSpec 0.17+)
 - **[Azure Key Vault](https://secretspec.dev/providers/akv)** - Azure secret management
 - **[Infisical](https://secretspec.dev/providers/infisical)** (0.16+) - Infisical secret management
+- **[BeyondTrust Password Safe](https://secretspec.dev/providers/bt-pws)** (0.19+) - Read-only managed account password retrieval
 - **[age](https://secretspec.dev/providers/age)** (0.17+) - age-encrypted file
 - **[SOPS](https://secretspec.dev/providers/sops)** (0.17+) - SOPS-encrypted files
 

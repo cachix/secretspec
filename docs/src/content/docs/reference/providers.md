@@ -449,6 +449,26 @@ the `production` environment. Projects whose environments do not correspond to p
 Values are read with Infisical's secret references expanded, matching its own CLI, so a value of
 `postgres://${DB_USER}@host` arrives resolved.
 
+## BeyondTrust Password Safe Provider (0.19+)
+
+**URI**: `bt-pws://HOST` - Retrieves passwords for BeyondTrust Password Safe
+managed accounts
+
+```bash
+bt-pws://passwordsafe.example.com
+```
+
+**Features**: Read-only managed-account retrieval, API key/run-as authentication
+with optional personal access token or interactive MFA, and OAuth client
+credentials
+**Prerequisites**: A Password Safe account authorized to view and request the
+managed account; build with `--features bt-pws`
+**Authentication**: `BTPWS_AUTH_KEY` + `BTPWS_RUNAS`, optionally
+`BTPWS_PERSONAL_ACCESS_TOKEN`; or `BTPWS_CLIENT_ID` +
+`BTPWS_CLIENT_SECRET` for OAuth
+**Storage**: `ref.item` names the managed account and `ref.field` names its
+managed system
+
 ## age Provider (0.17+)
 
 > **Version compatibility:** The age provider is added in SecretSpec 0.17.
@@ -539,5 +559,6 @@ export SECRETSPEC_PROVIDER="dotenv:///config/.env"
 | BWS | ✅ End-to-end | Cloud (Bitwarden) | ✅ Yes |
 | AKV | ✅ Azure-managed | Cloud (Azure) | ✅ Yes |
 | Infisical | ✅ Infisical-managed | Cloud (Infisical) or self-hosted | ✅ Yes |
+| BeyondTrust Password Safe (0.19+) | ✅ BeyondTrust-managed | Cloud or self-hosted Password Safe | ✅ Yes |
 | age (0.17+) | ✅ age encryption | Local filesystem | ❌ No |
 | SOPS (0.17+) | ✅ Configured SOPS encryption | Local filesystem | Depends on configured key service |

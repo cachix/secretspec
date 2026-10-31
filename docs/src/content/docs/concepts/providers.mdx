@@ -61,6 +61,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [bws](/providers/bws/) | Bitwarden Secrets Manager (official `bws` CLI in SecretSpec 0.17+; requires the `bws` build feature) | ✓ | ✓ | ✓ | — |
 | [akv](/providers/akv/) | Azure Key Vault (requires the `akv` build feature) | ✓ | ✓ | ✓ | — |
 | [infisical](/providers/infisical/) (0.16+) | Infisical (requires the `infisical` build feature) | ✓ | ✓ | ✓ | — |
+| [bt-pws](/providers/bt-pws/) (0.19+) | BeyondTrust Password Safe managed accounts (requires the `bt-pws` build feature) | ✓ | ✗ | ✓ | — |
 | [age](/providers/age/) (0.17+) | An age-encrypted file (requires the `age` build feature) | ✓ | ✓ | ✓ | — |
 | [sops](/providers/sops/) (0.17+) | SOPS-encrypted files (requires the `sops` build feature and SOPS CLI) | ✓ | ✓ | ✓ | Depends on the configured SOPS key service |
 

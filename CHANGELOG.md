@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- BeyondTrust Password Safe provider support for managed account password
+  retrieval, including API-key, MFA, personal access token, and OAuth client
+  credential authentication.
 - Secrets can store values as standard Base64, URL-safe Base64, or hexadecimal
   using `encoding`; writes encode logical text and reads decode stored values,
   while `as_path = true` materializes arbitrary decoded bytes.

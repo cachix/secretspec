@@ -77,7 +77,7 @@ jobs:
     - name: Check each provider feature standalone
       run: |
         set -euo pipefail
-        for feature in cli keyring keeper gcsm awssm vault openbao infisical bws akv sops bw; do
+        for feature in cli keyring keeper gcsm awssm vault openbao infisical bws akv sops bw bt-pws; do
           echo "::group::$feature"
           cargo check --package secretspec --no-default-features --features "$feature"
           echo "::endgroup::"

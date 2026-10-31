@@ -21,23 +21,25 @@ through the Password Safe Public API. It is read-only.
 | Access | Read-only |
 | Authentication | API key and run-as user, optionally with a personal access token or MFA; OAuth client credentials |
 | Availability | SecretSpec 0.19+; requires the `bt-pws` build feature |
+| Default storage | A managed account named by `ref` |
+
+## Quick start
+
+Set either the API-key credentials or OAuth client credentials described below,
+then retrieve a referenced account without printing its password:
+
+```bash
+secretspec run --provider beyondtrust -- your-command
+```
 
 ## Setup
 
-Configure the Password Safe host and use a `ref` to name the managed account
-and system:
-
-```toml title="secretspec.toml"
-[providers]
-beyondtrust = "bt-pws://passwordsafe.example.com"
-
-[profiles.default]
-DATABASE_PASSWORD = { description = "Database password", ref = { item = "database-user", field = "database-server" }, providers = ["beyondtrust"] }
-```
-
-`item` is the managed account name and `field` is the managed system name.
+Create a Password Safe Public API registration and grant its identity permission
+to view and request access to the managed accounts SecretSpec will retrieve.
 
 ### API key and run-as user
+
+For API-key authentication, configure the key and authorized run-as user:
 
 ```bash
 export BTPWS_AUTH_KEY=...
@@ -72,15 +74,54 @@ export BTPWS_CLIENT_SECRET=...
 When both OAuth variables are present, OAuth takes precedence over API-key
 authentication. The access token is held only for the current resolution.
 
+## Configuration
+
+### URI format
+
+```text
+bt-pws://HOST[?base_url=URL&system_name=NAME&api_version=VERSION]
+```
+
+`HOST` derives `https://HOST/BeyondTrust/api/public/v3`. `base_url` overrides
+that complete API base URL, which is useful when Password Safe is served at a
+nonstandard path. `system_name` supplies the managed system when a secret
+reference omits `field`.
+
+`api_version` is accepted for forward-compatible configuration but has no
+effect on the read operations available in SecretSpec 0.19.
+
+### URI examples
+
+```text
+bt-pws://passwordsafe.example.com
+bt-pws://passwordsafe.example.com?system_name=database-server
+bt-pws://passwordsafe.example.com?base_url=https%3A%2F%2Fpasswordsafe.example.com%2FBeyondTrust%2Fapi%2Fpublic%2Fv3
+```
+
+### Project configuration
+
+```toml title="secretspec.toml"
+[providers]
+beyondtrust = "bt-pws://passwordsafe.example.com"
+
+[profiles.default]
+DATABASE_PASSWORD = { description = "Database password", ref = { item = "database-user", field = "database-server" }, providers = ["beyondtrust"] }
+```
+
 ## Provider credentials
 
 <ProviderCredentials provider="bt-pws" />
 
-## Use existing managed accounts
+## Storage model
 
-```bash
-secretspec run --provider beyondtrust -- your-command
-```
+Password Safe is not a key/value store: SecretSpec retrieves an existing
+managed account and never creates one. In a reference, `item` is the managed
+account name and `field` is the managed system name. When `field` is omitted,
+the provider uses `system_name` from its URI.
+
+Without a `ref`, SecretSpec uses the conventional account name
+`{project}/{profile}/{key}`. Configure `system_name` in that case; explicit
+references are recommended for existing managed accounts.
 
 The provider creates a five-minute `View` request with reason `SecretSpec`,
 retrieves the resulting credential, and signs out. The Password Safe account

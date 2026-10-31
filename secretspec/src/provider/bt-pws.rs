@@ -32,12 +32,10 @@ const CLIENT_SECRET_ENV: &str = "BTPWS_CLIENT_SECRET";
 /// Configuration for the BeyondTrust Password Safe provider.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BtPwsConfig {
-    /// Optional host or tenant identifier used to derive the base URL.
+    /// Optional Password Safe host used to derive the base URL.
     pub vault: Option<String>,
     /// Optional base URL for the Password Safe REST API.
     pub base_url: Option<String>,
-    /// Optional tenant identifier to include in the auth context.
-    pub tenant_id: Option<String>,
     /// Optional API key used for the PS-Auth header.
     pub auth_key: Option<String>,
     /// Optional account or user identity passed with PS-Auth.
@@ -50,7 +48,10 @@ pub struct BtPwsConfig {
     pub client_secret: Option<String>,
     /// Optional system name used when the secret ref does not include one.
     pub default_system_name: Option<String>,
-    /// Optional API version or endpoint variant.
+    /// Reserved for future Password Safe endpoint variants.
+    ///
+    /// This is accepted for forward-compatible configuration but does not
+    /// change requests supported by the current provider.
     pub api_version: Option<String>,
 }
 
@@ -108,7 +109,6 @@ impl TryFrom<&ProviderUrl> for BtPwsConfig {
         }
 
         config.base_url = url.query_value("base_url");
-        config.tenant_id = url.query_value("tenant_id");
         config.auth_key = url.query_value(AUTH_KEY);
         config.runas = url.query_value(RUNAS);
         config.personal_access_token = url.query_value(PERSONAL_ACCESS_TOKEN);
@@ -547,8 +547,18 @@ impl Provider for BtPwsProvider {
         });
 
         let session = self.sign_in()?;
-        let password = self.request_password(&session, account_name, system_name)?;
-        let _ = self.sign_out(&session);
+        let password = self.request_password(&session, account_name, system_name);
+        let sign_out = self.sign_out(&session);
+        let password = match (password, sign_out) {
+            (Ok(password), Ok(())) => password,
+            (Ok(_), Err(sign_out)) => return Err(sign_out),
+            (Err(password), Ok(())) => return Err(password),
+            (Err(password), Err(sign_out)) => {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "{password}; additionally, BeyondTrust sign-out failed: {sign_out}"
+                )));
+            }
+        };
 
         if password.is_empty() {
             Ok(None)
@@ -558,11 +568,7 @@ impl Provider for BtPwsProvider {
     }
 
     fn set(&self, addr: Address<'_>, _value: &SecretString) -> Result<()> {
-        let _ = addr;
-        Err(SecretSpecError::ProviderOperationFailed(
-            "BeyondTrust Password Safe provider currently implements read-only secret retrieval"
-                .to_string(),
-        ))
+        self.check_writable(addr)
     }
 
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
@@ -580,13 +586,10 @@ mod tests {
 
     #[test]
     fn parses_basic_query_values() {
-        let url = ProviderUrl::new(
-            Url::parse("bt-pws://vault?tenant_id=tenant-a&api_version=v2").unwrap(),
-        );
+        let url = ProviderUrl::new(Url::parse("bt-pws://vault?api_version=v2").unwrap());
         let config: BtPwsConfig = (&url).try_into().unwrap();
 
         assert_eq!(config.vault.as_deref(), Some("vault"));
-        assert_eq!(config.tenant_id.as_deref(), Some("tenant-a"));
         assert_eq!(config.api_version.as_deref(), Some("v2"));
     }
 

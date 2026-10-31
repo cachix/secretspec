@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- BeyondTrust Password Safe now always signs out after a credential retrieval
+  attempt and reports a sign-out failure instead of silently ignoring it.
 - SDK pkg-config setup now pins cargo-c's library and metadata install
   directories, so Go, Ruby, and Haskell reliably discover
   `secretspec_ffi.pc` across environments.

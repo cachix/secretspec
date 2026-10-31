@@ -133,7 +133,7 @@ crate::register_provider! {
     name: "bt-pws",
     description: "BeyondTrust Password Safe API integration",
     schemes: ["bt-pws"],
-    examples: ["bt-pws://", "bt-pws://pbps.example.com"],
+    examples: ["bt-pws://", "bt-pws://pws.example.com"],
     credential_names: [AUTH_KEY, RUNAS, PERSONAL_ACCESS_TOKEN, CLIENT_ID, CLIENT_SECRET],
 }
 
@@ -154,7 +154,7 @@ impl BtPwsProvider {
             return format!("https://{host}/BeyondTrust/api/public/v3");
         }
 
-        "https://localhost/BeyondTrust/api/public/v3".to_string()
+        "https://pws.example.com/BeyondTrust/api/public/v3".to_string()
     }
 
     fn credential(&self, config: &Option<String>, name: &str, env_var: &str) -> Option<String> {
@@ -588,6 +588,14 @@ mod tests {
         assert_eq!(config.vault.as_deref(), Some("vault"));
         assert_eq!(config.tenant_id.as_deref(), Some("tenant-a"));
         assert_eq!(config.api_version.as_deref(), Some("v2"));
+    }
+
+    #[test]
+    fn defaults_to_password_safe_host() {
+        assert_eq!(
+            BtPwsProvider::new(BtPwsConfig::default()).base_url(),
+            "https://pws.example.com/BeyondTrust/api/public/v3"
+        );
     }
 
     #[test]

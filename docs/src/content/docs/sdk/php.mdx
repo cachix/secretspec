@@ -195,10 +195,32 @@ $ secretspec schema | quicktype -s schema --top-level SecretSpec --lang php -o S
 
 ## Files (`as_path`)
 
-Secrets declared `as_path` are materialized to a temporary file and come back as
-a readable path; `$secret->get()` returns the path. The SDK persists the file
-(mode 0400) so the path stays valid after `load()` returns — you own its
-lifetime. Call `$resolved->close()` when done to remove those temp files:
+<VersionCompatibility version="0.22" kind="changed">
+
+`as_path` uses memory-backed leases on Linux and macOS. Install the matching
+`secretspec` executable beside the application or on PATH to host its helper.
+`SECRETSPEC_BIN` can select its location (0.22+).
+The SDK's cleanup method revokes the result's files, including hidden
+composition dependencies. Unsupported platforms, including Windows, and storage
+failures return an error without falling back to disk.
+
+Linux helpers require a sufficient `RLIMIT_MEMLOCK` for page-rounded live file
+sizes (0.22+). See [file delivery limits](/reference/configuration/#as_path-option).
+
+</VersionCompatibility>
+
+
+In **0.22+**, use `$secret->open()` to read a file secret in PHP. It returns a
+seekable `php://memory` stream containing a snapshot of the bytes, through either
+native backend. This bypasses PHP's pathname canonicalization, which prevents
+normal `fopen()` and `file_get_contents()` from opening Linux memfd paths.
+The snapshot uses additional memory proportional to the file size and never
+spills to disk. Use `fclose()` when finished with the stream.
+
+`$secret->get()` still returns the original path for external consumers that
+open it directly. Call `$resolved->close()` after the last consumer to revoke
+the result's paths. Already-open streams retain their copied contents until
+closed; opening a new stream from a released result fails.
 
 <Code code={asPathExample} lang="php" meta='title="as_path.php"' />
 

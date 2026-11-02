@@ -212,7 +212,7 @@ let validated = match secrets.validate()? {
 };
 let redactor = validated.redactor()?;
 // Inject validated.resolved.secrets into your child environment.
-// Keep validated alive while the child needs its temporary files, or transfer
+// Keep validated alive while the child needs its memory-backed files, or transfer
 // ownership with validated.into_resolved(your_environment_map).
 
 let mut stdout = redactor.stream();
@@ -358,3 +358,103 @@ to declare native retry ownership and mutation replay safety. The default reject
 mutation replay. Set the policy before first provider I/O and before sharing an
 `Arc` provider. See [transient failures](/concepts/providers/#transient-failures)
 for batching, authentication, and native SDK behavior.
+
+## Process-owned file lifetimes
+
+<VersionCompatibility version="0.22" />
+
+SecretSpec uses memory-backed files for `as_path` secrets by default (0.22+).
+Retain `ValidatedSecrets` or a typed/cloned `Resolved` value while using its
+paths; dropping the final owner revokes them. Each resolution shares a helper
+among its files and can release files independently.
+
+```rust
+let spec = secretspec::Secrets::load()?;
+let validated = spec.validate()??;
+// Use validated.resolved.secrets while validated remains alive.
+```
+
+`resolve`, `resolve_named`, and their byte variants hand files to the embedding
+process, so their returned paths remain available until that process exits.
+Full resolve responses also provide `close()` to revoke their files, including
+hidden dependencies, before process exit. `keep_temp_files()` retains memory
+files until process exit. No secret
+payload is persisted to an ordinary temporary file.
+
+For explicit ownership, `FileLease` adapts the independent `file-lease` crate.
+Install a custom lease before validation when a shell or detached manager
+should own the files:
+
+```rust
+let mut spec = secretspec::Secrets::load()?;
+let lease = secretspec::FileLease::new(std::process::id());
+lease.install(&mut spec);
+let validated = spec.validate()??;
+```
+
+Linux uses sealed, read-only `memfd` objects reachable through the keeper's
+`/proc` descriptors. In **0.22+**, the helper locks their pages with `mlock()`
+before writing payloads and retains the mappings until release. Insufficient
+`RLIMIT_MEMLOCK` causes allocation to fail; live files consume page-rounded
+space. Source and consumer copies are not locked. See
+[file delivery limits](/reference/configuration/#as_path-option).
+macOS uses read-only files inside a private RAM disk, with
+ownership honored. The keeper watches its consumer through a Linux PID
+file descriptor or a macOS process-exit event.
+
+Dropping the final owned result and lease releases the resources. Before an
+exporter exits or an application replaces itself with `exec`, call
+`lease.handoff()?` to keep paths alive until the consuming PID exits. To transfer
+an existing lease to a detached manager, call `lease.handoff_to(manager_pid)?`.
+Each resolution can have an independent lease, so reloads and profiles never
+overwrite existing file contents. The application selects its consuming PID;
+`file_lease::ProcessInfo` provides process metadata for integrations.
+
+The matching `secretspec` executable runs the keeper. Install it next to the
+embedding executable or on PATH, or select its packaged location with
+`FileLease::with_keeper_executable` or `SECRETSPEC_BIN` (0.22+). Embedding applications do not add a helper
+entry point. No user shell setup or PID environment variable is required.
+
+A killed Linux keeper releases its anonymous files in the kernel. On macOS,
+a guardian watches the keeper and automatically cleans up its RAM disk if the
+keeper dies. The setup worker stays alive as the guardian, in a
+separate process group, with no background service installation. Volume commands
+have deadlines and cleanup retries transient failures. If both processes die or
+cleanup keeps failing, a subsequent lease recovers journals belonging to dead
+keepers, checking process birth times and volume identity first. Setup is
+journaled before attachment starts; the worker completes or rolls back
+attachment, formatting, and mounting even if the keeper dies. Busy setup locks
+are skipped, so a stopped worker cannot block unrelated leases. A random identifier is journaled before attachment and
+stored on the IOKit device, allowing recovery even if the setup worker dies
+before recording its device path. In-flight volume setup commands retain the
+setup lock until they exit. Unidentified attachments keep their metadata for a later
+recovery attempt rather than losing the record. Recovery handles partially
+formatted or mounted volumes. Journals under `~/Library/Application Support/file-lease`
+contain only process and volume metadata. Secret contents are written only into
+the mounted RAM disk. Consumer exit, including `SIGKILL`, normally causes the
+keeper to remove paths, unmount, and detach without elevated privileges.
+
+The request size limit is 64 MiB. macOS leases use a 64 MiB volume, including
+filesystem overhead, so available capacity can be lower. Linux file suffix
+hints are accepted but omitted from `/proc` paths; macOS preserves them.
+Other platforms, including Windows, and storage errors fail explicitly; there
+is no disk-file fallback. Explicitly installed custom materializers still
+require an owned `validate` result; detached APIs reject those resources,
+including compositions containing their paths.
+
+## Custom file lifetimes
+
+<VersionCompatibility version="0.22" />
+
+`Secrets::set_as_path_materializer` lets an embedding application deliver
+`as_path` values directly to its own storage, such as anonymous memory-backed
+files. The callback receives logical bytes after decoding and extraction and
+returns an absolute UTF-8 path. No temporary file is created first, and callback
+errors never fall back to filesystem storage. Composed secrets use the returned
+path too.
+
+Capture the resource owner in the callback. SecretSpec retains it with the
+validation result and with typed or cloned `Resolved` values. Resources must
+remain valid while any consumer uses their paths. Use `validate` for this owned
+flow; detached exports such as `resolve` and `export` cannot persist custom
+resources and return an error.

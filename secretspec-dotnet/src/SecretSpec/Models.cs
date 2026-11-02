@@ -35,14 +35,17 @@ public sealed class ResolvedSecret
 public sealed class Resolved : IDisposable
 {
     private bool _disposed;
+    private readonly string? _fileLeaseId;
 
     internal Resolved(
         string provider,
         string profile,
         string? scope,
         Dictionary<string, ResolvedSecret> secrets,
-        IEnumerable<string> missingOptional)
+        IEnumerable<string> missingOptional,
+        string? fileLeaseId = null)
     {
+        _fileLeaseId = fileLeaseId;
         Provider = provider;
         Profile = profile;
         Scope = scope;
@@ -86,12 +89,35 @@ public sealed class Resolved : IDisposable
             typeof(IReadOnlyDictionary<string, string?>),
             SecretSpecJsonContext.Default);
 
-    /// <summary>Removes temporary files backing <c>as_path</c> secrets.</summary>
+    /// <summary>Revokes memory-backed files and hidden dependencies (0.22+) for <c>as_path</c> secrets.</summary>
     public void Close()
     {
         if (_disposed)
             return;
 
+        if (_fileLeaseId is not null)
+        {
+            using var payload = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(payload))
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("request_version", 1);
+                writer.WriteString("operation", "release_files");
+                writer.WriteStartObject("source");
+                writer.WriteString("lease_id", _fileLeaseId);
+                writer.WriteEndObject();
+                writer.WriteEndObject();
+            }
+            using var envelope = JsonDocument.Parse(Native.Call(System.Text.Encoding.UTF8.GetString(payload.ToArray())));
+            if (!envelope.RootElement.GetProperty("ok").GetBoolean())
+            {
+                var error = envelope.RootElement.GetProperty("error");
+                throw new SecretSpecException(error.GetProperty("kind").GetString() ?? "unknown",
+                    error.GetProperty("message").GetString() ?? "release failed");
+            }
+            _disposed = true;
+            return;
+        }
         _disposed = true;
         Exception? firstError = null;
         foreach (var secret in Secrets.Values)

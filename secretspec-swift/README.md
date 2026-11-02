@@ -49,3 +49,15 @@ all other language SDKs conform to its JSON schema; a generated object ABI would
 duplicate that contract without removing meaningful Swift code. Swift imports
 the C header as a Clang module, while the public package exposes only idiomatic
 Swift `Codable` models and errors.
+
+## Files and cleanup
+
+In SecretSpec **0.22+**, `as_path` delivery uses memory-backed leases on Linux
+and macOS. Install the matching `secretspec` executable beside the application
+or on PATH to host the helper. `SECRETSPEC_BIN` can select its location (0.22+). Cleanup releases the complete result, including
+hidden file dependencies, through the native lease API. Other platforms,
+including Windows, and storage failures return an error without a disk fallback.
+Older runtimes retain their existing temporary-file behavior.
+
+Linux helpers require a sufficient `RLIMIT_MEMLOCK` for page-rounded live file
+sizes (0.22+). See [file delivery limits](https://secretspec.dev/reference/configuration/#as_path-option).

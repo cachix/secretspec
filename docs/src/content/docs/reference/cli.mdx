@@ -615,6 +615,17 @@ $ secretspec check --profile production --json
 
 ### get
 
+<VersionCompatibility version="0.22" kind="changed">
+
+`as_path` secrets use memory-backed files on Linux and macOS. Printed paths
+remain available until the invoking process exits, including across shell
+command substitution. Unsupported platforms and storage failures return an
+error without writing secret payloads to temporary files. See
+[file lifetimes](/reference/configuration/#as_path-option).
+
+</VersionCompatibility>
+
+
 <VersionCompatibility version="0.21" kind="changed">
 When stdout is a pipe or a file, inline values are written as exact bytes,
 including non-UTF-8 data and NULs, without adding a newline. When stdout is a
@@ -975,6 +986,17 @@ and interactive prompts. See the configuration reference for limits and shutdown
 behavior. Other commands, including `get` and `export`, still return values.
 
 ### export
+
+<VersionCompatibility version="0.22" kind="changed">
+
+`as_path` secrets use memory-backed files on Linux and macOS. Printed paths
+remain available until the invoking process exits, including across shell
+command substitution. Unsupported platforms and storage failures return an
+error without writing secret payloads to temporary files. See
+[file lifetimes](/reference/configuration/#as_path-option).
+
+</VersionCompatibility>
+
 Resolve every secret for the active profile and write it to stdout in a chosen format, without running a command. Unlike `run`, it never prompts and exits non-zero when a required secret is missing, so CI can gate on it.
 
 ```bash

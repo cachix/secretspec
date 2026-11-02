@@ -70,6 +70,24 @@ $ secretspec schema | quicktype -s schema --top-level SecretSpec --lang python -
 
 <Code code={typedAccessExample} lang="python" meta='title="typed_access.py"' />
 
+## Files (`as_path`)
+
+<VersionCompatibility version="0.22" kind="changed">
+
+File delivery uses memory-backed leases on Linux and macOS. Install the matching
+`secretspec` executable beside the application or on PATH to host the helper. `SECRETSPEC_BIN` can select its location (0.22+).
+SDK cleanup releases the result's visible and hidden file dependencies. Other
+platforms, including Windows, and storage failures return an error without a
+disk fallback.
+
+Linux helpers require a sufficient `RLIMIT_MEMLOCK` for page-rounded live file
+sizes (0.22+). See [file delivery limits](/reference/configuration/#as_path-option).
+
+</VersionCompatibility>
+
+Keep the result alive while consuming its paths, and call the SDK's cleanup
+method afterward. Unreleased files are revoked when the embedding process exits.
+
 ## Native library
 
 The resolver is statically linked into a pyo3 extension (`secretspec._native`,

@@ -7,6 +7,10 @@
   "additionalProperties": false,
   "required": ["schema_version", "provider", "profile", "secrets", "missing_required", "missing_optional"],
   "properties": {
+    "file_lease_id": {
+      "type": "string",
+      "description": "Process-local release token for memory-backed files, including hidden dependencies (0.22+)."
+    },
     "schema_version": {
       "description": "Wire-format version. Consumers should refuse versions they do not understand.",
       "type": "integer",

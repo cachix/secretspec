@@ -74,7 +74,18 @@ resolved, err := secretspec.New().WithScope("api").Load()
 
 ## Cleanup
 
-`as_path` secrets are materialized to temp files that outlive the call. Call
+In SecretSpec **0.22+**, `as_path` delivery uses memory-backed leases on Linux
+and macOS. Install the matching `secretspec` executable beside the application
+or on PATH to host the helper. `SECRETSPEC_BIN` can select its location (0.22+). Cleanup releases the complete result, including
+hidden file dependencies, through the native lease API. Other platforms,
+including Windows, and storage failures return an error without a disk fallback.
+Older runtimes retain their existing temporary-file behavior.
+
+Linux helpers require a sufficient `RLIMIT_MEMLOCK` for page-rounded live file
+sizes (0.22+). See [file delivery limits](https://secretspec.dev/reference/configuration/#as_path-option).
+
+
+`as_path` paths remain valid after resolution until cleanup or process exit. Call
 `resolved.Close()` (e.g. `defer resolved.Close()`) when done so the secret files
 do not accumulate in the temp dir.
 

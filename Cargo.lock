@@ -2583,6 +2583,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
+name = "file-lease"
+version = "0.1.0"
+dependencies = [
+ "core-foundation 0.10.1",
+ "libc",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
+ "wait-timeout",
+ "zeroize",
+]
+
+[[package]]
 name = "find-crate"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6331,6 +6346,7 @@ dependencies = [
  "dunce",
  "ed25519-dalek",
  "etcetera",
+ "file-lease",
  "futures-util",
  "google-cloud-gax",
  "google-cloud-secretmanager-v1",

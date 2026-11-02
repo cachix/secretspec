@@ -82,3 +82,24 @@ bash secretspec-php/scripts/build-ext.sh
 
 `tests/ConformanceTest.php` runs the shared cross-language conformance fixtures
 in `../conformance/fixtures`.
+
+## Files and cleanup
+
+In SecretSpec **0.22+**, `as_path` delivery uses memory-backed leases on Linux
+and macOS. Install the matching `secretspec` executable beside the application
+or on PATH to host the helper. `SECRETSPEC_BIN` can select its location (0.22+). Cleanup releases the complete result, including
+hidden file dependencies, through the native lease API. Other platforms,
+including Windows, and storage failures return an error without a disk fallback.
+Older runtimes retain their existing temporary-file behavior.
+
+Linux helpers require a sufficient `RLIMIT_MEMLOCK` for page-rounded live file
+sizes (0.22+). See [file delivery limits](https://secretspec.dev/reference/configuration/#as_path-option).
+
+In **0.22+**, read file secrets in PHP with `$secret->open()`, then use
+`stream_get_contents()` and `fclose()`. The SDK reads the original lease path
+natively and copies the bytes into a seekable `php://memory` stream, through
+either native backend. This uses additional memory and never spills to disk.
+PHP's ordinary file functions cannot open Linux memfd paths because they
+canonicalize the link to its deleted backing name. `get()` still returns the
+original path for external consumers that open it directly. Closing the result
+revokes paths and prevents new streams; existing stream snapshots remain usable.

@@ -253,6 +253,9 @@ final class ErrorContract {
 }
 
 final class ResolveResponseContract {
+    private final String fileLeaseId;
+
+    public String fileLeaseId() { return fileLeaseId; }
 
     private final int schemaVersion;
     private final String provider;
@@ -264,6 +267,7 @@ final class ResolveResponseContract {
 
     @JsonCreator
     public ResolveResponseContract(
+        @JsonProperty("file_lease_id") String fileLeaseId,
         @JsonProperty("schema_version") int schemaVersion,
         @JsonProperty("provider") String provider,
         @JsonProperty("profile") String profile,
@@ -272,6 +276,7 @@ final class ResolveResponseContract {
         @JsonProperty("missing_required") List<String> missingRequired,
         @JsonProperty("missing_optional") List<String> missingOptional
     ) {
+        this.fileLeaseId = fileLeaseId;
         this.schemaVersion = schemaVersion;
         this.provider = provider != null ? provider : "";
         this.profile = profile != null ? profile : "";

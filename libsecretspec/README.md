@@ -51,3 +51,40 @@ bash libsecretspec/scripts/cinstall.sh "$PREFIX" shared
 This is distinct from
 [`libsecretspec-resolver`](../libsecretspec-resolver/), the pure-C client for
 SecretSpec's out-of-process resolution protocol.
+
+## Memory-backed secret files (0.22+)
+
+`as_path` delivery uses the matching `secretspec` executable as a helper on
+Linux and macOS. Install it beside the embedding application or on PATH, or
+select it with `SECRETSPEC_BIN` (0.22+). Other
+platforms and storage failures return an error without a disk fallback.
+
+In **0.22+**, Linux helpers lock leased file pages into RAM with `mlock()` before
+writing payload bytes. Their inherited `RLIMIT_MEMLOCK` must cover page-rounded
+live file sizes; insufficient lock capacity fails allocation. Releasing files
+reclaims that budget. Source buffers and consumer copies remain outside this
+protection.
+
+Resolve responses containing file dependencies carry an optional
+`file_lease_id`, including when only a composition using a hidden file is
+visible. Pass it to `secretspec_call` to revoke all files for that result:
+
+```json
+{"request_version":1,"operation":"release_files","source":{"lease_id":"<file_lease_id>"}}
+```
+
+The response is `{"ok":true,"response":{"schema_version":1,"released":1}}`.
+Release is idempotent and tokens belong to the originating process. SDK cleanup
+methods use this operation; unreleased files are revoked at process exit.
+
+For consumers whose file API canonicalizes Linux memfd paths, **0.22+** also
+supports a native read of a file belonging to a live result:
+
+```json
+{"request_version":1,"operation":"read_file","source":{"lease_id":"<file_lease_id>","path":"<original path>"}}
+```
+
+The response contains `schema_version: 1` and the file bytes in `base64`.
+Unknown or released tokens and paths outside that result are rejected. Reads
+are bounded to 64 MiB. PHP's `ResolvedSecret::open()` uses this operation to
+populate a memory-only stream without canonicalizing the lease path.

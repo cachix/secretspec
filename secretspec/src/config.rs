@@ -35,6 +35,7 @@
 
 use crate::compiled_spec::CompiledSpec;
 use crate::composition::Template;
+use crate::file_lease::SecretFile;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
@@ -43,7 +44,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use tempfile::NamedTempFile;
 
 #[path = "config_schema.rs"]
 pub(crate) mod schema;
@@ -3813,14 +3813,16 @@ pub struct Resolved<T> {
     /// Resources whose lifetime must match the resolved secret values.
     #[serde(skip)]
     _resources: Option<Arc<ResolvedResources>>,
+    #[serde(skip)]
+    as_path_materializer: Option<Arc<crate::secrets::AsPathMaterializer>>,
 }
 
-/// Owns temporary files referenced by typed `as_path` fields.
+/// Owns memory-backed files referenced by typed `as_path` fields.
 ///
 /// Sharing this owner makes cloning a [`Resolved`] value safe: the files are
 /// removed only after the final clone is dropped.
 struct ResolvedResources {
-    _temp_files: Vec<NamedTempFile>,
+    _temp_files: Vec<SecretFile>,
 }
 
 impl<T: std::fmt::Debug> std::fmt::Debug for Resolved<T> {
@@ -3847,6 +3849,7 @@ impl<T> Resolved<T> {
             provider,
             profile,
             _resources: None,
+            as_path_materializer: None,
         }
     }
 
@@ -3856,10 +3859,23 @@ impl<T> Resolved<T> {
             provider: self.provider,
             profile: self.profile,
             _resources: self._resources,
+            as_path_materializer: self.as_path_materializer,
         }
     }
 
-    pub(crate) fn with_temp_files(mut self, temp_files: Vec<NamedTempFile>) -> Self {
+    pub(crate) fn with_as_path_materializer(
+        mut self,
+        materializer: Option<Arc<crate::secrets::AsPathMaterializer>>,
+    ) -> Self {
+        self.as_path_materializer = materializer;
+        self
+    }
+
+    pub(crate) fn has_as_path_materializer(&self) -> bool {
+        self.as_path_materializer.is_some()
+    }
+
+    pub(crate) fn with_temp_files(mut self, temp_files: Vec<SecretFile>) -> Self {
         if !temp_files.is_empty() {
             self._resources = Some(Arc::new(ResolvedResources {
                 _temp_files: temp_files,

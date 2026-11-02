@@ -63,6 +63,7 @@ module Secretspec
 
   # A successful resolution, mirroring the Rust Resolved wrapper.
   Resolved = Struct.new(:provider, :profile, :secrets, :missing_optional, :scope) do
+    attr_accessor :file_lease_id
     # Export each resolved secret into ENV by its declared name. Secrets with no
     # usable value (e.g. under no_values) are skipped rather than deleted from
     # ENV (assigning nil would remove the variable).
@@ -81,19 +82,21 @@ module Secretspec
       secrets.transform_values(&:get)
     end
 
-    # Remove the temp files backing any as_path secrets in this result. The
-    # resolver persists those files (mode 0400) so their paths stay valid after
-    # resolve returns; the caller owns their lifetime. Call #close (or pass a
-    # block to Builder#load, which closes automatically) when done so secret
-    # files do not accumulate in the temp dir. A file already gone is not an
-    # error.
-    #
-    # Every file is attempted even if one cannot be removed; the first such
-    # error is re-raised once the rest have been cleaned up. Stopping at the
-    # first failure would leave the remaining secrets on disk, which is the one
-    # outcome this method exists to prevent. Matches the Go SDK's firstErr and
-    # the .NET SDK's firstError.
+    # Revoke this result's secret files, including hidden dependencies (0.22+).
+    # Call #close after the final consumer, or pass a block to Builder#load to
+    # close automatically. Repeated calls are harmless. Older runtimes use
+    # filesystem cleanup and attempt every file before raising the first error.
     def close
+      if file_lease_id
+        envelope = JSON.parse(Native.call(JSON.generate(
+          request_version: 1, operation: "release_files", source: { lease_id: file_lease_id }
+        )))
+        unless envelope["ok"]
+          error = envelope["error"] || {}
+          raise Error.new(error["kind"] || "unknown", error["message"] || "")
+        end
+        return nil
+      end
       first_error = nil
       secrets.each_value do |secret|
         next unless secret.as_path && secret.path
@@ -235,6 +238,7 @@ module Secretspec
         response["provider"], response["profile"], secrets,
         response["missing_optional"] || [], response["scope"]
       )
+      resolved.file_lease_id = response["file_lease_id"]
       return resolved unless block_given?
 
       begin

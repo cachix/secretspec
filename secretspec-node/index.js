@@ -118,6 +118,7 @@ class ResolvedSecret {
 
 class Resolved {
   constructor(response) {
+    Object.defineProperty(this, '_fileLeaseId', { value: response.file_lease_id ?? null });
     this.provider = response.provider;
     this.profile = response.profile;
     this.scope = response.scope ?? null;
@@ -159,14 +160,19 @@ class Resolved {
     return JSON.stringify(this.fields());
   }
 
-  /**
-   * Remove the temp files backing any as_path secrets in this result. The
-   * resolver persists those files (mode 0400) so their paths stay valid after
-   * resolve returns; the caller owns their lifetime. Call dispose() when done
-   * (or use `using resolved = builder.load()` for automatic disposal) so secret
-   * files do not accumulate in the temp dir. A file already gone is not an error.
+  /** Revoke this result's secret files, including hidden dependencies (0.22+).
+   * Older runtimes use filesystem cleanup. Repeated disposal is harmless.
    */
   dispose() {
+    if (this._fileLeaseId != null) {
+      const envelope = JSON.parse(native.call(JSON.stringify({
+        request_version: 1, operation: 'release_files', source: { lease_id: this._fileLeaseId },
+      })));
+      if (!envelope.ok) {
+        throw new SecretSpecError(envelope.error?.kind ?? 'unknown', envelope.error?.message ?? '');
+      }
+      return;
+    }
     for (const secret of Object.values(this.secrets)) {
       if (secret.asPath && secret.path != null) {
         try {

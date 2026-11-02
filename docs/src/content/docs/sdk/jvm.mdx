@@ -110,7 +110,22 @@ default-profile fields.
 
 ## Files (`as_path`)
 
-File-shaped secrets are materialized as mode-0400 temporary files. The returned
+<VersionCompatibility version="0.22" kind="changed">
+
+`as_path` uses memory-backed leases on Linux and macOS. Install the matching
+`secretspec` executable beside the application or on PATH to host its helper.
+`SECRETSPEC_BIN` can select its location (0.22+).
+The SDK's cleanup method revokes the result's files, including hidden
+composition dependencies. Unsupported platforms, including Windows, and storage
+failures return an error without falling back to disk.
+
+Linux helpers require a sufficient `RLIMIT_MEMLOCK` for page-rounded live file
+sizes (0.22+). See [file delivery limits](/reference/configuration/#as_path-option).
+
+</VersionCompatibility>
+
+
+File-shaped secrets are materialized as mode-0400 files. The returned
 path must remain valid after `load()`, so the caller owns its lifetime.
 `Resolved` implements `AutoCloseable`; use a `try-with-resources` declaration or call `close()`
 to remove these files deterministically:

@@ -6,7 +6,7 @@ namespace Secretspec;
 
 /**
  * One resolved secret. Exactly one of {@see $value} / {@see $path} is set:
- * {@see $path} when the secret is materialized to a temp file (`as_path`),
+ * {@see $path} when the secret is delivered as a memory-backed file (`as_path`),
  * {@see $value} otherwise.
  */
 final class ResolvedSecret
@@ -17,6 +17,7 @@ final class ResolvedSecret
         public readonly bool $asPath,
         public readonly string $source,
         public readonly ?string $sourceProvider,
+        private readonly ?string $fileLeaseId = null,
     ) {
     }
 
@@ -24,5 +25,21 @@ final class ResolvedSecret
     public function get(): ?string
     {
         return $this->asPath ? $this->path : $this->value;
+    }
+
+    /**
+     * Open an independent, seekable read stream for a file secret (0.22+).
+     * Native reads bypass PHP's canonicalization of Linux memfd paths. The
+     * contents are copied into PHP memory, never a temporary file. Close the
+     * stream with fclose(); closing the result does not erase an open stream.
+     *
+     * @return resource
+     */
+    public function open()
+    {
+        if (!$this->asPath || $this->path === null) {
+            throw new SecretSpecException('representation', 'secret has no file value');
+        }
+        return Native::openFile($this->path, $this->fileLeaseId);
     }
 }

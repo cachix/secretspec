@@ -335,7 +335,7 @@ async fn pump(
 pub(crate) fn run(
     command: Command,
     matcher: Arc<Matcher>,
-    on_spawn: impl FnOnce(io::Result<u32>) + Send,
+    on_spawn: impl FnOnce(io::Result<u32>) -> io::Result<()> + Send,
 ) -> io::Result<ExitStatus> {
     crate::provider::block_on(async move {
         let mut command = tokio::process::Command::from(command);
@@ -344,13 +344,19 @@ pub(crate) fn run(
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         let spawned = command.spawn();
-        on_spawn(
+        let initialized = on_spawn(
             spawned
                 .as_ref()
                 .map(|child| child.id().expect("live child"))
                 .map_err(|e| io::Error::new(e.kind(), "could not start command")),
         );
         let mut child = spawned?;
+        if let Err(error) = initialized
+            && child.try_wait()?.is_none()
+        {
+            let _ = child.kill().await;
+            return Err(error);
+        }
         let stdout = child.stdout.take().expect("piped stdout");
         let stderr = child.stderr.take().expect("piped stderr");
         let pumps = async {

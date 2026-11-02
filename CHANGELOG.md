@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Linux file delivery (0.22+) locks memfd pages into RAM before writing secret
+  bytes and retains those locks until release. Allocation fails if the helper's
+  memory-lock limit is insufficient, with an explanatory error and no pageable
+  fallback. Older helpers are rejected before payload transfer. Source buffers
+  and consumer copies remain outside this protection.
+
+- Memory-backed file delivery on macOS (0.22+) verifies the RAM volume's
+  identity, permissions, and security mount flags for each allocation and
+  release. Directory-relative operations prevent an unmounted volume from
+  redirecting secret writes or cleanup into its disk-backed mount directory.
+
+- The new `file-lease` workspace crate provides reusable process-owned,
+  memory-backed files on Linux and macOS without depending on SecretSpec,
+  with automatic cleanup after process exit.
+
+- Secret-file delivery now uses memory-backed leases by default on Linux and
+  macOS, including CLI commands and resolver sessions. Exported CLI paths live
+  until the invoking process exits; owned Rust results retain their files across
+  clones, and one-shot SDK paths live until the embedding process exits.
+  Unsupported platforms and storage failures fail without a disk fallback.
+  Linux accepts filename suffix hints but omits them from its anonymous paths.
+  Language SDK cleanup methods release native leases, including hidden file
+  dependencies, through a process-local token; Rust one-shot results expose
+  `close()` for the same cleanup.
+  PHP's new `ResolvedSecret::open()` reads file secrets into memory-only streams,
+  including Linux memfd paths that PHP's ordinary file functions cannot open.
+
+- Rust embedders can use `FileLease` to keep file secrets in process-owned
+  memory-backed storage on Linux and macOS, hand ownership to commands or
+  detached managers, and automatically recover orphaned macOS RAM disks.
+  A macOS guardian cleans up if the keeper is killed, without waiting for
+  another lease or installing a background service. Volume commands have
+  deadlines, failed cleanup is retried, and concurrent recovery preserves
+  cleanup metadata until the volume is detached, including after setup crashes.
+  No user PID configuration or application helper entry point is required.
+
+- Rust embedders can supply an `as_path` materializer to deliver secret bytes
+  directly into process-owned resources without creating temporary files.
+  Composed values use the custom paths, and resolved values retain their owners.
+
 - `secretspec config show` displays computed project and global configuration,
   including CLI and environment overrides, each setting's source, and merged
   provider aliases. Use `--json` for structured output. No secrets are fetched;

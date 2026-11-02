@@ -71,6 +71,44 @@ final class Native
         return self::callViaFfi($requestJson);
     }
 
+    /** Open a lease file through the native reader (0.22+). @return resource */
+    public static function openFile(string $path, ?string $leaseId)
+    {
+        if ($leaseId === null) {
+            // Compatibility with older runtimes that return ordinary files.
+            $stream = @\fopen($path, 'rb');
+            if ($stream === false) {
+                throw new SecretSpecException('io', 'could not open secret file');
+            }
+            return $stream;
+        }
+        $payload = \json_encode(['request_version' => 1, 'operation' => 'read_file',
+            'source' => ['lease_id' => $leaseId, 'path' => $path]], \JSON_THROW_ON_ERROR);
+        $envelope = \json_decode(self::call($payload), true, 512, \JSON_THROW_ON_ERROR);
+        if (empty($envelope['ok'])) {
+            $error = $envelope['error'] ?? [];
+            throw new SecretSpecException($error['kind'] ?? 'unknown', $error['message'] ?? '');
+        }
+        $response = $envelope['response'] ?? [];
+        if (($response['schema_version'] ?? null) !== 1 || !\is_string($response['base64'] ?? null)) {
+            throw new SecretSpecException('schema', 'invalid native file-read response');
+        }
+        $bytes = \base64_decode($response['base64'], true);
+        if ($bytes === false) {
+            throw new SecretSpecException('schema', 'invalid native file-read encoding');
+        }
+        // php://memory never spills to disk, unlike php://temp.
+        $stream = \fopen('php://memory', 'w+b');
+        if ($stream === false) {
+            throw new SecretSpecException('io', 'could not allocate secret stream');
+        }
+        if (\fwrite($stream, $bytes) !== \strlen($bytes) || !\rewind($stream)) {
+            \fclose($stream);
+            throw new SecretSpecException('io', 'could not populate secret stream');
+        }
+        return $stream;
+    }
+
     /** The ABI version reported by the active backend. */
     public static function abiVersion(): string
     {

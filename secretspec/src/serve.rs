@@ -1,4 +1,5 @@
 use crate::SecretBytes;
+use crate::file_lease::SecretFile;
 use crate::resolve::ResolvedSource;
 use crate::secrets::{IpcAuditPurpose, OwnedNamedResolution};
 use crate::{SecretSpecError, Secrets};
@@ -18,12 +19,10 @@ use secretspec_ipc::resolver::{ResolverHandler, serve_resolver};
 use secretspec_ipc::server::{RequestContext, RpcResult, ServerConfig};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 #[cfg(unix)]
 use std::time::Duration;
-use tempfile::{NamedTempFile, TempDir};
 use tokio::sync::Mutex;
 
 const MAX_SESSION_LEASES: usize = 1024;
@@ -32,18 +31,15 @@ const MAX_SESSION_SUPPORTING_FILES: usize = 4096;
 const STALE_SESSION_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 struct Lease {
-    path: PathBuf,
-    identity: same_file::Handle,
+    _file: SecretFile,
 }
 
 struct ResolverState {
     secrets: Arc<Secrets>,
-    session_dir: PathBuf,
     leases: Mutex<HashMap<String, Lease>>,
     pending_leases: Mutex<HashMap<RequestId, String>>,
-    supporting_files: Mutex<Vec<NamedTempFile>>,
-    pending_supporting_files: Mutex<HashMap<RequestId, Vec<NamedTempFile>>>,
-    _session_dir_owner: TempDir,
+    supporting_files: Mutex<Vec<SecretFile>>,
+    pending_supporting_files: Mutex<HashMap<RequestId, Vec<SecretFile>>>,
 }
 
 #[derive(Default)]
@@ -129,27 +125,19 @@ impl ResolverHandler for ResolverHandlerImpl {
             }
             secrets.validate_ipc_selection()?;
             cleanup_stale_session_dirs_once();
-            let session_dir = tempfile::Builder::new()
-                .prefix("secretspec-ipc-")
-                .tempdir()
-                .map_err(SecretSpecError::Io)?;
-            harden_session_dir(&session_dir).map_err(SecretSpecError::Io)?;
-            mark_session_dir(&session_dir).map_err(SecretSpecError::Io)?;
-            Ok::<_, SecretSpecError>((secrets, session_dir))
+            Ok::<_, SecretSpecError>(secrets)
         })
         .await
         .map_err(|_| RpcError::new(ErrorKind::Internal))?
         .map_err(map_resolver_error)?;
 
-        let (secrets, session_dir) = loaded;
+        let secrets = loaded;
         let state = Arc::new(ResolverState {
             secrets: Arc::new(secrets),
-            session_dir: session_dir.path().to_path_buf(),
             leases: Mutex::new(HashMap::new()),
             pending_leases: Mutex::new(HashMap::new()),
             supporting_files: Mutex::new(Vec::new()),
             pending_supporting_files: Mutex::new(HashMap::new()),
-            _session_dir_owner: session_dir,
         });
         let mut slot = self.state.lock().await;
         if slot.is_some() {
@@ -268,32 +256,15 @@ impl ResolverHandler for ResolverHandlerImpl {
                 if params.representation == Representation::Value {
                     return Err(RpcError::new(ErrorKind::RepresentationMismatch));
                 }
-                let (path, persisted) = persist_lease_file(file, &state.session_dir)?;
-                let identity = match same_file::Handle::from_file(persisted) {
-                    Ok(identity) => identity,
-                    Err(_) => {
-                        let _ = std::fs::remove_file(&path);
-                        return Err(RpcError::new(ErrorKind::OperationFailed));
-                    }
-                };
+                let path = file.path().to_path_buf();
                 if context.cancellation.is_cancelled() {
-                    drop(identity);
-                    let _ = std::fs::remove_file(&path);
                     return Err(RpcError::new(ErrorKind::Cancelled));
                 }
-                if let Err(error) =
-                    retain_pending_supporting_files(&state, context.request_id, supporting_files)
-                        .await
-                {
-                    drop(identity);
-                    let _ = std::fs::remove_file(&path);
-                    return Err(error);
-                }
+                retain_pending_supporting_files(&state, context.request_id, supporting_files)
+                    .await?;
                 let mut leases = state.leases.lock().await;
                 if leases.len() >= MAX_SESSION_LEASES {
                     drop(leases);
-                    drop(identity);
-                    let _ = std::fs::remove_file(&path);
                     state
                         .pending_supporting_files
                         .lock()
@@ -307,13 +278,7 @@ impl ResolverHandler for ResolverHandlerImpl {
                         break candidate;
                     }
                 };
-                leases.insert(
-                    lease_id.clone(),
-                    Lease {
-                        path: path.clone(),
-                        identity,
-                    },
-                );
+                leases.insert(lease_id.clone(), Lease { _file: file });
                 drop(leases);
                 state
                     .pending_leases
@@ -385,17 +350,21 @@ impl ResolverHandler for ResolverHandlerImpl {
         let state = self.state().await?;
         let mut leases = state.leases.lock().await;
         let mut unique = HashSet::new();
-        let mut released = 0;
+        let mut released = Vec::new();
         for lease_id in params.path_lease_ids {
             if !unique.insert(lease_id.clone()) {
                 continue;
             }
             if let Some(lease) = leases.remove(&lease_id) {
-                remove_lease(lease);
-                released += 1;
+                released.push(lease);
             }
         }
-        Ok(ReleaseResult { released })
+        drop(leases);
+        let count = released.len();
+        tokio::task::spawn_blocking(move || drop(released))
+            .await
+            .map_err(|_| RpcError::new(ErrorKind::Internal))?;
+        Ok(ReleaseResult { released: count })
     }
 
     async fn request_finished(&self, request_id: RequestId, committed: bool) {
@@ -413,11 +382,17 @@ impl ResolverHandler for ResolverHandlerImpl {
             state.supporting_files.lock().await.extend(supporting_files);
             return;
         }
-        if let Some(lease_id) = lease_id
-            && let Some(lease) = state.leases.lock().await.remove(&lease_id)
-        {
-            remove_lease(lease);
-        }
+        let lease = if let Some(lease_id) = lease_id {
+            state.leases.lock().await.remove(&lease_id)
+        } else {
+            None
+        };
+        tokio::task::spawn_blocking(move || {
+            drop(lease);
+            drop(supporting_files);
+        })
+        .await
+        .ok();
     }
 
     async fn shutdown(&self) {
@@ -425,11 +400,15 @@ impl ResolverHandler for ResolverHandlerImpl {
         if let Some(state) = state {
             let leases = std::mem::take(&mut *state.leases.lock().await);
             state.pending_leases.lock().await.clear();
-            state.pending_supporting_files.lock().await.clear();
-            for lease in leases.into_values() {
-                remove_lease(lease);
-            }
-            state.supporting_files.lock().await.clear();
+            let pending = std::mem::take(&mut *state.pending_supporting_files.lock().await);
+            let files = std::mem::take(&mut *state.supporting_files.lock().await);
+            tokio::task::spawn_blocking(move || {
+                drop(leases);
+                drop(files);
+                drop(pending);
+            })
+            .await
+            .ok();
         }
     }
 }
@@ -450,55 +429,10 @@ fn random_token() -> String {
     data_encoding::BASE64URL_NOPAD.encode(&bytes)
 }
 
-fn persist_lease_file(
-    mut file: NamedTempFile,
-    session_dir: &std::path::Path,
-) -> RpcResult<(PathBuf, File)> {
-    harden_lease_file(file.path()).map_err(|_| RpcError::new(ErrorKind::OperationFailed))?;
-    for _ in 0..8 {
-        let path = session_dir.join(random_token());
-        match file.persist_noclobber(&path) {
-            Ok(persisted) => {
-                if harden_lease_file(&path).is_err() {
-                    drop(persisted);
-                    let _ = std::fs::remove_file(&path);
-                    return Err(RpcError::new(ErrorKind::OperationFailed));
-                }
-                return Ok((path, persisted));
-            }
-            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
-                file = error.file;
-            }
-            Err(_) => return Err(RpcError::new(ErrorKind::OperationFailed)),
-        }
-    }
-    Err(RpcError::unavailable(None))
-}
-
-#[cfg(windows)]
-fn harden_session_dir(directory: &TempDir) -> std::io::Result<()> {
-    crate::windows_security::make_path_private(directory.path())
-}
-
-#[cfg(not(windows))]
-fn harden_session_dir(_: &TempDir) -> std::io::Result<()> {
-    Ok(())
-}
-
-#[cfg(windows)]
-fn harden_lease_file(path: &std::path::Path) -> std::io::Result<()> {
-    crate::windows_security::make_path_private(path)
-}
-
-#[cfg(not(windows))]
-fn harden_lease_file(_: &std::path::Path) -> std::io::Result<()> {
-    Ok(())
-}
-
 async fn retain_pending_supporting_files(
     state: &ResolverState,
     request_id: RequestId,
-    files: Vec<NamedTempFile>,
+    files: Vec<SecretFile>,
 ) -> RpcResult<()> {
     if files.len() > MAX_SESSION_SUPPORTING_FILES {
         return Err(RpcError::unavailable(None));
@@ -516,32 +450,6 @@ async fn retain_pending_supporting_files(
     }
     drop(retained);
     pending.insert(request_id, files);
-    Ok(())
-}
-
-fn remove_lease(lease: Lease) {
-    let current = same_file::Handle::from_path(&lease.path);
-    let same = current
-        .as_ref()
-        .is_ok_and(|current| current == &lease.identity);
-    drop(current);
-    drop(lease.identity);
-    if same {
-        let _ = std::fs::remove_file(lease.path);
-    }
-}
-
-#[cfg(unix)]
-fn mark_session_dir(directory: &TempDir) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let marker = directory.path().join(".owner");
-    std::fs::write(&marker, std::process::id().to_string())?;
-    std::fs::set_permissions(marker, std::fs::Permissions::from_mode(0o400))
-}
-
-#[cfg(not(unix))]
-fn mark_session_dir(_: &TempDir) -> std::io::Result<()> {
     Ok(())
 }
 
@@ -627,7 +535,7 @@ fn cleanup_stale_session_dirs() {
 #[cfg(not(unix))]
 fn cleanup_stale_session_dirs() {
     // Refuse cleanup on platforms where this build cannot prove ownership and
-    // ACL isolation. Normal session shutdown still removes its own TempDir.
+    // ACL isolation. New sessions keep secret payloads in memory-backed leases.
 }
 
 /// One `prompt = true` declaration waiting for a person, carried from the

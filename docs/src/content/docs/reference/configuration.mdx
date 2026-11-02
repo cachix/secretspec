@@ -249,7 +249,7 @@ Each secret variable is defined as a table with the following fields:
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
 | `ref` | table | No | Coordinates naming an externally managed secret in the provider's store (e.g. `ref = { item = "db", field = "password" }`) |
 | `refs` (0.19+) | table | No | Provider-alias-scoped coordinates, keyed by leaf alias (e.g. `refs = { source = { item = "old" }, target = { item = "new" } }`); mutually exclusive with `ref` |
-| `as_path` | boolean | No | Write secret to temp file and return file path (default: false) |
+| `as_path` | boolean | No | Return a file path; memory-backed on Linux/macOS (0.22+, default: false) |
 | `encoding` (0.19+) | `"base64"`, `"base64url"`, or `"hex"` | No | Encode logical values before storage writes and decode stored values after reads |
 | `extract` (0.19+) | table | No | Select one field from stored JSON/INI text, or from the text of the secret named by `from` (0.22+) |
 | `type` | string | No | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key`, `passphrase` (0.22+), `mnemonic` (0.22+), `openpgp_private_key` (0.21+), `ssh_private_key` (0.21+), `wireguard_private_key` (0.22+), `jwk_private_key` (0.22+), `age_identity` (0.22+), `x509_identity` (0.22+). Typed conversion targets (0.22+): `pkcs12`, `pkcs8_private_key`, `x509_certificate`, `x509_certificate_chain`, `x509_issuer_chain` |
@@ -333,7 +333,7 @@ Composition intentionally does **not** implement dotenv or shell expansion:
   `required = false` composition is omitted;
 - empty values remain empty and are distinct from missing values.
 
-If a dependency uses `as_path = true`, its exported temporary-file path is the
+If a dependency uses `as_path = true`, its exported file path is the
 text inserted into the composed value. Applying `as_path = true` to the
 composed secret materializes the final combined value. In SecretSpec 0.21+,
 every other dependency must be valid UTF-8; binary declarations should use
@@ -448,7 +448,7 @@ Behavior:
   hides, since the point of the log is to capture provider access. A `run` event
   logs what it injected — the visible set. Scoped `check`, `run`, and `export`
   events also carry the selected `scope` name (SecretSpec 0.17+).
-- An `as_path` secret's resolved value is its temp-file path, so a visible
+- An `as_path` secret's resolved value is its file path, so a visible
   composition built from a hidden `as_path` input embeds that path. The file
   stays alive for the duration of the command rather than being cleaned up with
   the hidden secret, so the path resolves. The hidden input is still absent from
@@ -805,6 +805,25 @@ terminated by this timeout.
 
 ### as_path Option
 
+<VersionCompatibility version="0.22" kind="changed">
+
+Secret files now use memory-backed leases by default on Linux and macOS.
+Storage failures and unsupported platforms, including Windows, return an error
+without falling back to disk. Install the matching `secretspec` executable next
+to an embedding application or on PATH to host its helper.
+
+Linux helpers lock the leased file pages into RAM before writing secret bytes
+(0.22+). Allocation fails if `mlock()` fails. The helper inherits
+`RLIMIT_MEMLOCK`; live files consume their sizes rounded up to whole pages.
+Configure a sufficient memory-lock limit for the application or service.
+
+On macOS, each allocation and release verifies the private RAM volume and its
+security mount flags. Directory-relative writes and cleanup prevent an
+unmounted RAM volume from redirecting operations into its disk-backed mount
+directory (0.22+).
+
+</VersionCompatibility>
+
 <VersionCompatibility version="0.21" kind="changed">
 
 Temporary files now preserve arbitrary secret bytes exactly, including NULs
@@ -812,7 +831,8 @@ and trailing newlines.
 
 </VersionCompatibility>
 
-When `as_path = true`, the secret value is written to a temporary file and the file path is returned instead of the value:
+When `as_path = true`, the secret is delivered as a file path instead of an
+inline value:
 
 ```toml
 [profiles.default]
@@ -831,11 +851,21 @@ exports require UTF-8.
 
 | Context | Behavior |
 |---------|----------|
-| CLI `get`, `export` | Files are persisted (not deleted after command exits) because the path is printed |
-| CLI `run` | Files are deleted after the child process exits |
+| CLI `get`, `export` (0.22+) | Paths are handed to the invoking process, skipping forked shell intermediaries, and revoked when that owner exits |
+| CLI `run` (0.22+) | Memory-backed files follow the consuming process and are revoked when it exits |
 | CLI `check` | Files are deleted when the command exits (0.22+; earlier versions left them behind) |
-| Rust SDK | Files cleaned up when `ValidatedSecrets` is dropped; use `keep_temp_files()` to persist |
+| Rust SDK (0.22+) | Owned results and their clones retain files; one-shot reads and `keep_temp_files()` hand files to the embedding process until it exits |
 | Rust SDK types | `PathBuf` or `Option<PathBuf>` instead of `String` |
+
+Linux file pages stay locked only while the helper retains them (0.22+).
+Source buffers, transport buffers, and consumer copies remain outside that
+protection. Readers surviving revocation can retain bytes after unlocking.
+Memory-backed storage does not prevent hibernation or diagnostic captures, or access by other
+processes running as the same user, and macOS has no added memory-lock
+guarantee. Linux paths omit filename suffix hints; macOS preserves
+them (0.22+). For lifecycle and capacity limits, see
+[process-owned file lifetimes](/sdk/rust/#process-owned-file-lifetimes).
+
 
 ### Secret Encoding {/* #secret-encoding-019 */}
 
@@ -1115,7 +1145,8 @@ rather than a security boundary.
 #### Delivery
 
 - `as_path = true` writes the raw bytes to an owner-only file with the type's
-  suffix: `.pfx`, `.pem`, or `.der`.
+  suffix hint: `.pfx`, `.pem`, or `.der`. Linux memory-backed paths omit
+  suffixes; macOS preserves them (0.22+).
 - Without `as_path`, a binary target is exposed inline as text in its
   `encoding` (`base64` by default; `base64url` and `hex` are accepted). This
   suits CI systems that take a Base64 PFX in an environment variable. A text

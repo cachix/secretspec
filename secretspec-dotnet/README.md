@@ -75,7 +75,18 @@ var secrets = AppSecrets.FromJson(resolved.FieldsJson());
 
 ## Files and cleanup
 
-An `as_path` secret is materialized as a mode-0400 temporary file, and `Get()`
+In SecretSpec **0.22+**, `as_path` delivery uses memory-backed leases on Linux
+and macOS. Install the matching `secretspec` executable beside the application
+or on PATH to host the helper. `SECRETSPEC_BIN` can select its location (0.22+). Cleanup releases the complete result, including
+hidden file dependencies, through the native lease API. Other platforms,
+including Windows, and storage failures return an error without a disk fallback.
+Older runtimes retain their existing temporary-file behavior.
+
+Linux helpers require a sufficient `RLIMIT_MEMLOCK` for page-rounded live file
+sizes (0.22+). See [file delivery limits](https://secretspec.dev/reference/configuration/#as_path-option).
+
+
+An `as_path` secret is delivered through a mode-0400 file, and `Get()`
 returns its path. `Resolved` implements `IDisposable`; keep the result in a
 `using` declaration or call `Close()` to remove those files when finished.
 

@@ -73,7 +73,16 @@ final class ConformanceTest extends TestCase
     {
         $secrets = [];
         foreach ($resolved->secrets as $name => $secret) {
-            $value = $secret->asPath ? \file_get_contents($secret->get()) : $secret->value;
+            if ($secret->asPath) {
+                $stream = $secret->open();
+                try {
+                    $value = \stream_get_contents($stream);
+                } finally {
+                    \fclose($stream);
+                }
+            } else {
+                $value = $secret->value;
+            }
             $secrets[$name] = ['value' => $value, 'source' => $secret->source, 'as_path' => $secret->asPath];
         }
         $missingOptional = $resolved->missingOptional;

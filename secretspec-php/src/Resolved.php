@@ -21,6 +21,7 @@ final class Resolved
         public readonly array $secrets,
         public readonly array $missingOptional = [],
         public readonly ?string $scope = null,
+        private readonly ?string $fileLeaseId = null,
     ) {
     }
 
@@ -63,14 +64,22 @@ final class Resolved
     }
 
     /**
-     * Remove the temp files backing any `as_path` secrets in this result. The
-     * resolver persists those files (mode 0400) so their paths stay valid after
-     * resolve returns; the caller owns their lifetime. Call `close()` when done
-     * so secret files do not accumulate in the temp dir. A file already gone is
-     * not an error.
+     * Revoke this result's secret files, including hidden dependencies (0.22+).
+     * Call close() after the final consumer. Repeated calls are harmless.
+     * Older runtimes use filesystem cleanup.
      */
     public function close(): void
     {
+        if ($this->fileLeaseId !== null) {
+            $payload = \json_encode(['request_version' => 1, 'operation' => 'release_files',
+                'source' => ['lease_id' => $this->fileLeaseId]], \JSON_THROW_ON_ERROR);
+            $envelope = \json_decode(Native::call($payload), true, 512, \JSON_THROW_ON_ERROR);
+            if (empty($envelope['ok'])) {
+                $error = $envelope['error'] ?? [];
+                throw new SecretSpecException($error['kind'] ?? 'unknown', $error['message'] ?? '');
+            }
+            return;
+        }
         foreach ($this->secrets as $secret) {
             if ($secret->asPath && $secret->path !== null && \is_file($secret->path)) {
                 @\unlink($secret->path);

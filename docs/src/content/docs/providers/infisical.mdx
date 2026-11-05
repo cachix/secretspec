@@ -111,7 +111,8 @@ another instance's session, so SecretSpec checks `infisical --version` first and
 older than 0.44.0, including its pre-releases, or one whose version it cannot read.
 `INFISICAL_PROFILE` and `INFISICAL_ORG` (Infisical CLI 0.44.0+) select which CLI login and
 organization are used; they reach the CLI through the environment.
-The CLI runs in SecretSpec's working directory, so a CLI profile bound to that directory applies.
+The CLI runs in the working directory SecretSpec had when it first needed the login, so a CLI
+profile bound to that directory applies, including when the login is renewed.
 
 When SecretSpec's standard input is a terminal, it is passed to the CLI, so an expired session
 can start the CLI's own browser login, or its prompt to paste a token, with its prompts on stderr.

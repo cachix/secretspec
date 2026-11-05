@@ -380,6 +380,19 @@ impl CliSession {
         Arc::clone(sessions.entry(key).or_default())
     }
 
+    /// Drops the run that produced `token`, which the server rejected, so the
+    /// next caller asks the CLI again. A newer run is left alone.
+    fn reject(&self, token: &Arc<SecretBytes>) {
+        let mut flight = self.flight.lock().unwrap_or_else(PoisonError::into_inner);
+        let rejected = matches!(
+            flight.get(),
+            Some(Ok(cli)) if Arc::ptr_eq(&cli.token, token)
+        );
+        if rejected {
+            *flight = Arc::default();
+        }
+    }
+
     /// The run a caller takes its token from: the one in flight, whatever its
     /// outcome, or a finished one whose token is still fresh. Otherwise a new
     /// run replaces it, so neither a failure nor an expiring token outlives
@@ -625,7 +638,7 @@ impl InfisicalProvider {
     /// The login is awaited rather than blocked on: this runs inside the
     /// runtime that [`block_on`](super::block_on) already entered for the
     /// request, and blocking there would panic.
-    async fn resolve_token(&self) -> Result<Arc<SecretBytes>> {
+    async fn resolve_token(&self) -> Result<(Arc<SecretBytes>, Option<Arc<CliSession>>)> {
         // `get_or_try_init` runs one initializer at a time: a concurrent caller
         // waits for the in-flight exchange and takes its token rather than
         // starting a second one. On failure the cell stays empty, so a later
@@ -642,8 +655,8 @@ impl InfisicalProvider {
             })
             .await?;
         match auth {
-            Auth::Fixed(token) => Ok(Arc::clone(token)),
-            Auth::Cli(session) => self.cli_token(session).await,
+            Auth::Fixed(token) => Ok((Arc::clone(token), None)),
+            Auth::Cli(session) => Ok((self.cli_token(session).await?, Some(Arc::clone(session)))),
         }
     }
 
@@ -1481,7 +1494,7 @@ impl InfisicalProvider {
         body: Option<serde_json::Value>,
         consume_success: bool,
     ) -> Result<reqwest::Response> {
-        let token = self.resolve_token().await?;
+        let (token, cli_session) = self.resolve_token().await?;
         let mut request = self
             .http()
             .request(method, url)
@@ -1507,6 +1520,13 @@ impl InfisicalProvider {
             },
         )
         .await?;
+        // A rejected CLI token is dropped so a later request can pick up a new
+        // login; this request is not retried.
+        if let Some(session) = cli_session
+            && response.status() == StatusCode::UNAUTHORIZED
+        {
+            session.reject(&token);
+        }
         Ok(response)
     }
 
@@ -3008,7 +3028,7 @@ mod tests {
             "printf '%s' \"$*\" > \"$dir/args\"\nprintf 'notice\\naaa.bbb.ccc\\n'\n",
         );
 
-        let token = super::super::block_on(provider.resolve_token()).unwrap();
+        let token = super::super::block_on(provider.resolve_token()).unwrap().0;
         assert_eq!(token.expose_secret(), b"aaa.bbb.ccc");
         assert_eq!(
             std::fs::read_to_string(directory.path().join("args")).unwrap(),
@@ -3024,7 +3044,7 @@ mod tests {
         let mut provider = provider(&format!("infisical://localhost:8080/{PROJECT}?tls=false"));
         provider.cli_binary_path = "/must-not-run-infisical".into();
 
-        let token = super::super::block_on(provider.resolve_token()).unwrap();
+        let token = super::super::block_on(provider.resolve_token()).unwrap().0;
         assert_eq!(token.expose_secret(), b"env-token");
     }
 
@@ -3178,8 +3198,8 @@ mod tests {
         let (first_token, second_token) = super::super::block_on(async {
             tokio::join!(first.resolve_token(), second.resolve_token())
         });
-        assert_eq!(first_token.unwrap().expose_secret(), b"aaa.bbb.ccc");
-        assert_eq!(second_token.unwrap().expose_secret(), b"aaa.bbb.ccc");
+        assert_eq!(first_token.unwrap().0.expose_secret(), b"aaa.bbb.ccc");
+        assert_eq!(second_token.unwrap().0.expose_secret(), b"aaa.bbb.ccc");
         assert_eq!(cli_calls(directory.path(), "runs"), 1);
     }
 
@@ -3208,9 +3228,70 @@ mod tests {
         assert_eq!(cli_calls(directory.path(), "runs"), 1);
 
         std::fs::write(directory.path().join("logged-in"), "").unwrap();
-        let token = super::super::block_on(second.resolve_token()).unwrap();
+        let token = super::super::block_on(second.resolve_token()).unwrap().0;
         assert_eq!(token.expose_secret(), b"aaa.bbb.ccc");
         assert_eq!(cli_calls(directory.path(), "runs"), 2);
+    }
+
+    /// The server rejecting a CLI token drops that run, so the next request
+    /// asks the CLI again and sends what it now prints. The rejected request
+    /// is not retried.
+    #[cfg(unix)]
+    #[test]
+    fn a_rejected_cli_token_is_dropped() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _env = without_infisical_env();
+        let directory = tempfile::tempdir().unwrap();
+        let old = jwt_expiring_at(unix_now() + 3600);
+        let new = jwt_expiring_at(unix_now() + 7200);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let mut bearers = Vec::new();
+            for status in ["401 Unauthorized", "200 OK"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                    if line.to_ascii_lowercase().starts_with("authorization:") {
+                        bearers.push(line.split_once(':').unwrap().1.trim().to_string());
+                    }
+                }
+                let body = r#"{"secrets":[]}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: \
+                     {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            bearers
+        });
+        let mut provider = provider_with_cli(
+            directory.path(),
+            &format!(
+                "if [ -f \"$dir/rotated\" ]; then printf '%s\\n' '{new}'; else printf '%s\\n' \
+                 '{old}'; fi\n"
+            ),
+        );
+        provider.config.endpoint = format!("http://{endpoint}");
+        let requests = one_convention_request();
+
+        provider.get_many(&requests).unwrap_err();
+        assert_eq!(cli_calls(directory.path(), "runs"), 1);
+
+        std::fs::write(directory.path().join("rotated"), "").unwrap();
+        provider.get_many(&requests).unwrap();
+        assert_eq!(cli_calls(directory.path(), "runs"), 2);
+        assert_eq!(
+            server.join().unwrap(),
+            [format!("Bearer {old}"), format!("Bearer {new}")]
+        );
     }
 
     /// A token well before its `exp` is reused, by other instances too, and
@@ -3226,7 +3307,7 @@ mod tests {
         let second = same_cli(&first);
 
         for provider in [&first, &second, &first] {
-            let resolved = super::super::block_on(provider.resolve_token()).unwrap();
+            let resolved = super::super::block_on(provider.resolve_token()).unwrap().0;
             assert_eq!(resolved.expose_secret(), token.as_bytes());
         }
         assert_eq!(cli_calls(directory.path(), "runs"), 1);
@@ -3247,7 +3328,7 @@ mod tests {
                 provider_with_cli(directory.path(), &format!("printf '%s\\n' '{token}'\n"));
 
             for _ in 0..2 {
-                let resolved = super::super::block_on(provider.resolve_token()).unwrap();
+                let resolved = super::super::block_on(provider.resolve_token()).unwrap().0;
                 assert_eq!(resolved.expose_secret(), token.as_bytes());
             }
             assert_eq!(cli_calls(directory.path(), "runs"), 2, "exp {exp}");

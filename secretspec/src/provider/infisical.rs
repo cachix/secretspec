@@ -109,6 +109,7 @@ use crate::{Result, SecretSpecError};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, SystemTime};
 
@@ -353,8 +354,11 @@ enum Auth {
 
 /// What makes two Infisical CLI runs interchangeable: the same binary, asked
 /// for the same instance, under the same profile and organization selection
-/// ([`INFISICAL_CLI_SESSION_ENVS`], in order).
-type CliSessionKey = (String, String, [Option<std::ffi::OsString>; 2]);
+/// ([`INFISICAL_CLI_SESSION_ENVS`], in order), from the same working
+/// directory (canonicalized). The CLI picks its profile from the flag or
+/// `INFISICAL_PROFILE`, then from directory bindings, then from the global
+/// default, so another directory may mean another login.
+type CliSessionKey = (String, String, [Option<std::ffi::OsString>; 2], PathBuf);
 
 /// The latest CLI run for one [`CliSessionKey`]: still in flight while its
 /// cell is empty, then its outcome. A failure is kept as the message every
@@ -363,8 +367,10 @@ type CliFlight = tokio::sync::OnceCell<std::result::Result<CliToken, String>>;
 
 /// One Infisical CLI session, shared by every provider instance in the process
 /// with the same [`CliSessionKey`].
-#[derive(Default)]
 struct CliSession {
+    /// The directory the session was created in, where every run of the CLI
+    /// for it happens, wherever the process has moved to since.
+    directory: PathBuf,
     /// Set once the binary's version is accepted, for the life of the process.
     version_accepted: tokio::sync::OnceCell<()>,
     /// The latest run; see [`CliFlight`].
@@ -377,7 +383,14 @@ impl CliSession {
         static SESSIONS: LazyLock<Mutex<HashMap<CliSessionKey, Arc<CliSession>>>> =
             LazyLock::new(Default::default);
         let mut sessions = SESSIONS.lock().unwrap_or_else(PoisonError::into_inner);
-        Arc::clone(sessions.entry(key).or_default())
+        let directory = key.3.clone();
+        Arc::clone(sessions.entry(key).or_insert_with(|| {
+            Arc::new(Self {
+                directory,
+                version_accepted: Default::default(),
+                flight: Default::default(),
+            })
+        }))
     }
 
     /// Drops the run that produced `token`, which the server rejected, so the
@@ -676,10 +689,19 @@ impl InfisicalProvider {
         let (client_id, client_secret) = match (client_id, client_secret) {
             (Some(id), Some(secret)) => (id, secret),
             (None, None) => {
+                let directory = std::env::current_dir()
+                    .and_then(std::fs::canonicalize)
+                    .map_err(|error| {
+                        SecretSpecError::ProviderOperationFailed(format!(
+                            "Cannot determine the working directory for the Infisical CLI \
+                             session: {error}"
+                        ))
+                    })?;
                 return Ok(Auth::Cli(CliSession::shared((
                     self.cli_binary_path.clone(),
                     self.config.endpoint.clone(),
                     INFISICAL_CLI_SESSION_ENVS.map(std::env::var_os),
+                    directory,
                 ))));
             }
             (Some(_), None) => {
@@ -765,7 +787,7 @@ impl InfisicalProvider {
                     .version_accepted
                     .get_or_try_init(|| self.check_cli_version())
                     .await?;
-                self.run_cli().await
+                self.run_cli(&session.directory).await
             })
             .await;
         match outcome {
@@ -859,7 +881,7 @@ impl InfisicalProvider {
     /// stdin, and a run still going after [`cli_timeout`](Self::cli_timeout)
     /// is waiting for a login nobody can complete, so it is stopped together
     /// with the `infisical login` it spawned.
-    async fn run_cli(&self) -> std::result::Result<CliToken, String> {
+    async fn run_cli(&self, directory: &std::path::Path) -> std::result::Result<CliToken, String> {
         use tokio::io::AsyncReadExt;
 
         let path = &self.cli_binary_path;
@@ -878,6 +900,7 @@ impl InfisicalProvider {
             ])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit())
+            .current_dir(directory)
             .kill_on_drop(true);
         if interactive {
             command.stdin(std::process::Stdio::inherit());
@@ -3181,6 +3204,99 @@ mod tests {
                 "{unsupported}"
             );
         }
+    }
+
+    /// Restores the process's working directory on drop.
+    #[cfg(unix)]
+    struct CwdRestore(PathBuf);
+
+    #[cfg(unix)]
+    impl CwdRestore {
+        fn enter(directory: &std::path::Path) -> Self {
+            let previous = std::env::current_dir().unwrap();
+            std::env::set_current_dir(directory).unwrap();
+            Self(previous)
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for CwdRestore {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.0).unwrap();
+        }
+    }
+
+    /// The directories the fake CLI ran in, canonicalized, in order.
+    #[cfg(unix)]
+    fn cli_pwds(directory: &std::path::Path) -> Vec<PathBuf> {
+        std::fs::read_to_string(directory.join("pwds"))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| std::fs::canonicalize(line).unwrap())
+            .collect()
+    }
+
+    /// The CLI chooses its profile by directory, so a still-fresh token from
+    /// one directory is not another directory's login.
+    #[cfg(unix)]
+    #[test]
+    fn a_cli_login_is_not_shared_across_working_directories() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _cwd_lock = crate::secrets::lock_cwd();
+        let _env = without_infisical_env();
+        let directory = tempfile::tempdir().unwrap();
+        let first_dir = tempfile::tempdir().unwrap();
+        let second_dir = tempfile::tempdir().unwrap();
+        let token = jwt_expiring_at(unix_now() + 3600);
+        let first = provider_with_cli(
+            directory.path(),
+            &format!("pwd -P >> \"$dir/pwds\"\nprintf '{token}\\n'\n"),
+        );
+        let second = same_cli(&first);
+        let _restore = CwdRestore::enter(first_dir.path());
+
+        super::super::block_on(first.resolve_token()).unwrap();
+        std::env::set_current_dir(second_dir.path()).unwrap();
+        super::super::block_on(second.resolve_token()).unwrap();
+        // The same directory again reuses its login.
+        super::super::block_on(same_cli(&first).resolve_token()).unwrap();
+
+        assert_eq!(cli_calls(directory.path(), "runs"), 2);
+        assert_eq!(
+            cli_pwds(directory.path()),
+            [
+                std::fs::canonicalize(first_dir.path()).unwrap(),
+                std::fs::canonicalize(second_dir.path()).unwrap(),
+            ]
+        );
+    }
+
+    /// A session renews in the directory it was created in, not in wherever
+    /// the process has moved to since.
+    #[cfg(unix)]
+    #[test]
+    fn a_cli_session_renews_in_its_own_directory() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let _cwd_lock = crate::secrets::lock_cwd();
+        let _env = without_infisical_env();
+        let directory = tempfile::tempdir().unwrap();
+        let first_dir = tempfile::tempdir().unwrap();
+        let second_dir = tempfile::tempdir().unwrap();
+        // Expired, so every call runs the CLI again.
+        let token = jwt_expiring_at(unix_now() - 60);
+        let provider = provider_with_cli(
+            directory.path(),
+            &format!("pwd -P >> \"$dir/pwds\"\nprintf '{token}\\n'\n"),
+        );
+        let _restore = CwdRestore::enter(first_dir.path());
+
+        super::super::block_on(provider.resolve_token()).unwrap();
+        std::env::set_current_dir(second_dir.path()).unwrap();
+        super::super::block_on(provider.resolve_token()).unwrap();
+
+        assert_eq!(cli_calls(directory.path(), "runs"), 2);
+        let first = std::fs::canonicalize(first_dir.path()).unwrap();
+        assert_eq!(cli_pwds(directory.path()), [first.clone(), first]);
     }
 
     /// Two instances asking at once share one CLI run, which could otherwise

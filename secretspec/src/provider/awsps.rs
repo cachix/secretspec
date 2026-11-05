@@ -21,7 +21,10 @@
 //! Parameters use the path `[/prefix]/secretspec/{project}/{profile}/{key}` by
 //! default. `template` replaces that complete layout.
 
-use super::{Address, DiscoveryContext, Provider, ProviderUrl};
+use super::ProviderBase as _;
+use super::{Address, DiscoveryContext, ProviderUrl};
+#[cfg(test)]
+use super::{Provider, SyncProviderAdapter};
 use crate::SecretBytes;
 use crate::{Result, SecretSpecError};
 use aws_sdk_ssm::Client;
@@ -180,6 +183,7 @@ crate::register_provider! {
     struct: AwspsProvider,
     config: AwspsConfig,
     metadata: &super::catalog::AWSPS,
+    native_async: true,
 }
 
 impl AwspsProvider {
@@ -589,10 +593,11 @@ impl AwspsProvider {
     }
 }
 
-impl Provider for AwspsProvider {
+impl super::ProviderBase for AwspsProvider {
     fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
         self.retry_policy = policy;
     }
+
     fn retry_ownership(&self) -> super::RetryOwnership {
         super::RetryOwnership::Managed
     }
@@ -617,40 +622,6 @@ impl Provider for AwspsProvider {
 
     fn supported_coords(&self) -> &'static [&'static str] {
         &["version"]
-    }
-
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
-        let coordinates = self.resolve_coords(addr)?;
-        let name = Self::selected_name(&coordinates.item, coordinates.version.as_deref());
-        super::block_on(self.get_parameter_async(&name))
-    }
-
-    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
-        self.check_writable(addr)?;
-        let coordinates = self.resolve_coords(addr)?;
-        super::block_on(self.set_parameter_async(&coordinates.item, value))
-    }
-
-    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
-        match addr {
-            Address::Native(native) if native.item.starts_with("arn:") => {
-                Err(SecretSpecError::ProviderOperationFailed(
-                    "awsps refs using a parameter ARN are read-only: use the parameter's name to \
-                     write it in the provider's configured account and region."
-                        .to_string(),
-                ))
-            }
-            Address::Native(native) if native.version.is_some() => {
-                Err(SecretSpecError::ProviderOperationFailed(
-                    "awsps refs pinning a `version` are read-only: a Parameter Store version or \
-                     label cannot be overwritten. Drop `version` to write a new latest version."
-                        .to_string(),
-                ))
-            }
-            _ => self
-                .resolve_coords(addr)
-                .and_then(|coordinates| Self::validate_parameter_name(&coordinates.item)),
-        }
     }
 
     fn name(&self) -> &str {
@@ -699,8 +670,26 @@ impl Provider for AwspsProvider {
             format!("{base}{separator}{}", parameters.join("&"))
         }
     }
+}
 
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
+#[async_trait::async_trait]
+impl super::AsyncProvider for AwspsProvider {
+    async fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
+        let coordinates = self.resolve_coords(addr)?;
+        let name = Self::selected_name(&coordinates.item, coordinates.version.as_deref());
+        self.get_parameter_async(&name).await
+    }
+
+    async fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        super::AsyncProvider::check_writable(self, addr).await?;
+        let coordinates = self.resolve_coords(addr)?;
+        self.set_parameter_async(&coordinates.item, value).await
+    }
+
+    async fn get_many(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, SecretBytes>> {
         if requests.is_empty() {
             return Ok(HashMap::new());
         }
@@ -708,11 +697,36 @@ impl Provider for AwspsProvider {
         for (name, address) in requests {
             resolved.push((*name, self.resolve_coords(*address)?.into_owned()));
         }
-        super::block_on(self.get_many_async(&resolved))
+        self.get_many_async(&resolved).await
     }
 
-    fn reflect(&self, context: DiscoveryContext<'_>) -> Result<HashMap<String, crate::Secret>> {
-        super::block_on(self.reflect_async(context))
+    async fn reflect(
+        &self,
+        context: DiscoveryContext<'_>,
+    ) -> Result<HashMap<String, crate::Secret>> {
+        self.reflect_async(context).await
+    }
+
+    async fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+        match addr {
+            Address::Native(native) if native.item.starts_with("arn:") => {
+                Err(SecretSpecError::ProviderOperationFailed(
+                    "awsps refs using a parameter ARN are read-only: use the parameter's name to \
+                     write it in the provider's configured account and region."
+                        .to_string(),
+                ))
+            }
+            Address::Native(native) if native.version.is_some() => {
+                Err(SecretSpecError::ProviderOperationFailed(
+                    "awsps refs pinning a `version` are read-only: a Parameter Store version or \
+                     label cannot be overwritten. Drop `version` to write a new latest version."
+                        .to_string(),
+                ))
+            }
+            _ => self
+                .resolve_coords(addr)
+                .and_then(|coordinates| Self::validate_parameter_name(&coordinates.item)),
+        }
     }
 }
 
@@ -728,7 +742,8 @@ mod tests {
 
     #[test]
     fn convention_uses_parameter_hierarchy() {
-        let provider = AwspsProvider::new(config("awsps://us-east-1"));
+        let provider =
+            SyncProviderAdapter::from_async(AwspsProvider::new(config("awsps://us-east-1")));
         let address = provider
             .convention_address("myapp", "production", "DATABASE_URL")
             .unwrap();
@@ -774,9 +789,9 @@ mod tests {
 
     #[test]
     fn custom_template_replaces_default_hierarchy() {
-        let provider = AwspsProvider::new(config(
+        let provider = SyncProviderAdapter::from_async(AwspsProvider::new(config(
             "awsps://us-east-1?template=/{profile}/{project}/{key}",
-        ));
+        )));
         let address = provider
             .convention_address("payments", "production", "DATABASE_URL")
             .unwrap();
@@ -869,9 +884,9 @@ mod tests {
 
     #[test]
     fn uri_round_trips_all_options() {
-        let provider = AwspsProvider::new(config(
+        let provider = SyncProviderAdapter::from_async(AwspsProvider::new(config(
             "awsps://production@us-east-1?prefix=/team/platform&kms_key_id=alias/team&tier=intelligent-tiering",
-        ));
+        )));
         let uri = provider.uri();
         assert_eq!(
             uri,
@@ -884,9 +899,9 @@ mod tests {
 
     #[test]
     fn uri_round_trips_template() {
-        let provider = AwspsProvider::new(config(
+        let provider = SyncProviderAdapter::from_async(AwspsProvider::new(config(
             "awsps://production@us-east-1?template=/{profile}/{project}/{key}",
-        ));
+        )));
         let uri = provider.uri();
         assert_eq!(
             uri,
@@ -901,9 +916,13 @@ mod tests {
 
     #[test]
     fn uri_without_region_uses_bare_provider_name() {
-        assert_eq!(AwspsProvider::new(config("awsps://")).uri(), "awsps");
         assert_eq!(
-            AwspsProvider::new(config("awsps://?prefix=/team")).uri(),
+            SyncProviderAdapter::from_async(AwspsProvider::new(config("awsps://"))).uri(),
+            "awsps"
+        );
+        assert_eq!(
+            SyncProviderAdapter::from_async(AwspsProvider::new(config("awsps://?prefix=/team")))
+                .uri(),
             "awsps://?prefix=/team"
         );
     }
@@ -950,7 +969,8 @@ mod tests {
 
     #[test]
     fn unversioned_native_name_ref_is_writable() {
-        let provider = AwspsProvider::new(config("awsps://us-east-1"));
+        let provider =
+            SyncProviderAdapter::from_async(AwspsProvider::new(config("awsps://us-east-1")));
         let reference = crate::config::NativeAddress {
             item: "/prod/token".to_string(),
             ..Default::default()
@@ -962,7 +982,8 @@ mod tests {
 
     #[test]
     fn versioned_native_ref_is_read_only() {
-        let provider = AwspsProvider::new(config("awsps://us-east-1"));
+        let provider =
+            SyncProviderAdapter::from_async(AwspsProvider::new(config("awsps://us-east-1")));
         let reference = crate::config::NativeAddress {
             item: "/prod/token".to_string(),
             version: Some("3".to_string()),
@@ -976,7 +997,8 @@ mod tests {
 
     #[test]
     fn native_arn_ref_is_read_only() {
-        let provider = AwspsProvider::new(config("awsps://us-east-1"));
+        let provider =
+            SyncProviderAdapter::from_async(AwspsProvider::new(config("awsps://us-east-1")));
         let reference = crate::config::NativeAddress {
             item: "arn:aws:ssm:us-east-1:123456789012:parameter/prod/token".to_string(),
             ..Default::default()
@@ -990,7 +1012,8 @@ mod tests {
 
     #[test]
     fn versioned_native_arn_ref_reports_arn_remediation() {
-        let provider = AwspsProvider::new(config("awsps://us-east-1"));
+        let provider =
+            SyncProviderAdapter::from_async(AwspsProvider::new(config("awsps://us-east-1")));
         let reference = crate::config::NativeAddress {
             item: "arn:aws:ssm:us-east-1:123456789012:parameter/prod/token".to_string(),
             version: Some("3".to_string()),
@@ -1006,7 +1029,8 @@ mod tests {
 
     #[test]
     fn native_ref_rejects_unsupported_coordinates_during_writability_check() {
-        let provider = AwspsProvider::new(config("awsps://us-east-1"));
+        let provider =
+            SyncProviderAdapter::from_async(AwspsProvider::new(config("awsps://us-east-1")));
         let references = [
             (
                 "field",

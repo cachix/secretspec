@@ -69,14 +69,6 @@ impl RetryPolicy {
                 .min(Duration::from_secs(10)),
         )
     }
-    #[cfg(any(
-        feature = "aac",
-        feature = "cloudflare",
-        feature = "doppler",
-        feature = "infisical",
-        feature = "scaleway",
-        feature = "setec"
-    ))]
     pub(crate) async fn run_async<T, F, Fut>(self, provider: &str, mut call: F) -> Result<T>
     where
         F: FnMut() -> Fut,

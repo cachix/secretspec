@@ -16,6 +16,29 @@ fn runtime() -> &'static tokio::runtime::Runtime {
     &PROVIDER_RUNTIME
 }
 
+/// Starts runtime-bound background work on the same long-lived runtime used
+/// by synchronous callers, without blocking the async caller. Cancelling the
+/// caller also cancels startup instead of leaving a detached launch running.
+pub(super) async fn run_async<F>(future: F) -> F::Output
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+    impl<T> Drop for AbortOnDrop<T> {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+
+    let mut task = AbortOnDrop(runtime().spawn(future));
+    match (&mut task.0).await {
+        Ok(output) => output,
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(error) => panic!("provider runtime task was cancelled: {error}"),
+    }
+}
+
 /// Executes an async future in a blocking context on the provider runtime.
 ///
 /// Safe to call from any context: outside a runtime it blocks directly; on a
@@ -45,10 +68,43 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::block_on;
+    use super::{block_on, run_async};
 
     fn provider_runtime_id() -> tokio::runtime::Id {
         block_on(async { tokio::runtime::Handle::current().id() })
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_startup_uses_the_shared_provider_runtime() {
+        let expected = provider_runtime_id();
+        let actual = run_async(async { tokio::runtime::Handle::current().id() }).await;
+        assert_eq!(actual, expected);
+        assert_ne!(actual, tokio::runtime::Handle::current().id());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelling_async_startup_drops_its_resources() {
+        struct Dropped(Option<tokio::sync::oneshot::Sender<()>>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                let _ = self.0.take().unwrap().send(());
+            }
+        }
+
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let (dropped, dropped_rx) = tokio::sync::oneshot::channel();
+        let startup = tokio::spawn(run_async(async move {
+            let _resource = Dropped(Some(dropped));
+            started.send(()).unwrap();
+            std::future::pending::<()>().await;
+        }));
+        started_rx.await.unwrap();
+        startup.abort();
+        assert!(startup.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(std::time::Duration::from_secs(5), dropped_rx)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[test]

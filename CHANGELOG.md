@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - Infisical falls back to the logged-in Infisical CLI user (`infisical login`)
   when no token or machine identity credentials are configured. This requires
   Infisical CLI 0.44.0 or newer, because older CLIs ignore `--domain` and could
@@ -17,6 +18,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `secretspec set` write a personal override instead of the shared secret.
   Earlier SecretSpec versions ignore `?personal=true` and write the shared
   secret, so everyone using such an alias needs 0.22 or newer.
+
+- `secretspec add` accepts `--optional` and `--required` (0.22+) to override
+  profile defaults when declaring a secret. Omitting both keeps the defaults.
+
+- `secretspec config show` displays computed project and global configuration,
+  including CLI and environment overrides, each setting's source, and merged
+  provider aliases. Use `--json` for structured output. No secrets are fetched;
+  `config global show` continues to display saved user-global configuration.
+
+- `secretspec run --config-env=clear` removes the manifest, profile, provider,
+  scope, and reason environment overrides from the spawned child. The default,
+  `--config-env=inherit`, preserves existing inheritance behavior.
+
+- `secretspec run` now masks exact secret values in command stdout and stderr
+  automatically, including file contents for `as_path` secrets. Filtering uses
+  pipes, which can change terminal detection and buffering in interactive programs.
+  Rust embedders can use `Redactor` and independent `RedactionStream`s to filter
+  their own output. `ValidatedSecrets::redactor` builds a filter from the same
+  validation snapshot, including original file contents and hidden inputs.
+
+- Rust integrations can implement the awaitable `AsyncProvider` trait or use
+  `AsyncProviderAdapter` to call existing providers without blocking async tasks.
+  `SyncProviderAdapter` exposes native async backends to the existing sync API;
+  `ProviderBase` carries their shared configuration and identity.
+  Async SDK, HTTP, and external IPC providers implement the trait directly,
+  retaining batch reads, metadata, authentication, and retry behavior. The
+  async URI factory selects native implementations automatically, and its boxed
+  providers can be passed to `SyncProviderAdapter`. External IPC sessions remain
+  usable across async and sync calls and after the caller's runtime is dropped.
+
+- Bitwarden Password Manager can load its `session` credential from another
+  provider, such as keyring, instead of requiring `BW_SESSION` in the shell.
 
 - Proton Pass refs accept `field` to read any field of an existing item, such
   as `ref = { item = "test-item", field = "password" }` for a login's
@@ -52,6 +85,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a compatible SecretSpec executable.
 
 ### Fixed
+
+- Undeclared secrets in `set`, `delete`, and `cache clear NAME` now report the
+  profile and available secrets without a duplicated "Secret ... not found"
+  wrapper. Rust callers receive `SecretSpecError::SecretNotDefined` for these
+  errors; their `kind()` remains `secret_not_found`.
+
+- Scaleway: `secretspec set` on a secret that already exists adds a new version
+  instead of failing with HTTP 400 "cannot have same secret name in same path".
 
 - KDBX saves use the correct `DeletionTime` XML element, keeping databases
   compatible with KeePass clients that strictly validate deletion metadata.

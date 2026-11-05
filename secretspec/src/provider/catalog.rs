@@ -91,6 +91,7 @@ metadata! {
     description: "Bitwarden Password Manager",
     schemes: ["bw"],
     examples: ["bw://", "bw://collection-id", "bw://org@collection"],
+    credential_names: ["session"],
 }
 
 metadata! {

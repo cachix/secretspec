@@ -1,5 +1,8 @@
 use crate::SecretBytes;
-use crate::provider::{Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl};
+use crate::provider::{
+    Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl, credential_env_value,
+    credential_or_env,
+};
 use crate::{Result, Secret, SecretSpecError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -466,7 +469,7 @@ impl TryFrom<&ProviderUrl> for BitwardenConfig {
 /// 1. Self-hosted only: `bw config server <url>` (must run while logged out)
 /// 2. Login: `bw login` (interactive or with API key)
 /// 3. Unlock: `bw unlock` (generates session key)
-/// 4. Export session: `export BW_SESSION="session-key"`
+/// 4. Supply the `session` provider credential (0.22+) or export `BW_SESSION`.
 ///
 /// # Storage Structure
 ///
@@ -659,8 +662,9 @@ fn describe_org(id: Option<&str>, organizations: &[BitwardenNamedObject]) -> Str
 fn list_organizations(organizations: &[BitwardenNamedObject]) -> String {
     if organizations.is_empty() {
         return "The bw CLI listed no organizations. If you do belong to one, the \
-                CLI cannot currently read it: check that BW_SESSION is exported \
-                and current, then run `bw sync --force`."
+                CLI cannot currently read it: check that the session provider \
+                credential or BW_SESSION is current, then run `bw sync --force` \
+                with that session."
             .to_string();
     }
 
@@ -679,8 +683,9 @@ fn list_collections(
 ) -> String {
     if collections.is_empty() {
         return "The bw CLI listed no collections. If you expected some, the CLI \
-                cannot currently read them: check that BW_SESSION is exported and \
-                current, then run `bw sync --force`."
+                cannot currently read them: check that the session provider \
+                credential or BW_SESSION is current, then run `bw sync --force` \
+                with that session."
             .to_string();
     }
 
@@ -1218,12 +1223,16 @@ impl BitwardenProvider {
     }
 
     /// Builds a command for the Bitwarden CLI.
-    fn command(&self) -> Command {
+    fn command(&self) -> Result<Command> {
         #[cfg(test)]
-        return Command::new(&self.cli_binary_path);
-
+        let mut command = Command::new(&self.cli_binary_path);
         #[cfg(not(test))]
-        Command::new("bw")
+        let mut command = Command::new("bw");
+
+        if let Some(session) = credential_or_env(&self.credentials, "session", "BW_SESSION") {
+            command.env("BW_SESSION", credential_env_value(&session)?);
+        }
+        Ok(command)
     }
 
     /// Renders the namespace shared by every convention item in one project
@@ -1450,7 +1459,12 @@ impl BitwardenProvider {
     fn check_server(&self, expected: &str) -> std::result::Result<(), String> {
         // `execute_bw_command` calls this method, so invoke the CLI directly to
         // avoid recursing.
-        let output = match self.command().args(["--nointeraction", "status"]).output() {
+        let output = match self
+            .command()
+            .map_err(|error| error.to_string())?
+            .args(["--nointeraction", "status"])
+            .output()
+        {
             Ok(output) => output,
             // Say nothing about a missing CLI here: `execute_bw_command` reports
             // that with installation instructions, and it runs immediately after.
@@ -1493,7 +1507,7 @@ impl BitwardenProvider {
              \n  bw config server {expected}\
              \n  bw login\
              \n  bw unlock\
-             \n\nThen export BW_SESSION from the unlock output."
+             \n\nThen update the session provider credential or export BW_SESSION from the unlock output."
         ))
     }
 
@@ -1522,7 +1536,7 @@ impl BitwardenProvider {
     fn execute_bw_command(&self, args: &[&str]) -> Result<String> {
         self.ensure_server_configured()?;
 
-        let mut cmd = self.command();
+        let mut cmd = self.command()?;
 
         // Never allow bw to prompt on stdin; fail fast with a clear error
         // instead (e.g. when the session is missing or expired in CI).
@@ -1550,7 +1564,7 @@ impl BitwardenProvider {
 
             if error_msg.contains("Vault is locked") {
                 return Err(SecretSpecError::ProviderOperationFailed(
-                    "Bitwarden vault is locked. Please run 'bw unlock' and set the BW_SESSION environment variable.".to_string(),
+                    "Bitwarden vault is locked. Please run 'bw unlock' and update the session provider credential or set the BW_SESSION environment variable.".to_string(),
                 ));
             }
 
@@ -1625,7 +1639,7 @@ impl BitwardenProvider {
             Ok(())
         } else {
             Err(SecretSpecError::ProviderOperationFailed(
-                "Bitwarden authentication required. Please run 'bw login' and 'bw unlock', then set the BW_SESSION environment variable.".to_string(),
+                "Bitwarden authentication required. Please run 'bw login' and 'bw unlock', then update the session provider credential or set the BW_SESSION environment variable.".to_string(),
             ))
         }
     }
@@ -2316,7 +2330,7 @@ impl BitwardenProvider {
         use std::process::Stdio;
         let encoded_json = general_purpose::STANDARD.encode(&item_json_str);
 
-        let mut cmd = self.command();
+        let mut cmd = self.command()?;
 
         let mut args = vec!["--nointeraction", "edit", "item", item_id];
         // The organization to act in, not a filter — see `search_filter_args`.
@@ -2658,7 +2672,7 @@ impl BitwardenProvider {
         use std::process::Stdio;
         let encoded_json = general_purpose::STANDARD.encode(&template_json);
 
-        let mut cmd = self.command();
+        let mut cmd = self.command()?;
 
         let mut args = vec!["--nointeraction", "create", "item"];
         // The organization to create in, not a filter — see `search_filter_args`.
@@ -4720,6 +4734,110 @@ mod tests {
     }
 
     // -- fake-bw CLI subprocess tests -------------------------------------
+
+    #[test]
+    fn session_credential_overrides_environment_without_changing_it() {
+        with_env("BW_SESSION", "ambient-session", || {
+            let mut provider = BitwardenProvider::new(BitwardenConfig::default());
+            provider.with_credentials(ProviderCredentials::from([(
+                "session".to_string(),
+                SecretBytes::from_utf8("configured-session"),
+            )]));
+            let command = provider.command().unwrap();
+            assert_eq!(
+                command.get_envs().find(|(key, _)| *key == "BW_SESSION"),
+                Some((
+                    std::ffi::OsStr::new("BW_SESSION"),
+                    Some(std::ffi::OsStr::new("configured-session"))
+                ))
+            );
+            assert_eq!(std::env::var("BW_SESSION").unwrap(), "ambient-session");
+            assert_eq!(
+                super::super::credential_names_for_spec("bw://").unwrap(),
+                ["session"]
+            );
+        });
+    }
+
+    #[test]
+    fn session_environment_remains_a_fallback() {
+        with_env("BW_SESSION", "ambient-session", || {
+            let provider = BitwardenProvider::new(BitwardenConfig::default());
+            let command = provider.command().unwrap();
+            assert_eq!(
+                command.get_envs().find(|(key, _)| *key == "BW_SESSION"),
+                Some((
+                    std::ffi::OsStr::new("BW_SESSION"),
+                    Some(std::ffi::OsStr::new("ambient-session"))
+                ))
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_credential_reaches_status_reads_creates_and_edits() {
+        with_clean_env(|| {
+            let fake = FakeBw::new().with_stateful_vault();
+            // Include non-UTF-8 bytes to exercise byte-preserving Unix environments.
+            let session = b"configured-session-\xff";
+            std::fs::write(fake.dir.join("expected-session"), session).unwrap();
+            let mut provider = BitwardenProvider::new(BitwardenConfig {
+                server: Some(BITWARDEN_CLOUD_SERVER.to_string()),
+                ..Default::default()
+            });
+            provider.cli_binary_path = fake.dir.join("bw");
+            provider.with_credentials(ProviderCredentials::from([(
+                "session".to_string(),
+                SecretBytes::from_vec(session.to_vec()),
+            )]));
+            let parent_session = std::env::var_os("BW_SESSION");
+            let address = Address::convention("project", "default", "TOKEN");
+            provider
+                .set(address, &SecretBytes::from_utf8("first"))
+                .unwrap();
+            provider
+                .set(address, &SecretBytes::from_utf8("updated"))
+                .unwrap();
+            assert_eq!(
+                provider.get(address).unwrap(),
+                Some(SecretBytes::from_utf8("updated"))
+            );
+            assert_eq!(std::env::var_os("BW_SESSION"), parent_session);
+
+            let log = fake.invocations();
+            for operation in [
+                "<status>",
+                "<list> <items>",
+                "<get> <item>",
+                "<create> <item>",
+                "<edit> <item>",
+            ] {
+                assert!(log.contains(operation), "missing {operation}: {log}");
+            }
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_session_fails_before_spawning_without_environment_fallback() {
+        with_env("BW_SESSION", "ambient-session", || {
+            let fake = FakeBw::new();
+            let mut provider = BitwardenProvider::new(BitwardenConfig::default());
+            provider.cli_binary_path = fake.dir.join("bw");
+            provider.with_credentials(ProviderCredentials::from([(
+                "session".to_string(),
+                SecretBytes::from_vec(b"private-session\0invalid".to_vec()),
+            )]));
+            let error = provider
+                .execute_bw_command(&["status"])
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("NUL"), "{error}");
+            assert!(!error.contains("private-session"));
+            assert!(fake.invocations().is_empty());
+        });
+    }
 
     #[cfg(unix)]
     #[test]

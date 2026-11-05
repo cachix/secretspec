@@ -769,6 +769,40 @@ Secret values are never written to the log, and credentials embedded in provider
 URIs are redacted. Audit failures never block secret access. See
 [Audit Logging](/concepts/audit/) for the record format and full details.
 
+### Output redaction
+
+<VersionCompatibility version="0.22" />
+
+Starting in 0.22, `secretspec run` automatically replaces exact secret bytes
+with `[REDACTED]` in child stdout and stderr. No configuration is required.
+
+Filtering uses the resolved value after decoding and extraction, including
+prompted, generated, and default values. For `as_path`, it masks file contents
+rather than the temporary path. Dependencies remain masked even when a scope
+injects only a composed or converted result. Missing optional values and empty
+values add no pattern. Overlapping matches are masked together; each output
+stream is filtered separately.
+
+This reduces accidental disclosure to logs and agent transcripts. It does not
+isolate untrusted programs: encoded, partial, or deliberately transformed values,
+direct terminal writes, files, and network traffic are outside its protection.
+`get`, `export`, SDK resolution, and SecretSpec's own diagnostics retain their
+existing behavior.
+
+**Upgrading from 0.21:** output was previously passed through unchanged. In 0.22,
+commands that intentionally print secret values now print markers. When there
+are no nonempty resolved secret values, `run` inherits stdout and stderr directly.
+
+Filtering pipes the child's stdout and stderr, so applications may change their
+terminal detection, colors, or buffering. Only trailing bytes that could begin
+a secret are held back; a prompt ending in such a prefix can be delayed.
+The combined distinct nonempty patterns may contain at most 64 KiB; exceeding
+this limit fails before starting the child. Read and write failures never fall
+back to unfiltered output. After the direct child exits, output must finish
+draining within one second; otherwise `run` fails and closes its readers, even
+if a background descendant still holds a pipe open. The descendant is not
+terminated by this timeout.
+
 ### as_path Option
 
 <VersionCompatibility version="0.21" kind="changed">

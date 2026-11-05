@@ -32,6 +32,16 @@ pub struct ProviderRegistration {
     pub factory: fn(&ProviderUrl, ProviderCredentials) -> Result<ProviderWithPreflight>,
 }
 
+/// Native async factories are registered alongside their synchronous factory.
+#[doc(hidden)]
+pub struct AsyncProviderRegistration {
+    pub metadata: &'static ProviderMetadata,
+    pub factory: fn(&ProviderUrl, ProviderCredentials) -> Result<Box<dyn super::AsyncProvider>>,
+}
+
+#[linkme::distributed_slice]
+pub static ASYNC_PROVIDER_REGISTRY: [AsyncProviderRegistration];
+
 /// Folds an optional macro flag into a plain `bool`: `register_provider!` passes
 /// an empty slice when the field is omitted and a one-element slice otherwise.
 #[doc(hidden)]
@@ -162,6 +172,48 @@ macro_rules! register_disabled_provider {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! register_provider {
+    // Each native backend implements AsyncProvider and ProviderBase once.
+    (
+        struct: $struct_name:ident,
+        config: $config_type:ty,
+        metadata: $metadata:expr,
+        native_async: true $(,)?
+    ) => {
+        impl $struct_name {
+            const PROVIDER_NAME: &'static str = $metadata.info.name;
+        }
+        const _: () = {
+            #[linkme::distributed_slice($crate::provider::PROVIDER_REGISTRY)]
+            static SYNC_REGISTRATION: $crate::provider::ProviderRegistration =
+                $crate::provider::ProviderRegistration {
+                    metadata: $metadata,
+                    factory: |url, credentials| {
+                        let config = <$config_type>::try_from(url)?;
+                        let mut provider = $struct_name::new(config);
+                        $crate::provider::ProviderBase::with_credentials(&mut provider, credentials);
+                        Ok($crate::provider::ProviderWithPreflight {
+                            provider: Box::new($crate::provider::SyncProviderAdapter::from_async(provider)),
+                            preflight: None,
+                        })
+                    },
+                };
+            #[linkme::distributed_slice($crate::provider::macros::ASYNC_PROVIDER_REGISTRY)]
+            static ASYNC_REGISTRATION: $crate::provider::macros::AsyncProviderRegistration =
+                $crate::provider::macros::AsyncProviderRegistration {
+                    metadata: $metadata,
+                    factory: |url, credentials| {
+                        let config = <$config_type>::try_from(url)?;
+                        let mut provider = $struct_name::new(config);
+                        $crate::provider::ProviderBase::with_credentials(&mut provider, credentials);
+                        $crate::provider::ProviderBase::set_retry_policy(
+                            &mut provider, $crate::provider::RetryPolicy::default(),
+                        );
+                        Ok(Box::new(provider))
+                    },
+                };
+        };
+    };
+
     // Shared catalog metadata, without preflight.
     (
         struct: $struct_name:ident,

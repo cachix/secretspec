@@ -2093,13 +2093,14 @@ mod integration_tests {
         project: &str,
         config: Option<&str>,
         token: &str,
-    ) -> crate::provider::doppler::DopplerProvider {
+    ) -> crate::SyncProviderAdapter<crate::provider::doppler::DopplerProvider> {
         use crate::provider::doppler::{DopplerConfig, DopplerProvider};
 
-        let mut provider = DopplerProvider::new(DopplerConfig {
-            project: project.to_string(),
-            config: config.map(str::to_string),
-        });
+        let mut provider =
+            crate::SyncProviderAdapter::from_async(DopplerProvider::new(DopplerConfig {
+                project: project.to_string(),
+                config: config.map(str::to_string),
+            }));
         let mut credentials = crate::provider::ProviderCredentials::new();
         // "token" is the provider's declared credential name.
         credentials.insert("token".to_string(), SecretBytes::from_utf8(token));

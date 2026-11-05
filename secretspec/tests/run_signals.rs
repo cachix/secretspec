@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 
-fn project() -> tempfile::TempDir {
+fn project(redacted: bool) -> tempfile::TempDir {
     let project = tempfile::tempdir().unwrap();
     fs::write(
         project.path().join("secretspec.toml"),
@@ -26,6 +26,14 @@ UNUSED = { description = "unused optional value", required = false, providers = 
 "#,
     )
     .unwrap();
+    if redacted {
+        use std::io::Write;
+        let mut manifest = fs::OpenOptions::new()
+            .append(true)
+            .open(project.path().join("secretspec.toml"))
+            .unwrap();
+        writeln!(manifest, "TOKEN = {{ description = \"token\", providers = [\"env\"], default = \"synthetic-signal-token\" }}").unwrap();
+    }
     project
 }
 
@@ -74,59 +82,64 @@ fn wait_until_started(child: &mut Child, ready: &std::path::Path) {
 
 #[test]
 fn forwards_termination_signals_to_the_child() {
-    for (name, signal) in [
-        ("TERM", libc::SIGTERM),
-        ("INT", libc::SIGINT),
-        ("HUP", libc::SIGHUP),
-    ] {
-        let project = project();
-        let ready = project.path().join(format!("ready-{name}"));
-        let received = project.path().join(format!("received-{name}"));
-        let script = format!("trap ': > \"$2\"; exit 0' {name}; : > \"$1\"; while :; do :; done");
-        let mut child = command(&project)
-            .args([
-                "sh",
-                "-c",
-                &script,
-                "sh",
-                ready.to_str().unwrap(),
-                received.to_str().unwrap(),
-            ])
-            .spawn()
-            .unwrap();
+    for redacted in [false, true] {
+        for (name, signal) in [
+            ("TERM", libc::SIGTERM),
+            ("INT", libc::SIGINT),
+            ("HUP", libc::SIGHUP),
+        ] {
+            let project = project(redacted);
+            let ready = project.path().join(format!("ready-{name}"));
+            let received = project.path().join(format!("received-{name}"));
+            let script =
+                format!("trap ': > \"$2\"; exit 0' {name}; : > \"$1\"; while :; do :; done");
+            let mut child = command(&project)
+                .args([
+                    "sh",
+                    "-c",
+                    &script,
+                    "sh",
+                    ready.to_str().unwrap(),
+                    received.to_str().unwrap(),
+                ])
+                .spawn()
+                .unwrap();
 
-        wait_until_started(&mut child, &ready);
-        assert_eq!(unsafe { libc::kill(child.id() as libc::pid_t, signal) }, 0);
+            wait_until_started(&mut child, &ready);
+            assert_eq!(unsafe { libc::kill(child.id() as libc::pid_t, signal) }, 0);
 
-        let output = child.wait_with_output().unwrap();
-        assert!(
-            output.status.success(),
-            "forwarding {name} failed with {}:\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            received.exists(),
-            "the child did not receive forwarded SIG{name}"
-        );
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "forwarding {name} failed with {}:\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                received.exists(),
+                "the child did not receive forwarded SIG{name}"
+            );
+        }
     }
 }
 
 #[test]
 fn maps_child_signal_deaths_to_conventional_exit_codes() {
-    for (name, expected) in [("TERM", 143), ("KILL", 137)] {
-        let project = project();
-        let output = command(&project)
-            .args(["sh", "-c", &format!("kill -{name} $$")])
-            .output()
-            .unwrap();
+    for redacted in [false, true] {
+        for (name, expected) in [("TERM", 143), ("KILL", 137)] {
+            let project = project(redacted);
+            let output = command(&project)
+                .args(["sh", "-c", &format!("kill -{name} $$")])
+                .output()
+                .unwrap();
 
-        assert_eq!(
-            output.status.code(),
-            Some(expected),
-            "child killed by SIG{name} produced {}:\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        );
+            assert_eq!(
+                output.status.code(),
+                Some(expected),
+                "child killed by SIG{name} produced {}:\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 }

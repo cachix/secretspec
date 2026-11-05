@@ -62,10 +62,14 @@
 //! secretspec check --provider 'aac://shared?tag=app=payments&tag=stage=production'
 //! ```
 
+use super::ProviderBase as _;
+use super::async_provider::map_concurrently;
 use super::{
-    Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl, credential_or_env,
-    get_each_concurrency, map_concurrently,
+    Address, DiscoveryContext, ProviderCredentials, ProviderUrl, credential_or_env,
+    get_each_concurrency,
 };
+#[cfg(test)]
+use super::{Provider, SyncProviderAdapter};
 use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
@@ -465,6 +469,7 @@ crate::register_provider! {
     struct: AacProvider,
     config: AacConfig,
     metadata: &super::catalog::AAC,
+    native_async: true,
 }
 
 impl AacProvider {
@@ -1467,27 +1472,29 @@ impl AacProvider {
         Ok(provider)
     }
 
-    fn resolve_vault_reference(&self, reference: &VaultReference) -> Result<SecretBytes> {
+    async fn resolve_vault_reference(&self, reference: &VaultReference) -> Result<SecretBytes> {
         let provider = self.vault_provider(reference)?;
         let address = NativeAddress {
             item: reference.secret_name.clone(),
             version: reference.version.clone(),
             ..Default::default()
         };
-        provider.get(Address::Native(&address))?.ok_or_else(|| {
-            operation_error(format!(
-                "Azure App Configuration contains a dangling Key Vault reference to host '{}'",
-                reference.vault_host
-            ))
-        })
+        super::AsyncProvider::get(provider.as_ref(), Address::Native(&address))
+            .await?
+            .ok_or_else(|| {
+                operation_error(format!(
+                    "Azure App Configuration contains a dangling Key Vault reference to host '{}'",
+                    reference.vault_host
+                ))
+            })
     }
 
-    fn resolve_selected_reference(
+    async fn resolve_selected_reference(
         &self,
         key: &str,
         reference: &VaultReference,
     ) -> Result<SecretBytes> {
-        self.resolve_vault_reference(reference).map_err(|error| {
+        self.resolve_vault_reference(reference).await.map_err(|error| {
             operation_error(format!(
                 "failed to resolve Key Vault reference from Azure App Configuration key '{key}' through vault '{}': {error}",
                 reference.vault_host
@@ -1495,12 +1502,13 @@ impl AacProvider {
         })
     }
 
-    fn get_selected(&self, addr: Address<'_>) -> Result<Option<SelectedValue>> {
+    async fn get_selected(&self, addr: Address<'_>) -> Result<Option<SelectedValue>> {
         self.initial_request
-            .run(|| super::block_on(self.selected_value_async(addr)))
+            .run_async(|| self.selected_value_async(addr))
+            .await
     }
 
-    fn get_many_selected(
+    async fn get_many_selected(
         &self,
         requests: &[(&str, Address<'_>)],
     ) -> Result<HashMap<String, SecretBytes>> {
@@ -1509,9 +1517,11 @@ impl AacProvider {
             groups.entry(*address).or_default().push(name);
         }
         let groups = groups.into_iter().collect::<Vec<_>>();
-        let selected = map_concurrently(&groups, get_each_concurrency(), |(address, names)| {
-            (names.clone(), self.get_selected(*address))
-        });
+        let selected =
+            map_concurrently(&groups, get_each_concurrency(), |(address, names)| async {
+                (names.clone(), self.get_selected(*address).await)
+            })
+            .await;
 
         let mut values = HashMap::new();
         let mut references: HashMap<VaultReference, (Vec<&str>, BTreeSet<String>)> = HashMap::new();
@@ -1538,8 +1548,8 @@ impl AacProvider {
         let resolved = map_concurrently(
             &references,
             get_each_concurrency(),
-            |(reference, names, keys)| {
-                let result = self.resolve_vault_reference(reference).map_err(|error| {
+            |(reference, names, keys)| async {
+                let result = self.resolve_vault_reference(reference).await.map_err(|error| {
                     operation_error(format!(
                         "failed to resolve Key Vault reference for {} from Azure App Configuration key(s) {} through vault '{}': {error}",
                         names.join(", "),
@@ -1549,7 +1559,7 @@ impl AacProvider {
                 });
                 (names.clone(), result)
             },
-        );
+        ).await;
         for (names, result) in resolved {
             let value = result?;
             for name in names {
@@ -1695,7 +1705,7 @@ impl AacProvider {
     }
 }
 
-impl Provider for AacProvider {
+impl super::ProviderBase for AacProvider {
     fn retry_ownership(&self) -> super::RetryOwnership {
         super::RetryOwnership::Managed
     }
@@ -1715,67 +1725,8 @@ impl Provider for AacProvider {
         self.credentials = credentials;
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
-        match self.get_selected(addr)? {
-            Some(SelectedValue::Direct(value)) => Ok(Some(value)),
-            Some(SelectedValue::Reference { key, reference }) => {
-                self.resolve_selected_reference(&key, &reference).map(Some)
-            }
-            None => Ok(None),
-        }
-    }
-
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
-        self.get_many_selected(requests)
-    }
-
-    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
-        if matches!(addr, Address::Native(_)) {
-            return self.check_writable(addr);
-        }
-        let key = self.resolve_key(addr)?;
-        self.initial_request
-            .run(|| super::block_on(self.set_async(&key, value)))
-    }
-
-    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
-        self.resolve_coords(addr)?;
-        if matches!(addr, Address::Native(_)) {
-            return Err(operation_error(
-                "aac native references are read-only and cannot be written".to_string(),
-            ));
-        }
-        let key = self.resolve_key(addr)?;
-        self.initial_request
-            .run(|| super::block_on(self.mutation_record(&key)).map(|_| ()))
-    }
-
-    fn delete(&self, addr: Address<'_>) -> Result<bool> {
-        if matches!(addr, Address::Native(_)) {
-            self.check_deletable(addr)?;
-            return Err(operation_error(
-                "aac native deletion is not implemented".to_string(),
-            ));
-        }
-        let key = self.resolve_key(addr)?;
-        self.initial_request
-            .run(|| super::block_on(self.delete_async(&key)))
-    }
-
     fn supports_delete(&self) -> bool {
         true
-    }
-
-    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
-        self.resolve_coords(addr)?;
-        if matches!(addr, Address::Native(_)) {
-            return Err(operation_error(
-                "aac native references are read-only and cannot be deleted".to_string(),
-            ));
-        }
-        let key = self.resolve_key(addr)?;
-        self.initial_request
-            .run(|| super::block_on(self.mutation_record(&key)).map(|_| ()))
     }
 
     fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
@@ -1850,10 +1801,84 @@ impl Provider for AacProvider {
     fn entry_container_identity(&self) -> String {
         format!("{}|label={:?}", self.config.endpoint, self.config.label)
     }
+}
 
-    fn reflect(&self, context: DiscoveryContext<'_>) -> Result<HashMap<String, crate::Secret>> {
+#[async_trait::async_trait]
+impl super::AsyncProvider for AacProvider {
+    async fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
+        match self.get_selected(addr).await? {
+            Some(SelectedValue::Direct(value)) => Ok(Some(value)),
+            Some(SelectedValue::Reference { key, reference }) => self
+                .resolve_selected_reference(&key, &reference)
+                .await
+                .map(Some),
+            None => Ok(None),
+        }
+    }
+
+    async fn get_many(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, SecretBytes>> {
+        self.get_many_selected(requests).await
+    }
+
+    async fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        if matches!(addr, Address::Native(_)) {
+            return super::AsyncProvider::check_writable(self, addr).await;
+        }
+        let key = self.resolve_key(addr)?;
         self.initial_request
-            .run(|| super::block_on(self.reflect_async(context)))
+            .run_async(|| async { self.set_async(&key, value).await })
+            .await
+    }
+
+    async fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+        self.resolve_coords(addr)?;
+        if matches!(addr, Address::Native(_)) {
+            return Err(operation_error(
+                "aac native references are read-only and cannot be written".to_string(),
+            ));
+        }
+        let key = self.resolve_key(addr)?;
+        self.initial_request
+            .run_async(|| async { self.mutation_record(&key).await.map(|_| ()) })
+            .await
+    }
+
+    async fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        if matches!(addr, Address::Native(_)) {
+            super::AsyncProvider::check_deletable(self, addr).await?;
+            return Err(operation_error(
+                "aac native deletion is not implemented".to_string(),
+            ));
+        }
+        let key = self.resolve_key(addr)?;
+        self.initial_request
+            .run_async(|| async { self.delete_async(&key).await })
+            .await
+    }
+
+    async fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        self.resolve_coords(addr)?;
+        if matches!(addr, Address::Native(_)) {
+            return Err(operation_error(
+                "aac native references are read-only and cannot be deleted".to_string(),
+            ));
+        }
+        let key = self.resolve_key(addr)?;
+        self.initial_request
+            .run_async(|| async { self.mutation_record(&key).await.map(|_| ()) })
+            .await
+    }
+
+    async fn reflect(
+        &self,
+        context: DiscoveryContext<'_>,
+    ) -> Result<HashMap<String, crate::Secret>> {
+        self.initial_request
+            .run_async(|| async { self.reflect_async(context).await })
+            .await
     }
 }
 
@@ -2084,11 +2109,11 @@ mod tests {
         AacConfig::try_from(&ProviderUrl::new(Url::parse(uri).unwrap())).unwrap()
     }
 
-    fn provider(uri: &str) -> AacProvider {
-        AacProvider::new(config(uri))
+    fn provider(uri: &str) -> SyncProviderAdapter<AacProvider> {
+        SyncProviderAdapter::from_async(AacProvider::new(config(uri)))
     }
 
-    fn fixture_provider(endpoint: &str, uri: &str) -> AacProvider {
+    fn fixture_provider(endpoint: &str, uri: &str) -> SyncProviderAdapter<AacProvider> {
         let mut provider = provider(uri);
         provider.config.endpoint = endpoint.to_string();
         provider.allow_insecure_loopback = true;
@@ -3358,8 +3383,7 @@ mod tests {
         let SelectedValue::Reference { key, reference } = selected else {
             panic!("expected Key Vault reference");
         };
-        let error = provider
-            .resolve_selected_reference(&key, &reference)
+        let error = super::super::block_on(provider.resolve_selected_reference(&key, &reference))
             .unwrap_err();
         assert!(
             error.to_string().contains(

@@ -1,7 +1,12 @@
 //! Kubernetes provider
+use super::ProviderBase as _;
+#[cfg(test)]
+use super::{Provider, SyncProviderAdapter};
 use crate::{Result, SecretSpecError};
 
-use super::{Address, Provider, ProviderUrl, block_on};
+#[cfg(test)]
+use super::block_on;
+use super::{Address, ProviderUrl};
 use crate::SecretBytes;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use json_patch::jsonptr::Token;
@@ -106,6 +111,7 @@ crate::register_provider! {
     struct: KubernetesProvider,
     config: KubernetesConfig,
     metadata: &super::catalog::KUBERNETES,
+    native_async: true,
 }
 
 impl KubernetesProvider {
@@ -356,7 +362,7 @@ impl KubernetesProvider {
     }
 }
 
-impl Provider for KubernetesProvider {
+impl super::ProviderBase for KubernetesProvider {
     fn name(&self) -> &'static str {
         Self::PROVIDER_NAME
     }
@@ -377,26 +383,33 @@ impl Provider for KubernetesProvider {
         })
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
+    fn supports_delete(&self) -> bool {
+        true
+    }
+}
+
+#[async_trait::async_trait]
+impl super::AsyncProvider for KubernetesProvider {
+    async fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let coords = self.resolve_coords(addr)?;
-        block_on(self.get_coords_async(&coords.item))
+        self.get_coords_async(&coords.item).await
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
-        self.check_writable(addr)?;
+    async fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        super::AsyncProvider::check_writable(self, addr).await?;
         let coords = self.resolve_coords(addr)?;
-        block_on(self.set_secret_async(&coords.item, value))
+        self.set_secret_async(&coords.item, value).await
     }
 
-    fn delete(&self, addr: Address<'_>) -> Result<bool> {
-        self.check_deletable(addr)?;
+    async fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        super::AsyncProvider::check_deletable(self, addr).await?;
         let coords = self.resolve_coords(addr)?;
-        block_on(self.delete_secret_async(&coords.item))
+        self.delete_secret_async(&coords.item).await
     }
 
-    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+    async fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         self.resolve_coords(addr)?;
-        let can_i_patch = block_on(self.can_i_patch())?;
+        let can_i_patch = self.can_i_patch().await?;
         if !can_i_patch {
             let err_msg = if let Some(namespace) = &self.config.namespace {
                 format!(
@@ -411,12 +424,8 @@ impl Provider for KubernetesProvider {
         Ok(())
     }
 
-    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
-        self.check_writable(addr)
-    }
-
-    fn supports_delete(&self) -> bool {
-        true
+    async fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        super::AsyncProvider::check_writable(self, addr).await
     }
 }
 
@@ -480,7 +489,10 @@ mod tests {
     fn provider_with_access_reviews(
         allowed: bool,
         expected_requests: usize,
-    ) -> (KubernetesProvider, JoinHandle<Vec<serde_json::Value>>) {
+    ) -> (
+        SyncProviderAdapter<KubernetesProvider>,
+        JoinHandle<Vec<serde_json::Value>>,
+    ) {
         provider_with_responses(vec![
             serde_json::json!({
                 "apiVersion": "authorization.k8s.io/v1",
@@ -493,7 +505,10 @@ mod tests {
 
     fn provider_with_responses(
         responses: Vec<serde_json::Value>,
-    ) -> (KubernetesProvider, JoinHandle<Vec<serde_json::Value>>) {
+    ) -> (
+        SyncProviderAdapter<KubernetesProvider>,
+        JoinHandle<Vec<serde_json::Value>>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
@@ -535,11 +550,11 @@ mod tests {
 
         let config = kube::Config::new(format!("http://{address}").parse().unwrap());
         let client = block_on(async { Client::try_from(config).unwrap() });
-        let provider = KubernetesProvider::new(KubernetesConfig {
+        let provider = SyncProviderAdapter::from_async(KubernetesProvider::new(KubernetesConfig {
             kind: KubernetesKind::Secret,
             name: "app-secrets".to_string(),
             namespace: Some("app".to_string()),
-        });
+        }));
         assert!(provider.client.set(client).is_ok());
 
         (provider, server)
@@ -574,7 +589,9 @@ mod tests {
 
     #[test]
     fn configmap_rejects_binary_before_connecting() {
-        let provider = KubernetesProvider::new(config("k8s+configmap://app@default"));
+        let provider = SyncProviderAdapter::from_async(KubernetesProvider::new(config(
+            "k8s+configmap://app@default",
+        )));
         let error = block_on(
             provider.set_secret_async("BINARY", &SecretBytes::from_slice(b"do-not-leak\xff")),
         )

@@ -74,8 +74,11 @@
 //! secretspec check --provider openbao://team-a@bao.example.com:8200/secret
 //! ```
 
+use super::ProviderBase as _;
 use super::vault_common::{KvConfig, KvProvider, Product};
-use super::{Address, Provider, ProviderCredentials, ProviderUrl};
+use super::{Address, ProviderCredentials, ProviderUrl};
+#[cfg(test)]
+use super::{Provider, SyncProviderAdapter};
 use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
@@ -108,6 +111,7 @@ crate::register_provider! {
     struct: OpenBaoProvider,
     config: OpenBaoConfig,
     metadata: &super::catalog::OPENBAO,
+    native_async: true,
 }
 
 impl OpenBaoProvider {
@@ -119,15 +123,15 @@ impl OpenBaoProvider {
     }
 }
 
-impl Provider for OpenBaoProvider {
+impl super::ProviderBase for OpenBaoProvider {
     fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
         self.core.set_retry_policy(policy);
     }
+
     fn retry_ownership(&self) -> super::RetryOwnership {
         super::RetryOwnership::Managed
     }
 
-    /// Convention secrets use one KV path per secret and the `value` map field.
     fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
         self.core.convention_address(project, profile, key)
     }
@@ -152,62 +156,54 @@ impl Provider for OpenBaoProvider {
         self.core.supported_coords()
     }
 
-    /// A native reference must identify the field inside the KV entry's map.
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
+    fn supports_delete(&self) -> bool {
+        true
+    }
+}
+
+#[async_trait::async_trait]
+impl super::AsyncProvider for OpenBaoProvider {
+    async fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let coords = self.resolve_coords(addr)?;
-        self.core.get(&coords)
+        self.core.get(&coords).await
     }
 
-    /// Reuses one operation-scoped login across the batch while retaining the
-    /// default address deduplication and concurrency cap.
-    fn get_many(
+    async fn get_many(
         &self,
         requests: &[(&str, Address<'_>)],
     ) -> Result<std::collections::HashMap<String, SecretBytes>> {
-        self.core.get_many(requests)
+        self.core.get_many(requests).await
     }
 
-    /// Only convention addresses are writable; see [`Self::check_writable`].
-    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
-        self.check_writable(addr)?;
+    async fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        super::AsyncProvider::check_writable(self, addr).await?;
         let coords = self.resolve_coords(addr)?;
-        self.core.set(&coords, value)
+        self.core.set(&coords, value).await
     }
 
-    /// KV v2 expires the written version through the path's
-    /// `delete_version_after` metadata, so a cached copy of another store's
-    /// secret disappears on its own.
-    fn set_expiring(
+    async fn set_expiring(
         &self,
         addr: Address<'_>,
         value: &SecretBytes,
         max_age: std::time::Duration,
     ) -> Result<()> {
-        self.check_writable(addr)?;
+        super::AsyncProvider::check_writable(self, addr).await?;
         let coords = self.resolve_coords(addr)?;
-        self.core.set_expiring(&coords, value, max_age)
+        self.core.set_expiring(&coords, value, max_age).await
     }
 
-    /// Deletes the whole KV path, so it is confined to entries SecretSpec owns;
-    /// see [`Self::check_writable`] for the same reasoning about `ref`s.
-    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+    async fn delete(&self, addr: Address<'_>) -> Result<bool> {
         self.core.check_deletable(addr)?;
         let coords = self.resolve_coords(addr)?;
-        self.core.delete(&coords)
+        self.core.delete(&coords).await
     }
 
-    fn supports_delete(&self) -> bool {
-        true
-    }
-
-    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
-        self.core.check_deletable(addr)
-    }
-
-    /// Refuses native writes because replacing a KV entry to change one field
-    /// would silently discard every sibling field.
-    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+    async fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         self.core.check_writable(addr)
+    }
+
+    async fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        self.core.check_deletable(addr)
     }
 }
 
@@ -222,7 +218,9 @@ mod tests {
 
     #[test]
     fn has_an_independent_identity_and_uri() {
-        let provider = OpenBaoProvider::new(config("openbao://bao.example.com:8200/team"));
+        let provider = SyncProviderAdapter::from_async(OpenBaoProvider::new(config(
+            "openbao://bao.example.com:8200/team",
+        )));
         assert_eq!(provider.name(), "openbao");
         assert_eq!(provider.uri(), "openbao://bao.example.com:8200/team");
     }
@@ -238,7 +236,9 @@ mod tests {
 
     #[test]
     fn convention_address_is_the_writable_value_field() {
-        let provider = OpenBaoProvider::new(config("openbao://bao.example.com:8200/secret"));
+        let provider = SyncProviderAdapter::from_async(OpenBaoProvider::new(config(
+            "openbao://bao.example.com:8200/secret",
+        )));
         let address = provider
             .resolve_coords(Address::convention("app", "prod", "DATABASE_URL"))
             .unwrap();
@@ -248,7 +248,9 @@ mod tests {
 
     #[test]
     fn native_address_requires_a_field() {
-        let provider = OpenBaoProvider::new(config("openbao://bao.example.com:8200/secret"));
+        let provider = SyncProviderAdapter::from_async(OpenBaoProvider::new(config(
+            "openbao://bao.example.com:8200/secret",
+        )));
         let address = NativeAddress {
             item: "myapp/config".into(),
             ..Default::default()
@@ -260,7 +262,9 @@ mod tests {
 
     #[test]
     fn native_address_is_read_only_with_an_openbao_error() {
-        let provider = OpenBaoProvider::new(config("openbao://bao.example.com:8200/secret"));
+        let provider = SyncProviderAdapter::from_async(OpenBaoProvider::new(config(
+            "openbao://bao.example.com:8200/secret",
+        )));
         let address = NativeAddress {
             item: "myapp/config".into(),
             field: Some("db_password".into()),

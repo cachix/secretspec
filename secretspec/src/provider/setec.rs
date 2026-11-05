@@ -11,7 +11,10 @@
 //! HTTPS is used by default. `tls=false` is intended for local development.
 //! Convention secrets use `[prefix/]secretspec/{project}/{profile}/{key}`.
 
-use super::{Address, DiscoveryContext, Provider, ProviderUrl};
+use super::ProviderBase as _;
+use super::{Address, DiscoveryContext, ProviderUrl};
+#[cfg(test)]
+use super::{Provider, SyncProviderAdapter};
 use crate::config::NativeAddress;
 use crate::{Result, Secret, SecretBytes, SecretSpecError};
 use data_encoding::BASE64;
@@ -179,9 +182,21 @@ crate::register_provider! {
     struct: SetecProvider,
     config: SetecConfig,
     metadata: &super::catalog::SETEC,
+    native_async: true,
 }
 
 impl SetecProvider {
+    fn validate_write(&self, addr: Address<'_>) -> Result<()> {
+        let coordinates = self.resolve_coords(addr)?;
+        validate_name(&coordinates.item)?;
+        if coordinates.version.is_some() {
+            return Err(operation_error(
+                "setec refs pinning a `version` are read-only; drop `version` to create and activate a new version",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn new(config: SetecConfig) -> Self {
         Self {
             config,
@@ -414,7 +429,7 @@ impl SetecProvider {
     }
 }
 
-impl Provider for SetecProvider {
+impl super::ProviderBase for SetecProvider {
     fn retry_ownership(&self) -> super::RetryOwnership {
         super::RetryOwnership::Managed
     }
@@ -435,57 +450,12 @@ impl Provider for SetecProvider {
         &["version"]
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
-        let coordinates = self.resolved(addr)?;
-        let version = coordinates
-            .version
-            .as_deref()
-            .map(parse_version)
-            .transpose()?
-            .unwrap_or(0);
-        super::block_on(self.get_async(&coordinates.item, version))
-    }
-
-    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
-        let coordinates = self.resolve_coords(addr)?;
-        validate_name(&coordinates.item)?;
-        if coordinates.version.is_some() {
-            return Err(operation_error(
-                "setec refs pinning a `version` are read-only; drop `version` to create and activate a new version",
-            ));
-        }
-        Ok(())
-    }
-
-    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
-        self.check_writable(addr)?;
-        let coordinates = self.resolve_coords(addr)?;
-        super::block_on(self.set_async(&coordinates.item, value))
-    }
-
     fn supports_delete(&self) -> bool {
         true
     }
 
-    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
-        let coordinates = self.resolve_coords(addr)?;
-        validate_name(&coordinates.item)?;
-        if coordinates.version.is_some() {
-            return Err(operation_error(
-                "setec refs pinning a `version` cannot be deleted through SecretSpec; drop `version` to delete the whole secret",
-            ));
-        }
-        Ok(())
-    }
-
-    fn delete(&self, addr: Address<'_>) -> Result<bool> {
-        self.check_deletable(addr)?;
-        let coordinates = self.resolve_coords(addr)?;
-        super::block_on(self.delete_async(&coordinates.item))
-    }
-
     fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
-        self.check_writable(addr)?;
+        self.validate_write(addr)?;
         let coordinates = self.resolve_coords(addr)?;
         Ok(format!(
             "Setec server '{}' secret '{}' (new active version)",
@@ -513,9 +483,50 @@ impl Provider for SetecProvider {
             format!("{base}?{}", parameters.join("&"))
         }
     }
+}
 
-    fn reflect(&self, context: DiscoveryContext<'_>) -> Result<HashMap<String, Secret>> {
-        super::block_on(self.reflect_async(context))
+#[async_trait::async_trait]
+impl super::AsyncProvider for SetecProvider {
+    async fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
+        let coordinates = self.resolved(addr)?;
+        let version = coordinates
+            .version
+            .as_deref()
+            .map(parse_version)
+            .transpose()?
+            .unwrap_or(0);
+        self.get_async(&coordinates.item, version).await
+    }
+
+    async fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        super::AsyncProvider::check_writable(self, addr).await?;
+        let coordinates = self.resolve_coords(addr)?;
+        self.set_async(&coordinates.item, value).await
+    }
+
+    async fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        super::AsyncProvider::check_deletable(self, addr).await?;
+        let coordinates = self.resolve_coords(addr)?;
+        self.delete_async(&coordinates.item).await
+    }
+
+    async fn reflect(&self, context: DiscoveryContext<'_>) -> Result<HashMap<String, Secret>> {
+        self.reflect_async(context).await
+    }
+
+    async fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+        self.validate_write(addr)
+    }
+
+    async fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        let coordinates = self.resolve_coords(addr)?;
+        validate_name(&coordinates.item)?;
+        if coordinates.version.is_some() {
+            return Err(operation_error(
+                "setec refs pinning a `version` cannot be deleted through SecretSpec; drop `version` to delete the whole secret",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -575,8 +586,65 @@ mod tests {
         SetecConfig::try_from(&ProviderUrl::new(url::Url::parse(spec).unwrap())).unwrap()
     }
 
-    fn provider(endpoint: SocketAddr) -> SetecProvider {
-        SetecProvider::new(config(&format!("setec://{endpoint}?tls=false")))
+    fn provider(endpoint: SocketAddr) -> SyncProviderAdapter<SetecProvider> {
+        SyncProviderAdapter::from_async(SetecProvider::new(config(&format!(
+            "setec://{endpoint}?tls=false"
+        ))))
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_async_read_keeps_the_callers_runtime_responsive() {
+        use std::time::Duration;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(&mut stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert_eq!(line.trim_end(), "POST /api/get HTTP/1.1");
+            let mut length = 0;
+            loop {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse::<usize>().unwrap();
+                }
+            }
+            let mut request = vec![0; length];
+            reader.read_exact(&mut request).unwrap();
+            started_tx.send(()).unwrap();
+            // The response depends on another task on the caller's runtime.
+            // A blocking bridge makes this bounded wait fail instead of hanging.
+            progress_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            let body = r#"{"Value":"AP8=","Version":1}"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        });
+        let provider = provider(endpoint);
+        let read = tokio::spawn(async move {
+            super::super::AsyncProvider::get(
+                provider.as_async(),
+                Address::convention("app", "prod", "KEY"),
+            )
+            .await
+        });
+        started_rx.await.unwrap();
+        progress_tx.send(()).unwrap();
+        assert_eq!(
+            read.await.unwrap().unwrap().unwrap().expose_secret(),
+            &[0, 255]
+        );
+        server.join().unwrap();
     }
 
     fn response_server(
@@ -627,9 +695,9 @@ mod tests {
 
     #[test]
     fn parses_and_canonicalizes_uri() {
-        let provider = SetecProvider::new(config(
+        let provider = SyncProviderAdapter::from_async(SetecProvider::new(config(
             "setec://secrets.example.ts.net:8443?prefix=%2Fteam%2Fplatform%2F&tls=false",
-        ));
+        )));
         assert_eq!(provider.config.prefix.as_deref(), Some("team/platform"));
         assert_eq!(
             provider.uri(),
@@ -661,7 +729,8 @@ mod tests {
 
     #[test]
     fn convention_and_native_coordinates_are_distinct() {
-        let provider = SetecProvider::new(config("setec://host?prefix=team"));
+        let provider =
+            SyncProviderAdapter::from_async(SetecProvider::new(config("setec://host?prefix=team")));
         assert_eq!(
             provider
                 .convention_address("app", "production", "DATABASE_URL")
@@ -797,7 +866,7 @@ mod tests {
             version: Some("4".into()),
             ..Default::default()
         };
-        let provider = SetecProvider::new(config("setec://host"));
+        let provider = SyncProviderAdapter::from_async(SetecProvider::new(config("setec://host")));
         assert!(provider.check_writable(Address::Native(&native)).is_err());
         assert!(provider.check_deletable(Address::Native(&native)).is_err());
     }
@@ -861,7 +930,8 @@ mod tests {
 
     #[test]
     fn ipv6_hosts_are_bracketed_once() {
-        let provider = SetecProvider::new(config("setec://[::1]:8080"));
+        let provider =
+            SyncProviderAdapter::from_async(SetecProvider::new(config("setec://[::1]:8080")));
         assert_eq!(provider.config.host, "::1");
         assert_eq!(provider.server_url(), "https://[::1]:8080");
         assert_eq!(provider.uri(), "setec://[::1]:8080");
@@ -870,7 +940,7 @@ mod tests {
 
     #[test]
     fn http_client_bounds_request_time() {
-        let provider = SetecProvider::new(config("setec://host"));
+        let provider = SyncProviderAdapter::from_async(SetecProvider::new(config("setec://host")));
         crate::provider::http::assert_bounded(provider.client().unwrap());
     }
 

@@ -37,10 +37,12 @@
 //! secretspec check --provider scaleway://fr-par?project_id=…
 //! ```
 
+use super::ProviderBase as _;
 use super::{
-    Address, Provider, ProviderCredentials, ProviderUrl, credential_or_envs, join_slash_path,
-    preferred_env,
+    Address, ProviderCredentials, ProviderUrl, credential_or_envs, join_slash_path, preferred_env,
 };
+#[cfg(test)]
+use super::{Provider, SyncProviderAdapter};
 use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
@@ -138,6 +140,7 @@ crate::register_provider! {
     struct: ScalewayProvider,
     config: ScalewayConfig,
     metadata: &super::catalog::SCALEWAY,
+    native_async: true,
 }
 
 /// One secret in a `ListSecrets` response (only the fields we consume).
@@ -393,6 +396,16 @@ impl ScalewayProvider {
                 self.lookup_secret_id(client, project_id, secret_path, secret_name)
                     .await
             }
+            // Scaleway answers a name that is already taken with 400, not 409.
+            400 => {
+                let body = read_body(response).await;
+                if is_duplicate_name(&body) {
+                    self.lookup_secret_id(client, project_id, secret_path, secret_name)
+                        .await
+                } else {
+                    Err(status_error("creating secret", 400, &body))
+                }
+            }
             status => Err(http_error("creating secret", status, response).await),
         }
     }
@@ -460,19 +473,46 @@ fn decode_payload(item: &str, data: &str) -> Result<SecretBytes> {
 
 /// Builds an error for a non-success HTTP response, including the body.
 async fn http_error(action: &str, status: u16, response: reqwest::Response) -> SecretSpecError {
-    let body = match response.text().await {
-        Ok(body) => body,
-        Err(error) => format!(
-            "<failed to read response body: {}>",
-            crate::error::display_error_chain(&error)
-        ),
-    };
+    status_error(action, status, &read_body(response).await)
+}
+
+fn status_error(action: &str, status: u16, body: &str) -> SecretSpecError {
     SecretSpecError::ProviderOperationFailed(format!(
         "Scaleway returned HTTP {status} while {action}: {body}"
     ))
 }
 
-impl Provider for ScalewayProvider {
+async fn read_body(response: reqwest::Response) -> String {
+    match response.text().await {
+        Ok(body) => body,
+        Err(error) => format!(
+            "<failed to read response body: {}>",
+            crate::error::display_error_chain(&error)
+        ),
+    }
+}
+
+/// Whether a create-secret 400 is Scaleway's "name already taken in this path".
+fn is_duplicate_name(body: &str) -> bool {
+    #[derive(Deserialize)]
+    struct InvalidArguments {
+        #[serde(default)]
+        details: Vec<ArgumentError>,
+    }
+    #[derive(Deserialize)]
+    struct ArgumentError {
+        argument_name: String,
+        help_message: String,
+    }
+    serde_json::from_str::<InvalidArguments>(body).is_ok_and(|error| {
+        error.details.iter().any(|detail| {
+            detail.argument_name == "name"
+                && detail.help_message.contains("cannot have same secret name")
+        })
+    })
+}
+
+impl super::ProviderBase for ScalewayProvider {
     fn retry_ownership(&self) -> super::RetryOwnership {
         super::RetryOwnership::Managed
     }
@@ -481,7 +521,6 @@ impl Provider for ScalewayProvider {
         self.retry_policy = policy;
     }
 
-    /// Convention secrets live at `[{base}/]secretspec/{project}/{profile}/{key}`.
     fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
         Ok(NativeAddress {
             item: Self::format_item(&self.config.path, project, profile, key)?,
@@ -518,31 +557,30 @@ impl Provider for ScalewayProvider {
         }
     }
 
-    /// `field` extracts a key from a JSON (`key_value`) secret; `version` pins a
-    /// revision (default `latest_enabled`).
     fn supported_coords(&self) -> &'static [&'static str] {
         &["field", "version"]
     }
+}
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
+#[async_trait::async_trait]
+impl super::AsyncProvider for ScalewayProvider {
+    async fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let coords = self.resolve_coords(addr)?;
-        super::block_on(self.get_async(
+        self.get_async(
             &coords.item,
             coords.field.as_deref(),
             coords.version.as_deref(),
-        ))
+        )
+        .await
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
-        self.check_writable(addr)?;
+    async fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        super::AsyncProvider::check_writable(self, addr).await?;
         let coords = self.resolve_coords(addr)?;
-        super::block_on(self.set_async(&coords.item, value))
+        self.set_async(&coords.item, value).await
     }
 
-    /// Native references name secrets managed outside SecretSpec and are
-    /// read-only: a `field` write would append a version that discards the
-    /// other JSON keys, and the revision is server-assigned.
-    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+    async fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         match addr {
             Address::Convention { .. } => Ok(()),
             Address::Native(_) => Err(SecretSpecError::ProviderOperationFailed(
@@ -559,6 +597,17 @@ mod tests {
 
     fn config(spec: &str) -> ScalewayConfig {
         ScalewayConfig::try_from(&ProviderUrl::new(Url::parse(spec).unwrap())).unwrap()
+    }
+
+    #[test]
+    fn duplicate_name_is_recognized() {
+        // verbatim from Scaleway, setting a secret that already exists
+        let taken = r#"{"details":[{"argument_name":"name","help_message":"cannot have same secret name in same path","reason":"format"}],"message":"invalid argument(s)","type":"invalid_arguments"}"#;
+        assert!(is_duplicate_name(taken));
+
+        let bad_path = r#"{"details":[{"argument_name":"path","help_message":"must start with /","reason":"format"}],"message":"invalid argument(s)","type":"invalid_arguments"}"#;
+        assert!(!is_duplicate_name(bad_path));
+        assert!(!is_duplicate_name("not json"));
     }
 
     #[test]
@@ -637,7 +686,9 @@ mod tests {
 
     #[test]
     fn convention_address_uses_the_folder_hierarchy() {
-        let p = ScalewayProvider::new(config("scaleway://fr-par?path=/myteam"));
+        let p = SyncProviderAdapter::from_async(ScalewayProvider::new(config(
+            "scaleway://fr-par?path=/myteam",
+        )));
         let addr = p.convention_address("app", "default", "A").unwrap();
         assert_eq!(addr.item, "/myteam/secretspec/app/default/A");
         assert_eq!(addr.field, None);
@@ -646,16 +697,17 @@ mod tests {
 
     #[test]
     fn uri_round_trips() {
-        let p = ScalewayProvider::new(config(
+        let p = SyncProviderAdapter::from_async(ScalewayProvider::new(config(
             "scaleway://nl-ams?project_id=11111111-2222-3333-4444-555555555555&path=/myteam",
-        ));
+        )));
         assert_eq!(
             p.uri(),
             "scaleway://nl-ams?project_id=11111111-2222-3333-4444-555555555555&path=/myteam"
         );
         // Bare region, default path: no query string.
         assert_eq!(
-            ScalewayProvider::new(config("scaleway://fr-par")).uri(),
+            SyncProviderAdapter::from_async(ScalewayProvider::new(config("scaleway://fr-par")))
+                .uri(),
             "scaleway://fr-par"
         );
     }
@@ -664,7 +716,9 @@ mod tests {
     fn uri_omits_no_secret_material() {
         // The secret key comes from a credential/env, never the URI, so uri()
         // cannot leak it regardless of config.
-        let p = ScalewayProvider::new(config("scaleway://fr-par?project_id=abc"));
+        let p = SyncProviderAdapter::from_async(ScalewayProvider::new(config(
+            "scaleway://fr-par?project_id=abc",
+        )));
         assert!(!p.uri().contains("SCW_SECRET_KEY"));
     }
 
@@ -718,7 +772,9 @@ mod tests {
 
     #[test]
     fn native_reference_is_read_only() {
-        let p = ScalewayProvider::new(config("scaleway://fr-par?project_id=abc"));
+        let p = SyncProviderAdapter::from_async(ScalewayProvider::new(config(
+            "scaleway://fr-par?project_id=abc",
+        )));
         let addr = NativeAddress {
             item: "/prod/db-url".into(),
             ..Default::default()
@@ -759,7 +815,9 @@ mod tests {
 
     #[test]
     fn native_reference_rejects_unsupported_coordinate() {
-        let p = ScalewayProvider::new(config("scaleway://fr-par?project_id=abc"));
+        let p = SyncProviderAdapter::from_async(ScalewayProvider::new(config(
+            "scaleway://fr-par?project_id=abc",
+        )));
         let addr = NativeAddress {
             item: "/prod/db-url".into(),
             section: Some("x".into()),

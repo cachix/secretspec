@@ -38,7 +38,10 @@
 //! secretspec check --provider gcsm://my-gcp-project
 //! ```
 
-use super::{Address, Provider, ProviderUrl};
+use super::ProviderBase as _;
+use super::{Address, ProviderUrl};
+#[cfg(test)]
+use super::{Provider, SyncProviderAdapter};
 use crate::SecretBytes;
 use crate::{Result, SecretSpecError};
 use google_cloud_secretmanager_v1::client::SecretManagerService;
@@ -266,6 +269,7 @@ crate::register_provider! {
     struct: GcsmProvider,
     config: GcsmConfig,
     metadata: &super::catalog::GCSM,
+    native_async: true,
 }
 
 impl GcsmProvider {
@@ -538,16 +542,15 @@ impl GcsmProvider {
     }
 }
 
-impl Provider for GcsmProvider {
+impl super::ProviderBase for GcsmProvider {
     fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
         self.retry_policy = policy;
     }
+
     fn retry_ownership(&self) -> super::RetryOwnership {
         super::RetryOwnership::Managed
     }
 
-    /// Convention names use validated `--` boundaries so distinct accepted
-    /// project/profile/key triples always produce distinct GCSM secret ids.
     fn convention_address(
         &self,
         project: &str,
@@ -568,35 +571,34 @@ impl Provider for GcsmProvider {
         format!("gcsm://{}", self.config.project_id)
     }
 
-    /// An optional `version` pins the secret version to read.
     fn supported_coords(&self) -> &'static [&'static str] {
         &["version"]
     }
+}
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
+#[async_trait::async_trait]
+impl super::AsyncProvider for GcsmProvider {
+    async fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         match addr {
             Address::Convention {
                 project,
                 profile,
                 key,
-            } => super::block_on(self.get_convention_async(project, profile, key)),
+            } => self.get_convention_async(project, profile, key).await,
             Address::Native(_) => {
                 let coords = self.resolve_coords(addr)?;
-                super::block_on(self.get_coords_async(&coords))
+                self.get_coords_async(&coords).await
             }
         }
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
-        self.check_writable(addr)?;
+    async fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        super::AsyncProvider::check_writable(self, addr).await?;
         let coords = self.resolve_coords(addr)?;
-        super::block_on(self.set_secret_async(&coords.item, value))
+        self.set_secret_async(&coords.item, value).await
     }
 
-    /// Native addresses are read-only: they name an existing (often
-    /// version-pinned) secret, and writing would mean minting a new version of
-    /// someone else's secret.
-    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+    async fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         match addr {
             Address::Convention { .. } => Ok(()),
             Address::Native(_) => Err(SecretSpecError::ProviderOperationFailed(
@@ -630,7 +632,7 @@ mod reference_tests {
     fn native_address_is_read_only() {
         let c = GcsmConfig::try_from(&ProviderUrl::new(Url::parse("gcsm://my-project").unwrap()))
             .unwrap();
-        let p = GcsmProvider::new(c);
+        let p = SyncProviderAdapter::from_async(GcsmProvider::new(c));
         let addr = crate::config::NativeAddress {
             item: "db-url".into(),
             ..Default::default()
@@ -650,7 +652,7 @@ mod reference_tests {
     fn native_address_rejects_field() {
         let c = GcsmConfig::try_from(&ProviderUrl::new(Url::parse("gcsm://my-project").unwrap()))
             .unwrap();
-        let p = GcsmProvider::new(c);
+        let p = SyncProviderAdapter::from_async(GcsmProvider::new(c));
         let addr = crate::config::NativeAddress {
             item: "db-url".into(),
             field: Some("x".into()),

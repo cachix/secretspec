@@ -184,6 +184,62 @@ its bytes (0.21+). Composition and extraction also validate UTF-8, returning
 environment, `try_as_env_value()` or `try_as_env_value_for(name)` (0.21+)
 preserves non-UTF-8 bytes on Unix and rejects NUL bytes on every platform.
 
+## Redacting command output
+
+<VersionCompatibility version="0.22" />
+
+When `Secrets` runs a command through `run`, exact secret values are
+masked automatically in child stdout and stderr. No configuration is required.
+Ordinary SDK resolution still returns the original values. See
+[output redaction](/reference/configuration/#output-redaction) for terminal
+behavior, resource limits, and the limits of accidental-disclosure protection.
+
+Shell supervisors such as devenv can own process and terminal handling while
+using the same filter. Keep the existing `validate()` call and error handling,
+then build a reusable `Redactor` from the successful `ValidatedSecrets`.
+Validation captures the logical bytes in the same resolution pass; constructing
+the filter does not resolve providers again or reread materialized files:
+
+```rust
+// SecretSpec 0.22+
+let validated = match secrets.validate()? {
+    Ok(validated) => validated,
+    Err(errors) => {
+        // Use errors.missing_required for your existing prompting workflow.
+        // Constraint violations remain available in errors.constraint_violations.
+        return handle_validation_errors(errors);
+    }
+};
+let redactor = validated.redactor()?;
+// Inject validated.resolved.secrets into your child environment.
+// Keep validated alive while the child needs its temporary files, or transfer
+// ownership with validated.into_resolved(your_environment_map).
+
+let mut stdout = redactor.stream();
+let mut output = Vec::new();
+stdout.push(b"first chunk", &mut output);
+// Write only output to your destination, then clear it for the next read.
+output.clear();
+stdout.push(b"next chunk", &mut output);
+// At EOF, append any remaining filtered bytes before the final write.
+stdout.finish(&mut output);
+```
+
+Use independent streams for stdout and stderr, retaining each stream across
+reads. Candidate prefixes are buffered until more input or EOF; call `finish`
+only at EOF. Dropping a stream discards its pending suffix. The API accepts
+arbitrary bytes and chunk sizes and does not require an async runtime.
+
+The snapshot includes hidden scoped dependencies and original `as_path` file
+contents, even if the files later change. Validation still returns unredacted
+values and builds no matcher until `redactor()` is called. Its pattern size
+limit does not affect validation. If you already hold the logical
+secret bytes, construct `Redactor::new(values)` from `SecretBytes` instead.
+`redactor.redact(bytes)` filters a complete buffer; use streaming state for
+values that may span reads. Clones share immutable patterns, and construction
+fails if distinct nonempty patterns exceed 64 KiB combined. Empty patterns are
+ignored. These Rust APIs are available in 0.22+.
+
 ## Profile-specific types
 
 Use `load_profile()` when code should receive the exact shape of the selected

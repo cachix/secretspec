@@ -52,6 +52,12 @@ LOG="$DIR/invocations.log"
   printf '\n'
 } >> "$LOG"
 
+# Credential tests require the session on every subprocess without logging it.
+if [ -f "$DIR/expected-session" ] && [ "${BW_SESSION-}" != "$(cat "$DIR/expected-session")" ]; then
+  printf 'missing or incorrect session\n' >&2
+  exit 1
+fi
+
 # Forced-failure mode: exit with a fixed code and fixed streams. An optional
 # fourth line limits the failure to invocations whose argv contains that
 # substring, so one listing can fail while a sibling listing succeeds.

@@ -6,7 +6,10 @@
 //! an `api_token` provider credential, `CLOUDFLARE_API_TOKEN`, or Wrangler's
 //! current OAuth/API credentials via `wrangler auth token --json`.
 
-use super::{Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl};
+use super::ProviderBase as _;
+use super::{Address, DiscoveryContext, ProviderCredentials, ProviderUrl};
+#[cfg(test)]
+use super::{Provider, SyncProviderAdapter};
 use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, Secret, SecretSpecError};
@@ -15,7 +18,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io;
-use std::process::Command;
+use tokio::process::Command;
 
 const API_TOKEN: &str = "api_token";
 const API_TOKEN_ENV: &str = "CLOUDFLARE_API_TOKEN";
@@ -240,6 +243,7 @@ crate::register_provider! {
     struct: CloudflareProvider,
     config: CloudflareConfig,
     metadata: &super::catalog::CLOUDFLARE,
+    native_async: true,
 }
 
 impl CloudflareProvider {
@@ -273,12 +277,13 @@ impl CloudflareProvider {
         super::credential_or_env(&self.credentials, API_TOKEN, API_TOKEN_ENV)
     }
 
-    fn wrangler_credentials(&self) -> Result<WranglerCredentials> {
+    async fn wrangler_credentials(&self) -> Result<WranglerCredentials> {
         self.retry_policy
-            .run("cloudflare", || self.wrangler_credentials_once())
+            .run_async("cloudflare", || self.wrangler_credentials_once())
+            .await
     }
 
-    fn wrangler_credentials_once(&self) -> Result<WranglerCredentials> {
+    async fn wrangler_credentials_once(&self) -> Result<WranglerCredentials> {
         let mut command = Command::new(&self.wrangler_binary_path);
         command.args(["auth", "token", "--json"]);
         if let Some(profile) = &self.config.wrangler_profile {
@@ -286,6 +291,7 @@ impl CloudflareProvider {
         }
         let output = command
             .output()
+            .await
             .map_err(|error| self.wrangler_spawn_error(error))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -319,7 +325,7 @@ impl CloudflareProvider {
         }
     }
 
-    fn auth_headers(&self) -> Result<HeaderMap> {
+    async fn auth_headers(&self) -> Result<HeaderMap> {
         let mut headers = HeaderMap::new();
         if self.config.auth != CloudflareAuth::Wrangler {
             if let Some(token) = self.api_token() {
@@ -336,7 +342,7 @@ impl CloudflareProvider {
             }
         }
 
-        let credentials = self.wrangler_credentials()?;
+        let credentials = self.wrangler_credentials().await?;
         match credentials {
             WranglerCredentials::ApiToken { token } | WranglerCredentials::Oauth { token } => {
                 headers.insert(
@@ -359,9 +365,9 @@ impl CloudflareProvider {
         Ok(headers)
     }
 
-    fn client(&self) -> Result<reqwest::Client> {
+    async fn client(&self) -> Result<reqwest::Client> {
         super::http::client_builder()
-            .default_headers(self.auth_headers()?)
+            .default_headers(self.auth_headers().await?)
             // Account-secret values must remain confined to Cloudflare's fixed
             // API origin. In particular, never replay a PATCH/POST body after
             // a 307/308 redirect to an origin selected by a response.
@@ -384,7 +390,7 @@ impl CloudflareProvider {
     }
 
     fn secret_name<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, str>> {
-        let name = super::flat_item(self, addr)?;
+        let name = super::address::flat_item_from_coords(self.resolve_coords(addr)?);
         if name.is_empty() || name.chars().any(char::is_whitespace) || name.contains('\0') {
             return Err(operation_error(format!(
                 "'{name}' is not a valid Cloudflare secret name: names must be non-empty and cannot contain whitespace or NUL"
@@ -484,7 +490,7 @@ impl CloudflareProvider {
     async fn set_async(&self, name: &str, value: &SecretBytes) -> Result<()> {
         let value = super::require_utf8("cloudflare", value)?;
         let account_id = self.account_id()?;
-        let client = self.client()?;
+        let client = self.client().await?;
         if let Some(existing) = self.lookup_secret(&client, &account_id, name).await? {
             return self
                 .update_secret(&client, &account_id, &existing.id, value)
@@ -520,7 +526,7 @@ impl CloudflareProvider {
 
     async fn delete_async(&self, name: &str) -> Result<bool> {
         let account_id = self.account_id()?;
-        let client = self.client()?;
+        let client = self.client().await?;
         let Some(existing) = self.lookup_secret(&client, &account_id, name).await? else {
             return Ok(false);
         };
@@ -533,7 +539,7 @@ impl CloudflareProvider {
     }
 }
 
-impl Provider for CloudflareProvider {
+impl super::ProviderBase for CloudflareProvider {
     fn retry_ownership(&self) -> super::RetryOwnership {
         super::RetryOwnership::Managed
     }
@@ -542,8 +548,6 @@ impl Provider for CloudflareProvider {
         self.retry_policy = policy;
     }
 
-    /// The selected store supplies project/environment isolation; convention
-    /// writes use the SecretSpec key directly as the account-secret name.
     fn convention_address(
         &self,
         _project: &str,
@@ -607,40 +611,8 @@ impl Provider for CloudflareProvider {
         format!("cloudflare://{account_id}/{}", self.config.store_id)
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
-        let _ = self.secret_name(addr)?;
-        Err(operation_error(
-            "Cloudflare Secrets Store is write-only at the management API: plaintext values can only be read by bound Cloudflare services; use this provider with `secretspec set`, `secretspec delete`, or `secretspec init --from`",
-        ))
-    }
-
-    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
-        self.secret_name(addr).map(|_| ())
-    }
-
-    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
-        self.check_writable(addr)?;
-        if value.expose_secret().len() > MAX_SECRET_BYTES {
-            return Err(operation_error(format!(
-                "Cloudflare secret values cannot exceed {MAX_SECRET_BYTES} bytes"
-            )));
-        }
-        let name = self.secret_name(addr)?;
-        super::block_on(self.set_async(&name, value))
-    }
-
     fn supports_delete(&self) -> bool {
         true
-    }
-
-    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
-        self.secret_name(addr).map(|_| ())
-    }
-
-    fn delete(&self, addr: Address<'_>) -> Result<bool> {
-        self.check_deletable(addr)?;
-        let name = self.secret_name(addr)?;
-        super::block_on(self.delete_async(&name))
     }
 
     fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
@@ -653,21 +625,65 @@ impl Provider for CloudflareProvider {
             self.config.scopes.join(", ")
         ))
     }
+}
 
-    fn reflect(&self, _context: DiscoveryContext<'_>) -> Result<HashMap<String, Secret>> {
+#[async_trait::async_trait]
+impl super::AsyncProvider for CloudflareProvider {
+    async fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
+        let _ = self.secret_name(addr)?;
+        Err(operation_error(
+            "Cloudflare Secrets Store is write-only at the management API: plaintext values can only be read by bound Cloudflare services; use this provider with `secretspec set`, `secretspec delete`, or `secretspec init --from`",
+        ))
+    }
+
+    async fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        super::AsyncProvider::check_writable(self, addr).await?;
+        if value.expose_secret().len() > MAX_SECRET_BYTES {
+            return Err(operation_error(format!(
+                "Cloudflare secret values cannot exceed {MAX_SECRET_BYTES} bytes"
+            )));
+        }
+        let name = self.secret_name(addr)?;
+        self.set_async(&name, value).await
+    }
+
+    async fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        super::AsyncProvider::check_deletable(self, addr).await?;
+        let name = self.secret_name(addr)?;
+        self.delete_async(&name).await
+    }
+
+    async fn reflect(&self, _context: DiscoveryContext<'_>) -> Result<HashMap<String, Secret>> {
         let account_id = self.account_id()?;
-        let client = self.client()?;
-        Ok(
-            super::block_on(self.list_secrets(&client, &account_id, None))?
-                .into_iter()
-                .map(|listed| {
-                    let name = listed.name;
-                    let secret =
-                        Secret::required(format!("{name} Cloudflare Secrets Store secret"));
-                    (name, secret)
-                })
-                .collect(),
-        )
+        let client = self.client().await?;
+        Ok(self
+            .list_secrets(&client, &account_id, None)
+            .await?
+            .into_iter()
+            .map(|listed| {
+                let name = listed.name;
+                let secret = Secret::required(format!("{name} Cloudflare Secrets Store secret"));
+                (name, secret)
+            })
+            .collect())
+    }
+
+    async fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+        self.secret_name(addr).map(|_| ())
+    }
+
+    async fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        self.secret_name(addr).map(|_| ())
+    }
+
+    async fn exists(&self, addr: Address<'_>) -> Result<bool> {
+        let name = self.secret_name(addr)?;
+        let account_id = self.account_id()?;
+        let client = self.client().await?;
+        Ok(self
+            .lookup_secret(&client, &account_id, &name)
+            .await?
+            .is_some())
     }
 }
 
@@ -733,9 +749,9 @@ mod tests {
         CloudflareConfig::try_from(&ProviderUrl::new(Url::parse(spec).unwrap())).unwrap()
     }
 
-    fn provider_with_token(endpoint: SocketAddr) -> CloudflareProvider {
-        let mut provider = CloudflareProvider::new(config(&format!(
-            "cloudflare://{STORE}?account_id={ACCOUNT}&auth=token"
+    fn provider_with_token(endpoint: SocketAddr) -> SyncProviderAdapter<CloudflareProvider> {
+        let mut provider = SyncProviderAdapter::from_async(CloudflareProvider::new(config(
+            &format!("cloudflare://{STORE}?account_id={ACCOUNT}&auth=token"),
         )));
         provider.api_base = format!("http://{endpoint}");
         provider.with_credentials(ProviderCredentials::from([(
@@ -749,15 +765,15 @@ mod tests {
     fn explicit_token_bytes_never_fall_back_to_environment_or_wrangler() {
         let _lock = crate::tests::scrub_resolution_env();
         let _env = crate::tests::EnvVarGuard::set(API_TOKEN_ENV, "another-identity");
-        let mut provider = CloudflareProvider::new(config(&format!(
-            "cloudflare://{STORE}?account_id={ACCOUNT}"
+        let mut provider = SyncProviderAdapter::from_async(CloudflareProvider::new(config(
+            &format!("cloudflare://{STORE}?account_id={ACCOUNT}"),
         )));
         provider.wrangler_binary_path = "/must-not-run-wrangler".into();
         provider.with_credentials(ProviderCredentials::from([(
             API_TOKEN.into(),
             SecretBytes::from_slice(b"private-token\xff"),
         )]));
-        let headers = provider.auth_headers().unwrap();
+        let headers = super::super::block_on(provider.auth_headers()).unwrap();
         assert_eq!(
             headers[AUTHORIZATION].as_bytes(),
             b"Bearer private-token\xff"
@@ -767,7 +783,7 @@ mod tests {
             API_TOKEN.into(),
             SecretBytes::from_slice(b"private-token\r\n"),
         )]));
-        let error = provider.auth_headers().unwrap_err();
+        let error = super::super::block_on(provider.auth_headers()).unwrap_err();
         assert!(error.to_string().contains("HTTP Authorization header"));
         assert!(!format!("{error:?}: {error}").contains("private-token"));
     }
@@ -832,7 +848,7 @@ mod tests {
         let canonical = format!(
             "cloudflare://{STORE}?account_id={ACCOUNT}&scopes=workers,containers&auth=wrangler&wrangler_profile=production"
         );
-        let provider = CloudflareProvider::new(config(&encoded));
+        let provider = SyncProviderAdapter::from_async(CloudflareProvider::new(config(&encoded)));
         assert_eq!(provider.uri(), canonical);
         assert_eq!(config(&provider.uri()), provider.config);
         assert_eq!(provider.config.scopes, ["workers", "containers"]);
@@ -858,7 +874,9 @@ mod tests {
 
     #[test]
     fn convention_is_flat_and_reads_explain_the_limitation() {
-        let provider = CloudflareProvider::new(config(&format!("cloudflare://{STORE}")));
+        let provider = SyncProviderAdapter::from_async(CloudflareProvider::new(config(&format!(
+            "cloudflare://{STORE}"
+        ))));
         let address = provider
             .convention_address("project", "production", "DATABASE_URL")
             .unwrap();
@@ -886,7 +904,9 @@ mod tests {
 
     #[test]
     fn rejects_values_larger_than_cloudflares_limit_before_authentication() {
-        let provider = CloudflareProvider::new(config(&format!("cloudflare://{STORE}")));
+        let provider = SyncProviderAdapter::from_async(CloudflareProvider::new(config(&format!(
+            "cloudflare://{STORE}"
+        ))));
         let oversized = SecretBytes::from_utf8("x".repeat(MAX_SECRET_BYTES + 1));
         let error = provider
             .set(
@@ -1022,11 +1042,13 @@ printf '%s' '{"type":"oauth","token":"oauth-token"}'
 "#,
         );
 
-        let mut provider = CloudflareProvider::new(config(&format!(
-            "cloudflare://{STORE}?account_id={ACCOUNT}&auth=wrangler&wrangler_profile=production"
+        let mut provider = SyncProviderAdapter::from_async(CloudflareProvider::new(config(
+            &format!(
+                "cloudflare://{STORE}?account_id={ACCOUNT}&auth=wrangler&wrangler_profile=production"
+            ),
         )));
         provider.wrangler_binary_path = binary.to_string_lossy().into_owned();
-        let headers = provider.auth_headers().unwrap();
+        let headers = super::super::block_on(provider.auth_headers()).unwrap();
         assert_eq!(
             headers.get(AUTHORIZATION).unwrap().to_str().unwrap(),
             "Bearer oauth-token"

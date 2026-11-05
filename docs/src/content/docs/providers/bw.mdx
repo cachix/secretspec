@@ -4,6 +4,7 @@ description: Bitwarden Password Manager secrets management integration
 ---
 
 import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+import ProviderCredentials from '../../../components/ProviderCredentials.astro';
 
 <VersionCompatibility version="0.18" />
 
@@ -19,7 +20,7 @@ The [Bitwarden Password Manager](https://bitwarden.com/products/)
 | URI | `bw://[COLLECTION\|ORGANIZATION@COLLECTION][?options]` |
 | Access | Read and write |
 | Best for | Existing Bitwarden Password Manager vaults and items |
-| Authentication | An unlocked `bw` CLI session through `BW_SESSION` |
+| Authentication | An unlocked `bw` CLI session through `BW_SESSION` or a `session` provider credential (0.22+) |
 | Build feature | `bw` |
 
 ## Quick start
@@ -50,7 +51,7 @@ $ secretspec run --provider bw:// -- npm start
 - Bitwarden account
 - For self-hosted servers: the CLI pointed at your server with `bw config server` **before** logging in (see [Self-hosted servers](#self-hosted-servers))
 - Signed in via `bw login` and unlocked with `bw unlock`
-- `BW_SESSION` environment variable set
+- `BW_SESSION` environment variable set, or a `session` provider credential configured (0.22+)
 
 Build SecretSpec with `--features bw` when the provider is not included by
 your package.
@@ -101,6 +102,41 @@ company_vault = "bw://?server=https://vault.company.com"
 ```
 
 Omit `?server=` to accept whatever server the CLI is configured for.
+
+## Provider credentials
+
+<VersionCompatibility version="0.22" />
+
+<ProviderCredentials provider="bw" />
+
+Store the session returned by `bw unlock --raw` in another provider, such as
+your system keyring, instead of exporting it in your shell:
+
+```toml title="secretspec.toml"
+[providers]
+bitwarden = { uri = "bw://", credentials = { session = "keyring" } }
+```
+
+After `bw login`, run `bw unlock --raw` and paste its session key into the
+credential prompt:
+
+```bash
+$ secretspec config provider login bitwarden
+Enter session for provider 'bitwarden' (source: keyring): ****
+
+$ secretspec run --provider bitwarden -- your-command
+```
+
+The configured `session` takes precedence over `BW_SESSION`. SecretSpec passes
+it only to its `bw` subprocesses, including status checks, and does not add it
+to the environment of `your-command`. Remove any previously exported
+`BW_SESSION` from your shell with `unset BW_SESSION`; an existing environment
+variable would otherwise still be inherited by your command.
+
+The session must still be valid for the signed-in, unlocked vault. Storing it
+does not log in, unlock the vault, or renew an expired session. Provider
+credentials reduce environment exposure but do not isolate secrets from
+processes with access to the same user account or credential store.
 
 ## Configuration
 

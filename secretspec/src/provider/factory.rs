@@ -55,6 +55,44 @@ impl TryFrom<&str> for Box<dyn Provider> {
     }
 }
 
+/// Constructs an awaitable provider from a URI (0.22+).
+///
+/// SDK, HTTP, and external IPC backends use their native async implementation.
+/// Other backends use [`super::AsyncProviderAdapter`] and require a Tokio runtime
+/// when awaited. Construction is lazy and performs no async I/O.
+impl TryFrom<&str> for Box<dyn super::AsyncProvider> {
+    type Error = SecretSpecError;
+
+    fn try_from(spec: &str) -> Result<Self> {
+        let url = provider_url_from_spec(spec)?;
+        reject_uri_credential(&url)?;
+        if let Some(registration) = super::macros::ASYNC_PROVIDER_REGISTRY
+            .iter()
+            .find(|registration| registration.metadata.schemes.contains(&url.scheme()))
+        {
+            return (registration.factory)(&url, ProviderCredentials::new());
+        }
+        if registration_for_scheme(url.scheme()).is_some() {
+            return Ok(Box::new(super::AsyncProviderAdapter::new(Arc::from(
+                provider_from_url(&url, ProviderCredentials::new())?,
+            ))));
+        }
+        let endpoint = super::external::discover(url.scheme())?
+            .ok_or_else(|| SecretSpecError::ProviderNotFound(url.scheme().to_owned()))?;
+        let mut provider = super::external::ExternalProvider::from_url(endpoint, &url);
+        provider.set_retry_policy(super::RetryPolicy::default());
+        Ok(Box::new(provider.into_async()))
+    }
+}
+
+impl TryFrom<String> for Box<dyn super::AsyncProvider> {
+    type Error = SecretSpecError;
+
+    fn try_from(spec: String) -> Result<Self> {
+        Self::try_from(spec.as_str())
+    }
+}
+
 /// Builds a boxed provider from a spec string (a bare name, `scheme:...`
 /// shorthand, or full URI), handing it the supplied credentials. The shared
 /// body of the string `TryFrom` impls: construction funnels here so URL

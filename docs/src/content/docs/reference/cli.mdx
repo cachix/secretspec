@@ -121,9 +121,50 @@ $ secretspec config global init --provider env --profile default
 ✓ Configuration saved to ~/.config/secretspec/config.toml
 ```
 
+### config show
+
+<VersionCompatibility version="0.22" kind="changed">
+`config show` now displays computed configuration. In earlier releases it was
+an alias for `config global show`, which still displays saved global settings.
+</VersionCompatibility>
+
+Display the effective configuration for the current project after applying CLI
+flags, environment overrides, user-global defaults, and built-in defaults. Each
+setting includes its source. Provider aliases are merged with project entries
+taking precedence over user-global entries.
+
+```bash
+$ secretspec config show # 0.22+
+$ secretspec config show --profile production --scope api # 0.22+
+$ secretspec --file ../other/secretspec.toml config show --json # 0.22+
+```
+
+| Option | Description |
+|--------|-------------|
+| `-p, --provider <PROVIDER>` | Inspect a provider override. Env: `SECRETSPEC_PROVIDER` |
+| `-P, --profile <PROFILE>` | Inspect a profile selection. Env: `SECRETSPEC_PROFILE` |
+| `-S, --scope <SCOPE>` | Inspect a scope; an empty value clears an inherited scope. Env: `SECRETSPEC_SCOPE` |
+| `--json` | Print computed values, sources, provider aliases, and selection errors as JSON |
+
+The global `--file` and `--reason` options are also honored. A project manifest
+is required. The command reads configuration without fetching secrets,
+constructing providers, prompting for credentials, or initializing audit logging.
+It does not require an access reason. Credentials embedded in provider URIs
+are redacted, and secret defaults and values are not printed.
+
+The provider field identifies an override or a default; individual secrets may
+select different provider routes. Project alias sources include configurations
+loaded through `extends`.
+
+When an inherited manifest overrides discovery from the current directory, the
+text view shows the discovered path as overridden. JSON includes the selected
+`manifest` and the independently `discovered_manifest` path. Invalid profile or
+scope selections are printed with their sources and an error, then the command
+exits nonzero. In JSON mode stdout remains a JSON object, including `errors`.
+
 ### config global show
 Display current user-global configuration. The explicit namespace is available
-in SecretSpec 0.17+; `secretspec config show` remains a hidden alias.
+in SecretSpec 0.17+.
 
 ```bash
 $ secretspec config global show # 0.17+
@@ -661,11 +702,21 @@ for how to associate the generated schemas with TOML files.
 
 Add a secret declaration to an existing `secretspec.toml`. This edits only the
 selected profile and preserves the manifest's comments, formatting, and
-unrelated tables. The new declaration follows the profile's defaults; without
-a `required` profile default, it is required like any other declaration.
+unrelated tables. Unless overridden, the new declaration follows the profile's
+defaults; without a `required` profile default, it is required like any other
+declaration.
+
+<VersionCompatibility version="0.22" kind="changed">
+
+Use `--optional` or `--required` to override the profile's requiredness default
+for the new declaration. These flags are mutually exclusive. Omitting both
+leaves the `required` key absent, preserving the profile's defaults.
+
+</VersionCompatibility>
 
 ```bash
 $ secretspec add <NAME> [--description <DESCRIPTION>] [--profile <PROFILE>] # 0.18+
+$ secretspec add <NAME> [--description <DESCRIPTION>] [--profile <PROFILE>] [--optional | --required] # 0.22+
 ```
 
 **Arguments and options:**
@@ -677,6 +728,9 @@ $ secretspec add <NAME> [--description <DESCRIPTION>] [--profile <PROFILE>] # 0.
 - `-P, --profile <PROFILE>` - Profile to edit. When omitted, SecretSpec uses the
   normal active-profile resolution, including `SECRETSPEC_PROFILE` and the
   user-global default.
+- `--optional` - Write `required = false` (0.22+).
+- `--required` - Write `required = true`, even when the profile defaults to
+  optional (0.22+). Cannot be combined with `--optional` (0.22+).
 
 ```bash
 $ secretspec add API_KEY --description "API access token" # 0.18+
@@ -816,15 +870,16 @@ $ secretspec run [OPTIONS] -- <COMMAND>
 - `-p, --provider <PROVIDER>` - Provider backend to use
 - `-P, --profile <PROFILE>` - Profile to use
 - `-S, --scope <SCOPE>` - Inject only a `[scopes]` subset of the profile (SecretSpec 0.17+)
+- `--config-env <inherit|clear>` - Preserve or remove the five configuration overrides from the child environment; defaults to `inherit` (SecretSpec 0.22+)
 
 **Examples:**
 ```bash
 # Run npm with secrets available as environment variables
 $ secretspec run --profile production -- npm run deploy
 
-# Verify secrets are injected
+# Verify secrets are injected (values are redacted in SecretSpec 0.22+)
 $ secretspec run -- env | grep DATABASE_URL
-DATABASE_URL=postgresql://localhost/mydb
+DATABASE_URL=[REDACTED]
 
 # Inject only the `api` scope's secrets (SecretSpec 0.17+); secrets the
 # scope excludes are removed from the child even if the parent exported them
@@ -879,7 +934,7 @@ $ secretspec run -- echo $DATABASE_URL
 
 # This works - variable expansion happens in the subprocess
 $ secretspec run -- sh -c 'echo $DATABASE_URL'
-# Output: postgresql://localhost/mydb
+# Output in SecretSpec 0.22+: [REDACTED]
 ```
 
 For most use cases, simply run your application and it will read secrets from its environment:
@@ -887,6 +942,50 @@ For most use cases, simply run your application and it will read secrets from it
 $ secretspec run -- node app.js  # app.js reads process.env.DATABASE_URL
 ```
 :::
+
+#### Child configuration environment
+
+<VersionCompatibility version="0.22" />
+
+By default, `run` forwards ambient configuration variables to the child. It does
+not export configuration selected through CLI flags: for example, an inherited
+`SECRETSPEC_PROFILE=development` remains `development` in the child even when the
+outer command selects `--profile production`.
+
+Use `--config-env=clear` when launching an editor, shell, or other program whose
+nested SecretSpec invocations should discover their own project configuration:
+
+```bash
+$ secretspec run --config-env=clear -- zed . # 0.22+
+$ secretspec run --config-env=inherit -- make deploy # 0.22+
+```
+
+`clear` removes exactly `SECRETSPEC_FILE`, `SECRETSPEC_PROFILE`,
+`SECRETSPEC_PROVIDER`, `SECRETSPEC_SCOPE`, and `SECRETSPEC_REASON` from the spawned
+child's environment, even if those names are declared as application secrets.
+It leaves other environment variables and injected application secrets available.
+Scope-excluded secrets continue to be removed in both modes.
+
+The outer invocation still honors its CLI flags and environment while resolving
+secrets, enforcing access-reason requirements, and contacting providers. This
+option changes only the spawned child's environment; it does not clear the
+parent shell's variables or change stored configuration. Nested invocations
+still apply user-global defaults and their own discovered project settings.
+
+#### Output redaction
+
+<VersionCompatibility version="0.22" kind="changed">
+Child stdout and stderr now automatically mask exact secret values; earlier
+versions passed output through unchanged. No configuration is required.
+</VersionCompatibility>
+
+Secret values are replaced with `[REDACTED]` in child stdout and stderr.
+File-backed secrets mask their contents. See
+[output redaction](/reference/configuration/#output-redaction) for details. This protects against accidental output disclosure;
+programs can still expose transformed values or use other output channels.
+Filtering uses pipes, which changes terminal detection and can affect buffering
+and interactive prompts. See the configuration reference for limits and shutdown
+behavior. Other commands, including `get` and `export`, still return values.
 
 ### export
 Resolve every secret for the active profile and write it to stdout in a chosen format, without running a command. Unlike `run`, it never prompts and exits non-zero when a required secret is missing, so CI can gate on it.

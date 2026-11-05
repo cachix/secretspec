@@ -47,6 +47,7 @@ struct StoredValue {
 struct MemoryProvider {
     values: Mutex<HashMap<String, StoredValue>>,
     errors_seen: Mutex<HashSet<String>>,
+    async_attempts: Mutex<HashMap<String, usize>>,
     crash_on_get_once: Option<PathBuf>,
 }
 
@@ -105,6 +106,16 @@ impl MemoryProvider {
         if !marker.exists() && std::fs::write(marker, b"crashed").is_ok() {
             std::process::exit(42);
         }
+    }
+
+    // Faults used by direct async client tests. Counters let tests distinguish
+    // a surfaced lost acknowledgement from an automatically replayed mutation.
+    fn async_attempt(&self, operation: &str, key: &str) -> usize {
+        let key = key.rsplit('/').next().unwrap();
+        let mut counts = self.async_attempts.lock().unwrap();
+        let count = counts.entry(format!("{operation}/{key}")).or_default();
+        *count += 1;
+        *count
     }
 
     fn one_shot_error(&self, key: &str) -> Option<RpcError> {
@@ -198,6 +209,24 @@ impl ProviderHandler for MemoryProvider {
         address: Address,
     ) -> RpcResult<Option<ProvidedSecret>> {
         let key = Self::key(&address);
+        if key.ends_with("/__ASYNC_COUNTS__") {
+            let counts = serde_json::to_string(&*self.async_attempts.lock().unwrap()).unwrap();
+            return Ok(Some(ProvidedSecret::new(counts, None)));
+        }
+        if key.ends_with("/__ASYNC_RETRY_ONCE__") {
+            if self.async_attempt("get", &key) == 1 {
+                return Err(RpcError::unavailable(Some(1000)));
+            }
+            return Ok(Some(ProvidedSecret::new("recovered".into(), None)));
+        }
+        if key.ends_with("/__ASYNC_RETRY_ALWAYS__") {
+            self.async_attempt("get", &key);
+            return Err(RpcError::unavailable(Some(1)));
+        }
+        if key.ends_with("/__ASYNC_DENIED__") {
+            self.async_attempt("get", &key);
+            return Err(RpcError::new(ErrorKind::PermissionDenied));
+        }
         if key.ends_with("/__BLOCK__") {
             context.cancellation.cancelled().await;
             return Err(RpcError::new(ErrorKind::Cancelled));
@@ -254,6 +283,10 @@ impl ProviderHandler for MemoryProvider {
             return Err(error);
         }
         let key = Self::key(&address);
+        let lost_ack = key.ends_with("/__ASYNC_SET__");
+        if lost_ack {
+            self.async_attempt("set", &key);
+        }
         let secret_expires_at_unix_ms = key
             .ends_with("/SECRET_EXPIRY")
             .then(|| {
@@ -285,6 +318,9 @@ impl ProviderHandler for MemoryProvider {
                 revision,
             },
         );
+        if lost_ack {
+            return Err(RpcError::unavailable(Some(1)));
+        }
         Ok(())
     }
 
@@ -295,8 +331,13 @@ impl ProviderHandler for MemoryProvider {
         value: SecretValue,
         ttl_ms: u64,
     ) -> RpcResult<()> {
+        let key = Self::key(&address);
+        let lost_ack = key.ends_with("/__ASYNC_SET_EXPIRING__");
+        if lost_ack {
+            self.async_attempt("set_expiring", &key);
+        }
         self.values.lock().unwrap().insert(
-            Self::key(&address),
+            key,
             StoredValue {
                 value: value.expose().to_string(),
                 storage_expires_at: Some(Instant::now() + Duration::from_millis(ttl_ms)),
@@ -304,16 +345,23 @@ impl ProviderHandler for MemoryProvider {
                 revision: None,
             },
         );
+        if lost_ack {
+            return Err(RpcError::unavailable(Some(1)));
+        }
         Ok(())
     }
 
     async fn delete(&self, _context: RequestContext, address: Address) -> RpcResult<bool> {
-        Ok(self
-            .values
-            .lock()
-            .unwrap()
-            .remove(&Self::key(&address))
-            .is_some())
+        let key = Self::key(&address);
+        let lost_ack = key.ends_with("/__ASYNC_DELETE__");
+        if lost_ack {
+            self.async_attempt("delete", &key);
+        }
+        let removed = self.values.lock().unwrap().remove(&key).is_some();
+        if lost_ack {
+            return Err(RpcError::unavailable(Some(1)));
+        }
+        Ok(removed)
     }
 
     async fn clear(&self, _context: RequestContext, params: ClearParams) -> RpcResult<usize> {
@@ -448,6 +496,7 @@ async fn main() {
     let handler = MemoryProvider {
         values: Mutex::new(HashMap::new()),
         errors_seen: Mutex::new(HashSet::new()),
+        async_attempts: Mutex::new(HashMap::new()),
         crash_on_get_once,
     };
     if serve_provider(

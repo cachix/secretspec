@@ -2,6 +2,7 @@ use crate::config::{Config, GlobalConfig, GlobalDefaults, Profile as ConfigProfi
 #[cfg(feature = "kubernetes")]
 use crate::provider::kubernetes::{KubernetesKind, KubernetesProvider};
 use crate::provider::{Provider, providers, spec_names_known_provider};
+use crate::secrets::ConfigEnv;
 use crate::spec_edit::{
     add_description as add_secret_to_spec, validate_secret_name as validate_add_secret_name,
 };
@@ -19,6 +20,7 @@ use std::sync::{Arc, Mutex};
 
 mod claude;
 mod completion;
+mod config_show;
 mod docker;
 mod git;
 
@@ -191,6 +193,7 @@ pub(crate) struct TypedArgs {
     pub(crate) profile: bool,
     pub(crate) provider: bool,
     pub(crate) reason: bool,
+    pub(crate) scope: bool,
 }
 
 impl TypedArgs {
@@ -203,6 +206,7 @@ impl TypedArgs {
                 ("profile", &mut typed.profile),
                 ("provider", &mut typed.provider),
                 ("reason", &mut typed.reason),
+                ("scope", &mut typed.scope),
             ] {
                 if matches.ids().any(|known| known.as_str() == id)
                     && matches.value_source(id) == Some(ValueSource::CommandLine)
@@ -260,6 +264,12 @@ enum Commands {
         /// Human-readable description (prompts when omitted)
         #[arg(short, long)]
         description: Option<String>,
+        /// Declare the secret optional, overriding profile defaults (0.22+)
+        #[arg(long, conflicts_with = "required")]
+        optional: bool,
+        /// Declare the secret required, overriding profile defaults (0.22+)
+        #[arg(long, conflicts_with = "optional")]
+        required: bool,
         /// Profile to add the secret to
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
         profile: Option<String>,
@@ -323,6 +333,9 @@ enum Commands {
         /// secrets are removed from the child environment even if inherited.
         #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE", add = clap_complete::ArgValueCompleter::new(completion::scopes))]
         scope: Option<String>,
+        /// Child configuration overrides: inherit ambient values or clear them (0.22+)
+        #[arg(long, value_enum, default_value = "inherit")]
+        config_env: ConfigEnv,
         /// Command and arguments to run
         #[arg(trailing_var_arg = true, value_hint = ValueHint::CommandWithArguments, add = clap_complete::ArgValueCompleter::new(completion::RunCompleter))]
         command: Vec<String>,
@@ -510,9 +523,24 @@ enum ConfigAction {
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles_or_none))]
         profile: Option<String>,
     },
-    /// Show current configuration
-    #[command(hide = true)]
-    Show,
+    /// Show computed configuration and where each setting comes from (0.22+)
+    Show {
+        /// Provider override to inspect
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER", add = clap_complete::ArgValueCompleter::new(completion::providers))]
+        provider: Option<String>,
+        /// Profile to inspect
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
+        profile: Option<String>,
+        /// Scope to inspect; an empty value selects the whole profile
+        #[arg(short = 'S', long, env = "SECRETSPEC_SCOPE", add = clap_complete::ArgValueCompleter::new(completion::scopes))]
+        scope: Option<String>,
+        /// Print computed configuration as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    // Internal target for `config global show`, kept separate from computed show.
+    #[command(skip)]
+    GlobalShow,
     /// Store project-scoped provider credentials
     #[command(subcommand)]
     Provider(ProviderAction),
@@ -605,7 +633,7 @@ impl From<GlobalConfigAction> for ConfigAction {
     fn from(action: GlobalConfigAction) -> Self {
         match action {
             GlobalConfigAction::Init { provider, profile } => Self::Init { provider, profile },
-            GlobalConfigAction::Show => Self::Show,
+            GlobalConfigAction::Show => Self::GlobalShow,
             GlobalConfigAction::Provider(action) => Self::Provider(action.into()),
         }
     }
@@ -1255,6 +1283,8 @@ pub fn main() -> Result<()> {
             name,
             description,
             profile,
+            optional,
+            required,
         } => {
             let app = load_secrets(&cli.file, &cli.reason, &caller)?;
             let profile = app.resolve_profile_name(profile.as_deref());
@@ -1278,7 +1308,8 @@ pub fn main() -> Result<()> {
             let source = fs::read_to_string(&manifest_path)
                 .into_diagnostic()
                 .wrap_err_with(|| format!("Failed to read {}", manifest_path.display()))?;
-            let updated = add_secret_to_spec(&source, &profile, &name, description)?;
+            let required = required.then_some(true).or(optional.then_some(false));
+            let updated = add_secret_to_spec(&source, &profile, &name, description, required)?;
             write_manifest_atomically(&manifest_path, &updated)?;
 
             println!(
@@ -1297,6 +1328,20 @@ pub fn main() -> Result<()> {
         // Handle configuration management commands
         Commands::Config { action } => match normalize_config_action(action) {
             ConfigAction::Global { .. } => unreachable!("global action was normalized"),
+            ConfigAction::Show {
+                provider,
+                profile,
+                scope,
+                json,
+            } => config_show::run(
+                &cli.file,
+                &cli.reason,
+                provider,
+                profile,
+                scope,
+                json,
+                typed,
+            ),
             // Initialize user configuration, prompting only for omitted values.
             ConfigAction::Init { provider, profile } => {
                 let provider = select_config_init_provider(provider)?;
@@ -1318,7 +1363,7 @@ pub fn main() -> Result<()> {
                 Ok(())
             }
             // Display current user configuration
-            ConfigAction::Show => {
+            ConfigAction::GlobalShow => {
                 match GlobalConfig::load().into_diagnostic()? {
                     Some(config) => {
                         println!(
@@ -1693,6 +1738,7 @@ pub fn main() -> Result<()> {
             provider,
             profile,
             scope,
+            config_env,
         } => {
             let mut app = load_secrets(&cli.file, &cli.reason, &caller)?;
             if let Some(p) = provider {
@@ -1702,7 +1748,7 @@ pub fn main() -> Result<()> {
                 app.set_profile(p);
             }
             apply_scope(&mut app, scope);
-            app.run(command)
+            app.run_with_config_env(command, config_env)
                 .into_diagnostic()
                 .wrap_err("Failed to run command")?;
             Ok(())
@@ -2587,13 +2633,41 @@ mod tests {
                 name,
                 description,
                 profile,
+                optional,
+                required,
             } => {
                 assert_eq!(name, "API_KEY");
                 assert_eq!(description.as_deref(), Some("API access token"));
                 assert_eq!(profile.as_deref(), Some("production"));
+                assert!(!optional);
+                assert!(!required);
             }
             _ => panic!("expected Add command"),
         }
+    }
+
+    #[test]
+    fn add_parses_requiredness_flags_and_rejects_conflicts() {
+        for (flag, expected_optional, expected_required) in
+            [("--optional", true, false), ("--required", false, true)]
+        {
+            let cli = Cli::try_parse_from(["secretspec", "add", "API_KEY", flag]).unwrap();
+            match cli.command {
+                Commands::Add {
+                    optional, required, ..
+                } => {
+                    assert_eq!(optional, expected_optional);
+                    assert_eq!(required, expected_required);
+                }
+                _ => panic!("expected Add command"),
+            }
+        }
+
+        let error =
+            Cli::try_parse_from(["secretspec", "add", "API_KEY", "--optional", "--required"])
+                .err()
+                .expect("requiredness flags must conflict");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -2611,7 +2685,8 @@ DATABASE_URL = { description = "Database connection string" }
 local = "dotenv://.env"
 "#;
 
-        let updated = add_secret_to_spec(source, "default", "API_KEY", "API access token").unwrap();
+        let updated =
+            add_secret_to_spec(source, "default", "API_KEY", "API access token", None).unwrap();
 
         assert!(updated.contains("# Project documentation"));
         assert!(updated.contains("# Keep this explanation attached to the existing secret."));
@@ -2640,7 +2715,7 @@ LOCAL = { description = "Local secret" }
 "#;
 
         let updated =
-            add_secret_to_spec(source, "production", "API_KEY", "API access token").unwrap();
+            add_secret_to_spec(source, "production", "API_KEY", "API access token", None).unwrap();
 
         assert!(updated.contains("[profiles.production]"));
         assert!(updated.contains("API_KEY = { description = \"API access token\" }"));
@@ -2681,22 +2756,22 @@ API_KEY = { description = "API access token" }
 API_KEY = { description = "Existing" }
 "#;
 
-        let invalid = add_secret_to_spec(source, "default", "1BAD", "Description")
+        let invalid = add_secret_to_spec(source, "default", "1BAD", "Description", None)
             .unwrap_err()
             .to_string();
         assert!(invalid.contains("Invalid secret name"));
 
-        let reserved = add_secret_to_spec(source, "default", "defaults", "Description")
+        let reserved = add_secret_to_spec(source, "default", "defaults", "Description", None)
             .unwrap_err()
             .to_string();
         assert!(reserved.contains("reserved for profile defaults"));
 
-        let duplicate = add_secret_to_spec(source, "default", "API_KEY", "Description")
+        let duplicate = add_secret_to_spec(source, "default", "API_KEY", "Description", None)
             .unwrap_err()
             .to_string();
         assert!(duplicate.contains("already declared"));
 
-        let empty = add_secret_to_spec(source, "default", "NEW_KEY", "   ")
+        let empty = add_secret_to_spec(source, "default", "NEW_KEY", "   ", None)
             .unwrap_err()
             .to_string();
         assert!(empty.contains("description cannot be empty"));

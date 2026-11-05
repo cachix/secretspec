@@ -99,9 +99,10 @@
 //! and folders. The resulting error names the environment and whether the
 //! profile or `?env=` selected it.
 
-use super::{
-    Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env, join_slash_path,
-};
+use super::ProviderBase as _;
+use super::{Address, ProviderCredentials, ProviderUrl, credential_or_env, join_slash_path};
+#[cfg(test)]
+use super::{Provider, SyncProviderAdapter};
 use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
@@ -182,7 +183,7 @@ impl InfisicalConfig {
     ///
     /// The URI names a host, so the endpoint is a host too: a domain carrying
     /// a path is refused rather than accepted into a config that
-    /// [`uri`](Provider::uri) could not render back.
+    /// [`uri`](super::Provider::uri) could not render back.
     ///
     /// A trailing `/api` is the exception, and is dropped rather than refused.
     /// Infisical's own CLI appends `/api` to the domain unless it is already
@@ -438,13 +439,13 @@ pub struct InfisicalProvider {
     /// One HTTP client for every request, so a run of secrets reuses the
     /// connection rather than building a pool per call.
     http: OnceLock<reqwest::Client>,
-    /// The session's profile, set by [`Provider::set_profile`] before any I/O.
+    /// The session's profile, set by [`super::Provider::set_profile`] before any I/O.
     ///
     /// A convention address names the profile itself, so this only answers for a
     /// `ref`, whose coordinates name a folder and key but never an environment.
     /// It is deliberately not part of [`InfisicalConfig`]: the environment a
-    /// profile implies must not reach [`uri`](Provider::uri) or
-    /// [`storage_identity`](Provider::storage_identity), or the same store would
+    /// profile implies must not reach [`uri`](super::Provider::uri) or
+    /// [`storage_identity`](super::Provider::storage_identity), or the same store would
     /// take one identity per profile.
     profile: Mutex<Option<String>>,
     /// The Infisical CLI consulted when no token or machine identity is
@@ -461,6 +462,7 @@ crate::register_provider! {
     struct: InfisicalProvider,
     config: InfisicalConfig,
     metadata: &super::catalog::INFISICAL,
+    native_async: true,
 }
 
 impl InfisicalProvider {
@@ -485,7 +487,7 @@ impl InfisicalProvider {
         self.http.get_or_init(super::http::default_client)
     }
 
-    /// The profile this session resolves under, if [`Provider::set_profile`] has
+    /// The profile this session resolves under, if [`super::Provider::set_profile`] has
     /// run.
     ///
     /// A blank profile is treated as absent: an empty environment slug would
@@ -1533,7 +1535,7 @@ impl InfisicalProvider {
     }
 }
 
-impl Provider for InfisicalProvider {
+impl super::ProviderBase for InfisicalProvider {
     fn retry_ownership(&self) -> super::RetryOwnership {
         super::RetryOwnership::Managed
     }
@@ -1542,21 +1544,12 @@ impl Provider for InfisicalProvider {
         self.retry_policy = policy;
     }
 
-    /// Keeps the session's profile as the environment a `ref` reads from when
-    /// the URI names none. Last write wins, matching the other session hooks.
     fn set_profile(&self, profile: &str) {
         if let Ok(mut held) = self.profile.lock() {
             *held = Some(profile.to_string());
         }
     }
 
-    /// Names the environment as well as the folder and key.
-    ///
-    /// The environment is half the destination and is not in the coordinates,
-    /// which the default rendering shows; where the URI does not pin it, it is
-    /// not in [`uri`](Provider::uri) either, so a preview built from those two
-    /// would leave the profile-derived environment invisible on the one
-    /// operation that overwrites a value.
     fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
         let loc = self.locate(addr)?;
         Ok(format!(
@@ -1572,10 +1565,6 @@ impl Provider for InfisicalProvider {
         ))
     }
 
-    /// A profile's secrets share one folder under the configured prefix, each
-    /// under its own key. `item` carries the folder and the key together; the
-    /// environment is resolved separately in [`locate`](Self::locate), since
-    /// SecretSpec's `ref` table has no coordinate for it.
     fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
         for (label, value) in [("project", project), ("profile", profile), ("key", key)] {
             if value.is_empty() {
@@ -1619,9 +1608,6 @@ impl Provider for InfisicalProvider {
         })
     }
 
-    /// Resolves every part of the entry identity that Infisical sends to the
-    /// API. In particular, the environment may come from session profile
-    /// context rather than the provider URI or native coordinates.
     fn configured_entry_coordinates<'a>(
         &self,
         addr: Address<'a>,
@@ -1657,10 +1643,6 @@ impl Provider for InfisicalProvider {
         Self::PROVIDER_NAME
     }
 
-    /// The inverse of parsing: every knob the config holds is rendered, so the
-    /// URI naming this store in an audit record or a warning is one that reads
-    /// back as the same store. `tls` is the one that bites -- a plain-HTTP
-    /// endpoint rendered without it comes back as HTTPS.
     fn uri(&self) -> String {
         self.render_uri(
             self.config.environment.as_deref(),
@@ -1668,24 +1650,18 @@ impl Provider for InfisicalProvider {
         )
     }
 
-    /// The environment and path are part of the resolved entry coordinates,
-    /// not the Infisical instance and project container. Omitting both here
-    /// lets an unpinned provider under profile `prod` compare equal to
-    /// `?env=prod`, and lets an absolute ref override different path defaults;
-    /// [`storage_identity`](Provider::storage_identity) remains the public URI
-    /// with its configured defaults and never absorbs session profile context.
     fn entry_container_identity(&self) -> String {
         self.render_uri(None, None)
     }
 
-    /// Infisical versions its secrets, so a `ref` may pin one. Its values are
-    /// single strings with no sub-components, so `field`, `section` and
-    /// `vault` are rejected.
     fn supported_coords(&self) -> &'static [&'static str] {
         &["version"]
     }
+}
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
+#[async_trait::async_trait]
+impl super::AsyncProvider for InfisicalProvider {
+    async fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let loc = self.locate(addr)?;
         let version = match addr {
             Address::Native(native) => native.version.as_deref(),
@@ -1695,9 +1671,13 @@ impl Provider for InfisicalProvider {
         // override to the shared value nor resolves imports like the list
         // does, so a personal read goes through the batch path.
         if self.config.personal_overrides && version.is_none() {
-            return Ok(self.get_many(&[(loc.key.as_str(), addr)])?.remove(&loc.key));
+            return Ok(
+                super::AsyncProvider::get_many(self, &[(loc.key.as_str(), addr)])
+                    .await?
+                    .remove(&loc.key),
+            );
         }
-        super::block_on(async {
+        (async {
             let read = self.get_async(&loc, version).await?;
             if matches!(&read, SecretRead::NotFound) {
                 self.ensure_environment_exists_async(&loc.environment)
@@ -1708,12 +1688,13 @@ impl Provider for InfisicalProvider {
                 SecretRead::NotFound => None,
             })
         })
+        .await
     }
 
-    /// Secrets sharing a folder and environment are read with one list call
-    /// each, rather than one round trip per secret: Infisical's cloud rate
-    /// limits are per-minute, and a fan-out of single reads burns them.
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
+    async fn get_many(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, SecretBytes>> {
         // A pinned version names one historical value, which the folder
         // listing (always latest) cannot answer.
         let (versioned, listable): (Vec<_>, Vec<_>) = requests.iter().partition(
@@ -1729,27 +1710,31 @@ impl Provider for InfisicalProvider {
         let mut resolved = if versioned.is_empty() {
             HashMap::new()
         } else {
-            super::get_each_with(&versioned, |addr| {
-                let loc = self.locate(addr)?;
-                let version = match addr {
-                    Address::Native(native) => native.version.as_deref(),
-                    Address::Convention { .. } => None,
-                };
-                match super::block_on(self.get_async(&loc, version))? {
-                    SecretRead::Response(value) => Ok(value),
-                    SecretRead::NotFound => {
-                        versioned_misses
-                            .lock()
-                            .map_err(|_| {
-                                SecretSpecError::ProviderOperationFailed(
-                                    "Infisical batch diagnostic state was poisoned".to_string(),
-                                )
-                            })?
-                            .insert(loc.environment);
-                        Ok(None)
+            super::async_provider::get_each_with(&versioned, |addr| {
+                let versioned_misses = &versioned_misses;
+                async move {
+                    let loc = self.locate(addr)?;
+                    let version = match addr {
+                        Address::Native(native) => native.version.as_deref(),
+                        Address::Convention { .. } => None,
+                    };
+                    match self.get_async(&loc, version).await? {
+                        SecretRead::Response(value) => Ok(value),
+                        SecretRead::NotFound => {
+                            versioned_misses
+                                .lock()
+                                .map_err(|_| {
+                                    SecretSpecError::ProviderOperationFailed(
+                                        "Infisical batch diagnostic state was poisoned".to_string(),
+                                    )
+                                })?
+                                .insert(loc.environment);
+                            Ok(None)
+                        }
                     }
                 }
-            })?
+            })
+            .await?
         };
         let versioned_environments = versioned_misses.into_inner().map_err(|_| {
             SecretSpecError::ProviderOperationFailed(
@@ -1757,7 +1742,7 @@ impl Provider for InfisicalProvider {
             )
         })?;
 
-        super::block_on(async {
+        (async {
             // One list call per distinct folder and environment.
             let mut folders: HashMap<(String, String), Vec<(&str, String)>> = HashMap::new();
             for (name, addr) in &listable {
@@ -1808,17 +1793,16 @@ impl Provider for InfisicalProvider {
 
             Ok(resolved)
         })
+        .await
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
-        self.check_writable(addr)?;
+    async fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        super::AsyncProvider::check_writable(self, addr).await?;
         let loc = self.locate(addr)?;
-        super::block_on(self.set_async(&loc, value))
+        self.set_async(&loc, value).await
     }
 
-    /// A pinned version names a value that already exists; writing one would
-    /// mean rewriting history, which Infisical does not offer.
-    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+    async fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         match addr {
             Address::Native(native) if native.version.is_some() => {
                 Err(SecretSpecError::ProviderOperationFailed(
@@ -1852,8 +1836,8 @@ mod tests {
         InfisicalConfig::try_from(&ProviderUrl::new(Url::parse(s).unwrap())).unwrap()
     }
 
-    fn provider(s: &str) -> InfisicalProvider {
-        InfisicalProvider::new(config(s))
+    fn provider(s: &str) -> SyncProviderAdapter<InfisicalProvider> {
+        SyncProviderAdapter::from_async(InfisicalProvider::new(config(s)))
     }
 
     fn read_request(reader: &mut BufReader<TcpStream>) -> Option<String> {
@@ -2014,7 +1998,10 @@ mod tests {
         );
     }
 
-    fn provider_with_token(endpoint: SocketAddr, environment: Option<&str>) -> InfisicalProvider {
+    fn provider_with_token(
+        endpoint: SocketAddr,
+        environment: Option<&str>,
+    ) -> SyncProviderAdapter<InfisicalProvider> {
         let environment =
             environment.map_or_else(String::new, |environment| format!("&env={environment}"));
         let mut provider = provider(&format!(
@@ -2916,7 +2903,7 @@ mod tests {
     fn personal_provider_with_token(
         endpoint: SocketAddr,
         environment: Option<&str>,
-    ) -> InfisicalProvider {
+    ) -> SyncProviderAdapter<InfisicalProvider> {
         let environment =
             environment.map_or_else(String::new, |environment| format!("&env={environment}"));
         let mut provider = provider(&format!(
@@ -2943,7 +2930,10 @@ mod tests {
     /// runs as it would without a terminal, so these tests do not depend on
     /// how `cargo test` was started.
     #[cfg(unix)]
-    fn provider_with_cli_script(directory: &std::path::Path, script: &str) -> InfisicalProvider {
+    fn provider_with_cli_script(
+        directory: &std::path::Path,
+        script: &str,
+    ) -> SyncProviderAdapter<InfisicalProvider> {
         let binary = directory.join("infisical");
         crate::fake_executable::install(&binary, script);
         let mut provider = provider(&format!("infisical://localhost:8080/{PROJECT}?tls=false"));
@@ -2956,7 +2946,10 @@ mod tests {
     /// for `user get token`, with `$dir` naming its directory. Each version
     /// check appends a line to `versions` there, and each token run to `runs`.
     #[cfg(unix)]
-    fn provider_with_cli(directory: &std::path::Path, body: &str) -> InfisicalProvider {
+    fn provider_with_cli(
+        directory: &std::path::Path,
+        body: &str,
+    ) -> SyncProviderAdapter<InfisicalProvider> {
         provider_with_cli_script(
             directory,
             &format!(
@@ -2970,7 +2963,7 @@ mod tests {
     /// Another provider instance running the same CLI against the same
     /// Infisical instance as `original`, so the two share a CLI session.
     #[cfg(unix)]
-    fn same_cli(original: &InfisicalProvider) -> InfisicalProvider {
+    fn same_cli(original: &InfisicalProvider) -> SyncProviderAdapter<InfisicalProvider> {
         let mut other = provider(&format!("infisical://localhost:8080/{PROJECT}?tls=false"));
         other.cli_binary_path = original.cli_binary_path.clone();
         other.cli_stdin_is_terminal = original.cli_stdin_is_terminal;

@@ -1178,7 +1178,8 @@ impl InfisicalProvider {
     /// a separate `imports` array rather than merged into `secrets` (it sets
     /// `includeImports` by default, so they arrive whether or not they are
     /// asked for). Ignoring them would make a batch read disagree with a
-    /// single read of the same key, which does resolve imports: `check` and
+    /// single read of the same key, which resolves imports too (v4 defaults its
+    /// `includeImports` to true; v3's `include_imports` defaults to false): `check` and
     /// `run` would call an imported secret missing while `get` returned it.
     ///
     /// The precedence mirrors the Infisical CLI's `InjectRawImportedSecret`, so

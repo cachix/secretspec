@@ -99,9 +99,10 @@ For the last step SecretSpec runs:
 infisical user get token --plain --silent --domain <endpoint>
 ```
 
-SecretSpec runs it at most once at a time per instance and reuses the token until it expires;
-callers resolving in parallel share that run and its result. A failed attempt is not remembered,
-so a long-running `secretspec serve` picks up a login made after the failure.
+SecretSpec runs it at most once at a time per instance and working directory, and reuses the
+token until it expires or Infisical rejects it; callers resolving in parallel share that run and
+its result. A failed attempt or rejected token is not remembered, so a long-running
+`secretspec serve` picks up a login made after the failure.
 
 `<endpoint>` is the instance the URI names, e.g. `https://app.infisical.com`. Infisical CLI 0.44.0
 and newer refuse to hand over a session issued by a different instance, so log in against the same
@@ -110,6 +111,7 @@ another instance's session, so SecretSpec checks `infisical --version` first and
 older than 0.44.0, including its pre-releases, or one whose version it cannot read.
 `INFISICAL_PROFILE` and `INFISICAL_ORG` (Infisical CLI 0.44.0+) select which CLI login and
 organization are used; they reach the CLI through the environment.
+The CLI runs in SecretSpec's working directory, so a CLI profile bound to that directory applies.
 
 When SecretSpec's standard input is a terminal, it is passed to the CLI, so an expired session
 can start the CLI's own browser login, or its prompt to paste a token, with its prompts on stderr.

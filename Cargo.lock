@@ -6310,6 +6310,7 @@ name = "secretspec"
 version = "0.21.1"
 dependencies = [
  "age",
+ "anstyle-parse",
  "async-trait",
  "aws-config",
  "aws-lc-rs",

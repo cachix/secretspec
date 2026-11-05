@@ -1,9 +1,12 @@
 //! Byte-oriented output filtering for command runners and Rust embedders.
+mod terminal;
+pub use terminal::TerminalRedactionStream;
+
 use crate::SecretBytes;
 use secrecy::zeroize::{Zeroize, Zeroizing};
 use std::collections::VecDeque;
 use std::fmt;
-use std::io;
+use std::io::{self, IsTerminal};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
@@ -78,6 +81,17 @@ impl Redactor {
         RedactionStream {
             filter: Filter::new(Arc::clone(&self.matcher)),
         }
+    }
+
+    /// Start a terminal-aware output stream (0.22+).
+    ///
+    /// Preserves 7-bit ANSI control syntax while masking text, including OSC
+    /// titles and hyperlinks and DCS/APC/PM/SOS payloads. Known OSC color
+    /// controls and DCS status queries retain their control parameters. Matching stops at
+    /// control boundaries; values split by escape sequences are not matched.
+    /// Use [`Self::stream`] for byte-exact, nonterminal output.
+    pub fn terminal_stream(&self) -> TerminalRedactionStream {
+        TerminalRedactionStream::new(self.stream())
     }
 
     /// Mask a complete byte sequence, including its final suffix (0.22+).
@@ -307,12 +321,39 @@ impl Filter {
     }
 }
 
+enum OutputStream {
+    Bytes(RedactionStream),
+    Terminal(TerminalRedactionStream),
+}
+
+impl OutputStream {
+    fn push(&mut self, input: &[u8], output: &mut Vec<u8>) {
+        match self {
+            Self::Bytes(stream) => stream.push(input, output),
+            Self::Terminal(stream) => stream.push(input, output),
+        }
+    }
+
+    fn finish(self, output: &mut Vec<u8>) {
+        match self {
+            Self::Bytes(stream) => stream.finish(output),
+            Self::Terminal(stream) => stream.finish(output),
+        }
+    }
+}
+
 async fn pump(
     mut source: impl AsyncRead + Unpin,
     mut target: impl AsyncWrite + Unpin,
     matcher: Arc<Matcher>,
+    terminal: bool,
 ) -> io::Result<()> {
-    let mut stream = Redactor { matcher }.stream();
+    let redactor = Redactor { matcher };
+    let mut stream = if terminal {
+        OutputStream::Terminal(redactor.terminal_stream())
+    } else {
+        OutputStream::Bytes(redactor.stream())
+    };
     let mut input = Zeroizing::new([0u8; CHUNK]);
     let mut output = Zeroizing::new(Vec::new());
     loop {
@@ -355,8 +396,18 @@ pub(crate) fn run(
         let stderr = child.stderr.take().expect("piped stderr");
         let pumps = async {
             tokio::try_join!(
-                pump(stdout, tokio::io::stdout(), Arc::clone(&matcher)),
-                pump(stderr, tokio::io::stderr(), matcher),
+                pump(
+                    stdout,
+                    tokio::io::stdout(),
+                    Arc::clone(&matcher),
+                    io::stdout().is_terminal()
+                ),
+                pump(
+                    stderr,
+                    tokio::io::stderr(),
+                    matcher,
+                    io::stderr().is_terminal()
+                ),
             )?;
             Ok::<_, io::Error>(())
         };
@@ -520,6 +571,35 @@ mod tests {
     }
 
     #[test]
+    fn pumps_select_terminal_or_byte_matching_per_destination() {
+        crate::provider::block_on(async {
+            let matcher = Matcher::new(vec![SecretBytes::from_utf8("0")])
+                .unwrap()
+                .unwrap();
+            for (terminal, expected) in [
+                (true, b"\x1b[0m[REDACTED]\x1b]0;[REDACTED]\x07".as_slice()),
+                (
+                    false,
+                    b"\x1b[[REDACTED]m[REDACTED]\x1b][REDACTED];[REDACTED]\x07",
+                ),
+            ] {
+                let (target, mut receiver) = tokio::io::duplex(256);
+                pump(
+                    &b"\x1b[0m0\x1b]0;0\x07"[..],
+                    target,
+                    Arc::clone(&matcher),
+                    terminal,
+                )
+                .await
+                .unwrap();
+                let mut output = Vec::new();
+                receiver.read_to_end(&mut output).await.unwrap();
+                assert_eq!(output, expected);
+            }
+        });
+    }
+
+    #[test]
     fn write_failure_is_returned_without_raw_fallback() {
         crate::provider::block_on(async {
             let matcher = Matcher::new(vec![SecretBytes::from_utf8("secret")])
@@ -527,7 +607,9 @@ mod tests {
                 .unwrap();
             let (target, receiver) = tokio::io::duplex(16);
             drop(receiver);
-            let error = pump(&b"secret"[..], target, matcher).await.unwrap_err();
+            let error = pump(&b"secret"[..], target, matcher, false)
+                .await
+                .unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
         });
     }

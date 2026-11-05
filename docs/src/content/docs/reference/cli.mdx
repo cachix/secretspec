@@ -702,11 +702,21 @@ for how to associate the generated schemas with TOML files.
 
 Add a secret declaration to an existing `secretspec.toml`. This edits only the
 selected profile and preserves the manifest's comments, formatting, and
-unrelated tables. The new declaration follows the profile's defaults; without
-a `required` profile default, it is required like any other declaration.
+unrelated tables. Unless overridden, the new declaration follows the profile's
+defaults; without a `required` profile default, it is required like any other
+declaration.
+
+<VersionCompatibility version="0.22" kind="changed">
+
+Use `--optional` or `--required` to override the profile's requiredness default
+for the new declaration. These flags are mutually exclusive. Omitting both
+leaves the `required` key absent, preserving the profile's defaults.
+
+</VersionCompatibility>
 
 ```bash
 $ secretspec add <NAME> [--description <DESCRIPTION>] [--profile <PROFILE>] # 0.18+
+$ secretspec add <NAME> [--description <DESCRIPTION>] [--profile <PROFILE>] [--optional | --required] # 0.22+
 ```
 
 **Arguments and options:**
@@ -718,6 +728,9 @@ $ secretspec add <NAME> [--description <DESCRIPTION>] [--profile <PROFILE>] # 0.
 - `-P, --profile <PROFILE>` - Profile to edit. When omitted, SecretSpec uses the
   normal active-profile resolution, including `SECRETSPEC_PROFILE` and the
   user-global default.
+- `--optional` - Write `required = false` (0.22+).
+- `--required` - Write `required = true`, even when the profile defaults to
+  optional (0.22+). Cannot be combined with `--optional` (0.22+).
 
 ```bash
 $ secretspec add API_KEY --description "API access token" # 0.18+

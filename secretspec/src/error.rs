@@ -69,6 +69,16 @@ pub enum SecretSpecError {
     },
     #[error("Secret '{0}' not found")]
     SecretNotFound(String),
+    /// A mutation or cache clear named a secret absent from the profile (0.22+).
+    #[error(
+        "Secret '{name}' is not defined in profile '{profile}'. Available secrets: {}",
+        .available.join(", ")
+    )]
+    SecretNotDefined {
+        name: String,
+        profile: String,
+        available: Vec<String>,
+    },
     #[error("Secret '{0}' is required but not set")]
     RequiredSecretMissing(String),
     #[error(
@@ -165,10 +175,10 @@ pub enum SecretSpecError {
 }
 
 impl SecretSpecError {
-    /// A stable, non-sensitive token identifying the error variant, for audit
+    /// A stable, non-sensitive token identifying the error category, for audit
     /// logs and typed handling by other-language SDKs over the FFI boundary.
     ///
-    /// Returns only the variant name, never the error message: messages can embed
+    /// Returns only a category token, never the error message: messages can embed
     /// secret names, provider URIs, or backend detail that must not reach the log.
     pub fn kind(&self) -> &'static str {
         match self {
@@ -185,7 +195,9 @@ impl SecretSpecError {
             SecretSpecError::NoProviderConfigured => "no_provider_configured",
             SecretSpecError::ProviderNotFound(_) => "provider_not_found",
             SecretSpecError::ProviderFeatureDisabled { .. } => "provider_feature_disabled",
-            SecretSpecError::SecretNotFound(_) => "secret_not_found",
+            SecretSpecError::SecretNotFound(_) | SecretSpecError::SecretNotDefined { .. } => {
+                "secret_not_found"
+            }
             SecretSpecError::RequiredSecretMissing(_) => "required_secret_missing",
             SecretSpecError::PromptUnavailable(_) => "prompt_unavailable",
             SecretSpecError::PromptValueEmpty(_) => "prompt_value_empty",
@@ -289,6 +301,13 @@ mod tests {
         assert_eq!(display_error_chain(&error), "IO error: disk failed");
     }
 
+    #[test]
+    fn secret_not_found_still_accepts_a_bare_name() {
+        let error = SecretSpecError::SecretNotFound("TOKEN".into());
+        assert_eq!(error.to_string(), "Secret 'TOKEN' not found");
+        assert_eq!(error.kind(), "secret_not_found");
+    }
+
     /// `kind()` returns a stable token per variant and never the (possibly
     /// secret-bearing) error message.
     #[test]
@@ -316,6 +335,14 @@ mod tests {
             ),
             (
                 SecretSpecError::SecretNotFound("X".into()),
+                "secret_not_found",
+            ),
+            (
+                SecretSpecError::SecretNotDefined {
+                    name: "X".into(),
+                    profile: "default".into(),
+                    available: vec!["Y".into()],
+                },
                 "secret_not_found",
             ),
             (

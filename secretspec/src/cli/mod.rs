@@ -264,6 +264,12 @@ enum Commands {
         /// Human-readable description (prompts when omitted)
         #[arg(short, long)]
         description: Option<String>,
+        /// Declare the secret optional, overriding profile defaults (0.22+)
+        #[arg(long, conflicts_with = "required")]
+        optional: bool,
+        /// Declare the secret required, overriding profile defaults (0.22+)
+        #[arg(long, conflicts_with = "optional")]
+        required: bool,
         /// Profile to add the secret to
         #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
         profile: Option<String>,
@@ -1277,6 +1283,8 @@ pub fn main() -> Result<()> {
             name,
             description,
             profile,
+            optional,
+            required,
         } => {
             let app = load_secrets(&cli.file, &cli.reason, &caller)?;
             let profile = app.resolve_profile_name(profile.as_deref());
@@ -1300,7 +1308,8 @@ pub fn main() -> Result<()> {
             let source = fs::read_to_string(&manifest_path)
                 .into_diagnostic()
                 .wrap_err_with(|| format!("Failed to read {}", manifest_path.display()))?;
-            let updated = add_secret_to_spec(&source, &profile, &name, description)?;
+            let required = required.then_some(true).or(optional.then_some(false));
+            let updated = add_secret_to_spec(&source, &profile, &name, description, required)?;
             write_manifest_atomically(&manifest_path, &updated)?;
 
             println!(
@@ -2624,13 +2633,41 @@ mod tests {
                 name,
                 description,
                 profile,
+                optional,
+                required,
             } => {
                 assert_eq!(name, "API_KEY");
                 assert_eq!(description.as_deref(), Some("API access token"));
                 assert_eq!(profile.as_deref(), Some("production"));
+                assert!(!optional);
+                assert!(!required);
             }
             _ => panic!("expected Add command"),
         }
+    }
+
+    #[test]
+    fn add_parses_requiredness_flags_and_rejects_conflicts() {
+        for (flag, expected_optional, expected_required) in
+            [("--optional", true, false), ("--required", false, true)]
+        {
+            let cli = Cli::try_parse_from(["secretspec", "add", "API_KEY", flag]).unwrap();
+            match cli.command {
+                Commands::Add {
+                    optional, required, ..
+                } => {
+                    assert_eq!(optional, expected_optional);
+                    assert_eq!(required, expected_required);
+                }
+                _ => panic!("expected Add command"),
+            }
+        }
+
+        let error =
+            Cli::try_parse_from(["secretspec", "add", "API_KEY", "--optional", "--required"])
+                .err()
+                .expect("requiredness flags must conflict");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -2648,7 +2685,8 @@ DATABASE_URL = { description = "Database connection string" }
 local = "dotenv://.env"
 "#;
 
-        let updated = add_secret_to_spec(source, "default", "API_KEY", "API access token").unwrap();
+        let updated =
+            add_secret_to_spec(source, "default", "API_KEY", "API access token", None).unwrap();
 
         assert!(updated.contains("# Project documentation"));
         assert!(updated.contains("# Keep this explanation attached to the existing secret."));
@@ -2677,7 +2715,7 @@ LOCAL = { description = "Local secret" }
 "#;
 
         let updated =
-            add_secret_to_spec(source, "production", "API_KEY", "API access token").unwrap();
+            add_secret_to_spec(source, "production", "API_KEY", "API access token", None).unwrap();
 
         assert!(updated.contains("[profiles.production]"));
         assert!(updated.contains("API_KEY = { description = \"API access token\" }"));
@@ -2718,22 +2756,22 @@ API_KEY = { description = "API access token" }
 API_KEY = { description = "Existing" }
 "#;
 
-        let invalid = add_secret_to_spec(source, "default", "1BAD", "Description")
+        let invalid = add_secret_to_spec(source, "default", "1BAD", "Description", None)
             .unwrap_err()
             .to_string();
         assert!(invalid.contains("Invalid secret name"));
 
-        let reserved = add_secret_to_spec(source, "default", "defaults", "Description")
+        let reserved = add_secret_to_spec(source, "default", "defaults", "Description", None)
             .unwrap_err()
             .to_string();
         assert!(reserved.contains("reserved for profile defaults"));
 
-        let duplicate = add_secret_to_spec(source, "default", "API_KEY", "Description")
+        let duplicate = add_secret_to_spec(source, "default", "API_KEY", "Description", None)
             .unwrap_err()
             .to_string();
         assert!(duplicate.contains("already declared"));
 
-        let empty = add_secret_to_spec(source, "default", "NEW_KEY", "   ")
+        let empty = add_secret_to_spec(source, "default", "NEW_KEY", "   ", None)
             .unwrap_err()
             .to_string();
         assert!(empty.contains("description cannot be empty"));

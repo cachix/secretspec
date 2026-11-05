@@ -2558,8 +2558,29 @@ mod tests {
             matches!(listed.get("DB_HOST"), Some(None)),
             "a withheld import must be recorded, not passed through"
         );
-        let err = InfisicalProvider::withheld_error("DB_HOST");
-        assert!(err.to_string().contains("DB_HOST"), "{err}");
+    }
+
+    /// Requesting a key that exists only as a withheld import fails through
+    /// the real batch read.
+    #[test]
+    fn a_requested_withheld_import_is_refused_in_a_batch() {
+        let (endpoint, server) = response_server(vec![(
+            "200 OK",
+            r#"{"secrets":[],"imports":[{"secretPath":"/shared","environment":"prod","secrets":[{"secretKey":"DB_HOST","secretValue":"<hidden-by-infisical>","secretValueHidden":true}]}]}"#,
+        )]);
+        let provider = provider_with_token(endpoint, Some("development"));
+        let err = provider
+            .get_many(&[(
+                "DB_HOST",
+                Address::convention("myapp", "development", "DB_HOST"),
+            )])
+            .unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("withheld") && text.contains("DB_HOST"),
+            "{err}"
+        );
+        server.join().unwrap();
     }
 
     /// A response without `imports` is not an error: an instance predating
@@ -2985,14 +3006,28 @@ mod tests {
         provider
     }
 
-    /// Clears every Infisical credential the environment could supply. The
-    /// returned guards must outlive the test body; the caller holds the lock.
-    fn without_infisical_env() -> [crate::tests::EnvVarGuard; 3] {
-        [
-            crate::tests::EnvVarGuard::remove(INFISICAL_TOKEN_ENV),
-            crate::tests::EnvVarGuard::remove(INFISICAL_CLIENT_ID_ENV),
-            crate::tests::EnvVarGuard::remove(INFISICAL_CLIENT_SECRET_ENV),
-        ]
+    /// Holds the working-directory lock and a credential-free environment.
+    /// The CLI login is keyed on, and run in, the working directory, which
+    /// other tests change while holding the same lock.
+    struct CliTestEnv {
+        _credentials: [crate::tests::EnvVarGuard; 3],
+        // Declared last so it is released last.
+        _cwd: std::sync::MutexGuard<'static, ()>,
+    }
+
+    /// Clears every Infisical credential the environment could supply and
+    /// pins the working directory. The caller takes the resolution env lock
+    /// first; no other test takes the two in the opposite order.
+    fn without_infisical_env() -> CliTestEnv {
+        let cwd = crate::secrets::lock_cwd();
+        CliTestEnv {
+            _credentials: [
+                crate::tests::EnvVarGuard::remove(INFISICAL_TOKEN_ENV),
+                crate::tests::EnvVarGuard::remove(INFISICAL_CLIENT_ID_ENV),
+                crate::tests::EnvVarGuard::remove(INFISICAL_CLIENT_SECRET_ENV),
+            ],
+            _cwd: cwd,
+        }
     }
 
     /// A provider whose CLI fallback is `script`, installed in `directory`. It
@@ -3268,7 +3303,6 @@ mod tests {
     #[test]
     fn a_cli_login_is_not_shared_across_working_directories() {
         let _lock = crate::tests::scrub_resolution_env();
-        let _cwd_lock = crate::secrets::lock_cwd();
         let _env = without_infisical_env();
         let directory = tempfile::tempdir().unwrap();
         let first_dir = tempfile::tempdir().unwrap();
@@ -3303,7 +3337,6 @@ mod tests {
     #[test]
     fn a_cli_session_renews_in_its_own_directory() {
         let _lock = crate::tests::scrub_resolution_env();
-        let _cwd_lock = crate::secrets::lock_cwd();
         let _env = without_infisical_env();
         let directory = tempfile::tempdir().unwrap();
         let first_dir = tempfile::tempdir().unwrap();

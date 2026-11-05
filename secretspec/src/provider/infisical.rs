@@ -1089,6 +1089,19 @@ impl InfisicalProvider {
         ]
     }
 
+    /// Whether Infisical replaced this secret's value with a placeholder.
+    fn is_withheld(secret: &serde_json::Value) -> bool {
+        secret["secretValueHidden"].as_bool() == Some(true)
+    }
+
+    /// The refusal for a requested key whose value Infisical withheld.
+    fn withheld_error(key: &str) -> SecretSpecError {
+        SecretSpecError::ProviderOperationFailed(format!(
+            "Infisical withheld the value of '{key}': this identity may see that the \
+             secret exists but not read it. Grant it permission to read secret values."
+        ))
+    }
+
     /// Reads one secret's value from its JSON, rejecting a value Infisical
     /// withheld.
     ///
@@ -1098,11 +1111,8 @@ impl InfisicalProvider {
     /// literal `<hidden-by-infisical>` to the process SecretSpec runs, so it is
     /// reported as the refusal it is.
     fn secret_value(secret: &serde_json::Value, key: &str) -> Result<Option<SecretBytes>> {
-        if secret["secretValueHidden"].as_bool() == Some(true) {
-            return Err(SecretSpecError::ProviderOperationFailed(format!(
-                "Infisical withheld the value of '{key}': this identity may see that the \
-                 secret exists but not read it. Grant it permission to read secret values."
-            )));
+        if Self::is_withheld(secret) {
+            return Err(Self::withheld_error(key));
         }
         Ok(secret["secretValue"]
             .as_str()
@@ -1178,7 +1188,7 @@ impl InfisicalProvider {
     /// in reverse, taking the first value it finds for a key).
     fn merge_imports(
         parsed: &serde_json::Value,
-        listed: &mut HashMap<String, SecretBytes>,
+        listed: &mut HashMap<String, Option<SecretBytes>>,
     ) -> Result<()> {
         // Absent rather than empty on an instance that predates imports, or on
         // a folder that imports nothing.
@@ -1199,24 +1209,27 @@ impl InfisicalProvider {
                 if listed.contains_key(key) {
                     continue;
                 }
-                // Withheld values are refused here exactly as for a direct
-                // secret: an imported key the identity may not read must not
-                // arrive as the literal placeholder.
-                if let Some(value) = Self::secret_value(secret, key)? {
-                    listed.insert(key.to_string(), value);
+                // A withheld value is recorded as `None`, exactly as for a
+                // direct secret, so it never arrives as the literal
+                // placeholder yet still shadows a lower-precedence import.
+                if Self::is_withheld(secret) {
+                    listed.insert(key.to_string(), None);
+                } else if let Some(value) = Self::secret_value(secret, key)? {
+                    listed.insert(key.to_string(), Some(value));
                 }
             }
         }
         Ok(())
     }
 
-    /// Lists every secret in one folder, indexed by key. Infisical has no
+    /// Lists every secret in one folder, indexed by key. A withheld value is
+    /// `None`. Infisical has no
     /// fetch-these-N-names endpoint, so a batch read lists the folder once.
     async fn list_async(
         &self,
         environment: &str,
         secret_path: &str,
-    ) -> Result<Option<HashMap<String, SecretBytes>>> {
+    ) -> Result<Option<HashMap<String, Option<SecretBytes>>>> {
         let url = format!("{}/api/v4/secrets", self.config.endpoint);
         let mut query = self.read_query(environment, secret_path);
         // The server answers one entry per key, the user's override winning,
@@ -1247,10 +1260,14 @@ impl InfisicalProvider {
                     let Some(key) = secret["secretKey"].as_str() else {
                         continue;
                     };
-                    // A withheld value is refused here rather than dropped:
-                    // omitting it would read as a secret that is simply unset.
-                    if let Some(value) = Self::secret_value(secret, key)? {
-                        listed.insert(key.to_string(), value);
+                    // A withheld value is recorded as `None` rather than dropped
+                    // or refused: dropping it would read as a secret that is
+                    // simply unset, and refusing it would fail every other key
+                    // in the folder. `get_many` refuses it only if requested.
+                    if Self::is_withheld(secret) {
+                        listed.insert(key.to_string(), None);
+                    } else if let Some(value) = Self::secret_value(secret, key)? {
+                        listed.insert(key.to_string(), Some(value));
                     }
                 }
                 Self::merge_imports(&parsed, &mut listed)?;
@@ -1710,9 +1727,9 @@ impl super::AsyncProvider for InfisicalProvider {
             Address::Native(native) => native.version.as_deref(),
             Address::Convention { .. } => None,
         };
-        // The single-secret endpoint neither falls back from a personal
-        // override to the shared value nor resolves imports like the list
-        // does, so a personal read goes through the batch path.
+        // The single-secret endpoint does not fall back from a personal
+        // override to the shared value, so a personal read goes through the
+        // batch path.
         if self.config.personal_overrides && version.is_none() {
             return Ok(
                 super::AsyncProvider::get_many(self, &[(loc.key.as_str(), addr)])
@@ -1808,8 +1825,12 @@ impl super::AsyncProvider for InfisicalProvider {
                     Some(listed) => {
                         known_environments.insert(environment);
                         for (name, key) in wanted {
-                            if let Some(value) = listed.get(&key) {
-                                resolved.insert(name.to_string(), value.clone());
+                            match listed.get(&key) {
+                                Some(Some(value)) => {
+                                    resolved.insert(name.to_string(), value.clone());
+                                }
+                                Some(None) => return Err(Self::withheld_error(&key)),
+                                None => {}
                             }
                         }
                     }
@@ -2457,14 +2478,14 @@ mod tests {
     }
 
     fn merged(parsed: &serde_json::Value, direct: &[(&str, &str)]) -> HashMap<String, String> {
-        let mut listed: HashMap<String, SecretBytes> = direct
+        let mut listed: HashMap<String, Option<SecretBytes>> = direct
             .iter()
-            .map(|(k, v)| (k.to_string(), SecretBytes::from_utf8(*v)))
+            .map(|(k, v)| (k.to_string(), Some(SecretBytes::from_utf8(*v))))
             .collect();
         InfisicalProvider::merge_imports(parsed, &mut listed).expect("merge");
         listed
             .into_iter()
-            .map(|(k, v)| (k, v.try_as_utf8().unwrap().to_string()))
+            .map(|(k, v)| (k, v.unwrap().try_as_utf8().unwrap().to_string()))
             .collect()
     }
 
@@ -2531,8 +2552,12 @@ mod tests {
             })],
         });
         let mut listed = HashMap::new();
-        let err = InfisicalProvider::merge_imports(&parsed, &mut listed)
-            .expect_err("a withheld import must not pass through");
+        InfisicalProvider::merge_imports(&parsed, &mut listed).expect("merge");
+        assert!(
+            matches!(listed.get("DB_HOST"), Some(None)),
+            "a withheld import must be recorded, not passed through"
+        );
+        let err = InfisicalProvider::withheld_error("DB_HOST");
         assert!(err.to_string().contains("DB_HOST"), "{err}");
     }
 
@@ -3557,6 +3582,61 @@ mod tests {
             "{}",
             requests[0]
         );
+    }
+
+    /// An entry the identity may not read leaves the folder's other keys
+    /// readable: a personal read of `API_KEY` must not fail on `ADMIN_KEY`.
+    #[test]
+    fn a_hidden_neighbour_does_not_block_a_personal_read() {
+        let (endpoint, server) = response_server(vec![(
+            "200 OK",
+            r#"{"secrets":[{"secretKey":"API_KEY","secretValue":"v","secretValueHidden":false},{"secretKey":"ADMIN_KEY","secretValue":"<hidden-by-infisical>","secretValueHidden":true}]}"#,
+        )]);
+        let provider = personal_provider_with_token(endpoint, Some("development"));
+
+        let value = provider
+            .get(Address::convention("myapp", "development", "API_KEY"))
+            .unwrap()
+            .expect("the readable key must be read");
+        assert_eq!(value.expose_secret(), b"v");
+        server.join().unwrap();
+    }
+
+    /// The hidden key itself is still refused when it is the one requested.
+    #[test]
+    fn a_requested_hidden_key_is_still_refused_in_a_batch() {
+        let (endpoint, server) = response_server(vec![(
+            "200 OK",
+            r#"{"secrets":[{"secretKey":"API_KEY","secretValue":"v","secretValueHidden":false},{"secretKey":"ADMIN_KEY","secretValue":"<hidden-by-infisical>","secretValueHidden":true}]}"#,
+        )]);
+        let provider = provider_with_token(endpoint, Some("development"));
+        let err = provider
+            .get_many(&[(
+                "ADMIN_KEY",
+                Address::convention("myapp", "development", "ADMIN_KEY"),
+            )])
+            .unwrap_err();
+        assert!(err.to_string().contains("withheld"), "{err}");
+        server.join().unwrap();
+    }
+
+    /// A batch read of `API_KEY` succeeds although `ADMIN_KEY` is hidden.
+    #[test]
+    fn a_hidden_neighbour_does_not_block_a_batch_read() {
+        let (endpoint, server) = response_server(vec![(
+            "200 OK",
+            r#"{"secrets":[{"secretKey":"API_KEY","secretValue":"v","secretValueHidden":false},{"secretKey":"ADMIN_KEY","secretValue":"<hidden-by-infisical>","secretValueHidden":true}]}"#,
+        )]);
+        let provider = provider_with_token(endpoint, Some("development"));
+        let got = provider
+            .get_many(&[(
+                "API_KEY",
+                Address::convention("myapp", "development", "API_KEY"),
+            )])
+            .unwrap();
+        assert_eq!(got["API_KEY"].expose_secret(), b"v");
+        assert!(!got.contains_key("ADMIN_KEY"));
+        server.join().unwrap();
     }
 
     #[test]

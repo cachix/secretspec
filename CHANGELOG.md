@@ -148,6 +148,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   temporary directory. It never printed their paths, so nothing could use
   them.
 
+- Batch reads from Infisical (`secretspec check`, `secretspec run`, and
+  `?personal=true` reads) no longer fail when an unrelated secret in the same
+  folder has its value hidden from the reader. Only a secret you actually
+  request still reports its value as withheld.
+
 ## [0.21.1] - 2026-09-27
 
 ### Added

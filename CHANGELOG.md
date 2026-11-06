@@ -11,7 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - macOS file delivery (0.22+) removes unused recovery metadata after failures
   before RAM-disk attachment, limits startup recovery work with a shared time
-  budget, and records persistent cleanup failures for inspection.
+  budget, and records persistent cleanup failures for inspection. Interrupted
+  recovery retains the journal for a later attempt. A full RAM volume rejects
+  new allocations without retaining partial files or revoking existing secrets.
 
 - Linux file delivery (0.22+) locks memfd pages into RAM before writing secret
   bytes and retains those locks until release. Allocation fails if the helper's

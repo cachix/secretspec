@@ -292,11 +292,15 @@ impl Journal {
             }
         }
         drop(root);
+        #[cfg(test)]
+        tests::cleanup_checkpoint(tests::CleanupStage::BeforeUnmount, &self.mount, deadline)?;
         command_until(
             "/sbin/umount",
             &["-f".as_ref(), self.mount.as_os_str()],
             deadline,
         )?;
+        #[cfg(test)]
+        tests::cleanup_checkpoint(tests::CleanupStage::BeforeDetach, &self.mount, deadline)?;
         command_until(
             "/usr/bin/hdiutil",
             &["detach".as_ref(), "-force".as_ref(), self.device.as_ref()],
@@ -435,6 +439,12 @@ fn cleanup_directory_until(directory: &Path, deadline: Instant) -> io::Result<()
             && entry.file_name() != "lease.json"
         {
             fs::remove_file(entry.path())?;
+            #[cfg(test)]
+            tests::cleanup_checkpoint(
+                tests::CleanupStage::MetadataSweep,
+                &journal.mount,
+                deadline,
+            )?;
         }
     }
     // Keep the journal until the sweep finishes, including if its deadline
@@ -735,9 +745,11 @@ impl Volume {
     fn create() -> io::Result<Self> {
         let root = runtime_root()?;
         recover_orphans(&root)?;
-        let directory = tempfile::Builder::new()
-            .prefix("lease-")
-            .tempdir_in(&root)?;
+        Self::create_in(&root)
+    }
+
+    fn create_in(root: &Path) -> io::Result<Self> {
+        let directory = tempfile::Builder::new().prefix("lease-").tempdir_in(root)?;
         let mount = directory.path().join("memory");
         fs::DirBuilder::new().mode(0o700).create(&mount)?;
         let process = process_info(std::process::id())?;
@@ -894,10 +906,189 @@ impl Drop for Storage {
 mod tests {
     use super::*;
     use std::{
+        cell::RefCell,
         process::Child,
-        sync::mpsc,
+        sync::{Arc, Mutex, mpsc},
         time::{Duration, Instant},
     };
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum CleanupStage {
+        BeforeUnmount,
+        BeforeDetach,
+        MetadataSweep,
+    }
+
+    type CleanupHook = dyn FnMut(CleanupStage, &Path, Instant) -> io::Result<()>;
+
+    thread_local! {
+        // Recovery runs on the caller's thread. A scoped thread-local hook
+        // avoids changing environment or behavior in other tests and helpers.
+        static CLEANUP_HOOK: RefCell<Option<Box<CleanupHook>>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn cleanup_checkpoint(
+        stage: CleanupStage,
+        mount: &Path,
+        deadline: Instant,
+    ) -> io::Result<()> {
+        CLEANUP_HOOK.with_borrow_mut(|hook| match hook {
+            Some(hook) => hook(stage, mount, deadline),
+            None => Ok(()),
+        })
+    }
+
+    struct CleanupHookGuard;
+    impl CleanupHookGuard {
+        fn install(
+            hook: impl FnMut(CleanupStage, &Path, Instant) -> io::Result<()> + 'static,
+        ) -> Self {
+            CLEANUP_HOOK.with_borrow_mut(|slot| {
+                assert!(slot.is_none());
+                *slot = Some(Box::new(hook));
+            });
+            Self
+        }
+    }
+    impl Drop for CleanupHookGuard {
+        fn drop(&mut self) {
+            CLEANUP_HOOK.with_borrow_mut(|slot| *slot = None);
+        }
+    }
+
+    struct OrphanStorage {
+        _storage: Storage,
+        path: PathBuf,
+        directory: PathBuf,
+        id: uuid::Uuid,
+    }
+
+    fn orphan_storage(root: &Path) -> OrphanStorage {
+        let mut storage = Storage {
+            volume: Some(Volume::create_in(root).unwrap()),
+            counter: 0,
+            files: std::collections::HashSet::new(),
+        };
+        let path = storage.materialize(b"orphan-fixture", "").unwrap();
+        let volume = storage.volume.as_mut().unwrap();
+        // Setup has completed with a real keeper birth time. Mark only its
+        // journal as orphaned, leaving the guardian dormant while testing.
+        volume.journal.birth = [0, 0];
+        volume.journal.save(&volume.directory).unwrap();
+        let directory = volume.directory.clone();
+        let id = volume.journal.lease_id.unwrap();
+        OrphanStorage {
+            _storage: storage,
+            path,
+            directory,
+            id,
+        }
+    }
+
+    #[test]
+    fn recovery_deadline_interrupts_cleanup_and_later_attempt_finishes_all_orphans() {
+        for interrupted_stage in [
+            CleanupStage::BeforeUnmount,
+            CleanupStage::BeforeDetach,
+            CleanupStage::MetadataSweep,
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let root_path = root.path().canonicalize().unwrap();
+            let orphans = [orphan_storage(&root_path), orphan_storage(&root_path)];
+            let visited = Arc::new(Mutex::new(Vec::new()));
+            let visits = visited.clone();
+            let hook = CleanupHookGuard::install(move |stage, mount, deadline| {
+                if stage != interrupted_stage {
+                    return Ok(());
+                }
+                visits.lock().unwrap().push(mount.to_path_buf());
+                // Exercise the production volume-command wrapper and its
+                // termination path with a child that outlives the budget.
+                command_until("/bin/sleep", &["60".as_ref()], deadline)
+            });
+            let deadline = Instant::now() + Duration::from_secs(2);
+            recover_orphans_until(&root_path, deadline).unwrap();
+            drop(hook);
+            assert!(Instant::now() < deadline + Duration::from_secs(3));
+            let visited = visited.lock().unwrap();
+            assert_eq!(
+                visited.len(),
+                1,
+                "recovery started another orphan after expiry"
+            );
+            let interrupted = orphans
+                .iter()
+                .find(|orphan| orphan.path.parent() == Some(visited[0].as_path()))
+                .unwrap();
+            for orphan in &orphans {
+                Journal::read(&orphan.directory).unwrap();
+                assert!(orphan.directory.join("setup.lock").exists());
+            }
+            assert_eq!(
+                orphans.iter().filter(|orphan| orphan.path.exists()).count(),
+                1
+            );
+            for orphan in orphans.iter().filter(|orphan| orphan.path.exists()) {
+                assert_eq!(fs::read(&orphan.path).unwrap(), b"orphan-fixture");
+            }
+            let journal = Journal::read(&interrupted.directory).unwrap();
+            match interrupted_stage {
+                CleanupStage::BeforeUnmount => assert!(journal.validate_mount().unwrap()),
+                CleanupStage::BeforeDetach => {
+                    assert!(!journal.validate_mount().unwrap());
+                    assert!(journal.validate_device().unwrap());
+                }
+                CleanupStage::MetadataSweep => {
+                    assert!(!journal.mount.exists());
+                    assert!(registry::device(interrupted.id).unwrap().is_none());
+                }
+            }
+            assert!(
+                fs::read_to_string(interrupted.directory.join("cleanup.error"))
+                    .unwrap()
+                    .contains("timed out")
+            );
+
+            recover_orphans(&root_path).unwrap();
+            for orphan in &orphans {
+                assert!(!orphan.directory.exists());
+                assert!(!orphan.path.exists());
+                assert!(registry::device(orphan.id).unwrap().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn volume_full_allocation_removes_partial_file_and_preserves_existing_secrets() {
+        let mut storage = Storage::default();
+        let existing = storage.materialize(b"existing-fixture", "").unwrap();
+        let mount = existing.parent().unwrap();
+        let entries = || {
+            let mut names: Vec<_> = fs::read_dir(mount)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .filter(|name| name.as_bytes().starts_with(b"secret-"))
+                .collect();
+            names.sort();
+            names
+        };
+        let original_entries = entries();
+        // The RAM volume is 64 MiB including filesystem overhead. A 64 MiB
+        // payload therefore starts writing and fails with ENOSPC.
+        let error = storage
+            .materialize(&vec![42; 64 * 1024 * 1024], "")
+            .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ENOSPC));
+        assert_eq!(entries(), original_entries);
+        assert_eq!(fs::read(&existing).unwrap(), b"existing-fixture");
+        // Reclaimed space remains usable after the failed partial allocation.
+        let next = storage.materialize(b"next-fixture", "").unwrap();
+        assert_eq!(fs::read(&next).unwrap(), b"next-fixture");
+        assert_eq!(fs::read(&existing).unwrap(), b"existing-fixture");
+        storage.cleanup().unwrap();
+        assert!(!existing.exists());
+        assert!(!next.exists());
+    }
 
     fn unattached_journal(root: &Path) -> (tempfile::TempDir, Journal) {
         let directory = tempfile::tempdir_in(root).unwrap();

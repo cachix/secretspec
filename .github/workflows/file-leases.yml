@@ -30,6 +30,7 @@ concurrency:
 
 jobs:
   lifecycle:
+    name: Storage and lifecycle (${{ matrix.runner }})
     strategy:
       fail-fast: false
       matrix:
@@ -47,10 +48,16 @@ jobs:
       - uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           key: file-leases
-      - name: Test storage, ownership transfer, and orphan recovery
+      - name: Lint file leases
         run: |
           cargo clippy -p file-lease --all-targets -- -D warnings
+      - name: Test file leases, crash recovery, deadlines, and volume exhaustion
+        # Run the complete suite on the native host. macos::tests includes real
+        # RAM-volume recovery interruptions and ENOSPC regression cases.
+        run: |
           cargo test -p file-lease -- --test-threads=1
+      - name: Test SecretSpec CLI and resolver integration
+        run: |
           cargo test -p secretspec --no-default-features --features cli --test file_lease_cli
           cargo test -p secretspec --no-default-features --features cli --test as_path_materializer --test ipc_resolver --test check_report_stream
       - name: Measure small-file setup and cleanup latency

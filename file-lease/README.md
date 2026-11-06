@@ -182,6 +182,14 @@ library and helper versions. They are not a public interoperability contract.
   processes die, or cleanup keeps failing, a later lease retries recovery.
   Recovery metadata, never payload bytes, lives in
   `~/Library/Application Support/file-lease`. No background service is installed.
+  Startup recovery uses a shared five-second budget for scanning and volume-tool
+  waits, deferring remaining work to a later lease. Individual OS calls can still
+  take longer. Failures before attachment starts remove the unused metadata;
+  interrupted attachments and older journals retain conservative recovery rules.
+  Persistent cleanup failures are recorded in the lease directory's private
+  `cleanup.error` file, which contains only an error description and is removed
+  with the recovered lease. Detached helpers do not retain application output
+  pipes for diagnostics.
 - Other operating systems return `Unsupported` on allocation.
 - Payloads are limited to 64 MiB per request. The macOS limit also applies to
   the whole volume, including filesystem overhead. Suffixes are limited to
@@ -198,3 +206,9 @@ library and helper versions. They are not a public interoperability contract.
 `cargo test -p file-lease -- --test-threads=1` runs the storage, owner-exit,
 ownership-transfer, helper-crash, closed-descriptor, and macOS setup-recovery
 tests. CI runs these on Linux and macOS independently of SecretSpec tests.
+
+`cargo run -p file-lease --example lifecycle_timings` measures first-file setup,
+additional-file allocation, and cleanup latency with synthetic 256-byte files.
+It reports five sequential leases and four parallel leases as CSV. The lifecycle
+CI matrix runs it on Linux and macOS. These are diagnostic timings, not performance
+thresholds or measurements of the RAM disk's memory footprint.

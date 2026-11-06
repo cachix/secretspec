@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- macOS file delivery (0.22+) removes unused recovery metadata after failures
+  before RAM-disk attachment, limits startup recovery work with a shared time
+  budget, and records persistent cleanup failures for inspection.
+
 - Linux file delivery (0.22+) locks memfd pages into RAM before writing secret
   bytes and retains those locks until release. Allocation fails if the helper's
   memory-lock limit is insufficient, with an explanatory error and no pageable

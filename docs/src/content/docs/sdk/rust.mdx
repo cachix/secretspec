@@ -434,6 +434,13 @@ contain only process and volume metadata. Secret contents are written only into
 the mounted RAM disk. Consumer exit, including `SIGKILL`, normally causes the
 keeper to remove paths, unmount, and detach without elevated privileges.
 
+Startup recovery shares a five-second budget across scanning and volume-tool
+waits, leaving unfinished work for a later lease. Individual OS calls can still
+take longer. Failures before attachment starts remove unused metadata. Persistent
+cleanup failures are recorded in a private `cleanup.error` file beside the lease
+journal; it contains an error description, never secret contents. Successful
+recovery removes the diagnostic with the journal.
+
 The request size limit is 64 MiB. macOS leases use a 64 MiB volume, including
 filesystem overhead, so available capacity can be lower. Linux file suffix
 hints are accepted but omitted from `/proc` paths; macOS preserves them.

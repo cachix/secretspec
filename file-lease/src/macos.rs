@@ -60,6 +60,7 @@ pub(super) fn process_info(pid: u32) -> io::Result<libc::proc_bsdinfo> {
 
 const TOOL_TIMEOUT: Duration = Duration::from_secs(10);
 const SETUP_TIMEOUT: Duration = Duration::from_secs(120);
+const RECOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUIRED_MOUNT_FLAGS: u32 =
     (libc::MNT_NOEXEC | libc::MNT_NOSUID | libc::MNT_NODEV | libc::MNT_DONTBROWSE) as u32;
 
@@ -73,9 +74,13 @@ fn validate_mount_flags(flags: u32) -> io::Result<()> {
 }
 
 fn command(program: &str, args: &[&std::ffi::OsStr]) -> io::Result<()> {
+    command_until(program, args, Instant::now() + TOOL_TIMEOUT)
+}
+
+fn command_until(program: &str, args: &[&std::ffi::OsStr], deadline: Instant) -> io::Result<()> {
     // Volume tools operate only on metadata. Avoid pipe-draining threads which
     // could themselves wait forever if a tool leaves descendants holding pipes.
-    super::command::run(
+    super::command::run_until(
         Command::new(program)
             .args(args)
             .stdin(Stdio::null())
@@ -83,7 +88,7 @@ fn command(program: &str, args: &[&std::ffi::OsStr]) -> io::Result<()> {
             // retain it if the guardian dies. After setup stdout is /dev/null.
             .stdout(Stdio::inherit())
             .stderr(Stdio::null()),
-        TOOL_TIMEOUT,
+        deadline.min(Instant::now() + TOOL_TIMEOUT),
     )
     .map_err(|error| io::Error::new(error.kind(), format!("{program}: {error}")))
 }
@@ -145,6 +150,10 @@ struct Journal {
     mount: PathBuf,
     filesystem: Option<u64>,
     device_identity: Option<[u64; 4]>,
+    // None means an older journal with unknown attachment state. Only an
+    // explicit false permits cleanup without identifying an attached device.
+    #[serde(default)]
+    attachment_started: Option<bool>,
 }
 
 impl Journal {
@@ -251,14 +260,15 @@ impl Journal {
         Ok(true)
     }
 
-    fn cleanup(&self) -> io::Result<()> {
+    fn cleanup(&self, deadline: Instant) -> io::Result<()> {
         if !self.validate_device()? {
             return Ok(());
         }
         let Some((root, _)) = self.mounted_root()? else {
-            command(
+            command_until(
                 "/usr/bin/hdiutil",
                 &["detach".as_ref(), "-force".as_ref(), self.device.as_ref()],
+                deadline,
             )?;
             return Ok(());
         };
@@ -271,6 +281,7 @@ impl Journal {
         }
         // Remove all readable names first, even if a later unmount fails.
         for entry in fs::read_dir(&self.mount)? {
+            check_deadline(deadline)?;
             let entry = entry?;
             if entry.file_type()?.is_file() {
                 let name = std::ffi::CString::new(entry.file_name().as_bytes())
@@ -281,10 +292,15 @@ impl Journal {
             }
         }
         drop(root);
-        command("/sbin/umount", &["-f".as_ref(), self.mount.as_os_str()])?;
-        command(
+        command_until(
+            "/sbin/umount",
+            &["-f".as_ref(), self.mount.as_os_str()],
+            deadline,
+        )?;
+        command_until(
             "/usr/bin/hdiutil",
             &["detach".as_ref(), "-force".as_ref(), self.device.as_ref()],
+            deadline,
         )?;
         Ok(())
     }
@@ -293,7 +309,51 @@ impl Journal {
 /// Recover only journals belonging to dead keepers, comparing process birth
 /// times and the mounted filesystem identity before removing any resource.
 fn recover_orphans(root: &Path) -> io::Result<()> {
+    recover_orphans_until(root, Instant::now() + RECOVERY_TIMEOUT)
+}
+
+fn check_deadline(deadline: Instant) -> io::Result<()> {
+    if Instant::now() >= deadline {
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "Cleanup deadline expired",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn report_cleanup_failure(directory: &Path, error: &io::Error) {
+    // Detached helpers must not retain the launcher's captured output pipes.
+    // Preserve a metadata-only diagnostic for inspection after the caller exits.
+    // Serialize with cleanup so a report cannot recreate files after its sweep.
+    let _ = (|| -> io::Result<()> {
+        let Some(_lock) = try_setup_lock(directory)? else {
+            return Ok(());
+        };
+        Journal::read(directory)?;
+        let mut report = tempfile::NamedTempFile::new_in(directory)?;
+        writeln!(report, "{error}")?;
+        report.as_file().sync_all()?;
+        report
+            .persist(directory.join("cleanup.error"))
+            .map_err(|error| error.error)?;
+        Ok(())
+    })();
+    eprintln!(
+        "file-lease: cleanup deferred for {}: {error}; a later lease will retry recovery",
+        directory.display()
+    );
+}
+
+fn recover_orphans_until(root: &Path, deadline: Instant) -> io::Result<()> {
     for directory in fs::read_dir(root)? {
+        if check_deadline(deadline).is_err() {
+            eprintln!(
+                "file-lease: orphan recovery budget exhausted; remaining journals will be retried by a later lease"
+            );
+            break;
+        }
         let directory = directory?;
         if !directory.file_type()?.is_dir() {
             continue;
@@ -313,7 +373,11 @@ fn recover_orphans(root: &Path) -> io::Result<()> {
             _ => {}
         }
         // Recovery skips busy setup or cleanup without delaying other leases.
-        let _ = cleanup_directory(&directory.path());
+        if let Err(error) = cleanup_directory_until(&directory.path(), deadline)
+            && error.kind() != io::ErrorKind::WouldBlock
+        {
+            report_cleanup_failure(&directory.path(), &error);
+        }
     }
     Ok(())
 }
@@ -321,6 +385,11 @@ fn recover_orphans(root: &Path) -> io::Result<()> {
 // All cleanup paths share this lock and re-read metadata after acquiring it.
 // Never recursively remove the directory: it may still contain a mounted disk.
 fn cleanup_directory(directory: &Path) -> io::Result<()> {
+    cleanup_directory_until(directory, Instant::now() + 2 * TOOL_TIMEOUT)
+}
+
+fn cleanup_directory_until(directory: &Path, deadline: Instant) -> io::Result<()> {
+    check_deadline(deadline)?;
     if !directory.try_exists()? {
         return Ok(());
     }
@@ -343,19 +412,34 @@ fn cleanup_directory(directory: &Path) -> io::Result<()> {
     if journal.mount != directory.join("memory") {
         return Err(io::Error::other("Invalid file lease mount path"));
     }
-    journal.identify_device(directory)?;
-    journal.cleanup()?;
+    // The worker records this transition while holding the setup lock, before
+    // starting hdiutil. A pre-attachment failure has no volume to recover. Old
+    // journals and interrupted attachments remain conservative.
+    if journal.attachment_started != Some(false) {
+        journal.identify_device(directory)?;
+        journal.cleanup(deadline)?;
+    } else if !journal.device.is_empty() {
+        return Err(io::Error::other("Inconsistent RAM-disk attachment state"));
+    }
+    check_deadline(deadline)?;
     match fs::remove_dir(&journal.mount) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
     for entry in fs::read_dir(directory)? {
+        check_deadline(deadline)?;
         let entry = entry?;
-        if entry.file_type()?.is_file() && entry.file_name() != "setup.lock" {
+        if entry.file_type()?.is_file()
+            && entry.file_name() != "setup.lock"
+            && entry.file_name() != "lease.json"
+        {
             fs::remove_file(entry.path())?;
         }
     }
+    // Keep the journal until the sweep finishes, including if its deadline
+    // expires after the mount directory has already been removed.
+    fs::remove_file(directory.join("lease.json"))?;
     // Remove the lock last. Cleanup opens existing locks only, so contenders
     // cannot create a new lock inode while this one is being removed.
     fs::remove_file(directory.join("setup.lock"))?;
@@ -374,7 +458,11 @@ fn retry_cleanup(mut cleanup: impl FnMut() -> io::Result<()>) -> io::Result<()> 
 }
 
 fn cleanup_with_retry(directory: &Path) -> io::Result<()> {
-    retry_cleanup(|| cleanup_directory(directory))
+    let result = retry_cleanup(|| cleanup_directory(directory));
+    if let Err(error) = &result {
+        report_cleanup_failure(directory, error);
+    }
+    result
 }
 
 const SETUP_ENV: &str = "_FILE_LEASE_SETUP_DIRECTORY";
@@ -430,6 +518,7 @@ fn setup_and_guard(directory: &Path) -> io::Result<()> {
         if [info.pbi_start_tvsec, info.pbi_start_tvusec] != journal.birth {
             return Err(io::Error::other("File lease keeper identity changed"));
         }
+        checkpoint("prepared", directory, "")?;
         setup_device(directory)?;
         Ok(watch)
     })();
@@ -503,7 +592,16 @@ fn setup_device(directory: &Path) -> io::Result<()> {
         .stderr(Stdio::null());
     // The checkpoint is before the bounded wait, so tests can still kill a
     // worker while attachment is running. The tool retains the setup lock.
-    let attach = attach.process_group(0).spawn()?;
+    journal.attachment_started = Some(true);
+    journal.save(directory)?;
+    let attach = match attach.process_group(0).spawn() {
+        Ok(attach) => attach,
+        Err(error) => {
+            journal.attachment_started = Some(false);
+            journal.save(directory)?;
+            return Err(error);
+        }
+    };
     if let Err(error) = checkpoint("attaching", directory, "") {
         super::command::terminate(attach);
         return Err(error);
@@ -651,6 +749,7 @@ impl Volume {
             mount: mount.clone(),
             filesystem: None,
             device_identity: None,
+            attachment_started: Some(false),
         };
         let lock = OpenOptions::new()
             .read(true)
@@ -799,6 +898,98 @@ mod tests {
         sync::mpsc,
         time::{Duration, Instant},
     };
+
+    fn unattached_journal(root: &Path) -> (tempfile::TempDir, Journal) {
+        let directory = tempfile::tempdir_in(root).unwrap();
+        let mount = directory.path().join("memory");
+        fs::DirBuilder::new().mode(0o700).create(&mount).unwrap();
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(directory.path().join("setup.lock"))
+            .unwrap();
+        let journal = Journal {
+            keeper: std::process::id(),
+            // A mismatched birth time represents a dead keeper with a reused PID.
+            birth: [0, 0],
+            lease_id: Some(uuid::Uuid::new_v4()),
+            device: String::new(),
+            mount,
+            filesystem: None,
+            device_identity: None,
+            attachment_started: Some(false),
+        };
+        journal.save(directory.path()).unwrap();
+        (directory, journal)
+    }
+
+    #[test]
+    fn recovery_removes_metadata_when_attachment_never_started() {
+        let root = tempfile::tempdir().unwrap();
+        let (directory, _) = unattached_journal(root.path());
+        recover_orphans(root.path()).unwrap();
+        assert!(!directory.path().exists());
+    }
+
+    #[test]
+    fn recovery_keeps_unknown_and_inflight_attachments() {
+        let root = tempfile::tempdir().unwrap();
+        for state in [None, Some(true)] {
+            let (directory, mut journal) = unattached_journal(root.path());
+            journal.attachment_started = state;
+            let mut value = serde_json::to_value(&journal).unwrap();
+            if state.is_none() {
+                // Existing journals predate the attachment_started field.
+                value.as_object_mut().unwrap().remove("attachment_started");
+            }
+            fs::write(
+                directory.path().join("lease.json"),
+                serde_json::to_vec(&value).unwrap(),
+            )
+            .unwrap();
+            let error = cleanup_directory(directory.path()).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+            assert!(directory.path().join("lease.json").exists());
+            assert!(journal.mount.exists());
+        }
+    }
+
+    #[test]
+    fn expired_recovery_budget_leaves_journals_for_another_attempt() {
+        let root = tempfile::tempdir().unwrap();
+        let (directory, _) = unattached_journal(root.path());
+        recover_orphans_until(root.path(), Instant::now()).unwrap();
+        assert!(directory.path().join("lease.json").exists());
+        recover_orphans(root.path()).unwrap();
+        assert!(!directory.path().exists());
+    }
+
+    #[test]
+    fn preattachment_cleanup_preserves_unexpected_mount_contents() {
+        let root = tempfile::tempdir().unwrap();
+        let (directory, journal) = unattached_journal(root.path());
+        let sentinel = journal.mount.join("unrelated");
+        fs::write(&sentinel, b"keep").unwrap();
+        assert!(cleanup_directory(directory.path()).is_err());
+        assert_eq!(fs::read(sentinel).unwrap(), b"keep");
+        assert!(directory.path().join("lease.json").exists());
+    }
+
+    #[test]
+    fn persistent_cleanup_failure_is_recorded_and_removed_after_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let (directory, journal) = unattached_journal(root.path());
+        let sentinel = journal.mount.join("unrelated");
+        fs::write(&sentinel, b"private-fixture").unwrap();
+        assert!(cleanup_with_retry(directory.path()).is_err());
+        let diagnostic = directory.path().join("cleanup.error");
+        assert!(!fs::read_to_string(&diagnostic).unwrap().is_empty());
+        assert_eq!(fs::metadata(&diagnostic).unwrap().mode() & 0o777, 0o600);
+        fs::remove_file(sentinel).unwrap();
+        recover_orphans(root.path()).unwrap();
+        assert!(!directory.path().exists());
+    }
 
     #[test]
     fn all_security_mount_flags_are_required() {
@@ -959,7 +1150,7 @@ mod tests {
 
     #[test]
     fn guardian_cleans_keeper_death_during_setup_without_another_lease() {
-        for stage in ["attaching", "attached", "formatted", "mounted"] {
+        for stage in ["prepared", "attaching", "attached", "formatted", "mounted"] {
             let mut paused = PausedSetup::start(stage);
             paused.keeper.kill().unwrap();
             paused.keeper.wait().unwrap();
@@ -970,7 +1161,7 @@ mod tests {
 
     #[test]
     fn worker_death_during_setup_is_recoverable() {
-        for stage in ["attaching", "attached", "formatted", "mounted"] {
+        for stage in ["prepared", "attaching", "attached", "formatted", "mounted"] {
             let mut paused = PausedSetup::start(stage);
             assert_eq!(unsafe { libc::kill(paused.worker as _, libc::SIGKILL) }, 0);
             assert!(!paused.keeper.wait().unwrap().success());

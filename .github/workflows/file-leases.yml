@@ -53,3 +53,5 @@ jobs:
           cargo test -p file-lease -- --test-threads=1
           cargo test -p secretspec --no-default-features --features cli --test file_lease_cli
           cargo test -p secretspec --no-default-features --features cli --test as_path_materializer --test ipc_resolver --test check_report_stream
+      - name: Measure small-file setup and cleanup latency
+        run: cargo run -p file-lease --example lifecycle_timings

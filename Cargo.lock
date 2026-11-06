@@ -2585,6 +2585,7 @@ checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 [[package]]
 name = "file-lease"
 version = "0.1.0"
+source = "git+https://github.com/cachix/file-lease?rev=e24c00602069a40ee74d9baa9faedd90ea5cae05#e24c00602069a40ee74d9baa9faedd90ea5cae05"
 dependencies = [
  "core-foundation 0.10.1",
  "libc",

@@ -1,6 +1,5 @@
 [workspace]
 members = [
-  "file-lease",
   "secretspec",
   "secretspec-derive",
   "libsecretspec",

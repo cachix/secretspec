@@ -27,7 +27,7 @@ path = "src/bin/git-credential-secretspec.rs"
 required-features = ["cli"]
 
 [dependencies]
-file-lease = { version = "0.1.0", path = "../file-lease" }
+file-lease = { version = "0.1.0", git = "https://github.com/cachix/file-lease", rev = "e24c00602069a40ee74d9baa9faedd90ea5cae05" }
 clap.workspace = true
 clap_complete = { workspace = true, optional = true }
 clap_complete_nushell = { workspace = true, optional = true }

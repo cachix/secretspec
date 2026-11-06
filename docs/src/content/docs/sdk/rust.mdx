@@ -381,7 +381,8 @@ hidden dependencies, before process exit. `keep_temp_files()` retains memory
 files until process exit. No secret
 payload is persisted to an ordinary temporary file.
 
-For explicit ownership, `FileLease` adapts the independent `file-lease` crate.
+For explicit ownership, `FileLease` adapts the independent
+[`file-lease`](https://github.com/cachix/file-lease) crate.
 Install a custom lease before validation when a shell or detached manager
 should own the files:
 

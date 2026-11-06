@@ -26,8 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release. Directory-relative operations prevent an unmounted volume from
   redirecting secret writes or cleanup into its disk-backed mount directory.
 
-- The new `file-lease` workspace crate provides reusable process-owned,
-  memory-backed files on Linux and macOS without depending on SecretSpec,
+- The standalone [`file-lease`](https://github.com/cachix/file-lease) crate
+  provides reusable process-owned, memory-backed files on Linux and macOS
+  without depending on SecretSpec,
   with automatic cleanup after process exit.
 
 - Secret-file delivery now uses memory-backed leases by default on Linux and

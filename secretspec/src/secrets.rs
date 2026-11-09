@@ -49,6 +49,7 @@ struct ChildSignalForwarder {
     signals: Option<Signals>,
     handle: SignalHandle,
     thread: Option<JoinHandle<()>>,
+    poll_signals: bool,
 }
 
 #[cfg(unix)]
@@ -56,12 +57,38 @@ impl ChildSignalForwarder {
     /// Install handlers before spawning the child so a signal cannot slip
     /// through while SecretSpec is becoming the child's supervisor.
     fn prepare() -> io::Result<Self> {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::net::UnixStream;
+
+        // Some sandboxes permit socketpair/read/write but deny send/recv,
+        // which Signal Hook uses for wake-ups. Its pending signal flags still
+        // work there, so fall back to bounded polling rather than blocking on
+        // a wake-up that can never arrive (including during shutdown).
+        let (reader, writer) = UnixStream::pair()?;
+        let mut byte = 0u8;
+        // SAFETY: both descriptors are live sockets and the one-byte buffers
+        // remain valid for these nonblocking calls.
+        let wakeup_available = unsafe {
+            libc::send(
+                writer.as_raw_fd(),
+                b"X".as_ptr().cast(),
+                1,
+                libc::MSG_DONTWAIT,
+            ) == 1
+                && libc::recv(
+                    reader.as_raw_fd(),
+                    (&mut byte as *mut u8).cast(),
+                    1,
+                    libc::MSG_DONTWAIT,
+                ) == 1
+        };
         let signals = Signals::new([SIGTERM, SIGINT, SIGHUP])?;
         let handle = signals.handle();
         Ok(Self {
             signals: Some(signals),
             handle,
             thread: None,
+            poll_signals: !wakeup_available,
         })
     }
 
@@ -70,13 +97,26 @@ impl ChildSignalForwarder {
             .signals
             .take()
             .expect("signal forwarder can only be started once");
+        let poll_signals = self.poll_signals;
         self.thread = Some(std::thread::spawn(move || {
-            for signal in signals.forever() {
+            let forward = |signal| {
                 // `kill` is async-signal-safe, and this call runs on an ordinary
                 // thread rather than inside the installed signal handler. The
                 // child may already have exited, in which case ESRCH is benign.
                 unsafe {
                     libc::kill(child_pid as libc::pid_t, signal);
+                }
+            };
+            if poll_signals {
+                while !signals.is_closed() {
+                    for signal in signals.pending() {
+                        forward(signal);
+                    }
+                    std::thread::park_timeout(Duration::from_millis(50));
+                }
+            } else {
+                for signal in signals.forever() {
+                    forward(signal);
                 }
             }
         }));
@@ -88,6 +128,7 @@ impl Drop for ChildSignalForwarder {
     fn drop(&mut self) {
         self.handle.close();
         if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
             let _ = thread.join();
         }
     }

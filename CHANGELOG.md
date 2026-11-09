@@ -82,6 +82,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Commands now finish and forward termination signals in restricted Unix
+  sandboxes that block socket wake-ups.
+
 - Interactive prompts now return an error when stderr is redirected instead of
   hanging and consuming a CPU core.
 

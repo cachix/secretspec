@@ -3817,7 +3817,7 @@ pub struct Resolved<T> {
     as_path_materializer: Option<Arc<crate::secrets::AsPathMaterializer>>,
 }
 
-/// Owns memory-backed files referenced by typed `as_path` fields.
+/// Owns files referenced by typed `as_path` fields.
 ///
 /// Sharing this owner makes cloning a [`Resolved`] value safe: the files are
 /// removed only after the final clone is dropped.

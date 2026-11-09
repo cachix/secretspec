@@ -13,6 +13,10 @@ fn run_check(project: &Path, present: bool) -> Output {
 }
 
 fn run(project: &Path, present: bool, args: &[&str]) -> Output {
+    run_with_storage(project, present, args, None)
+}
+
+fn run_with_storage(project: &Path, present: bool, args: &[&str], storage: Option<&str>) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_secretspec"));
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     if args.first() == Some(&"get") {
@@ -43,6 +47,10 @@ fn run(project: &Path, present: bool, args: &[&str]) -> Output {
         .env_remove("SECRETSPEC_REASON")
         .env_remove(SECRET_NAME);
 
+    command.env_remove("SECRETSPEC_FILE_STORAGE");
+    if let Some(storage) = storage {
+        command.env("SECRETSPEC_FILE_STORAGE", storage);
+    }
     if present {
         command.env(SECRET_NAME, "postgres://localhost/example");
     }
@@ -127,7 +135,12 @@ fn failing_check_keeps_the_report_separate_from_diagnostics() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn get_keeps_the_as_path_file_it_prints() {
     let project = project_with(true);
-    let output = run(project.path(), true, &["get", SECRET_NAME]);
+    let output = run_with_storage(
+        project.path(),
+        true,
+        &["get", SECRET_NAME],
+        Some("file-lease"),
+    );
 
     assert!(output.status.success(), "{}", stderr(&output));
     let stdout = stdout(&output);
@@ -163,7 +176,12 @@ fn check_leaves_no_as_path_files_behind() {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn unsupported_file_delivery_never_falls_back_to_temporary_files() {
     let project = project_with(true);
-    let output = run_check(project.path(), true);
+    let output = run_with_storage(
+        project.path(),
+        true,
+        &["check", "--no-prompt"],
+        Some("file-lease"),
+    );
     assert!(!output.status.success());
     assert!(stderr(&output).contains("requires Linux or macOS"));
     assert!(temp_files(project.path()).is_empty());

@@ -9,6 +9,7 @@ on:
       - secretspec/src/file_lease.rs
       - secretspec/src/cli/mod.rs
       - secretspec/tests/file_lease_cli.rs
+      - secretspec/tests/file_storage.rs
       - secretspec/tests/as_path_materializer.rs
       - secretspec/src/secrets.rs
       - secretspec/src/config.rs
@@ -33,9 +34,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-latest, macos-15, macos-26]
+        runner: [ubuntu-latest, macos-15, macos-26, windows-latest]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -48,5 +52,5 @@ jobs:
           key: file-leases
       - name: Test SecretSpec CLI and resolver integration
         run: |
-          cargo test --locked -p secretspec --no-default-features --features cli --test file_lease_cli
-          cargo test --locked -p secretspec --no-default-features --features cli --test as_path_materializer --test ipc_resolver --test check_report_stream
+          cargo test --locked -p secretspec --no-default-features --features cli --test file_lease_cli --test file_storage
+          cargo test --locked -p secretspec --no-default-features --features cli --test as_path_materializer --test ipc_resolver --test check_report_stream --test run_config_env

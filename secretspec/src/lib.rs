@@ -161,4 +161,4 @@ mod typed_tests;
 
 /// Process-owned file delivery (0.22+).
 pub mod file_lease;
-pub use file_lease::FileLease;
+pub use file_lease::{FileLease, FileStorageMode};

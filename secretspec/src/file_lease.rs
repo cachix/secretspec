@@ -1,6 +1,7 @@
-//! SecretSpec integration for process-owned file delivery (0.22+).
+//! Temporary files and opt-in process-owned file delivery (0.22+).
 //!
-//! Storage and process lifecycle management are provided by [`::file_lease`].
+//! Ordinary files use `tempfile`; memory-backed storage and process lifecycle
+//! management are provided by [`::file_lease`].
 
 pub use ::file_lease::ProcessInfo;
 #[cfg(feature = "cli")]
@@ -12,7 +13,7 @@ use std::{
 
 /// A cloneable lease on memory-backed secret files (0.22+).
 ///
-/// SecretSpec allocates leases automatically. Install an explicit lease before
+/// Temporary files are the default. Install an explicit lease before
 /// validation to choose its consuming process. Resolved values retain it. Dropping the
 /// final owner releases files unless ownership has been handed to a consumer.
 /// The matching SecretSpec executable must be alongside the host or on PATH.
@@ -95,15 +96,83 @@ pub(crate) enum DetachedOwner {
     Invoker,
 }
 
-/// Reuse storage while files from this manager remain live. Weak ownership
-/// releases idle helpers and RAM volumes without keeping results alive.
-#[derive(Default)]
-pub(crate) struct FileStorage(std::sync::Mutex<std::sync::Weak<FileLease>>);
+/// Storage used for `as_path` secret delivery (0.22+).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum FileStorageMode {
+    /// Ordinary private temporary files, removed when their owner is dropped.
+    #[default]
+    Temp,
+    /// Process-owned memory-backed files, without a disk fallback.
+    FileLease,
+}
+
+/// Reuse leased storage without retaining resolved results.
+pub(crate) struct FileStorage {
+    mode: Option<FileStorageMode>,
+    cached: std::sync::Mutex<std::sync::Weak<FileLease>>,
+}
+
+impl Default for FileStorage {
+    fn default() -> Self {
+        let mode = match std::env::var("SECRETSPEC_FILE_STORAGE") {
+            Err(std::env::VarError::NotPresent) => Some(FileStorageMode::Temp),
+            Ok(value) => match value.trim() {
+                "" | "temp" => Some(FileStorageMode::Temp),
+                "file-lease" => Some(FileStorageMode::FileLease),
+                _ => None,
+            },
+            Err(_) => None,
+        };
+        Self {
+            mode,
+            cached: Default::default(),
+        }
+    }
+}
 
 impl FileStorage {
+    pub(crate) fn new(mode: FileStorageMode) -> Self {
+        Self {
+            mode: Some(mode),
+            cached: Default::default(),
+        }
+    }
+
+    pub(crate) fn fresh(&self) -> Self {
+        Self {
+            mode: self.mode,
+            cached: Default::default(),
+        }
+    }
+
     pub(crate) fn materialize(&self, bytes: &[u8], suffix: Option<&str>) -> io::Result<SecretFile> {
+        let mode = self.mode.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "SECRETSPEC_FILE_STORAGE must be 'temp' or 'file-lease'",
+            )
+        })?;
+        if mode == FileStorageMode::Temp {
+            use std::io::Write;
+            let mut file = tempfile::Builder::new()
+                .suffix(suffix.unwrap_or(""))
+                .tempfile_in(std::path::absolute(std::env::temp_dir())?)?;
+            file.write_all(bytes)?;
+            file.flush()?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.as_file()
+                    .set_permissions(std::fs::Permissions::from_mode(0o400))?;
+            }
+            return Ok(SecretFile(std::sync::Arc::new(SecretFileInner {
+                path: file.path().to_owned(),
+                resource: FileResource::Temporary(std::sync::Mutex::new(file)),
+                revoke_on_drop: std::sync::atomic::AtomicBool::new(true),
+            })));
+        }
         let mut cached = self
-            .0
+            .cached
             .lock()
             .map_err(|_| io::Error::other("Secret file storage poisoned"))?;
         let lease = cached.upgrade();
@@ -127,35 +196,68 @@ impl FileStorage {
         };
         *cached = std::sync::Arc::downgrade(&lease);
         Ok(SecretFile(std::sync::Arc::new(SecretFileInner {
-            file,
-            lease,
+            path: file.path().to_owned(),
+            resource: FileResource::Leased { file, lease },
             revoke_on_drop: std::sync::atomic::AtomicBool::new(true),
         })))
     }
 }
 
-/// One secret path. Files from a resolution share a helper, but can be revoked
-/// independently, including when a resolver client releases an individual path.
+/// One owned secret path, backed by a temporary file or an explicit lease.
 #[derive(Clone)]
 pub(crate) struct SecretFile(std::sync::Arc<SecretFileInner>);
 
+enum FileResource {
+    Temporary(std::sync::Mutex<tempfile::NamedTempFile>),
+    Leased {
+        file: ::file_lease::LeasedFile,
+        lease: std::sync::Arc<FileLease>,
+    },
+}
+
 struct SecretFileInner {
-    file: ::file_lease::LeasedFile,
-    lease: std::sync::Arc<FileLease>,
+    path: PathBuf,
+    resource: FileResource,
     revoke_on_drop: std::sync::atomic::AtomicBool,
+}
+
+impl SecretFileInner {
+    fn release(&self) -> io::Result<()> {
+        match &self.resource {
+            FileResource::Temporary(file) => {
+                let mut file = file
+                    .lock()
+                    .map_err(|_| io::Error::other("Temporary file poisoned"))?;
+                match std::fs::remove_file(&self.path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+                file.disable_cleanup(true);
+                Ok(())
+            }
+            FileResource::Leased { file, lease } => lease.0.release(file).map_err(Into::into),
+        }
+    }
 }
 
 impl SecretFile {
     pub(crate) fn path(&self) -> &Path {
-        self.0.file.path()
+        &self.0.path
     }
 
     pub(crate) fn storage_id(&self) -> usize {
-        std::sync::Arc::as_ptr(&self.0.lease) as usize
+        match &self.0.resource {
+            FileResource::Temporary(_) => std::sync::Arc::as_ptr(&self.0) as usize,
+            FileResource::Leased { lease, .. } => std::sync::Arc::as_ptr(lease) as usize,
+        }
     }
 
     pub(crate) fn handoff_to(&self, owner: u32) -> io::Result<()> {
-        self.0.lease.handoff_to(owner)
+        match &self.0.resource {
+            FileResource::Temporary(_) => Ok(()),
+            FileResource::Leased { lease, .. } => lease.handoff_to(owner),
+        }
     }
 
     pub(crate) fn keep(self, owner: DetachedOwner) -> io::Result<PathBuf> {
@@ -166,12 +268,21 @@ impl SecretFile {
                 .insert(self.path().to_path_buf(), self.clone());
             return Ok(self.path().to_path_buf());
         }
-        let owner = match owner {
-            DetachedOwner::Process(pid) => pid,
-            #[cfg(feature = "cli")]
-            DetachedOwner::Invoker => invoking_process()?,
-        };
-        self.0.lease.handoff_to(owner)?;
+        match &self.0.resource {
+            FileResource::Temporary(file) => {
+                file.lock()
+                    .map_err(|_| io::Error::other("Temporary file poisoned"))?
+                    .disable_cleanup(true);
+            }
+            FileResource::Leased { lease, .. } => {
+                let owner = match owner {
+                    DetachedOwner::Process(pid) => pid,
+                    #[cfg(feature = "cli")]
+                    DetachedOwner::Invoker => invoking_process()?,
+                };
+                lease.handoff_to(owner)?;
+            }
+        }
         self.0
             .revoke_on_drop
             .store(false, std::sync::atomic::Ordering::Release);
@@ -262,12 +373,7 @@ pub(crate) fn release_group(id: &str) -> io::Result<usize> {
             .map_err(|_| io::Error::other("Secret file registry poisoned"))?
             .remove(&path);
         if let Some(file) = file {
-            if let Err(error) = file
-                .0
-                .lease
-                .0
-                .release(&file.0.file)
-                .map_err(io::Error::from)
+            if let Err(error) = file.0.release()
                 && path.exists()
             {
                 retained_files()
@@ -299,8 +405,9 @@ impl Drop for SecretFileInner {
         if self
             .revoke_on_drop
             .load(std::sync::atomic::Ordering::Acquire)
+            && let FileResource::Leased { file, lease } = &self.resource
         {
-            let _ = self.lease.0.release(&self.file);
+            let _ = lease.0.release(file);
         }
     }
 }

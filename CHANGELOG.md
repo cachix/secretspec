@@ -9,13 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- macOS file delivery (0.22+) removes unused recovery metadata after failures
+- File delivery uses private temporary files by default. Opt into process-owned
+  memory-backed files with `SECRETSPEC_FILE_STORAGE=file-lease` (0.22+) or the
+  Rust `Secrets::set_file_storage` API. Explicit lease failures never fall back
+  to disk; ordinary temporary files do not require a helper.
+
+- Opt-in macOS leased file delivery (0.22+) removes unused recovery metadata after failures
   before RAM-disk attachment, limits startup recovery work with a shared time
   budget, and records persistent cleanup failures for inspection. Interrupted
   recovery retains the journal for a later attempt. A full RAM volume rejects
   new allocations without retaining partial files or revoking existing secrets.
 
-- Linux file delivery (0.22+) locks memfd pages into RAM before writing secret
+- Opt-in Linux leased file delivery (0.22+) locks memfd pages into RAM before writing secret
   bytes and retains those locks until release. Allocation fails if the helper's
   memory-lock limit is insufficient, with an explanatory error and no pageable
   fallback. Older helpers are rejected before payload transfer. Source buffers
@@ -26,11 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release. Directory-relative operations prevent an unmounted volume from
   redirecting secret writes or cleanup into its disk-backed mount directory.
 
-- File delivery (0.22+) uses the published
+- Opt-in memory-backed file delivery (0.22+) uses the published
   [`file-lease`](https://crates.io/crates/file-lease) crate, with automatic
   process-owned cleanup on Linux and shared RAM volumes on macOS.
 
-- Secret-file delivery now uses memory-backed leases by default on Linux and
+- Opt-in secret-file delivery uses memory-backed leases on Linux and
   macOS, including CLI commands and resolver sessions. Exported CLI paths live
   until the invoking process exits; owned Rust results retain their files across
   clones, and one-shot SDK paths live until the embedding process exits.
@@ -61,7 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `config global show` continues to display saved user-global configuration.
 
 - `secretspec run --config-env=clear` removes the manifest, profile, provider,
-  scope, and reason environment overrides from the spawned child. The default,
+  scope, reason, and file-storage environment overrides from the spawned child. The default,
   `--config-env=inherit`, preserves existing inheritance behavior.
 
 - `secretspec run` now masks exact secret values in command stdout and stderr

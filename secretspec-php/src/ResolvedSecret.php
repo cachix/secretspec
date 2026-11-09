@@ -6,7 +6,7 @@ namespace Secretspec;
 
 /**
  * One resolved secret. Exactly one of {@see $value} / {@see $path} is set:
- * {@see $path} when the secret is delivered as a memory-backed file (`as_path`),
+ * {@see $path} when the secret is delivered as a temporary or leased file (`as_path`),
  * {@see $value} otherwise.
  */
 final class ResolvedSecret

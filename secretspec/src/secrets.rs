@@ -1357,7 +1357,7 @@ fn warn_primary_provider_failure(display_uri: Option<&str>, err: &SecretSpecErro
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Materialize {
     /// Full pass: mint-and-store a missing generatable secret and write each
-    /// `as_path` secret to a memory-backed file. Backs `validate()`/`resolve()`/`check`.
+    /// `as_path` secret to the selected file storage. Backs `validate()`/`resolve()`/`check`.
     Values,
     /// Full pass for `run`: the same materialization as `Values`, plus secure
     /// controlling-terminal input for declarations with `prompt = true`.
@@ -1444,7 +1444,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             // A command can transfer its owner PID without changing the lifetime
             // of results from earlier or concurrent SDK resolutions.
             file_storage: if materialize.prompts() {
-                Arc::default()
+                Arc::new(manager.file_storage.fresh())
             } else {
                 manager.file_storage.clone()
             },
@@ -2427,7 +2427,7 @@ enum PreparedSecret {
     },
 }
 
-/// Named resolution with memory-backed file ownership retained by the caller.
+/// Named resolution with file ownership retained by the caller.
 /// Resolver sessions retain these owners; one-shot APIs hand files to the
 /// embedding process or the CLI's invoking process.
 pub(crate) enum OwnedNamedResolution<T = String> {
@@ -2763,7 +2763,7 @@ pub(crate) enum ConfigEnv {
     /// Preserve ambient configuration overrides (the default).
     #[default]
     Inherit,
-    /// Remove manifest, profile, provider, scope, and reason overrides.
+    /// Remove configuration selection and file-storage overrides.
     #[cfg(feature = "cli")]
     Clear,
 }
@@ -2779,6 +2779,7 @@ impl ConfigEnv {
                 "SECRETSPEC_PROVIDER",
                 "SECRETSPEC_SCOPE",
                 "SECRETSPEC_REASON",
+                "SECRETSPEC_FILE_STORAGE",
             ],
         }
     }
@@ -3211,6 +3212,15 @@ impl Secrets {
     #[cfg(feature = "cli")]
     pub(crate) fn silence_progress(&mut self) {
         self.progress = false;
+    }
+
+    /// Select temporary or memory-backed `as_path` storage (0.22+).
+    ///
+    /// Temporary files are the default. This overrides `SECRETSPEC_FILE_STORAGE`
+    /// for future resolutions; existing results retain their original storage.
+    /// An explicitly installed custom materializer takes precedence.
+    pub fn set_file_storage(&mut self, mode: crate::FileStorageMode) {
+        self.file_storage = Arc::new(crate::file_lease::FileStorage::new(mode));
     }
 
     /// Override `as_path` materialization (0.22+).
@@ -4464,8 +4474,8 @@ impl Secrets {
 
     /// Inserts a resolved secret into the working set, applying its optional
     /// storage decoding and extraction when the value crossed a storage
-    /// boundary, then transparently materializing an `as_path` value to an
-    /// memory-backed file whose lifetime is tied to `temp_files`. Shared by
+    /// boundary, then transparently materializing an `as_path` value to a
+    /// file whose lifetime is tied to `temp_files`. Shared by
     /// every resolution branch so stored-value transforms cannot drift.
     #[allow(clippy::too_many_arguments)]
     fn insert_resolved(
@@ -7060,8 +7070,8 @@ impl Secrets {
         }
     }
 
-    /// Materialize logical bytes in memory-backed storage (0.22+), or invoke
-    /// the caller's explicit materializer. Failures never fall back to disk.
+    /// Materialize logical bytes in the selected storage, or invoke the caller's
+    /// explicit materializer. File-lease and custom failures never fall back to disk.
     fn materialize_secret_file(
         &self,
         secret: &[u8],
@@ -7176,7 +7186,7 @@ impl Secrets {
     /// Resolve inline values as arbitrary bytes (0.21+).
     ///
     /// Like [`Self::resolve`], but without converting inline values to text.
-    /// `as_path` values still return paths to process-owned memory files.
+    /// `as_path` values return paths in the selected file storage.
     pub fn resolve_bytes(&self) -> Result<ResolveResponse<SecretBytes>> {
         self.resolve_impl(true, |_, value| Ok(value))
     }
@@ -8324,8 +8334,8 @@ impl Secrets {
     /// counterpart to [`Secrets::run`]: it never prompts and errors when a
     /// required secret is missing, so CI can gate on it.
     ///
-    /// In 0.22+, `as_path` secrets use memory-backed files. Ownership is handed
-    /// to the CLI caller or embedding process before emitting paths.
+    /// Temporary files are persisted for the caller to clean up. With opt-in
+    /// file leases (0.22+), paths are handed to the caller's process instead.
     ///
     /// Output is written to `out` rather than directly to stdout, so an SDK/FFI
     /// caller can capture the formatted bytes and a broken pipe surfaces as a

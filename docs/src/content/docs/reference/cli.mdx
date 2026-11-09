@@ -617,10 +617,11 @@ $ secretspec check --profile production --json
 
 <VersionCompatibility version="0.22" kind="changed">
 
-`as_path` secrets use memory-backed files on Linux and macOS. Printed paths
-remain available until the invoking process exits, including across shell
-command substitution. Unsupported platforms and storage failures return an
-error without writing secret payloads to temporary files. See
+`as_path` secrets use private temporary files by default. Printed paths persist
+for the caller to remove. Set `SECRETSPEC_FILE_STORAGE=file-lease` (0.22+) to
+use memory-backed files on Linux and macOS; these paths are revoked when the
+invoking process exits, including across shell command substitution. Explicit
+lease failures never fall back to disk. See
 [file lifetimes](/reference/configuration/#as_path-option).
 
 </VersionCompatibility>
@@ -959,7 +960,8 @@ $ secretspec run --config-env=inherit -- make deploy # 0.22+
 ```
 
 `clear` removes exactly `SECRETSPEC_FILE`, `SECRETSPEC_PROFILE`,
-`SECRETSPEC_PROVIDER`, `SECRETSPEC_SCOPE`, and `SECRETSPEC_REASON` from the spawned
+`SECRETSPEC_PROVIDER`, `SECRETSPEC_SCOPE`, `SECRETSPEC_REASON`, and
+`SECRETSPEC_FILE_STORAGE` from the spawned
 child's environment, even if those names are declared as application secrets.
 It leaves other environment variables and injected application secrets available.
 Scope-excluded secrets continue to be removed in both modes.
@@ -989,10 +991,11 @@ behavior. Other commands, including `get` and `export`, still return values.
 
 <VersionCompatibility version="0.22" kind="changed">
 
-`as_path` secrets use memory-backed files on Linux and macOS. Printed paths
-remain available until the invoking process exits, including across shell
-command substitution. Unsupported platforms and storage failures return an
-error without writing secret payloads to temporary files. See
+`as_path` secrets use private temporary files by default. Printed paths persist
+for the caller to remove. Set `SECRETSPEC_FILE_STORAGE=file-lease` (0.22+) to
+use memory-backed files on Linux and macOS; these paths are revoked when the
+invoking process exits, including across shell command substitution. Explicit
+lease failures never fall back to disk. See
 [file lifetimes](/reference/configuration/#as_path-option).
 
 </VersionCompatibility>
@@ -1267,6 +1270,7 @@ Regenerate that file after upgrading SecretSpec.
 | `SECRETSPEC_PROVIDER` | Default provider to use |
 | `SECRETSPEC_FILE` | Path to `secretspec.toml` (same as `--file`) |
 | `SECRETSPEC_REASON` | Reason for accessing secrets (same as `--reason`) |
+| `SECRETSPEC_FILE_STORAGE` (0.22+) | `temp` (default) or `file-lease` for process-owned memory-backed file delivery |
 
 ## Quick Start Workflow
 

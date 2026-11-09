@@ -85,6 +85,7 @@ fn validated_and_cloned_values_retain_the_lease() {
     std::fs::write(root.path().join("secretspec.toml"), "[project]\nname='file-lease-test'\nrevision='1.0'\nrequire_reason=false\n[profiles.default]\nKEY={description='key',as_path=true}\n").unwrap();
     std::fs::write(root.path().join(".env"), "KEY=public-test-key\n").unwrap();
     let mut spec = secretspec::Secrets::load_from(&root.path().join("secretspec.toml")).unwrap();
+    spec.set_file_storage(secretspec::FileStorageMode::FileLease);
     spec.set_provider("dotenv:.env");
     let validated = spec.validate().unwrap().unwrap();
     let path = std::path::PathBuf::from(
@@ -120,6 +121,7 @@ fn configure(command: &mut Command, root: &std::path::Path) {
     command
         .current_dir(root)
         .env("CLI", env!("CARGO_BIN_EXE_secretspec"))
+        .env("SECRETSPEC_FILE_STORAGE", "file-lease")
         .env("HOME", root)
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("XDG_STATE_HOME", root.join("state"))
@@ -238,6 +240,7 @@ fn run_files_follow_the_consumer_after_launcher_sigkill() {
 fn native_release_revokes_hidden_dependencies_and_is_idempotent() {
     let root = cli_project();
     let mut spec = secretspec::Secrets::load_from(&root.path().join("secretspec.toml")).unwrap();
+    spec.set_file_storage(secretspec::FileStorageMode::FileLease);
     spec.set_provider("env");
     spec.set_scope("app");
     let resolved = spec.resolve().unwrap();
@@ -274,6 +277,7 @@ fn native_release_revokes_hidden_dependencies_and_is_idempotent() {
 fn separate_results_share_storage_but_release_independently() {
     let root = cli_project();
     let mut spec = secretspec::Secrets::load_from(&root.path().join("secretspec.toml")).unwrap();
+    spec.set_file_storage(secretspec::FileStorageMode::FileLease);
     spec.set_provider("env");
     let first = spec.resolve().unwrap();
     let second = spec.resolve().unwrap();
@@ -292,6 +296,7 @@ fn separate_results_share_storage_but_release_independently() {
 fn native_reader_requires_a_live_result_and_its_exact_path() {
     let root = cli_project();
     let mut spec = secretspec::Secrets::load_from(&root.path().join("secretspec.toml")).unwrap();
+    spec.set_file_storage(secretspec::FileStorageMode::FileLease);
     spec.set_provider("env");
     let first = spec.resolve().unwrap();
     let second = spec.resolve().unwrap();
@@ -343,6 +348,7 @@ fn exhausted_descriptor_namespace_rotates_storage_child() {
     assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
     let root = cli_project();
     let mut spec = secretspec::Secrets::load_from(&root.path().join("secretspec.toml")).unwrap();
+    spec.set_file_storage(secretspec::FileStorageMode::FileLease);
     spec.set_provider("env");
     let anchor = spec.validate().unwrap().unwrap();
     let path = anchor.resolved.secrets["KEY"].try_as_utf8().unwrap();

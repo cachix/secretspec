@@ -5,12 +5,13 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
-const OVERRIDES: [&str; 5] = [
+const OVERRIDES: [&str; 6] = [
     "SECRETSPEC_FILE",
     "SECRETSPEC_PROFILE",
     "SECRETSPEC_PROVIDER",
     "SECRETSPEC_SCOPE",
     "SECRETSPEC_REASON",
+    "SECRETSPEC_FILE_STORAGE",
 ];
 
 fn project() -> tempfile::TempDir {
@@ -52,6 +53,7 @@ fn command(project: &Path) -> Command {
         .env("SECRETSPEC_PROVIDER", "null")
         .env("SECRETSPEC_SCOPE", "api")
         .env("SECRETSPEC_REASON", "outer-reason")
+        .env("SECRETSPEC_FILE_STORAGE", "temp")
         .env("SECRETSPEC_UNRELATED", "passthrough")
         .env("APPLICATION_SETTING", "preserved")
         .env("HIDDEN", "inherited-hidden-value")
@@ -100,6 +102,7 @@ fn environment_child() {
             ("SECRETSPEC_PROVIDER", "null".into()),
             ("SECRETSPEC_SCOPE", "api".into()),
             ("SECRETSPEC_REASON", "outer-reason".into()),
+            ("SECRETSPEC_FILE_STORAGE", "temp".into()),
         ] {
             assert_eq!(std::env::var(key).unwrap(), expected, "{key}");
         }
@@ -142,7 +145,7 @@ fn explicit_inherit_preserves_ambient_values_instead_of_exporting_cli_overrides(
 }
 
 #[test]
-fn clear_removes_all_five_overrides_but_keeps_injected_secrets_and_other_environment() {
+fn clear_removes_all_six_overrides_but_keeps_injected_secrets_and_other_environment() {
     let project = project();
     let mut cmd = command(project.path());
     cmd.args(["--config-env", "clear"]);

@@ -38,18 +38,20 @@ resolved = Secretspec::SecretSpec.builder.with_scope("api").load
 
 ## Cleanup
 
-In SecretSpec **0.22+**, `as_path` delivery uses memory-backed leases on Linux
-and macOS. Install the matching `secretspec` executable beside the application
-or on PATH to host the helper. `SECRETSPEC_BIN` can select its location (0.22+). Cleanup releases the complete result, including
-hidden file dependencies, through the native lease API. Other platforms,
-including Windows, and storage failures return an error without a disk fallback.
-Older runtimes retain their existing temporary-file behavior.
+`as_path` uses private temporary files by default. Set
+`SECRETSPEC_FILE_STORAGE=file-lease` to opt into process-owned, memory-backed
+files on Linux and macOS (0.22+). This mode requires the matching `secretspec`
+executable beside the application or on PATH; `SECRETSPEC_BIN` selects it.
+Linux leases require sufficient `RLIMIT_MEMLOCK`. Explicit lease failures and
+unsupported platforms return errors without a disk fallback.
 
-Linux helpers require a sufficient `RLIMIT_MEMLOCK` for page-rounded live file
-sizes (0.22+). See [file delivery limits](https://secretspec.dev/reference/configuration/#as_path-option).
+SDK cleanup releases visible files and hidden composition dependencies for
+either backend. Temporary files must be explicitly cleaned up; they are not
+revoked automatically on process exit. See
+[file delivery and lifetimes](https://secretspec.dev/reference/configuration/#as_path-option).
 
 
-`as_path` paths remain valid after resolution until cleanup or process exit. Pass a
+`as_path` paths remain valid after resolution until explicit cleanup. Pass a
 block to `load` (which closes automatically) or call `resolved.close` when done
 so the secret files do not accumulate in the temp dir.
 

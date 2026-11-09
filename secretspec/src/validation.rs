@@ -15,7 +15,7 @@ use std::fmt;
 pub struct ValidatedSecrets {
     /// Resolved secrets with provider and profile information.
     /// Inline values retain arbitrary bytes starting with 0.21; `as_path`
-    /// entries contain the UTF-8 bytes of their memory-backed file paths.
+    /// entries contain the UTF-8 bytes of their materialized file paths.
     pub resolved: Resolved<HashMap<String, SecretBytes>>,
     /// List of optional secrets that are missing
     pub missing_optional: Vec<String>,
@@ -24,7 +24,7 @@ pub struct ValidatedSecrets {
     /// Value-free per-secret resolution provenance (which provider answered,
     /// generated, defaulted, as_path). Drives `check --json`/`--explain`.
     pub resolution: Vec<SecretResolution>,
-    /// Memory-backed files retained by this result and its resolved-value clones.
+    /// Files retained by this result and its resolved-value clones.
     #[doc(hidden)]
     pub(crate) temp_files: Vec<SecretFile>,
     /// Logical bytes captured before materialization and scope filtering. Never reported.
@@ -93,8 +93,8 @@ impl ValidatedSecrets {
 
     /// Hand file ownership to the embedding process (0.22+).
     ///
-    /// The historical method name is retained for compatibility. Files remain
-    /// memory-backed and their paths are revoked when this process exits.
+    /// Temporary files remain on disk until explicitly removed. Opt-in leased
+    /// files remain memory-backed and are revoked when this process exits.
     /// Returns the retained paths. Custom materializers must use their own
     /// handoff API and return an error here.
     pub fn keep_temp_files(&mut self) -> Result<Vec<std::path::PathBuf>, std::io::Error> {

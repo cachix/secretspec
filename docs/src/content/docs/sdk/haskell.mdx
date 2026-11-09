@@ -31,15 +31,17 @@ throws `SecretSpecError` (with a stable `errorKind`).
 
 <VersionCompatibility version="0.22" kind="changed">
 
-`as_path` uses memory-backed leases on Linux and macOS. Install the matching
-`secretspec` executable beside the application or on PATH to host its helper.
-`SECRETSPEC_BIN` can select its location (0.22+).
-The SDK's cleanup method revokes the result's files, including hidden
-composition dependencies. Unsupported platforms, including Windows, and storage
-failures return an error without falling back to disk.
+`as_path` uses private temporary files by default. Set
+`SECRETSPEC_FILE_STORAGE=file-lease` to opt into process-owned, memory-backed
+files on Linux and macOS (0.22+). This mode requires the matching `secretspec`
+executable beside the application or on PATH; `SECRETSPEC_BIN` selects it.
+Linux leases require sufficient `RLIMIT_MEMLOCK`. Explicit lease failures and
+unsupported platforms return errors without a disk fallback.
 
-Linux helpers require a sufficient `RLIMIT_MEMLOCK` for page-rounded live file
-sizes (0.22+). See [file delivery limits](/reference/configuration/#as_path-option).
+SDK cleanup releases visible files and hidden composition dependencies for
+either backend. Temporary files must be explicitly cleaned up; they are not
+revoked automatically on process exit. See
+[file delivery and lifetimes](/reference/configuration/#as_path-option).
 
 </VersionCompatibility>
 

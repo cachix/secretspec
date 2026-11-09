@@ -109,7 +109,7 @@ public final class Resolved {
         try JSONEncoder().encode(fields())
     }
 
-    /// Revokes memory-backed files and hidden dependencies (0.22+) for `as_path` secrets.
+    /// Revokes files and hidden dependencies (0.22+) for `as_path` secrets.
     public func close() throws {
         guard !closed else {
             return

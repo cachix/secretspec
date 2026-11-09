@@ -249,7 +249,7 @@ Each secret variable is defined as a table with the following fields:
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
 | `ref` | table | No | Coordinates naming an externally managed secret in the provider's store (e.g. `ref = { item = "db", field = "password" }`) |
 | `refs` (0.19+) | table | No | Provider-alias-scoped coordinates, keyed by leaf alias (e.g. `refs = { source = { item = "old" }, target = { item = "new" } }`); mutually exclusive with `ref` |
-| `as_path` | boolean | No | Return a file path; memory-backed on Linux/macOS (0.22+, default: false) |
+| `as_path` | boolean | No | Return a temporary file path; opt-in memory-backed leases (0.22+, default: false) |
 | `encoding` (0.19+) | `"base64"`, `"base64url"`, or `"hex"` | No | Encode logical values before storage writes and decode stored values after reads |
 | `extract` (0.19+) | table | No | Select one field from stored JSON/INI text, or from the text of the secret named by `from` (0.22+) |
 | `type` | string | No | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key`, `passphrase` (0.22+), `mnemonic` (0.22+), `openpgp_private_key` (0.21+), `ssh_private_key` (0.21+), `wireguard_private_key` (0.22+), `jwk_private_key` (0.22+), `age_identity` (0.22+), `x509_identity` (0.22+). Typed conversion targets (0.22+): `pkcs12`, `pkcs8_private_key`, `x509_certificate`, `x509_certificate_chain`, `x509_issuer_chain` |
@@ -807,20 +807,18 @@ terminated by this timeout.
 
 <VersionCompatibility version="0.22" kind="changed">
 
-Secret files now use memory-backed leases by default on Linux and macOS.
-Storage failures and unsupported platforms, including Windows, return an error
-without falling back to disk. Install the matching `secretspec` executable next
-to an embedding application or on PATH to host its helper.
+Secret files use private temporary files by default. Set
+`SECRETSPEC_FILE_STORAGE=file-lease` to opt into process-owned memory-backed
+files on Linux and macOS. Rust callers can instead use
+`Secrets::set_file_storage(FileStorageMode::FileLease)`. These choices are new
+in 0.22. Explicit lease failures and unsupported platforms return errors
+without falling back to disk.
 
-Linux helpers lock the leased file pages into RAM before writing secret bytes
-(0.22+). Allocation fails if `mlock()` fails. The helper inherits
-`RLIMIT_MEMLOCK`; live files consume their sizes rounded up to whole pages.
-Configure a sufficient memory-lock limit for the application or service.
-
-On macOS, each allocation and release verifies the private RAM volume and its
-security mount flags. Directory-relative writes and cleanup prevent an
-unmounted RAM volume from redirecting operations into its disk-backed mount
-directory (0.22+).
+The opt-in backend needs a matching `secretspec` executable beside the
+application or on PATH; `SECRETSPEC_BIN` selects it. Linux leases lock pages
+before writing and fail if `RLIMIT_MEMLOCK` is insufficient. macOS leases use
+validated private RAM volumes with independent file cleanup, capacity spillover,
+and per-volume crash recovery. A shared manager failure affects its entire pool.
 
 </VersionCompatibility>
 
@@ -851,13 +849,14 @@ exports require UTF-8.
 
 | Context | Behavior |
 |---------|----------|
-| CLI `get`, `export` (0.22+) | Paths are handed to the invoking process, skipping forked shell intermediaries, and revoked when that owner exits |
-| CLI `run` (0.22+) | Memory-backed files follow the consuming process and are revoked when it exits |
+| CLI `get`, `export` | Temporary paths persist for the caller to remove. With `file-lease` (0.22+), paths follow the invoking process and are revoked on its exit |
+| CLI `run` | Temporary files are removed when the command completes normally. With `file-lease` (0.22+), files follow the consuming process even if the launcher is killed |
 | CLI `check` | Files are deleted when the command exits (0.22+; earlier versions left them behind) |
-| Rust SDK (0.22+) | Owned results and their clones retain files; one-shot reads and `keep_temp_files()` hand files to the embedding process until it exits |
+| Rust SDK (0.22+) | Owned results and clones retain files. One-shot results support explicit `close()`. Persisted temporary files require explicit removal; leased paths are revoked on process exit |
 | Rust SDK types | `PathBuf` or `Option<PathBuf>` instead of `String` |
 
-Linux file pages stay locked only while the helper retains them (0.22+).
+With `file-lease`, Linux file pages stay locked only while the helper retains
+them (0.22+).
 Source buffers, transport buffers, and consumer copies remain outside that
 protection. Readers surviving revocation can retain bytes after unlocking.
 Memory-backed storage does not prevent hibernation or diagnostic captures, or access by other

@@ -148,7 +148,7 @@ revoked automatically on process exit. See
 </VersionCompatibility>
 
 
-File-shaped secrets are materialized as mode-0400 files. Call
+Files use mode 0400 on Unix. Call
 `resolved.close()` after the last consumer finishes with those paths.
 `Resolved` also performs best-effort cleanup when it is deinitialized, but
 explicit cleanup gives deterministic lifetime and reports filesystem errors.

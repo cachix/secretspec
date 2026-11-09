@@ -158,7 +158,7 @@ revoked automatically on process exit. See
 </VersionCompatibility>
 
 
-File-shaped secrets are materialized as mode-0400 files. The returned
+Files use mode 0400 on Unix. The returned
 path must remain valid after `Load()`, so the caller owns its lifetime.
 `Resolved` implements `IDisposable`; use a `using` declaration or call `Close()`
 to remove these files deterministically:

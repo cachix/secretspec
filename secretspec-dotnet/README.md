@@ -88,7 +88,7 @@ revoked automatically on process exit. See
 [file delivery and lifetimes](https://secretspec.dev/reference/configuration/#as_path-option).
 
 
-An `as_path` secret is delivered through a mode-0400 file, and `Get()`
+An `as_path` secret is delivered through a file (mode 0400 on Unix), and `Get()`
 returns its path. `Resolved` implements `IDisposable`; keep the result in a
 `using` declaration or call `Close()` to remove those files when finished.
 

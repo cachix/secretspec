@@ -92,6 +92,30 @@ A version without an installer asset must fail rather than install latest.
 
 ## After every release
 
+### Container image (0.22+)
+
+Starting with 0.22, cargo-dist calls `publish-container.yml` after hosting a
+stable release. The workflow verifies the checksums of the existing musl
+archives, tests `/secretspec --version` on amd64 and arm64, and publishes one
+multi-platform image to `ghcr.io/cachix/secretspec:X.Y.Z`. Prereleases are
+skipped. There are no floating tags. The scratch image contains only
+`/secretspec`; users copy it into their application image.
+
+The publisher uses `GITHUB_TOKEN` with `contents: read` and `packages: write`.
+After the first publication, verify that the GHCR package has public visibility
+so users can pull it without authentication. Check both platforms:
+
+```bash
+docker run --rm --platform linux/amd64 ghcr.io/cachix/secretspec:X.Y.Z --version
+docker run --rm --platform linux/arm64 ghcr.io/cachix/secretspec:X.Y.Z --version
+```
+
+If publication fails after the GitHub Release is created, rerun the failed
+container job in the Release workflow. Keep its cargo-dist hook and permissions
+in `dist-workspace.toml`, then regenerate CI with `dist generate --mode ci`.
+
+### Nixpkgs
+
 Once the release artifacts are available, update the `secretspec` package in
 Nixpkgs. From a Nixpkgs checkout, let `nix-update` update the crate source and
 Cargo dependency hashes and verify that the package builds:

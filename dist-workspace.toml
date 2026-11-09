@@ -29,6 +29,9 @@ targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = true
+# Package the existing static Linux release binaries as a multi-platform image.
+publish-jobs = ["./publish-container"]
+github-custom-job-permissions = { publish-container = { contents = "read", packages = "write" } }
 
 # https://github.com/axodotdev/cargo-dist/issues/74
 [dist.github-custom-runners]

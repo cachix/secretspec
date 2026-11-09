@@ -165,6 +165,22 @@ Running `secretspec-update` still updates to the latest release.
 
 See the [installation guide](https://secretspec.dev/quick-start#installation) for more options including Nix and Devenv.
 
+### Docker (0.22+)
+
+Copy the static Linux binary from the minimal GHCR image into your own image:
+
+```dockerfile
+FROM ghcr.io/cachix/secretspec:0.22.0 AS secretspec-bin
+FROM alpine:3.23
+RUN apk add --no-cache ca-certificates
+COPY --from=secretspec-bin /secretspec /usr/local/bin/secretspec
+```
+
+Images are published for stable releases starting with 0.22.0, with version tags
+without a leading `v`. They support `linux/amd64` and `linux/arm64` and contain
+only `/secretspec`. Install any external provider tools in your application image.
+See the [Docker installation guide](https://secretspec.dev/quick-start#installation).
+
 ## Configuration
 
 Editor autocomplete is available through JSON Schemas (0.21+). Add

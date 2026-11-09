@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Minimal container images (0.22+) at `ghcr.io/cachix/secretspec`, containing
+  the static Linux binary at `/secretspec` for amd64 and arm64. Copy the binary
+  into your own image using a versioned image tag.
+
 - `secretspec add` accepts `--optional` and `--required` (0.22+) to override
   profile defaults when declaring a secret. Omitting both keeps the defaults.
 

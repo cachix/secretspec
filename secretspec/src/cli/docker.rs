@@ -4,6 +4,7 @@ use crate::integration::docker::{
     canonical_registry, docker_config_path, load_embedded_docker_credentials, load_state,
     state_entry_path, state_path, valid_username,
 };
+use crate::prompt::CheckedPrompt;
 use crate::{CallerContext, Secrets};
 use clap::Subcommand;
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
@@ -659,7 +660,7 @@ fn confirm(yes: bool, prompt: &str) -> Result<bool> {
     }
     if !inquire::Confirm::new(prompt)
         .with_default(false)
-        .prompt()
+        .prompt_checked()
         .into_diagnostic()?
     {
         println!("Cancelled.");

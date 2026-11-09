@@ -9,6 +9,7 @@ use crate::config::{
 };
 use crate::error::{Result, SecretSpecError};
 use crate::plan::{PlannedSecret, ResolutionPlan, ResolvedCache, Route};
+use crate::prompt::CheckedPrompt;
 use crate::provider::{
     Address, OwnedAddress, ProducedValuePersistence, Provider as ProviderTrait,
     ProviderCredentials, ProviderValue, same_storage_container,
@@ -5728,7 +5729,7 @@ impl Secrets {
                         "Enter value for {name} (profile: {profile_name}):"
                     ))
                     .without_confirmation()
-                    .prompt()?;
+                    .prompt_checked()?;
                     Ok(SecretBytes::from_utf8(secret))
                 } else {
                     // Read from stdin when input is piped
@@ -6224,7 +6225,7 @@ impl Secrets {
                                 format!("[{}/{}] Enter value for {}:", i + 1, total, secret_name,);
                             let prompt = inquire::Password::new(&prompt_msg).without_confirmation();
 
-                            let value = SecretBytes::from_utf8(prompt.prompt()?);
+                            let value = SecretBytes::from_utf8(prompt.prompt_checked()?);
 
                             let encoded_value = match Self::prompted_value_for_storage(
                                 &planned,
@@ -6874,9 +6875,9 @@ impl Secrets {
     }
 
     /// Reads one missing value from the controlling terminal during `run`.
-    /// Inquire's crossterm backend opens `/dev/tty` on Unix (and the console
-    /// input handle on Windows) when stdin is redirected, so the child retains
-    /// its original stdin stream. Persistence is deliberately handled by
+    /// The Console backend requires terminal stderr and reads from `/dev/tty`
+    /// on Unix when stdin is redirected, preserving the child's stdin stream.
+    /// Persistence is deliberately handled by
     /// [`Self::try_prompt_secret`], after this input-only step succeeds.
     fn prompt_run_secret(
         &self,
@@ -6890,7 +6891,7 @@ impl Secrets {
             let message = format!("Enter value for {name} (profile: {profile}):");
             let entered = inquire::Password::new(&message)
                 .without_confirmation()
-                .prompt()
+                .prompt_checked()
                 .map_err(|error| match error {
                     inquire::InquireError::NotTTY | inquire::InquireError::IO(_) => {
                         SecretSpecError::PromptUnavailable(name.to_string())

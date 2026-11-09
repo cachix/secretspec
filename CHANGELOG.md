@@ -92,6 +92,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Interactive prompts now return an error when stderr is piped or redirected
   instead of hanging and consuming a CPU core.
 
+- 1Password: `ref` coordinates whose vault, item, section, or field contain
+  characters that `op://` references cannot express (for example `:` in a vault
+  name or `/` in an item title) are now read through `op item get` instead of
+  failing. Other references keep using `op read` and `op inject`.
+
 - Undeclared secrets in `set`, `delete`, and `cache clear NAME` now report the
   profile and available secrets without a duplicated "Secret ... not found"
   wrapper. Rust callers receive `SecretSpecError::SecretNotDefined` for these

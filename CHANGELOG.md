@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - File delivery uses private temporary files by default. Opt into process-owned
   memory-backed files with `SECRETSPEC_FILE_STORAGE=file-lease` (0.22+) or the
   Rust `Secrets::set_file_storage` API. Explicit lease failures never fall back
-  to disk; ordinary temporary files do not require a helper.
+  to disk; ordinary temporary files do not require a helper and remain
+  available on Windows as well as Unix.
 
 - Opt-in macOS leased file delivery (0.22+) removes unused recovery metadata after failures
   before RAM-disk attachment, limits startup recovery work with a shared time

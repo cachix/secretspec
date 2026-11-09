@@ -76,7 +76,8 @@ fn materializer_errors_do_not_fall_back_to_temporary_files() {
 fn custom_paths_cannot_be_detached_from_their_owner() {
     let root = tempfile::tempdir().unwrap();
     let mut spec = project(root.path());
-    spec.set_as_path_materializer(|_, _| Ok("/custom/key".into()));
+    let path = root.path().join("custom-key");
+    spec.set_as_path_materializer(move |_, _| Ok(path.clone()));
     let error = spec.resolve().unwrap_err();
     assert!(error.to_string().contains("cannot be persisted"));
 }
@@ -106,7 +107,8 @@ fn scoped_compositions_cannot_detach_hidden_file_dependencies() {
     let mut spec = Secrets::load_from(&root.path().join("secretspec.toml")).unwrap();
     spec.set_provider("dotenv:.env");
     spec.set_scope("app");
-    spec.set_as_path_materializer(|_, _| Ok("/custom/key".into()));
+    let path = root.path().join("custom-key");
+    spec.set_as_path_materializer(move |_, _| Ok(path.clone()));
     assert!(
         spec.resolve()
             .unwrap_err()
@@ -119,7 +121,8 @@ fn scoped_compositions_cannot_detach_hidden_file_dependencies() {
 fn named_compositions_cannot_detach_custom_file_dependencies() {
     let root = tempfile::tempdir().unwrap();
     let mut spec = project(root.path());
-    spec.set_as_path_materializer(|_, _| Ok("/custom/key".into()));
+    let path = root.path().join("custom-key");
+    spec.set_as_path_materializer(move |_, _| Ok(path.clone()));
     for result in [spec.resolve_named("ARGS"), spec.resolve_named("KEY")] {
         assert!(
             result

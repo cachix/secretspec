@@ -85,8 +85,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Commands now finish and forward termination signals in restricted Unix
   sandboxes that block socket wake-ups.
 
-- Interactive prompts now return an error when stderr is redirected instead of
-  hanging and consuming a CPU core.
+- Interactive prompts now return an error when stderr is piped or redirected
+  instead of hanging and consuming a CPU core.
 
 - Undeclared secrets in `set`, `delete`, and `cache clear NAME` now report the
   profile and available secrets without a duplicated "Secret ... not found"

@@ -25,6 +25,24 @@ fn installed_cli_hosts_a_lease_without_an_application_helper_hook() {
 }
 
 #[test]
+fn published_lease_adapter_preserves_suffixes_and_io_errors() {
+    let lease = secretspec::FileLease::new(std::process::id())
+        .with_keeper_executable(env!("CARGO_BIN_EXE_secretspec"));
+    let error = lease
+        .materialize(b"invalid-suffix", Some("../escape"))
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+    let payload = b"binary\0fixture\n";
+    let path = lease.materialize(payload, Some(".pem")).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), payload);
+    #[cfg(target_os = "macos")]
+    assert_eq!(path.extension().unwrap(), "pem");
+    drop(lease);
+    assert!(!path.exists());
+}
+
+#[test]
 fn closed_standard_descriptors_child() {
     let Ok(mask) = std::env::var("SECRETSPEC_TEST_CLOSED_STDIO") else {
         return;

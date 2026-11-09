@@ -382,7 +382,7 @@ files until process exit. No secret
 payload is persisted to an ordinary temporary file.
 
 For explicit ownership, `FileLease` adapts the independent
-[`file-lease`](https://github.com/cachix/file-lease) crate.
+[`file-lease`](https://crates.io/crates/file-lease) crate.
 Install a custom lease before validation when a shell or detached manager
 should own the files:
 
@@ -399,8 +399,9 @@ before writing payloads and retains the mappings until release. Insufficient
 `RLIMIT_MEMLOCK` causes allocation to fail; live files consume page-rounded
 space. Source and consumer copies are not locked. See
 [file delivery limits](/reference/configuration/#as_path-option).
-macOS uses read-only files inside a private RAM disk, with
-ownership honored. The keeper watches its consumer through a Linux PID
+macOS uses read-only files inside private RAM volumes with ownership honored.
+In **0.22+**, overlapping leases from the same process and helper executable
+share a volume pool while retaining independent file cleanup. The keeper watches its consumer through a Linux PID
 file descriptor or a macOS process-exit event.
 
 Dropping the final owned result and lease releases the resources. Before an
@@ -417,8 +418,9 @@ embedding executable or on PATH, or select its packaged location with
 entry point. No user shell setup or PID environment variable is required.
 
 A killed Linux keeper releases its anonymous files in the kernel. On macOS,
-a guardian watches the keeper and automatically cleans up its RAM disk if the
-keeper dies. The setup worker stays alive as the guardian, in a
+each RAM volume has a guardian that watches the volume manager and cleans up
+if that manager dies. A lease helper crash revokes only its own files; a manager
+crash affects every lease in its pool. The setup worker stays alive as the guardian, in a
 separate process group, with no background service installation. Volume commands
 have deadlines and cleanup retries transient failures. If both processes die or
 cleanup keeps failing, a subsequent lease recovers journals belonging to dead
@@ -433,7 +435,8 @@ recovery attempt rather than losing the record. Recovery handles partially
 formatted or mounted volumes. Journals under `~/Library/Application Support/file-lease`
 contain only process and volume metadata. Secret contents are written only into
 the mounted RAM disk. Consumer exit, including `SIGKILL`, normally causes the
-keeper to remove paths, unmount, and detach without elevated privileges.
+keeper to remove its paths without elevated privileges. Surplus empty volumes
+are detached, and closing the last scope and controller tears down the pool.
 
 Startup recovery shares a five-second budget across scanning and volume-tool
 waits, leaving unfinished work for a later lease. Individual OS calls can still
@@ -442,8 +445,11 @@ cleanup failures are recorded in a private `cleanup.error` file beside the lease
 journal; it contains an error description, never secret contents. Successful
 recovery removes the diagnostic with the journal.
 
-The request size limit is 64 MiB. macOS leases use a 64 MiB volume, including
-filesystem overhead, so available capacity can be lower. Linux file suffix
+The request size limit is 64 MiB. Each macOS volume holds 64 MiB including
+filesystem overhead. The pool checks available space, spills into additional
+volumes on ENOSPC, and retains at most one empty volume for reuse. A request
+that cannot fit an empty volume fails without growing the pool on retry. There
+is no fixed total pool capacity limit. Linux file suffix
 hints are accepted but omitted from `/proc` paths; macOS preserves them.
 Other platforms, including Windows, and storage errors fail explicitly; there
 is no disk-file fallback. Explicitly installed custom materializers still

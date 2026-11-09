@@ -4,7 +4,7 @@
 
 pub use ::file_lease::ProcessInfo;
 #[cfg(feature = "cli")]
-pub(crate) use ::file_lease::maybe_run_keeper;
+pub(crate) use ::file_lease::maybe_run_helper as maybe_run_keeper;
 use std::{
     io,
     path::{Path, PathBuf},
@@ -40,7 +40,7 @@ impl FileLease {
             })
             .filter(|path| path.is_file());
         Self(
-            ::file_lease::FileLease::new(owner).with_keeper_executable(
+            ::file_lease::FileLease::new(owner).with_helper_executable(
                 configured
                     .or(sibling)
                     .unwrap_or_else(|| PathBuf::from("secretspec")),
@@ -50,7 +50,7 @@ impl FileLease {
 
     /// Select the matching SecretSpec executable before cloning or installing.
     pub fn with_keeper_executable(self, executable: impl Into<PathBuf>) -> Self {
-        Self(self.0.with_keeper_executable(executable))
+        Self(self.0.with_helper_executable(executable))
     }
 
     /// Deliver validated file secrets directly into this lease's storage.
@@ -61,17 +61,30 @@ impl FileLease {
 
     /// Materialize logical bytes directly into memory-backed storage.
     pub fn materialize(&self, bytes: &[u8], suffix: Option<&str>) -> io::Result<PathBuf> {
-        self.0.materialize(bytes, suffix)
+        self.materialize_file(bytes, suffix)
+            .map(::file_lease::LeasedFile::into_path)
+    }
+
+    fn materialize_file(
+        &self,
+        bytes: &[u8],
+        suffix: Option<&str>,
+    ) -> io::Result<::file_lease::LeasedFile> {
+        let mut options = ::file_lease::FileOptions::new();
+        if let Some(suffix) = suffix {
+            options = options.suffix(suffix);
+        }
+        self.0.materialize_with(bytes, &options).map_err(Into::into)
     }
 
     /// Keep exported files until the original consuming process exits.
     pub fn handoff(&self) -> io::Result<()> {
-        self.0.handoff()
+        self.0.handoff().map_err(Into::into)
     }
 
     /// Transfer an existing lease to another consuming process.
     pub fn handoff_to(&self, owner: u32) -> io::Result<()> {
-        self.0.handoff_to(owner)
+        self.0.handoff_to(owner).map_err(Into::into)
     }
 }
 
@@ -94,27 +107,27 @@ impl FileStorage {
             .lock()
             .map_err(|_| io::Error::other("Secret file storage poisoned"))?;
         let lease = cached.upgrade();
-        let (lease, path) = match lease {
-            Some(lease) => match lease.materialize(bytes, suffix) {
-                Ok(path) => (lease, path),
+        let (lease, file) = match lease {
+            Some(lease) => match lease.materialize_file(bytes, suffix) {
+                Ok(file) => (lease, file),
                 Err(_) => {
                     // A full volume, exhausted descriptor namespace, or failed
                     // helper must not affect existing readers. Try fresh memory
                     // storage once; never fall back to a disk-backed file.
                     let lease = std::sync::Arc::new(FileLease::new(std::process::id()));
-                    let path = lease.materialize(bytes, suffix)?;
-                    (lease, path)
+                    let file = lease.materialize_file(bytes, suffix)?;
+                    (lease, file)
                 }
             },
             None => {
                 let lease = std::sync::Arc::new(FileLease::new(std::process::id()));
-                let path = lease.materialize(bytes, suffix)?;
-                (lease, path)
+                let file = lease.materialize_file(bytes, suffix)?;
+                (lease, file)
             }
         };
         *cached = std::sync::Arc::downgrade(&lease);
         Ok(SecretFile(std::sync::Arc::new(SecretFileInner {
-            path,
+            file,
             lease,
             revoke_on_drop: std::sync::atomic::AtomicBool::new(true),
         })))
@@ -127,14 +140,14 @@ impl FileStorage {
 pub(crate) struct SecretFile(std::sync::Arc<SecretFileInner>);
 
 struct SecretFileInner {
-    path: PathBuf,
+    file: ::file_lease::LeasedFile,
     lease: std::sync::Arc<FileLease>,
     revoke_on_drop: std::sync::atomic::AtomicBool,
 }
 
 impl SecretFile {
     pub(crate) fn path(&self) -> &Path {
-        &self.0.path
+        self.0.file.path()
     }
 
     pub(crate) fn storage_id(&self) -> usize {
@@ -150,8 +163,8 @@ impl SecretFile {
             retained_files()
                 .lock()
                 .map_err(|_| io::Error::other("Secret file registry poisoned"))?
-                .insert(self.0.path.clone(), self.clone());
-            return Ok(self.0.path.clone());
+                .insert(self.path().to_path_buf(), self.clone());
+            return Ok(self.path().to_path_buf());
         }
         let owner = match owner {
             DetachedOwner::Process(pid) => pid,
@@ -162,7 +175,7 @@ impl SecretFile {
         self.0
             .revoke_on_drop
             .store(false, std::sync::atomic::Ordering::Release);
-        Ok(self.0.path.clone())
+        Ok(self.path().to_path_buf())
     }
 }
 
@@ -249,7 +262,12 @@ pub(crate) fn release_group(id: &str) -> io::Result<usize> {
             .map_err(|_| io::Error::other("Secret file registry poisoned"))?
             .remove(&path);
         if let Some(file) = file {
-            if let Err(error) = file.0.lease.0.release(&path)
+            if let Err(error) = file
+                .0
+                .lease
+                .0
+                .release(&file.0.file)
+                .map_err(io::Error::from)
                 && path.exists()
             {
                 retained_files()
@@ -282,7 +300,7 @@ impl Drop for SecretFileInner {
             .revoke_on_drop
             .load(std::sync::atomic::Ordering::Acquire)
         {
-            let _ = self.lease.0.release(&self.path);
+            let _ = self.lease.0.release(&self.file);
         }
     }
 }

@@ -57,6 +57,7 @@ pub(crate) mod ini_field;
 pub(crate) mod json_field;
 mod native;
 mod plan;
+mod prompt;
 mod redaction;
 mod report;
 mod resolve;

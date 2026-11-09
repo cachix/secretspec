@@ -82,7 +82,7 @@ pub enum SecretSpecError {
     #[error("Secret '{0}' is required but not set")]
     RequiredSecretMissing(String),
     #[error(
-        "Secret '{0}' requires an interactive prompt, but no controlling terminal is available"
+        "Secret '{0}' requires an interactive prompt, but terminal input or output is unavailable; ensure stderr is a terminal"
     )]
     PromptUnavailable(String),
     #[error("Prompted value for secret '{0}' cannot be empty")]

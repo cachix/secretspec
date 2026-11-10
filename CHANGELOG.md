@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Secret-file delivery closes temporary-file descriptors after writing, preserves
+  replacement files during resolver cleanup, and restores private Windows ACLs
+  and stale resolver-session recovery.
+
 - File delivery (0.22+) uses private temporary files by default, without a
   helper, on Windows, Linux, and macOS. Opt into process-owned memory-backed
   files through Rust's `Secrets::set_file_storage` API. Leased storage uses the

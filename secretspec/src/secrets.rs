@@ -2490,7 +2490,7 @@ impl<T> OwnedNamedResolution<T> {
                 ..
             } => {
                 keep_owned_files(supporting_files, owner)?;
-                let path = file.keep(owner)?;
+                let path = file.persist(owner)?;
                 Ok(NamedResolution::Resolved(ResolvedSecret {
                     value: None,
                     path: Some(path.to_string_lossy().into_owned()),
@@ -2528,7 +2528,7 @@ fn keep_owned_files(
     owner: crate::file_lease::DetachedOwner,
 ) -> Result<()> {
     for file in files {
-        file.keep(owner)?;
+        file.persist(owner)?;
     }
     Ok(())
 }
@@ -3220,6 +3220,15 @@ impl Secrets {
     /// An explicitly installed custom materializer takes precedence.
     pub fn set_file_storage(&mut self, mode: crate::FileStorageMode) {
         self.file_storage = Arc::new(crate::file_lease::FileStorage::new(mode));
+    }
+
+    #[cfg(feature = "cli")]
+    pub(crate) fn set_file_storage_directory(
+        &mut self,
+        directory: tempfile::TempDir,
+    ) -> io::Result<()> {
+        self.file_storage = Arc::new(crate::file_lease::FileStorage::in_directory(directory)?);
+        Ok(())
     }
 
     /// Override `as_path` materialization (0.22+).

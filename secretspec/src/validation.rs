@@ -98,12 +98,23 @@ impl ValidatedSecrets {
     /// Returns the retained paths. Custom materializers must use their own
     /// handoff API and return an error here.
     pub fn keep_temp_files(&mut self) -> Result<Vec<std::path::PathBuf>, std::io::Error> {
-        self.keep_files_for(crate::file_lease::DetachedOwner::Process(std::process::id()))
+        self.export_files(
+            crate::file_lease::DetachedOwner::Process(std::process::id()),
+            false,
+        )
     }
 
     pub(crate) fn keep_files_for(
         &mut self,
         owner: crate::file_lease::DetachedOwner,
+    ) -> Result<Vec<std::path::PathBuf>, std::io::Error> {
+        self.export_files(owner, true)
+    }
+
+    fn export_files(
+        &mut self,
+        owner: crate::file_lease::DetachedOwner,
+        tracked: bool,
     ) -> Result<Vec<std::path::PathBuf>, std::io::Error> {
         // A visible composition may refer to a hidden as_path dependency,
         // so the visible resolution entries cannot determine ownership.
@@ -117,7 +128,11 @@ impl ValidatedSecrets {
         let temp_files = std::mem::take(&mut self.temp_files);
 
         for temp_file in temp_files {
-            let path = temp_file.keep(owner)?;
+            let path = if tracked {
+                temp_file.keep(owner)?
+            } else {
+                temp_file.persist(owner)?
+            };
             paths.push(path);
         }
 

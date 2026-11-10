@@ -125,6 +125,11 @@ impl ResolverHandler for ResolverHandlerImpl {
             }
             secrets.validate_ipc_selection()?;
             cleanup_stale_session_dirs_once();
+            let directory = tempfile::Builder::new()
+                .prefix("secretspec-ipc-")
+                .tempdir_in(std::path::absolute(std::env::temp_dir())?)?;
+            mark_session_dir(directory.path())?;
+            secrets.set_file_storage_directory(directory)?;
             Ok::<_, SecretSpecError>(secrets)
         })
         .await
@@ -454,7 +459,25 @@ async fn retain_pending_supporting_files(
 }
 
 #[cfg(unix)]
+fn mark_session_dir(directory: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let marker = directory.join(".owner");
+    std::fs::write(&marker, std::process::id().to_string())?;
+    std::fs::set_permissions(marker, std::fs::Permissions::from_mode(0o400))
+}
+
+#[cfg(not(unix))]
+fn mark_session_dir(_: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
 fn cleanup_stale_session_dirs() {
+    cleanup_stale_session_dirs_in(&std::env::temp_dir());
+}
+
+#[cfg(unix)]
+fn cleanup_stale_session_dirs_in(root: &std::path::Path) {
     use std::os::unix::fs::MetadataExt;
 
     unsafe extern "C" {
@@ -463,7 +486,7 @@ fn cleanup_stale_session_dirs() {
     }
     // SAFETY: `geteuid` has no arguments and no memory-safety preconditions.
     let uid = unsafe { geteuid() };
-    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+    let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
     for entry in entries.flatten() {
@@ -535,7 +558,7 @@ fn cleanup_stale_session_dirs() {
 #[cfg(not(unix))]
 fn cleanup_stale_session_dirs() {
     // Refuse cleanup on platforms where this build cannot prove ownership and
-    // ACL isolation. New sessions keep secret payloads in memory-backed leases.
+    // ACL isolation. Normal session shutdown still removes its own files.
 }
 
 /// One `prompt = true` declaration waiting for a person, carried from the
@@ -691,6 +714,39 @@ mod tests {
             .unwrap()
             .as_millis() as u64
             + 2_000
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_cleanup_removes_only_expired_dead_sessions() {
+        use std::fs::{File, FileTimes};
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let expired = SystemTime::now() - STALE_SESSION_AGE - Duration::from_secs(60);
+        let make = |name: &str, owner: u32, old: bool| {
+            let path = root.path().join(name);
+            std::fs::create_dir(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::write(path.join(".owner"), owner.to_string()).unwrap();
+            std::fs::write(path.join("payload"), b"fixture").unwrap();
+            if old {
+                File::open(&path)
+                    .unwrap()
+                    .set_times(FileTimes::new().set_modified(expired))
+                    .unwrap();
+            }
+            path
+        };
+        let dead_pid = i32::MAX as u32;
+        let dead = make("secretspec-ipc-dead", dead_pid, true);
+        let live = make("secretspec-ipc-live", std::process::id(), true);
+        let fresh = make("secretspec-ipc-fresh", dead_pid, false);
+        let unrelated = make("unrelated", dead_pid, true);
+        cleanup_stale_session_dirs_in(root.path());
+        assert!(!dead.exists());
+        for path in [live, fresh, unrelated] {
+            assert_eq!(std::fs::read(path.join("payload")).unwrap(), b"fixture");
+        }
     }
 
     #[test]

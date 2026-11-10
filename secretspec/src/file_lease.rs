@@ -117,19 +117,29 @@ pub enum FileStorageMode {
 pub(crate) struct FileStorage {
     mode: FileStorageMode,
     cached: Mutex<Weak<FileLease>>,
+    directory: Option<Arc<TempDirectory>>,
 }
 
 impl FileStorage {
     pub(crate) fn new(mode: FileStorageMode) -> Self {
         Self {
             mode,
-            cached: Default::default(),
+            ..Default::default()
         }
+    }
+
+    #[cfg(any(feature = "cli", test))]
+    pub(crate) fn in_directory(directory: tempfile::TempDir) -> io::Result<Self> {
+        Ok(Self {
+            directory: Some(Arc::new(TempDirectory::new(directory)?)),
+            ..Default::default()
+        })
     }
 
     pub(crate) fn fresh(&self) -> Self {
         Self {
             mode: self.mode,
+            directory: self.directory.clone(),
             cached: Default::default(),
         }
     }
@@ -137,9 +147,22 @@ impl FileStorage {
     pub(crate) fn materialize(&self, bytes: &[u8], suffix: Option<&str>) -> io::Result<SecretFile> {
         if self.mode == FileStorageMode::Temp {
             use std::io::Write;
+            let root = std::path::absolute(std::env::temp_dir())?;
+            let directory = self.directory.clone();
+            #[cfg(windows)]
+            let directory = match directory {
+                Some(directory) => Some(directory),
+                None => Some(Arc::new(TempDirectory::new(
+                    tempfile::Builder::new()
+                        .prefix("secretspec-")
+                        .tempdir_in(&root)?,
+                )?)),
+            };
             let mut file = tempfile::Builder::new()
                 .suffix(suffix.unwrap_or(""))
-                .tempfile_in(std::path::absolute(std::env::temp_dir())?)?;
+                .tempfile_in(directory.as_ref().map_or(root.as_path(), |dir| dir.path()))?;
+            #[cfg(windows)]
+            crate::windows_security::make_path_private(file.path())?;
             file.write_all(bytes)?;
             file.flush()?;
             #[cfg(unix)]
@@ -148,9 +171,22 @@ impl FileStorage {
                 file.as_file()
                     .set_permissions(std::fs::Permissions::from_mode(0o400))?;
             }
+            let (descriptor, path) = file.into_parts();
+            // Only resolver sessions need an open identity handle. Persisted
+            // one-shot results retain path ownership without retaining an FD.
+            let identity = if self.directory.is_some() {
+                Some(same_file::Handle::from_file(descriptor)?)
+            } else {
+                drop(descriptor);
+                None
+            };
             return Ok(SecretFile(Arc::new(SecretFileInner {
-                path: file.path().to_owned(),
-                resource: FileResource::Temporary(Mutex::new(file)),
+                path: path.to_path_buf(),
+                resource: FileResource::Temporary {
+                    path: Mutex::new(path),
+                    identity,
+                    directory,
+                },
                 revoke_on_drop: AtomicBool::new(true),
             })));
         }
@@ -183,12 +219,47 @@ impl FileStorage {
     }
 }
 
+/// A private storage directory that never recursively removes replacement files.
+struct TempDirectory {
+    directory: tempfile::TempDir,
+    keep: AtomicBool,
+}
+
+impl TempDirectory {
+    fn new(directory: tempfile::TempDir) -> io::Result<Self> {
+        #[cfg(windows)]
+        crate::windows_security::make_path_private(directory.path())?;
+        Ok(Self {
+            directory,
+            keep: AtomicBool::new(false),
+        })
+    }
+
+    fn path(&self) -> &Path {
+        self.directory.path()
+    }
+}
+
+impl Drop for TempDirectory {
+    fn drop(&mut self) {
+        self.directory.disable_cleanup(true);
+        if !self.keep.load(Ordering::Acquire) {
+            let _ = std::fs::remove_file(self.path().join(".owner"));
+            let _ = std::fs::remove_dir(self.path());
+        }
+    }
+}
+
 /// One owned secret path, backed by a temporary file or an explicit lease.
 #[derive(Clone)]
 pub(crate) struct SecretFile(Arc<SecretFileInner>);
 
 enum FileResource {
-    Temporary(Mutex<tempfile::NamedTempFile>),
+    Temporary {
+        path: Mutex<tempfile::TempPath>,
+        identity: Option<same_file::Handle>,
+        directory: Option<Arc<TempDirectory>>,
+    },
     Leased {
         file: ::file_lease::LeasedFile,
         lease: Arc<FileLease>,
@@ -204,16 +275,26 @@ struct SecretFileInner {
 impl SecretFileInner {
     fn release(&self) -> io::Result<()> {
         match &self.resource {
-            FileResource::Temporary(file) => {
-                let mut file = file
+            FileResource::Temporary { path, identity, .. } => {
+                let mut path = path
                     .lock()
                     .map_err(|_| io::Error::other("Temporary file poisoned"))?;
+                // Cleanup goes through the identity check, including on errors;
+                // TempPath's destructor must not later unlink an unchecked path.
+                path.disable_cleanup(true);
+                if let Some(identity) = identity {
+                    match same_file::Handle::from_path(&self.path) {
+                        Ok(current) if &current != identity => return Ok(()),
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                        Err(error) => return Err(error),
+                        _ => {}
+                    }
+                }
                 match std::fs::remove_file(&self.path) {
                     Ok(()) => {}
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                     Err(error) => return Err(error),
                 }
-                file.disable_cleanup(true);
                 Ok(())
             }
             FileResource::Leased { file, lease } => lease.0.release(file).map_err(Into::into),
@@ -228,14 +309,14 @@ impl SecretFile {
 
     pub(crate) fn storage_id(&self) -> usize {
         match &self.0.resource {
-            FileResource::Temporary(_) => Arc::as_ptr(&self.0) as usize,
+            FileResource::Temporary { .. } => Arc::as_ptr(&self.0) as usize,
             FileResource::Leased { lease, .. } => Arc::as_ptr(lease) as usize,
         }
     }
 
     pub(crate) fn handoff_to(&self, owner: u32) -> io::Result<()> {
         match &self.0.resource {
-            FileResource::Temporary(_) => Ok(()),
+            FileResource::Temporary { .. } => Ok(()),
             FileResource::Leased { lease, .. } => lease.handoff_to(owner),
         }
     }
@@ -247,11 +328,27 @@ impl SecretFile {
                 .insert(self.path().to_path_buf(), self.clone());
             return Ok(self.path().to_path_buf());
         }
+        self.persist(owner)
+    }
+
+    /// Export a path without registering an owner that the caller cannot release.
+    pub(crate) fn persist(self, owner: DetachedOwner) -> io::Result<PathBuf> {
+        // Memory-backed one-shot paths still need a process-lifetime lease.
+        if matches!(self.0.resource, FileResource::Leased { .. })
+            && matches!(owner, DetachedOwner::Process(pid) if pid == std::process::id())
+        {
+            return self.keep(owner);
+        }
         match &self.0.resource {
-            FileResource::Temporary(file) => {
-                file.lock()
+            FileResource::Temporary {
+                path, directory, ..
+            } => {
+                path.lock()
                     .map_err(|_| io::Error::other("Temporary file poisoned"))?
                     .disable_cleanup(true);
+                if let Some(directory) = directory {
+                    directory.keep.store(true, Ordering::Release);
+                }
             }
             FileResource::Leased { lease, .. } => {
                 let owner = match owner {
@@ -357,10 +454,8 @@ pub(crate) fn release_group(id: &str) -> io::Result<usize> {
 
 impl Drop for SecretFileInner {
     fn drop(&mut self) {
-        if self.revoke_on_drop.load(Ordering::Acquire)
-            && let FileResource::Leased { file, lease } = &self.resource
-        {
-            let _ = lease.0.release(file);
+        if self.revoke_on_drop.load(Ordering::Acquire) {
+            let _ = self.release();
         }
     }
 }
@@ -384,4 +479,47 @@ pub(crate) fn invoking_process() -> io::Result<u32> {
     Err(io::Error::other(
         "Cannot identify the consumer of exported secret paths",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolver_cleanup_preserves_replacement_files() {
+        for explicit_release in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let directory = tempfile::Builder::new()
+                .prefix("secretspec-ipc-")
+                .tempdir_in(root.path())
+                .unwrap();
+            let storage = FileStorage::in_directory(directory).unwrap();
+            let file = storage.materialize(b"original", None).unwrap();
+            let path = file.path().to_owned();
+            std::fs::remove_file(&path).unwrap();
+            std::fs::write(&path, b"replacement").unwrap();
+            if explicit_release {
+                file.0.release().unwrap();
+            }
+            drop(file);
+            drop(storage);
+            assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+        }
+    }
+
+    #[test]
+    fn resolver_directory_lives_until_its_last_file_is_dropped() {
+        let directory = tempfile::Builder::new()
+            .prefix("secretspec-ipc-")
+            .tempdir()
+            .unwrap();
+        let path = directory.path().to_owned();
+        std::fs::write(path.join(".owner"), std::process::id().to_string()).unwrap();
+        let storage = FileStorage::in_directory(directory).unwrap();
+        let file = storage.materialize(b"fixture", None).unwrap();
+        drop(storage);
+        assert_eq!(std::fs::read(file.path()).unwrap(), b"fixture");
+        drop(file);
+        assert!(!path.exists());
+    }
 }

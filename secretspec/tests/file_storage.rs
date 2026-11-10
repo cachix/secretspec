@@ -43,8 +43,11 @@ fn default_temp_paths_work_without_a_helper_and_are_persisted() {
         String::from_utf8_lossy(&result.stderr)
     );
     let path = std::path::PathBuf::from(String::from_utf8(result.stdout).unwrap().trim());
+    let directory = path.parent().unwrap();
+    #[cfg(windows)]
+    let directory = directory.parent().unwrap();
     assert_eq!(
-        path.parent().unwrap().canonicalize().unwrap(),
+        directory.canonicalize().unwrap(),
         root.path().join("tmp").canonicalize().unwrap()
     );
     assert_eq!(std::fs::read(&path).unwrap(), b"fixture");
@@ -140,4 +143,44 @@ fn temporary_result_cleanup_revokes_hidden_dependencies_and_preserves_neighbours
     assert_eq!(std::fs::read(&two).unwrap(), b"fixture");
     second.close().unwrap();
     assert!(!two.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn named_resolution_does_not_retain_descriptors() {
+    // Isolate descriptor accounting from parallel tests and provider runtimes.
+    if std::env::var_os("SECRETSPEC_TEST_NAMED_DESCRIPTORS").is_none() {
+        assert!(
+            Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "named_resolution_does_not_retain_descriptors",
+                    "--nocapture"
+                ])
+                .env("SECRETSPEC_TEST_NAMED_DESCRIPTORS", "1")
+                .status()
+                .unwrap()
+                .success()
+        );
+        return;
+    }
+    let root = project();
+    let mut spec = secretspec::Secrets::load_from(&root.path().join("secretspec.toml")).unwrap();
+    spec.set_provider("env");
+    spec.set_file_storage(secretspec::FileStorageMode::Temp);
+    let descriptors = || std::fs::read_dir("/proc/self/fd").unwrap().count();
+    let before = descriptors();
+    for _ in 0..64 {
+        let secretspec::NamedResolution::Resolved(secret) = spec.resolve_named("KEY").unwrap()
+        else {
+            panic!("expected a resolved file")
+        };
+        let path = secret.path.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"fixture");
+        std::fs::remove_file(path).unwrap();
+    }
+    assert!(
+        descriptors() <= before + 2,
+        "named resolution retained open descriptors"
+    );
 }

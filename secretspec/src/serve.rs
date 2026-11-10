@@ -533,11 +533,11 @@ fn cleanup_stale_session_dirs_in(root: &std::path::Path) {
         let Ok(children) = std::fs::read_dir(&path) else {
             continue;
         };
-        let children = children
-            .take(MAX_SESSION_LEASES + 2)
-            .collect::<Result<Vec<_>, _>>();
+        // Hidden composition dependencies share the session directory too.
+        let max_files = MAX_SESSION_LEASES + MAX_SESSION_SUPPORTING_FILES + 1;
+        let children = children.take(max_files + 1).collect::<Result<Vec<_>, _>>();
         let Ok(children) = children else { continue };
-        if children.len() > MAX_SESSION_LEASES + 1
+        if children.len() > max_files
             || children.iter().any(|child| {
                 std::fs::symlink_metadata(child.path()).map_or(true, |metadata| {
                     !metadata.is_file()
@@ -742,8 +742,17 @@ mod tests {
         let live = make("secretspec-ipc-live", std::process::id(), true);
         let fresh = make("secretspec-ipc-fresh", dead_pid, false);
         let unrelated = make("unrelated", dead_pid, true);
+        let hidden = make("secretspec-ipc-hidden", dead_pid, false);
+        for index in 0..MAX_SESSION_LEASES {
+            std::fs::write(hidden.join(format!("dependency-{index}")), b"fixture").unwrap();
+        }
+        File::open(&hidden)
+            .unwrap()
+            .set_times(FileTimes::new().set_modified(expired))
+            .unwrap();
         cleanup_stale_session_dirs_in(root.path());
         assert!(!dead.exists());
+        assert!(!hidden.exists());
         for path in [live, fresh, unrelated] {
             assert_eq!(std::fs::read(path.join("payload")).unwrap(), b"fixture");
         }

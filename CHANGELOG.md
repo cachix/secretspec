@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The SOPS provider supports deleting secrets (0.22+). `secretspec delete` and
+  `secretspec import --delete-source` remove the value
+  a read would return and leave the other keys in the file. A missing key or
+  file is left unchanged. Mapping branches are refused to protect unrelated
+  secrets. Imports refuse source and destination addresses that resolve to
+  the same file and key, including equivalent SOPS URIs and legacy layouts.
+
 - Minimal container images (0.22+) at `ghcr.io/cachix/secretspec`, containing
   the static Linux binary at `/secretspec` for amd64 and arm64. Copy the binary
   into your own image using a versioned image tag.

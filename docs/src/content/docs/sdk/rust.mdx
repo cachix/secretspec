@@ -382,22 +382,12 @@ let validated = spec.validate()??;
 files explicitly. The setter affects future resolutions; existing results keep
 their original backend. Storage selection is explicit through the Rust API.
 
-The opt-in backend uses the published
-[`file-lease`](https://crates.io/crates/file-lease) crate. Linux uses sealed,
-locked memfds under the helper's `/proc` entries; macOS uses shared private
-HFS RAM volumes with capacity spillover and guardian recovery. A macOS manager
-crash affects all scopes in that pool. Linux requires sufficient
-`RLIMIT_MEMLOCK`; macOS has no additional memory-lock guarantee. Unsupported
-platforms and lease failures return errors without a disk fallback. Ordinary
-temporary files do not require a helper or a memory-lock budget.
+The backend uses [`file-lease`](https://crates.io/crates/file-lease) on Linux
+and macOS. Install the matching `secretspec` executable beside the application
+or on PATH, or select it with `SECRETSPEC_BIN` (0.22+).
 
-Install the matching `secretspec` executable beside the application or on PATH,
-or select it with `SECRETSPEC_BIN` (0.22+), when opting into leases. Rust
-`Secrets::run` hands leased files to its child.
-One-shot results retain leased files until explicit cleanup or embedding-process
-exit. CLI commands and other language SDKs use temporary files. Source and
-consumer buffers, existing open readers, hibernation, and general diagnostic
-captures remain outside the lock guarantee.
+`Secrets::run` hands leased files to its child. One-shot results retain them
+until explicit cleanup or embedding-process exit.
 
 For an explicitly selected consuming process, install a custom lease before
 owned validation:
@@ -410,9 +400,8 @@ let validated = spec.validate()??;
 ```
 
 The custom materializer takes precedence over the selected backend. Keep its
-owner alive with the result and call `lease.handoff()` before `exec`, or
-`lease.handoff_to(manager_pid)` for a detached consumer. Custom resources cannot
-be detached by one-shot APIs; use owned validation and explicit handoff instead.
+owner alive with the result. Use owned validation and call `lease.handoff()`
+before `exec`, or `lease.handoff_to(manager_pid)` for a detached consumer.
 
 ## Custom file lifetimes
 

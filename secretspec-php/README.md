@@ -90,11 +90,8 @@ hidden composition dependencies (0.22+). Files must be explicitly cleaned up;
 they are not removed automatically on process exit. See
 [file delivery and lifetimes](https://secretspec.dev/reference/configuration/#as_path-option).
 
-In **0.22+**, read file secrets in PHP with `$secret->open()`, then use
-`stream_get_contents()` and `fclose()`. The SDK reads the original secret-file path
-natively and copies the bytes into a seekable `php://memory` stream, through
-either native backend. This uses additional memory and never spills to disk.
-PHP's ordinary file functions cannot open Linux memfd paths because they
-canonicalize the link to its deleted backing name. `get()` still returns the
-original path for external consumers that open it directly. Closing the result
-revokes paths and prevents new streams; existing stream snapshots remain usable.
+In **0.22+**, read file secrets with `$secret->open()`, then use
+`stream_get_contents()` and `fclose()`. The returned `php://memory` stream is
+seekable and contains a snapshot of the file. `get()` returns the path for
+external consumers. Call `$resolved->close()` after the last consumer to remove
+the result's files. Already-open streams retain their contents until closed.

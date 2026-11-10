@@ -69,8 +69,7 @@ The response is `{"ok":true,"response":{"schema_version":1,"released":1}}`.
 Release is idempotent and tokens belong to the originating process. SDK cleanup
 methods use this operation.
 
-For consumers whose file API canonicalizes Linux memfd paths, **0.22+** also
-supports a native read of a file belonging to a live result:
+**0.22+** also supports reading a file belonging to a live result:
 
 ```json
 {"request_version":1,"operation":"read_file","source":{"lease_id":"<file_lease_id>","path":"<original path>"}}
@@ -79,4 +78,4 @@ supports a native read of a file belonging to a live result:
 The response contains `schema_version: 1` and the file bytes in `base64`.
 Unknown or released tokens and paths outside that result are rejected. Reads
 are bounded to 64 MiB. PHP's `ResolvedSecret::open()` uses this operation to
-populate a memory-only stream without canonicalizing the secret-file path.
+populate a memory-only stream.

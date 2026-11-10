@@ -13,21 +13,7 @@ fn run_check(project: &Path, present: bool) -> Output {
 }
 
 fn run(project: &Path, present: bool, args: &[&str]) -> Output {
-    run_with_storage(project, present, args, None)
-}
-
-fn run_with_storage(project: &Path, present: bool, args: &[&str], storage: Option<&str>) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_secretspec"));
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    if args.first() == Some(&"get") {
-        command = Command::new("sh");
-        command.args([
-            "-c",
-            r#"path=$("$@") || exit; printf '%s\n' "$path"; cat "$path""#,
-            "sh",
-            env!("CARGO_BIN_EXE_secretspec"),
-        ]);
-    }
     command
         .args(["--file", project.join("secretspec.toml").to_str().unwrap()])
         .args(args)
@@ -47,10 +33,6 @@ fn run_with_storage(project: &Path, present: bool, args: &[&str], storage: Optio
         .env_remove("SECRETSPEC_REASON")
         .env_remove(SECRET_NAME);
 
-    command.env_remove("SECRETSPEC_FILE_STORAGE");
-    if let Some(storage) = storage {
-        command.env("SECRETSPEC_FILE_STORAGE", storage);
-    }
     if present {
         command.env(SECRET_NAME, "postgres://localhost/example");
     }
@@ -132,57 +114,20 @@ fn failing_check_keeps_the_report_separate_from_diagnostics() {
 }
 
 #[test]
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn get_keeps_the_as_path_file_it_prints() {
     let project = project_with(true);
-    let output = run_with_storage(
-        project.path(),
-        true,
-        &["get", SECRET_NAME],
-        Some("file-lease"),
-    );
-
+    let output = run(project.path(), true, &["get", SECRET_NAME]);
     assert!(output.status.success(), "{}", stderr(&output));
-    let stdout = stdout(&output);
-    let (printed, value) = stdout.split_once('\n').unwrap();
-    let printed = PathBuf::from(printed);
-    assert!(temp_files(project.path()).is_empty());
-    assert_eq!(value, "postgres://localhost/example");
-    let metadata = project
-        .path()
-        .join("Library/Application Support/file-lease");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    while (printed.exists()
-        || fs::read_dir(&metadata).is_ok_and(|mut entries| entries.next().is_some()))
-        && std::time::Instant::now() < deadline
-    {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    assert!(!printed.exists());
-    assert!(fs::read_dir(metadata).map_or(true, |mut entries| entries.next().is_none()));
+    let printed = PathBuf::from(stdout(&output).trim());
+    assert_eq!(fs::read(&printed).unwrap(), b"postgres://localhost/example");
+    fs::remove_file(printed).unwrap();
 }
 
 #[test]
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn check_leaves_no_as_path_files_behind() {
     let project = project_with(true);
     let output = run_check(project.path(), true);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(temp_files(project.path()), Vec::<PathBuf>::new());
-}
-
-#[test]
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn unsupported_file_delivery_never_falls_back_to_temporary_files() {
-    let project = project_with(true);
-    let output = run_with_storage(
-        project.path(),
-        true,
-        &["check", "--no-prompt"],
-        Some("file-lease"),
-    );
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("requires Linux or macOS"));
-    assert!(temp_files(project.path()).is_empty());
 }

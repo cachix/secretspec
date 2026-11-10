@@ -42,7 +42,7 @@ esac
 # Runtime-dlopen contract (SDKs not yet migrated to static linking still use it).
 export SECRETSPEC_FFI_LIB="$target_dir/debug/$lib_name"
 export SECRETSPEC_BIN="$target_dir/debug/secretspec"
-# Keep the matching helper available for opt-in file-lease delivery (0.22+).
+# Keep schema code generation on the matching freshly built CLI.
 export PATH="$target_dir/debug:$PATH"
 
 # Raw linker flags for the legs that do not call pkg-config. A Rust staticlib

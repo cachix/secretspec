@@ -380,9 +380,7 @@ let validated = spec.validate()??;
 
 `Secrets::set_file_storage(FileStorageMode::Temp)` selects ordinary temporary
 files explicitly. The setter affects future resolutions; existing results keep
-their original backend. Alternatively set `SECRETSPEC_FILE_STORAGE=temp` or
-`SECRETSPEC_FILE_STORAGE=file-lease` before loading a manager. The default is
-`temp`. An invalid value fails when file delivery is requested.
+their original backend. Storage selection is explicit through the Rust API.
 
 The opt-in backend uses the published
 [`file-lease`](https://crates.io/crates/file-lease) crate. Linux uses sealed,
@@ -394,11 +392,12 @@ platforms and lease failures return errors without a disk fallback. Ordinary
 temporary files do not require a helper or a memory-lock budget.
 
 Install the matching `secretspec` executable beside the application or on PATH,
-or select it with `SECRETSPEC_BIN` (0.22+), when opting into leases. CLI `get`
-and `export` hand leased files to the invoking process; `run` hands them to its
-child. SDK one-shot results retain leased files until explicit cleanup or
-embedding-process exit. Source and consumer buffers, existing open readers,
-hibernation, and general diagnostic captures remain outside the lock guarantee.
+or select it with `SECRETSPEC_BIN` (0.22+), when opting into leases. Rust
+`Secrets::run` hands leased files to its child.
+One-shot results retain leased files until explicit cleanup or embedding-process
+exit. CLI commands and other language SDKs use temporary files. Source and
+consumer buffers, existing open readers, hibernation, and general diagnostic
+captures remain outside the lock guarantee.
 
 For an explicitly selected consuming process, install a custom lease before
 owned validation:

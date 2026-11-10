@@ -2763,7 +2763,7 @@ pub(crate) enum ConfigEnv {
     /// Preserve ambient configuration overrides (the default).
     #[default]
     Inherit,
-    /// Remove configuration selection and file-storage overrides.
+    /// Remove configuration selection overrides.
     #[cfg(feature = "cli")]
     Clear,
 }
@@ -2779,7 +2779,6 @@ impl ConfigEnv {
                 "SECRETSPEC_PROVIDER",
                 "SECRETSPEC_SCOPE",
                 "SECRETSPEC_REASON",
-                "SECRETSPEC_FILE_STORAGE",
             ],
         }
     }
@@ -3216,8 +3215,8 @@ impl Secrets {
 
     /// Select temporary or memory-backed `as_path` storage (0.22+).
     ///
-    /// Temporary files are the default. This overrides `SECRETSPEC_FILE_STORAGE`
-    /// for future resolutions; existing results retain their original storage.
+    /// Temporary files are the default. This affects future resolutions;
+    /// existing results retain their original storage.
     /// An explicitly installed custom materializer takes precedence.
     pub fn set_file_storage(&mut self, mode: crate::FileStorageMode) {
         self.file_storage = Arc::new(crate::file_lease::FileStorage::new(mode));
@@ -10125,7 +10124,8 @@ mod output_redaction_tests {
     fn run_handoff_preserves_existing_owned_results() {
         let _env = crate::tests::scrub_resolution_env();
         let config: Config = toml::from_str("[project]\nname='run-owner'\nrevision='1.0'\nrequire_reason=false\n[profiles.default]\nKEY={description='key',default='fixture',as_path=true}\n").unwrap();
-        let spec = Secrets::new(config, None, Some("null://".into()), None);
+        let mut spec = Secrets::new(config, None, Some("null://".into()), None);
+        spec.set_file_storage(crate::FileStorageMode::FileLease);
         let first = spec.validate().unwrap().unwrap();
         let path = first.resolved.secrets["KEY"].try_as_utf8().unwrap();
         assert_eq!(

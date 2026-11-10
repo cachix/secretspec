@@ -13,7 +13,7 @@ fn project() -> tempfile::TempDir {
     root
 }
 
-fn get(root: &Path, mode: Option<&str>) -> Output {
+fn get(root: &Path) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_secretspec"));
     command
         .current_dir(root)
@@ -25,61 +25,53 @@ fn get(root: &Path, mode: Option<&str>) -> Output {
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("XDG_STATE_HOME", root.join("state"))
         .env("SECRETSPEC_BIN", root.join("missing-helper"))
-        .env_remove("SECRETSPEC_FILE_STORAGE")
         .env_remove("SECRETSPEC_FILE")
         .env_remove("SECRETSPEC_PROFILE")
         .env_remove("SECRETSPEC_SCOPE")
         .env_remove("SECRETSPEC_REASON")
         .env_remove("KEY");
-    if let Some(mode) = mode {
-        command.env("SECRETSPEC_FILE_STORAGE", mode);
-    }
     command.output().unwrap()
 }
 
 #[test]
-fn default_and_explicit_temp_paths_work_without_a_helper_and_are_persisted() {
-    for mode in [None, Some("temp")] {
-        let root = project();
-        let result = get(root.path(), mode);
-        assert!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-        let path = std::path::PathBuf::from(String::from_utf8(result.stdout).unwrap().trim());
+fn default_temp_paths_work_without_a_helper_and_are_persisted() {
+    let root = project();
+    let result = get(root.path());
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let path = std::path::PathBuf::from(String::from_utf8(result.stdout).unwrap().trim());
+    assert_eq!(
+        path.parent().unwrap().canonicalize().unwrap(),
+        root.path().join("tmp").canonicalize().unwrap()
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"fixture");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
         assert_eq!(
-            path.parent().unwrap().canonicalize().unwrap(),
-            root.path().join("tmp").canonicalize().unwrap()
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o400
         );
-        assert_eq!(std::fs::read(&path).unwrap(), b"fixture");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-                0o400
-            );
-        }
-        std::fs::remove_file(path).unwrap();
     }
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]
-fn explicit_lease_failure_and_invalid_selection_never_create_temp_payloads() {
-    for mode in ["file-lease", "invalid"] {
-        let root = project();
-        let result = get(root.path(), Some(mode));
-        assert!(!result.status.success());
-        assert!(result.stdout.is_empty());
-        assert_eq!(
-            std::fs::read_dir(root.path().join("tmp")).unwrap().count(),
-            0
-        );
-        if mode == "invalid" {
-            assert!(String::from_utf8_lossy(&result.stderr).contains("SECRETSPEC_FILE_STORAGE"));
-        }
-    }
+fn explicit_lease_failure_never_creates_temp_payloads() {
+    let root = project();
+    let mut spec = secretspec::Secrets::load_from(&root.path().join("secretspec.toml")).unwrap();
+    spec.set_provider("env");
+    let lease = secretspec::FileLease::new(std::process::id())
+        .with_keeper_executable(root.path().join("missing-helper"));
+    lease.install(&mut spec);
+    assert!(spec.validate().is_err());
+    assert_eq!(
+        std::fs::read_dir(root.path().join("tmp")).unwrap().count(),
+        0
+    );
 }
 
 #[test]

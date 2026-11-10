@@ -113,33 +113,16 @@ pub enum FileStorageMode {
 }
 
 /// Reuse leased storage without retaining resolved results.
+#[derive(Default)]
 pub(crate) struct FileStorage {
-    mode: Option<FileStorageMode>,
+    mode: FileStorageMode,
     cached: Mutex<Weak<FileLease>>,
-}
-
-impl Default for FileStorage {
-    fn default() -> Self {
-        let mode = match std::env::var("SECRETSPEC_FILE_STORAGE") {
-            Err(std::env::VarError::NotPresent) => Some(FileStorageMode::Temp),
-            Ok(value) => match value.trim() {
-                "" | "temp" => Some(FileStorageMode::Temp),
-                "file-lease" => Some(FileStorageMode::FileLease),
-                _ => None,
-            },
-            Err(_) => None,
-        };
-        Self {
-            mode,
-            cached: Default::default(),
-        }
-    }
 }
 
 impl FileStorage {
     pub(crate) fn new(mode: FileStorageMode) -> Self {
         Self {
-            mode: Some(mode),
+            mode,
             cached: Default::default(),
         }
     }
@@ -152,13 +135,7 @@ impl FileStorage {
     }
 
     pub(crate) fn materialize(&self, bytes: &[u8], suffix: Option<&str>) -> io::Result<SecretFile> {
-        let mode = self.mode.ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "SECRETSPEC_FILE_STORAGE must be 'temp' or 'file-lease'",
-            )
-        })?;
-        if mode == FileStorageMode::Temp {
+        if self.mode == FileStorageMode::Temp {
             use std::io::Write;
             let mut file = tempfile::Builder::new()
                 .suffix(suffix.unwrap_or(""))

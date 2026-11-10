@@ -11,14 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - File delivery (0.22+) uses private temporary files by default, without a
   helper, on Windows, Linux, and macOS. Opt into process-owned memory-backed
-  files with `SECRETSPEC_FILE_STORAGE=file-lease` or Rust's
-  `Secrets::set_file_storage`. Leased storage uses the published
+  files through Rust's `Secrets::set_file_storage` API. Leased storage uses the
+  published
   [`file-lease`](https://crates.io/crates/file-lease) crate: locked, sealed memfds
   on Linux and shared RAM volumes with crash recovery on macOS. Lease failures
-  never fall back to disk. Exported leased paths live until the consuming
-  process exits; owned Rust results retain their files across clones. Language
-  SDKs and Rust one-shot results can explicitly release files, including hidden
-  dependencies, with their cleanup methods.
+  never fall back to disk. Owned Rust results retain files across clones, and
+  leases can be handed to a consuming process. Language SDKs and Rust one-shot
+  results can explicitly release files, including hidden dependencies, with
+  their cleanup methods.
 
 - Rust embedders can supply an `as_path` materializer (0.22+) to deliver logical
   secret bytes directly into caller-owned resources. Composed values use the
@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `config global show` continues to display saved user-global configuration.
 
 - `secretspec run --config-env=clear` removes the manifest, profile, provider,
-  scope, reason, and file-storage environment overrides from the spawned child. The default,
+  scope, and reason environment overrides from the spawned child. The default,
   `--config-env=inherit`, preserves existing inheritance behavior.
 
 - `secretspec run` now masks exact secret values in command stdout and stderr

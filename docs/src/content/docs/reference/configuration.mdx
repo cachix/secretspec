@@ -249,7 +249,7 @@ Each secret variable is defined as a table with the following fields:
 | `providers` | array[string] | No | List of provider aliases to use in fallback order |
 | `ref` | table | No | Coordinates naming an externally managed secret in the provider's store (e.g. `ref = { item = "db", field = "password" }`) |
 | `refs` (0.19+) | table | No | Provider-alias-scoped coordinates, keyed by leaf alias (e.g. `refs = { source = { item = "old" }, target = { item = "new" } }`); mutually exclusive with `ref` |
-| `as_path` | boolean | No | Return a temporary file path; opt-in memory-backed leases (0.22+, default: false) |
+| `as_path` | boolean | No | Return a temporary file path (default: false) |
 | `encoding` (0.19+) | `"base64"`, `"base64url"`, or `"hex"` | No | Encode logical values before storage writes and decode stored values after reads |
 | `extract` (0.19+) | table | No | Select one field from stored JSON/INI text, or from the text of the secret named by `from` (0.22+) |
 | `type` | string | No | Secret type for generation: `password`, `hex`, `base64`, `uuid`, `command`, `rsa_private_key`, `passphrase` (0.22+), `mnemonic` (0.22+), `openpgp_private_key` (0.21+), `ssh_private_key` (0.21+), `wireguard_private_key` (0.22+), `jwk_private_key` (0.22+), `age_identity` (0.22+), `x509_identity` (0.22+). Typed conversion targets (0.22+): `pkcs12`, `pkcs8_private_key`, `x509_certificate`, `x509_certificate_chain`, `x509_issuer_chain` |
@@ -807,12 +807,11 @@ terminated by this timeout.
 
 <VersionCompatibility version="0.22" kind="changed">
 
-Secret files use private temporary files by default. Set
-`SECRETSPEC_FILE_STORAGE=file-lease` to opt into process-owned memory-backed
-files on Linux and macOS. Rust callers can instead use
-`Secrets::set_file_storage(FileStorageMode::FileLease)`. These choices are new
-in 0.22. Explicit lease failures and unsupported platforms return errors
-without falling back to disk.
+Secret files use private temporary files. Rust callers can opt into
+process-owned memory-backed files on Linux and macOS with
+`Secrets::set_file_storage(FileStorageMode::FileLease)` (0.22+). CLI commands
+and other language SDKs use temporary files. Explicit lease failures and
+unsupported platforms return errors without falling back to disk.
 
 The opt-in backend needs a matching `secretspec` executable beside the
 application or on PATH; `SECRETSPEC_BIN` selects it. Linux leases lock pages
@@ -849,8 +848,8 @@ exports require UTF-8.
 
 | Context | Behavior |
 |---------|----------|
-| CLI `get`, `export` | Temporary paths persist for the caller to remove. With `file-lease` (0.22+), paths follow the invoking process and are revoked on its exit |
-| CLI `run` | Temporary files are removed when the command completes normally. With `file-lease` (0.22+), files follow the consuming process even if the launcher is killed |
+| CLI `get`, `export` | Temporary paths persist for the caller to remove |
+| CLI `run` | Temporary files are removed when the command completes normally |
 | CLI `check` | Files are deleted when the command exits (0.22+; earlier versions left them behind) |
 | Rust SDK (0.22+) | Owned results and clones retain files. One-shot results support explicit `close()`. Persisted temporary files require explicit removal; leased paths are revoked on process exit |
 | Rust SDK types | `PathBuf` or `Option<PathBuf>` instead of `String` |

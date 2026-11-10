@@ -75,16 +75,9 @@ var secrets = AppSecrets.FromJson(resolved.FieldsJson());
 
 ## Files and cleanup
 
-`as_path` uses private temporary files by default. Set
-`SECRETSPEC_FILE_STORAGE=file-lease` to opt into process-owned, memory-backed
-files on Linux and macOS (0.22+). This mode requires the matching `secretspec`
-executable beside the application or on PATH; `SECRETSPEC_BIN` selects it.
-Linux leases require sufficient `RLIMIT_MEMLOCK`. Explicit lease failures and
-unsupported platforms return errors without a disk fallback.
-
-SDK cleanup releases visible files and hidden composition dependencies for
-either backend. Temporary files must be explicitly cleaned up; they are not
-revoked automatically on process exit. See
+`as_path` uses private temporary files. SDK cleanup releases visible files and
+hidden composition dependencies (0.22+). Files must be explicitly cleaned up;
+they are not removed automatically on process exit. See
 [file delivery and lifetimes](https://secretspec.dev/reference/configuration/#as_path-option).
 
 

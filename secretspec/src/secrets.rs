@@ -7168,7 +7168,7 @@ impl Secrets {
     /// the authoritative output other-language SDKs consume over the C ABI.
     ///
     /// Unlike [`Self::validate`], the returned payload **carries secret
-    /// values** (or, for `as_path` secrets, the path to a process-owned memory file).
+    /// values** (or, for `as_path` secrets, a path in the selected file storage).
     /// Treat its bytes as sensitive. When a required secret is missing the
     /// resolution failed: `secrets` is empty and `missing_required` is
     /// populated, mirroring the derive crate's `load()`.

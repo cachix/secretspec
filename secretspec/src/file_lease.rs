@@ -3,12 +3,18 @@
 //! Ordinary files use `tempfile`; memory-backed storage and process lifecycle
 //! management are provided by [`::file_lease`].
 
-pub use ::file_lease::ProcessInfo;
+#[cfg(feature = "cli")]
+use ::file_lease::ProcessInfo;
 #[cfg(feature = "cli")]
 pub(crate) use ::file_lease::maybe_run_helper as maybe_run_keeper;
 use std::{
+    collections::HashMap,
     io,
     path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex, MutexGuard, OnceLock, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 /// A cloneable lease on memory-backed secret files (0.22+).
@@ -109,7 +115,7 @@ pub enum FileStorageMode {
 /// Reuse leased storage without retaining resolved results.
 pub(crate) struct FileStorage {
     mode: Option<FileStorageMode>,
-    cached: std::sync::Mutex<std::sync::Weak<FileLease>>,
+    cached: Mutex<Weak<FileLease>>,
 }
 
 impl Default for FileStorage {
@@ -165,60 +171,57 @@ impl FileStorage {
                 file.as_file()
                     .set_permissions(std::fs::Permissions::from_mode(0o400))?;
             }
-            return Ok(SecretFile(std::sync::Arc::new(SecretFileInner {
+            return Ok(SecretFile(Arc::new(SecretFileInner {
                 path: file.path().to_owned(),
-                resource: FileResource::Temporary(std::sync::Mutex::new(file)),
-                revoke_on_drop: std::sync::atomic::AtomicBool::new(true),
+                resource: FileResource::Temporary(Mutex::new(file)),
+                revoke_on_drop: AtomicBool::new(true),
             })));
         }
         let mut cached = self
             .cached
             .lock()
             .map_err(|_| io::Error::other("Secret file storage poisoned"))?;
-        let lease = cached.upgrade();
-        let (lease, file) = match lease {
-            Some(lease) => match lease.materialize_file(bytes, suffix) {
-                Ok(file) => (lease, file),
-                Err(_) => {
-                    // A full volume, exhausted descriptor namespace, or failed
-                    // helper must not affect existing readers. Try fresh memory
-                    // storage once; never fall back to a disk-backed file.
-                    let lease = std::sync::Arc::new(FileLease::new(std::process::id()));
-                    let file = lease.materialize_file(bytes, suffix)?;
-                    (lease, file)
-                }
-            },
+        let existing = cached.upgrade().and_then(|lease| {
+            lease
+                .materialize_file(bytes, suffix)
+                .ok()
+                .map(|file| (lease, file))
+        });
+        let (lease, file) = match existing {
+            Some(existing) => existing,
             None => {
-                let lease = std::sync::Arc::new(FileLease::new(std::process::id()));
+                // If existing storage failed, retry once with a fresh lease,
+                // preserving existing readers and never falling back to disk.
+                let lease = Arc::new(FileLease::new(std::process::id()));
                 let file = lease.materialize_file(bytes, suffix)?;
                 (lease, file)
             }
         };
-        *cached = std::sync::Arc::downgrade(&lease);
-        Ok(SecretFile(std::sync::Arc::new(SecretFileInner {
+        *cached = Arc::downgrade(&lease);
+        Ok(SecretFile(Arc::new(SecretFileInner {
             path: file.path().to_owned(),
             resource: FileResource::Leased { file, lease },
-            revoke_on_drop: std::sync::atomic::AtomicBool::new(true),
+            revoke_on_drop: AtomicBool::new(true),
         })))
     }
 }
 
 /// One owned secret path, backed by a temporary file or an explicit lease.
 #[derive(Clone)]
-pub(crate) struct SecretFile(std::sync::Arc<SecretFileInner>);
+pub(crate) struct SecretFile(Arc<SecretFileInner>);
 
 enum FileResource {
-    Temporary(std::sync::Mutex<tempfile::NamedTempFile>),
+    Temporary(Mutex<tempfile::NamedTempFile>),
     Leased {
         file: ::file_lease::LeasedFile,
-        lease: std::sync::Arc<FileLease>,
+        lease: Arc<FileLease>,
     },
 }
 
 struct SecretFileInner {
     path: PathBuf,
     resource: FileResource,
-    revoke_on_drop: std::sync::atomic::AtomicBool,
+    revoke_on_drop: AtomicBool,
 }
 
 impl SecretFileInner {
@@ -248,8 +251,8 @@ impl SecretFile {
 
     pub(crate) fn storage_id(&self) -> usize {
         match &self.0.resource {
-            FileResource::Temporary(_) => std::sync::Arc::as_ptr(&self.0) as usize,
-            FileResource::Leased { lease, .. } => std::sync::Arc::as_ptr(lease) as usize,
+            FileResource::Temporary(_) => Arc::as_ptr(&self.0) as usize,
+            FileResource::Leased { lease, .. } => Arc::as_ptr(lease) as usize,
         }
     }
 
@@ -262,9 +265,8 @@ impl SecretFile {
 
     pub(crate) fn keep(self, owner: DetachedOwner) -> io::Result<PathBuf> {
         if matches!(owner, DetachedOwner::Process(pid) if pid == std::process::id()) {
-            retained_files()
-                .lock()
-                .map_err(|_| io::Error::other("Secret file registry poisoned"))?
+            registry()?
+                .files
                 .insert(self.path().to_path_buf(), self.clone());
             return Ok(self.path().to_path_buf());
         }
@@ -283,25 +285,23 @@ impl SecretFile {
                 lease.handoff_to(owner)?;
             }
         }
-        self.0
-            .revoke_on_drop
-            .store(false, std::sync::atomic::Ordering::Release);
+        self.0.revoke_on_drop.store(false, Ordering::Release);
         Ok(self.path().to_path_buf())
     }
 }
 
-fn retained_files() -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, SecretFile>> {
-    static FILES: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<PathBuf, SecretFile>>,
-    > = std::sync::OnceLock::new();
-    FILES.get_or_init(Default::default)
+#[derive(Default)]
+struct FileRegistry {
+    files: HashMap<PathBuf, SecretFile>,
+    groups: HashMap<String, Vec<PathBuf>>,
 }
 
-fn retained_groups() -> &'static std::sync::Mutex<std::collections::HashMap<String, Vec<PathBuf>>> {
-    static GROUPS: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<String, Vec<PathBuf>>>,
-    > = std::sync::OnceLock::new();
-    GROUPS.get_or_init(Default::default)
+fn registry() -> io::Result<MutexGuard<'static, FileRegistry>> {
+    static REGISTRY: OnceLock<Mutex<FileRegistry>> = OnceLock::new();
+    REGISTRY
+        .get_or_init(Default::default)
+        .lock()
+        .map_err(|_| io::Error::other("Secret file registry poisoned"))
 }
 
 pub(crate) fn retain_group(paths: Vec<PathBuf>) -> io::Result<Option<String>> {
@@ -309,10 +309,7 @@ pub(crate) fn retain_group(paths: Vec<PathBuf>) -> io::Result<Option<String>> {
         return Ok(None);
     }
     let id = uuid::Uuid::new_v4().to_string();
-    retained_groups()
-        .lock()
-        .map_err(|_| io::Error::other("Secret file registry poisoned"))?
-        .insert(id.clone(), paths);
+    registry()?.groups.insert(id.clone(), paths);
     Ok(Some(id))
 }
 
@@ -320,10 +317,9 @@ pub(crate) fn retain_group(paths: Vec<PathBuf>) -> io::Result<Option<String>> {
 /// without the pathname canonicalization performed by PHP's file wrapper.
 pub(crate) fn read_group_file(id: &str, path: &Path) -> io::Result<Vec<u8>> {
     use std::io::Read;
-    let groups = retained_groups()
-        .lock()
-        .map_err(|_| io::Error::other("Secret file registry poisoned"))?;
-    if !groups
+    let registry = registry()?;
+    if !registry
+        .groups
         .get(id)
         .is_some_and(|paths| paths.iter().any(|p| p == path))
     {
@@ -332,18 +328,15 @@ pub(crate) fn read_group_file(id: &str, path: &Path) -> io::Result<Vec<u8>> {
             "File does not belong to a live result",
         ));
     }
-    let files = retained_files()
-        .lock()
-        .map_err(|_| io::Error::other("Secret file registry poisoned"))?;
-    let file = files
+    let file = registry
+        .files
         .get(path)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Secret file has been released"))?;
-    // Open while holding the registry locks so concurrent release cannot revoke
+    // Open while holding the registry lock so concurrent release cannot revoke
     // the path before the descriptor is acquired. The read can then finish even
     // if the result closes, like any already-open file consumer.
     let file = std::fs::File::open(file.path())?;
-    drop(files);
-    drop(groups);
+    drop(registry);
     const MAX_BYTES: u64 = 64 * 1024 * 1024;
     let mut bytes = Vec::new();
     file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
@@ -359,42 +352,27 @@ pub(crate) fn read_group_file(id: &str, path: &Path) -> io::Result<Vec<u8>> {
 /// Release a result's visible and hidden file dependencies. Tokens are local to
 /// this process, idempotent, and can never request deletion of arbitrary paths.
 pub(crate) fn release_group(id: &str) -> io::Result<usize> {
-    let paths = retained_groups()
-        .lock()
-        .map_err(|_| io::Error::other("Secret file registry poisoned"))?
-        .remove(id)
-        .unwrap_or_default();
+    let paths = registry()?.groups.remove(id).unwrap_or_default();
     let mut released = 0;
     let mut failed = Vec::new();
     let mut first_error = None;
     for path in paths {
-        let file = retained_files()
-            .lock()
-            .map_err(|_| io::Error::other("Secret file registry poisoned"))?
-            .remove(&path);
+        let file = registry()?.files.remove(&path);
         if let Some(file) = file {
             if let Err(error) = file.0.release()
                 && path.exists()
             {
-                retained_files()
-                    .lock()
-                    .map_err(|_| io::Error::other("Secret file registry poisoned"))?
-                    .insert(path.clone(), file);
+                registry()?.files.insert(path.clone(), file);
                 failed.push(path);
                 first_error.get_or_insert(error);
                 continue;
             }
-            file.0
-                .revoke_on_drop
-                .store(false, std::sync::atomic::Ordering::Release);
+            file.0.revoke_on_drop.store(false, Ordering::Release);
             released += 1;
         }
     }
     if let Some(error) = first_error {
-        retained_groups()
-            .lock()
-            .map_err(|_| io::Error::other("Secret file registry poisoned"))?
-            .insert(id.to_owned(), failed);
+        registry()?.groups.insert(id.to_owned(), failed);
         return Err(error);
     }
     Ok(released)
@@ -402,9 +380,7 @@ pub(crate) fn release_group(id: &str) -> io::Result<usize> {
 
 impl Drop for SecretFileInner {
     fn drop(&mut self) {
-        if self
-            .revoke_on_drop
-            .load(std::sync::atomic::Ordering::Acquire)
+        if self.revoke_on_drop.load(Ordering::Acquire)
             && let FileResource::Leased { file, lease } = &self.resource
         {
             let _ = lease.0.release(file);

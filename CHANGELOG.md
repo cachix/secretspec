@@ -9,57 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- File delivery uses private temporary files by default. Opt into process-owned
-  memory-backed files with `SECRETSPEC_FILE_STORAGE=file-lease` (0.22+) or the
-  Rust `Secrets::set_file_storage` API. Explicit lease failures never fall back
-  to disk; ordinary temporary files do not require a helper and remain
-  available on Windows as well as Unix.
+- File delivery (0.22+) uses private temporary files by default, without a
+  helper, on Windows, Linux, and macOS. Opt into process-owned memory-backed
+  files with `SECRETSPEC_FILE_STORAGE=file-lease` or Rust's
+  `Secrets::set_file_storage`. Leased storage uses the published
+  [`file-lease`](https://crates.io/crates/file-lease) crate: locked, sealed memfds
+  on Linux and shared RAM volumes with crash recovery on macOS. Lease failures
+  never fall back to disk. Exported leased paths live until the consuming
+  process exits; owned Rust results retain their files across clones. Language
+  SDKs and Rust one-shot results can explicitly release files, including hidden
+  dependencies, with their cleanup methods.
 
-- Opt-in macOS leased file delivery (0.22+) removes unused recovery metadata after failures
-  before RAM-disk attachment, limits startup recovery work with a shared time
-  budget, and records persistent cleanup failures for inspection. Interrupted
-  recovery retains the journal for a later attempt. A full RAM volume rejects
-  new allocations without retaining partial files or revoking existing secrets.
-
-- Opt-in Linux leased file delivery (0.22+) locks memfd pages into RAM before writing secret
-  bytes and retains those locks until release. Allocation fails if the helper's
-  memory-lock limit is insufficient, with an explanatory error and no pageable
-  fallback. Older helpers are rejected before payload transfer. Source buffers
-  and consumer copies remain outside this protection.
-
-- Memory-backed file delivery on macOS (0.22+) verifies the RAM volume's
-  identity, permissions, and security mount flags for each allocation and
-  release. Directory-relative operations prevent an unmounted volume from
-  redirecting secret writes or cleanup into its disk-backed mount directory.
-
-- Opt-in memory-backed file delivery (0.22+) uses the published
-  [`file-lease`](https://crates.io/crates/file-lease) crate, with automatic
-  process-owned cleanup on Linux and shared RAM volumes on macOS.
-
-- Opt-in secret-file delivery uses memory-backed leases on Linux and
-  macOS, including CLI commands and resolver sessions. Exported CLI paths live
-  until the invoking process exits; owned Rust results retain their files across
-  clones, and one-shot SDK paths live until the embedding process exits.
-  Unsupported platforms and storage failures fail without a disk fallback.
-  Linux accepts filename suffix hints but omits them from its anonymous paths.
-  Language SDK cleanup methods release native leases, including hidden file
-  dependencies, through a process-local token; Rust one-shot results expose
-  `close()` for the same cleanup.
-  PHP's new `ResolvedSecret::open()` reads file secrets into memory-only streams,
+- Rust embedders can supply an `as_path` materializer (0.22+) to deliver logical
+  secret bytes directly into caller-owned resources. Composed values use the
+  custom paths, and resolved values retain their owners. PHP's new
+  `ResolvedSecret::open()` reads file secrets into memory-only streams,
   including Linux memfd paths that PHP's ordinary file functions cannot open.
-
-- Rust embedders can use `FileLease` to keep file secrets in process-owned
-  memory-backed storage on Linux and macOS, hand ownership to commands or
-  detached managers, and automatically recover orphaned macOS RAM disks.
-  A macOS guardian cleans up if the keeper is killed, without waiting for
-  another lease or installing a background service. Volume commands have
-  deadlines, failed cleanup is retried, and concurrent recovery preserves
-  cleanup metadata until the volume is detached, including after setup crashes.
-  No user PID configuration or application helper entry point is required.
-
-- Rust embedders can supply an `as_path` materializer to deliver secret bytes
-  directly into process-owned resources without creating temporary files.
-  Composed values use the custom paths, and resolved values retain their owners.
 
 - `secretspec config show` displays computed project and global configuration,
   including CLI and environment overrides, each setting's source, and merged

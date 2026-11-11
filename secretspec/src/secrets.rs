@@ -9,6 +9,7 @@ use crate::config::{
 };
 use crate::error::{Result, SecretSpecError};
 use crate::plan::{PlannedSecret, ResolutionPlan, ResolvedCache, Route};
+use crate::prompt::CheckedPrompt;
 use crate::provider::{
     Address, OwnedAddress, ProducedValuePersistence, Provider as ProviderTrait,
     ProviderCredentials, ProviderValue, same_storage_container,
@@ -48,6 +49,7 @@ struct ChildSignalForwarder {
     signals: Option<Signals>,
     handle: SignalHandle,
     thread: Option<JoinHandle<()>>,
+    poll_signals: bool,
 }
 
 #[cfg(unix)]
@@ -55,12 +57,38 @@ impl ChildSignalForwarder {
     /// Install handlers before spawning the child so a signal cannot slip
     /// through while SecretSpec is becoming the child's supervisor.
     fn prepare() -> io::Result<Self> {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::net::UnixStream;
+
+        // Some sandboxes permit socketpair/read/write but deny send/recv,
+        // which Signal Hook uses for wake-ups. Its pending signal flags still
+        // work there, so fall back to bounded polling rather than blocking on
+        // a wake-up that can never arrive (including during shutdown).
+        let (reader, writer) = UnixStream::pair()?;
+        let mut byte = 0u8;
+        // SAFETY: both descriptors are live sockets and the one-byte buffers
+        // remain valid for these nonblocking calls.
+        let wakeup_available = unsafe {
+            libc::send(
+                writer.as_raw_fd(),
+                b"X".as_ptr().cast(),
+                1,
+                libc::MSG_DONTWAIT,
+            ) == 1
+                && libc::recv(
+                    reader.as_raw_fd(),
+                    (&mut byte as *mut u8).cast(),
+                    1,
+                    libc::MSG_DONTWAIT,
+                ) == 1
+        };
         let signals = Signals::new([SIGTERM, SIGINT, SIGHUP])?;
         let handle = signals.handle();
         Ok(Self {
             signals: Some(signals),
             handle,
             thread: None,
+            poll_signals: !wakeup_available,
         })
     }
 
@@ -69,13 +97,26 @@ impl ChildSignalForwarder {
             .signals
             .take()
             .expect("signal forwarder can only be started once");
+        let poll_signals = self.poll_signals;
         self.thread = Some(std::thread::spawn(move || {
-            for signal in signals.forever() {
+            let forward = |signal| {
                 // `kill` is async-signal-safe, and this call runs on an ordinary
                 // thread rather than inside the installed signal handler. The
                 // child may already have exited, in which case ESRCH is benign.
                 unsafe {
                     libc::kill(child_pid as libc::pid_t, signal);
+                }
+            };
+            if poll_signals {
+                while !signals.is_closed() {
+                    for signal in signals.pending() {
+                        forward(signal);
+                    }
+                    std::thread::park_timeout(Duration::from_millis(50));
+                }
+            } else {
+                for signal in signals.forever() {
+                    forward(signal);
                 }
             }
         }));
@@ -87,6 +128,7 @@ impl Drop for ChildSignalForwarder {
     fn drop(&mut self) {
         self.handle.close();
         if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
             let _ = thread.join();
         }
     }
@@ -4744,6 +4786,17 @@ impl Secrets {
         }
     }
 
+    /// Suggestions for mutations and named cache clears use the full profile:
+    /// these operations have no scope, and an invalid ambient scope must not
+    /// mask an undeclared name or skip the caller's audit record.
+    fn secret_not_defined(&self, name: &str, profile: &str) -> Result<SecretSpecError> {
+        Ok(SecretSpecError::SecretNotDefined {
+            name: name.to_string(),
+            profile: profile.to_string(),
+            available: self.profile_secret_names_unscoped(Some(profile))?,
+        })
+    }
+
     /// Every secret name in `profile` (∪ `default`), sorted, with no scope
     /// filtering. `import` uses this directly so an ambient `SECRETSPEC_SCOPE`
     /// can't narrow a command that has no `--scope`.
@@ -5703,9 +5756,7 @@ impl Secrets {
             let planned = match self.plan_declared_secret(&name, &profile)? {
                 Some(planned) => planned,
                 None => {
-                    return Err(SecretSpecError::SecretNotFound(format!(
-                        "Secret '{name}' is not defined in profile '{profile}'"
-                    )));
+                    return Err(self.secret_not_defined(&name, &profile)?);
                 }
             };
             let Some(route) = &planned.route else {
@@ -5797,7 +5848,7 @@ impl Secrets {
                         "Enter value for {name} (profile: {profile_name}):"
                     ))
                     .without_confirmation()
-                    .prompt()?;
+                    .prompt_checked()?;
                     Ok(SecretBytes::from_utf8(secret))
                 } else {
                     // Read from stdin when input is piped
@@ -5870,18 +5921,7 @@ impl Secrets {
                 return Err(err);
             }
             Ok(None) => {
-                // Unscoped, like `import`: `set` has no `--scope`, so an ambient
-                // `SECRETSPEC_SCOPE` must not hide names from the listing (it
-                // does not restrict what `set` may write) nor turn an undefined
-                // scope into an early return that skips the audit record below.
-                let available_secrets = self.profile_secret_names_unscoped(Some(&profile_name))?;
-
-                let err = SecretSpecError::SecretNotFound(format!(
-                    "Secret '{}' is not defined in profile '{}'. Available secrets: {}",
-                    name,
-                    profile_name,
-                    available_secrets.join(", ")
-                ));
+                let err = self.secret_not_defined(name, &profile_name)?;
                 // Provider is unknown for an undefined secret, so attribute to None.
                 self.record_key_error(AuditAction::Set, &profile_name, name, None, None, &err);
                 return Err(err);
@@ -6048,11 +6088,7 @@ impl Secrets {
                 return Err(error);
             }
             Ok(None) => {
-                let available = self.profile_secret_names_unscoped(Some(&profile_name))?;
-                let error = SecretSpecError::SecretNotFound(format!(
-                    "Secret '{name}' is not defined in profile '{profile_name}'. Available secrets: {}",
-                    available.join(", ")
-                ));
+                let error = self.secret_not_defined(name, &profile_name)?;
                 self.record_key_error(AuditAction::Delete, &profile_name, name, None, None, &error);
                 return Err(error);
             }
@@ -6307,7 +6343,7 @@ impl Secrets {
                                 format!("[{}/{}] Enter value for {}:", i + 1, total, secret_name,);
                             let prompt = inquire::Password::new(&prompt_msg).without_confirmation();
 
-                            let value = SecretBytes::from_utf8(prompt.prompt()?);
+                            let value = SecretBytes::from_utf8(prompt.prompt_checked()?);
 
                             let encoded_value = match Self::prompted_value_for_storage(
                                 &planned,
@@ -6957,9 +6993,9 @@ impl Secrets {
     }
 
     /// Reads one missing value from the controlling terminal during `run`.
-    /// Inquire's crossterm backend opens `/dev/tty` on Unix (and the console
-    /// input handle on Windows) when stdin is redirected, so the child retains
-    /// its original stdin stream. Persistence is deliberately handled by
+    /// The Console backend requires terminal stderr and reads from `/dev/tty`
+    /// on Unix when stdin is redirected, preserving the child's stdin stream.
+    /// Persistence is deliberately handled by
     /// [`Self::try_prompt_secret`], after this input-only step succeeds.
     fn prompt_run_secret(
         &self,
@@ -6973,7 +7009,7 @@ impl Secrets {
             let message = format!("Enter value for {name} (profile: {profile}):");
             let entered = inquire::Password::new(&message)
                 .without_confirmation()
-                .prompt()
+                .prompt_checked()
                 .map_err(|error| match error {
                     inquire::InquireError::NotTTY | inquire::InquireError::IO(_) => {
                         SecretSpecError::PromptUnavailable(name.to_string())

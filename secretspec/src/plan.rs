@@ -752,6 +752,15 @@ impl Secrets {
             (alias.fallback().to_vec(), source_uris)
         };
         let cache_uri = self.resolve_one_provider(cache.provider())?;
+        // SOPS deletion can reveal an older layout's copy. Supporting direct
+        // deletion does not yet make those fallback reads safe for caching.
+        if crate::provider::provider_display_name_for_spec(&cache_uri) == "sops" {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "cached provider alias '{name}' uses SOPS for its cache; SOPS caches are not \
+                 supported because deleting a key can expose an older copy. Use a different \
+                 cache provider."
+            )));
+        }
         self.validate_credential_sources(cache.provider())?;
 
         let source_identities = source_uris
@@ -815,7 +824,11 @@ impl Secrets {
                  so its entries could never be invalidated. Cache into an external provider \
                  advertising `provider.delete`, or one of: {supported}.",
                 uri = crate::audit::redact_uri_strict(&cache_uri),
-                supported = crate::provider::deleting_provider_names().join(", "),
+                supported = crate::provider::deleting_provider_names()
+                    .into_iter()
+                    .filter(|provider| *provider != "sops")
+                    .collect::<Vec<_>>()
+                    .join(", "),
             )));
         }
 
@@ -1903,6 +1916,30 @@ mod tests {
             scoped_ref_cache_fingerprint(separate_field),
             "different scoped-ref coordinates must not collide through display rendering"
         );
+    }
+
+    #[test]
+    fn sops_caches_are_rejected_during_planning() {
+        let _env = scrub_resolution_env();
+        for cache in [
+            "sops",
+            "sops://cache.enc.yaml",
+            "sops://{project}/{profile}.enc.yaml",
+            "local",
+        ] {
+            let spec = cached_spec_with(
+                vec!["myprovider"],
+                &[
+                    ("local", ProviderAlias::from("sops://cache.enc.yaml")),
+                    ("myprovider", cached_alias(&["env://"], cache, "8h")),
+                ],
+            );
+            let message = spec.build_plan(None).unwrap_err().to_string();
+            assert!(
+                message.contains("SOPS caches are not supported"),
+                "{cache}: {message}"
+            );
+        }
     }
 
     #[test]

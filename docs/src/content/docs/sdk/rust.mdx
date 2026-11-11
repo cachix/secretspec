@@ -225,6 +225,16 @@ stdout.push(b"next chunk", &mut output);
 stdout.finish(&mut output);
 ```
 
+For terminal output (0.22+), use `redactor.terminal_stream()` instead of
+`stream()`. It has the same `push` and `finish` interface and preserves 7-bit ANSI
+control syntax, such as color codes and bracketed-paste modes. Text payloads,
+including window titles and hyperlink URLs, are still redacted. Use it before
+feeding PTY output to a terminal parser or scrollback buffer. Escape boundaries
+interrupt matching; styled secrets and eight-bit C1 controls are not supported.
+Control parameters, OSC color controls and command numbers, and DCS status
+queries are preserved even if they coincide
+with a secret. Use `stream()` when every literal byte must be masked.
+
 Use independent streams for stdout and stderr, retaining each stream across
 reads. Candidate prefixes are buffered until more input or EOF; call `finish`
 only at EOF. Dropping a stream discards its pending suffix. The API accepts

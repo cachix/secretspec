@@ -794,7 +794,13 @@ commands that intentionally print secret values now print markers. When there
 are no nonempty resolved secret values, `run` inherits stdout and stderr directly.
 
 Filtering pipes the child's stdout and stderr, so applications may change their
-terminal detection, colors, or buffering. Only trailing bytes that could begin
+terminal detection, colors, or buffering. For terminal destinations (0.22+), the
+filter preserves 7-bit ANSI control syntax and masks text, including window
+titles and hyperlink URLs. Control parameters, OSC color controls and command
+numbers, and DCS status queries are
+preserved even if they match a secret. Matching stops at escape boundaries;
+secrets split by styling and eight-bit C1 controls are not supported. Nonterminal
+destinations use exact byte matching instead. Only trailing bytes that could begin
 a secret are held back; a prompt ending in such a prefix can be delayed.
 The combined distinct nonempty patterns may contain at most 64 KiB; exceeding
 this limit fails before starting the child. Read and write failures never fall

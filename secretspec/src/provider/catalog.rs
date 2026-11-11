@@ -230,6 +230,7 @@ metadata! {
         "sops://secrets-dir/{project}/.env.{profile}.enc?format=dotenv",
     ],
     credential_names: ["age_key", "aws_secret_access_key", "azure_client_secret", "hc_vault_token", "huawei_sdk_ak", "huawei_sdk_sk", "google_oauth_access_token"],
+    deletes: true,
 }
 
 metadata! {

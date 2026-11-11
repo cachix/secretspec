@@ -706,11 +706,21 @@ for how to associate the generated schemas with TOML files.
 
 Add a secret declaration to an existing `secretspec.toml`. This edits only the
 selected profile and preserves the manifest's comments, formatting, and
-unrelated tables. The new declaration follows the profile's defaults; without
-a `required` profile default, it is required like any other declaration.
+unrelated tables. Unless overridden, the new declaration follows the profile's
+defaults; without a `required` profile default, it is required like any other
+declaration.
+
+<VersionCompatibility version="0.22" kind="changed">
+
+Use `--optional` or `--required` to override the profile's requiredness default
+for the new declaration. These flags are mutually exclusive. Omitting both
+leaves the `required` key absent, preserving the profile's defaults.
+
+</VersionCompatibility>
 
 ```bash
 $ secretspec add <NAME> [--description <DESCRIPTION>] [--profile <PROFILE>] # 0.18+
+$ secretspec add <NAME> [--description <DESCRIPTION>] [--profile <PROFILE>] [--optional | --required] # 0.22+
 ```
 
 **Arguments and options:**
@@ -722,6 +732,9 @@ $ secretspec add <NAME> [--description <DESCRIPTION>] [--profile <PROFILE>] # 0.
 - `-P, --profile <PROFILE>` - Profile to edit. When omitted, SecretSpec uses the
   normal active-profile resolution, including `SECRETSPEC_PROFILE` and the
   user-global default.
+- `--optional` - Write `required = false` (0.22+).
+- `--required` - Write `required = true`, even when the profile defaults to
+  optional (0.22+). Cannot be combined with `--optional` (0.22+).
 
 ```bash
 $ secretspec add API_KEY --description "API access token" # 0.18+
@@ -837,7 +850,8 @@ serve the deleted value.
 
 The providers that support deletion in 0.18 are keyring, dotenv, pass, gopass,
 Vault, OpenBao, and Keeper Secrets Manager; age supports it starting with
-0.20. Other providers return an explicit unsupported-operation error. Vault,
+0.20, and SOPS starting with 0.22. Other providers return an explicit
+unsupported-operation error. Vault,
 OpenBao, and Keeper refuse to delete native `ref` entries because their
 backends would have to destroy a whole externally managed path or record
 rather than only the referenced field.
@@ -975,7 +989,9 @@ File-backed secrets mask their contents. See
 [output redaction](/reference/configuration/#output-redaction) for details. This protects against accidental output disclosure;
 programs can still expose transformed values or use other output channels.
 Filtering uses pipes, which changes terminal detection and can affect buffering
-and interactive prompts. See the configuration reference for limits and shutdown
+and interactive prompts. Terminal destinations use terminal-aware filtering
+(0.22+) to preserve ANSI control syntax while masking text and string payloads.
+See the configuration reference for limits and shutdown
 behavior. Other commands, including `get` and `export`, still return values.
 
 ### export

@@ -30,6 +30,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ResolvedSecret::open()` reads file secrets into memory-only streams,
   including Linux memfd paths that PHP's ordinary file functions cannot open.
 
+- The SOPS provider supports deleting secrets (0.22+). `secretspec delete` and
+  `secretspec import --delete-source` remove the value
+  a read would return and leave the other keys in the file. A missing key or
+  file is left unchanged. Mapping branches are refused to protect unrelated
+  secrets. Imports refuse source and destination addresses that resolve to
+  the same file and key, including equivalent SOPS URIs and legacy layouts.
+
+- Minimal container images (0.22+) at `ghcr.io/cachix/secretspec`, containing
+  the static Linux binary at `/secretspec` for amd64 and arm64. Copy the binary
+  into your own image using a versioned image tag.
+
+- `secretspec add` accepts `--optional` and `--required` (0.22+) to override
+  profile defaults when declaring a secret. Omitting both keeps the defaults.
+
 - `secretspec config show` displays computed project and global configuration,
   including CLI and environment overrides, each setting's source, and merged
   provider aliases. Use `--json` for structured output. No secrets are fetched;
@@ -38,6 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `secretspec run --config-env=clear` removes the manifest, profile, provider,
   scope, and reason environment overrides from the spawned child. The default,
   `--config-env=inherit`, preserves existing inheritance behavior.
+
+- Terminal output redaction preserves ANSI control syntax so numeric secrets
+  do not break colors or shell modes. Window titles and hyperlink payloads remain
+  masked; Rust embedders can select this behavior with `Redactor::terminal_stream`.
+  Color modes, canceled sequences, and ignored control bytes retain their
+  terminal behavior while ordinary text remains masked.
 
 - `secretspec run` now masks exact secret values in command stdout and stderr
   automatically, including file contents for `as_path` secrets. Filtering uses
@@ -93,6 +113,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a compatible SecretSpec executable.
 
 ### Fixed
+
+- Commands now finish and forward termination signals in restricted Unix
+  sandboxes that block socket wake-ups.
+
+- Interactive prompts now return an error when stderr is piped or redirected
+  instead of hanging and consuming a CPU core.
+
+- 1Password: `ref` coordinates whose vault, item, section, or field contain
+  characters that `op://` references cannot express (for example `:` in a vault
+  name or `/` in an item title) are now read through `op item get` instead of
+  failing. Other references keep using `op read` and `op inject`.
+
+- Undeclared secrets in `set`, `delete`, and `cache clear NAME` now report the
+  profile and available secrets without a duplicated "Secret ... not found"
+  wrapper. Rust callers receive `SecretSpecError::SecretNotDefined` for these
+  errors; their `kind()` remains `secret_not_found`.
+
 - Scaleway: `secretspec set` on a secret that already exists adds a new version
   instead of failing with HTTP 400 "cannot have same secret name in same path".
 

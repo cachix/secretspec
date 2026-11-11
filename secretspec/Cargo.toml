@@ -28,6 +28,7 @@ required-features = ["cli"]
 
 [dependencies]
 file-lease = "0.1.0"
+anstyle-parse.workspace = true
 clap.workspace = true
 clap_complete = { workspace = true, optional = true }
 clap_complete_nushell = { workspace = true, optional = true }

@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   files through Rust's `Secrets::set_file_storage` API. Leased storage uses the
   published
   [`file-lease`](https://crates.io/crates/file-lease) crate: locked, sealed memfds
-  on Linux and shared RAM volumes with crash recovery on macOS. Lease failures
+  on Linux and shared RAM volumes with crash recovery on macOS. Leased files
+  keep typed extensions such as `.pem` on both platforms. Lease failures
   never fall back to disk. Owned Rust results retain files across clones, and
   leases can be handed to a consuming process. Language SDKs and Rust one-shot
   results can explicitly release files, including hidden dependencies, with

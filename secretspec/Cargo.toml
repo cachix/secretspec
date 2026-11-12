@@ -27,7 +27,7 @@ path = "src/bin/git-credential-secretspec.rs"
 required-features = ["cli"]
 
 [dependencies]
-file-lease = "0.1.0"
+file-lease = "0.2.0"
 anstyle-parse.workspace = true
 clap.workspace = true
 clap_complete = { workspace = true, optional = true }

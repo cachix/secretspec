@@ -184,3 +184,24 @@ fn named_resolution_does_not_retain_descriptors() {
         "named resolution retained open descriptors"
     );
 }
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn leased_typed_files_keep_their_extension() {
+    let root = project();
+    std::fs::write(root.path().join("secretspec.toml"),
+        "[project]\nname='lease-suffix'\nrevision='1.0'\nrequire_reason=false\n[profiles.default]\nIDENTITY={description='identity',type='x509_identity',generate={san=['dns:localhost']}}\nCERT={description='certificate',type='x509_certificate',from='IDENTITY',as_path=true}\n").unwrap();
+    let mut spec = secretspec::Secrets::load_from(&root.path().join("secretspec.toml")).unwrap();
+    spec.set_provider(format!("dotenv://{}", root.path().join(".env").display()));
+    spec.set_file_storage(secretspec::FileStorageMode::FileLease);
+    let validated = spec.validate().unwrap().unwrap();
+    let path = std::path::PathBuf::from(validated.resolved.secrets["CERT"].try_as_utf8().unwrap());
+    assert_eq!(path.extension().unwrap(), "pem", "{}", path.display());
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .starts_with("-----BEGIN CERTIFICATE-----")
+    );
+    drop(validated);
+    assert!(!path.exists());
+}

@@ -791,7 +791,6 @@ fn generated_identity_derives_every_target_in_one_resolve() {
         "passphrase: {password}"
     );
     let pfx_path = secrets["TLS_PFX"].path.as_deref().unwrap();
-    #[cfg(not(target_os = "linux"))]
     assert!(pfx_path.ends_with(".pfx"), "{pfx_path}");
     assert!(secrets["TLS_PFX"].as_path);
     let pfx_bytes = fs::read(pfx_path).unwrap();
@@ -825,7 +824,6 @@ fn generated_identity_derives_every_target_in_one_resolve() {
     assert!(pem_key.starts_with("-----BEGIN PRIVATE KEY-----"));
     assert!(key_from_pem(pem_key.as_bytes()).unwrap().public_key_raw() == key.public_key_raw());
     let der_path = secrets["TLS_KEY_DER"].path.as_deref().unwrap();
-    #[cfg(not(target_os = "linux"))]
     assert!(der_path.ends_with(".der"), "{der_path}");
     let der_key = KeyPair::try_from(fs::read(der_path).unwrap().as_slice()).unwrap();
     assert!(der_key.public_key_raw() == key.public_key_raw());
@@ -847,7 +845,6 @@ fn generated_identity_derives_every_target_in_one_resolve() {
 
     // Certificate projections.
     let cert_path = secrets["TLS_CERTIFICATE"].path.as_deref().unwrap();
-    #[cfg(not(target_os = "linux"))]
     assert!(cert_path.ends_with(".pem"), "{cert_path}");
     let cert_pem = fs::read(cert_path).unwrap();
     assert_eq!(
@@ -855,7 +852,6 @@ fn generated_identity_derives_every_target_in_one_resolve() {
         certificate.as_der().to_vec()
     );
     let cert_der_path = secrets["TLS_CERTIFICATE_DER"].path.as_deref().unwrap();
-    #[cfg(not(target_os = "linux"))]
     assert!(cert_der_path.ends_with(".der"), "{cert_der_path}");
     assert_eq!(
         fs::read(cert_der_path).unwrap(),
@@ -915,7 +911,6 @@ SERVICE_CERTIFICATE = { description = "cert", type = "x509_certificate_chain", f
 
     // The identity is delivered as its stored, still protected, archive.
     let path = secrets["SERVICE_IDENTITY"].path.as_deref().unwrap();
-    #[cfg(not(target_os = "linux"))]
     assert!(path.ends_with(".pfx"), "{path}");
     assert_eq!(fs::read(path).unwrap(), archive);
     assert_eq!(secrets["SERVICE_IDENTITY"].source, ResolvedSource::Provider);
@@ -1584,7 +1579,6 @@ UNRELATED = { description = "must not be resolved" }
     };
     let path = file.path().to_owned();
     cert_from_pem(&fs::read(&path).unwrap()).unwrap();
-    #[cfg(not(target_os = "linux"))]
     assert_eq!(path.extension().unwrap(), "pem");
     drop(file);
     assert!(!path.exists());

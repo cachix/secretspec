@@ -78,8 +78,15 @@ impl FileLease {
         suffix: Option<&str>,
     ) -> io::Result<::file_lease::LeasedFile> {
         let mut options = ::file_lease::FileOptions::new();
-        if let Some(suffix) = suffix {
-            options = options.suffix(suffix);
+        if let Some(suffix) = suffix.filter(|suffix| !suffix.is_empty()) {
+            // Linux memfd paths cannot carry an extension, so expose them through
+            // a lease-owned symlink with the expected name. macOS keeps suffixes
+            // natively without an extra link.
+            options = if cfg!(target_os = "linux") {
+                options.filename(format!("secret{suffix}"))
+            } else {
+                options.suffix(suffix)
+            };
         }
         self.0.materialize_with(bytes, &options).map_err(Into::into)
     }

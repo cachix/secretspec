@@ -9,10 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Persisted temporary secret files no longer retain open descriptors. Resolver
-  cleanup preserves replacement files, and file delivery restores private
-  Windows ACLs and stale-session recovery, including hidden composition files.
-
 - File delivery (0.22+) uses private temporary files by default, without a
   helper, on Windows, Linux, and macOS. Opt into process-owned memory-backed
   files through Rust's `Secrets::set_file_storage` API. Leased storage uses the
@@ -23,7 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never fall back to disk. Owned Rust results retain files across clones, and
   leases can be handed to a consuming process. Language SDKs and Rust one-shot
   results can explicitly release files, including hidden dependencies, with
-  their cleanup methods.
+  their cleanup methods. `ResolveResponse` gains a public `file_lease_id` field
+  and a `close()` method, so code constructing it with a struct literal must
+  set the new field.
 
 - Rust embedders can supply an `as_path` materializer (0.22+) to deliver logical
   secret bytes directly into caller-owned resources. Composed values use the

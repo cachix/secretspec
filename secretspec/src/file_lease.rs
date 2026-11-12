@@ -155,16 +155,15 @@ impl FileStorage {
         if self.mode == FileStorageMode::Temp {
             use std::io::Write;
             let root = std::path::absolute(std::env::temp_dir())?;
-            let directory = self.directory.clone();
+            // Windows files must be created inside an already private directory
+            // so they never briefly inherit a permissive ACL. Reuse one directory
+            // so persisted paths leave nothing behind once callers remove them.
             #[cfg(windows)]
-            let directory = match directory {
-                Some(directory) => Some(directory),
-                None => Some(Arc::new(TempDirectory::new(
-                    tempfile::Builder::new()
-                        .prefix("secretspec-")
-                        .tempdir_in(&root)?,
-                )?)),
+            let root = match &self.directory {
+                Some(_) => root,
+                None => private_windows_directory(&root)?,
             };
+            let directory = self.directory.clone();
             let mut file = tempfile::Builder::new()
                 .suffix(suffix.unwrap_or(""))
                 .tempfile_in(directory.as_ref().map_or(root.as_path(), |dir| dir.path()))?;
@@ -224,6 +223,32 @@ impl FileStorage {
             revoke_on_drop: AtomicBool::new(true),
         })))
     }
+}
+
+/// The shared private directory for Windows secret files outside resolver sessions.
+/// Refuses links and directories owned or writable by other principals, then
+/// resets the ACL so only the current user, SYSTEM, and Administrators can read.
+#[cfg(windows)]
+fn private_windows_directory(root: &Path) -> io::Result<PathBuf> {
+    use crate::windows_security::{AclObjectKind, make_path_private, path_acl_is_trusted};
+    let directory = root.join("secretspec-files");
+    match std::fs::create_dir(&directory) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    let metadata = std::fs::symlink_metadata(&directory)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || !path_acl_is_trusted(&directory, AclObjectKind::Directory, false)?
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} is not a private directory", directory.display()),
+        ));
+    }
+    make_path_private(&directory)?;
+    Ok(directory)
 }
 
 /// A private storage directory that never recursively removes replacement files.

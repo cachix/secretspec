@@ -44,6 +44,9 @@ fn default_temp_paths_work_without_a_helper_and_are_persisted() {
     );
     let path = std::path::PathBuf::from(String::from_utf8(result.stdout).unwrap().trim());
     let directory = path.parent().unwrap();
+    // Windows reuses one private directory, so removing the file leaves no residue.
+    #[cfg(windows)]
+    assert_eq!(directory.file_name().unwrap(), "secretspec-files");
     #[cfg(windows)]
     let directory = directory.parent().unwrap();
     assert_eq!(

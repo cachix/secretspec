@@ -253,12 +253,9 @@ final class ErrorContract {
 }
 
 final class ResolveResponseContract {
-    private final String fileLeaseId;
-
-    public String fileLeaseId() { return fileLeaseId; }
-
     private final int schemaVersion;
     private final String provider;
+    private final String fileLeaseId;
     private final String profile;
     private final String scope;
     private final Map<String, ResolvedSecret> secrets;
@@ -267,18 +264,18 @@ final class ResolveResponseContract {
 
     @JsonCreator
     public ResolveResponseContract(
-        @JsonProperty("file_lease_id") String fileLeaseId,
         @JsonProperty("schema_version") int schemaVersion,
         @JsonProperty("provider") String provider,
+        @JsonProperty("file_lease_id") String fileLeaseId,
         @JsonProperty("profile") String profile,
         @JsonProperty("scope") String scope,
         @JsonProperty("secrets") Map<String, ResolvedSecret> secrets,
         @JsonProperty("missing_required") List<String> missingRequired,
         @JsonProperty("missing_optional") List<String> missingOptional
     ) {
-        this.fileLeaseId = fileLeaseId;
         this.schemaVersion = schemaVersion;
         this.provider = provider != null ? provider : "";
+        this.fileLeaseId = fileLeaseId;
         this.profile = profile != null ? profile : "";
         this.scope = scope;
         this.secrets = secrets != null ? secrets : Map.of();
@@ -294,6 +291,11 @@ final class ResolveResponseContract {
     @JsonProperty("provider")
     public String provider() {
         return provider;
+    }
+
+    @JsonProperty("file_lease_id")
+    public String fileLeaseId() {
+        return fileLeaseId;
     }
 
     @JsonProperty("profile")

@@ -10213,15 +10213,9 @@ secrets = ["URL", "FILE"]
             .to_owned();
         assert_eq!(std::fs::read(&path).unwrap(), b"file-fixture");
         // Patterns come from resolution, not a later read of a mutable file.
-        // Linux seals prevent mutation even by the file owner. On macOS the
-        // owner can replace the file, but redaction still uses the captured bytes.
-        #[cfg(target_os = "linux")]
-        assert!(std::fs::write(&path, b"changed").is_err());
-        #[cfg(not(target_os = "linux"))]
-        {
-            std::fs::remove_file(&path).unwrap();
-            std::fs::write(&path, b"changed").unwrap();
-        }
+        // Materialized secrets are read-only; replace the file as its owner.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"changed").unwrap();
         let redactor = validated.redactor().unwrap();
         assert_eq!(
             redactor.redact(b"file-fixture token-fixture prefix:token-fixture:suffix"),

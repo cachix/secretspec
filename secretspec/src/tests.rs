@@ -5294,7 +5294,8 @@ CERT_DATA = { description = "Certificate data", as_path = true }
     let file_content = fs::read_to_string(&cert_path).unwrap();
     assert_eq!(file_content, secret_value);
 
-    // The helper retains this handed-off path until the test process exits.
+    // Kept temporary files belong to the caller.
+    fs::remove_file(&cert_path).unwrap();
 }
 
 #[test]

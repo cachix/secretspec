@@ -22,14 +22,17 @@ import static org.cachix.secretspec.SafeCopy.safeCopyOf;
 public final class Resolved implements AutoCloseable {
 
     private boolean disposed;
+    private final String fileLeaseId;
 
     Resolved(
         String provider,
         String profile,
         String scope,
         Map<String, ResolvedSecret> secrets,
-        Collection<String> missingOptional
+        Collection<String> missingOptional,
+        String fileLeaseId
     ) {
+        this.fileLeaseId = fileLeaseId;
         this.provider = provider;
         this.profile = profile;
         this.scope = scope;
@@ -112,12 +115,27 @@ public final class Resolved implements AutoCloseable {
     }
 
     /**
-     * Removes temporary files backing {@code as_path} secrets.
+     * Revokes memory-backed files and hidden dependencies (0.22+) for {@code as_path} secrets.
      */
     public void close() {
         if (disposed)
             return;
 
+        if (fileLeaseId != null) {
+            try {
+                var payload = SecretSpecJsonContext.MAPPER.writeValueAsString(Map.of(
+                    "request_version", 1, "operation", "release_files", "source", Map.of("lease_id", fileLeaseId)));
+                var envelope = SecretSpecJsonContext.MAPPER.readTree(NativeResolver.call(payload));
+                if (!envelope.path("ok").asBoolean(false)) {
+                    throw new SecretSpecException(envelope.path("error").path("kind").asText("unknown"),
+                        envelope.path("error").path("message").asText("release failed"));
+                }
+            } catch (IOException error) {
+                throw new UncheckedIOException(error);
+            }
+            disposed = true;
+            return;
+        }
         disposed = true;
         UncheckedIOException firstError = null;
         for (var secret : secrets.values()) {

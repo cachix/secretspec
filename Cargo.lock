@@ -2583,6 +2583,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
+name = "file-lease"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42c7b104a34bde65ef60a8906d4b3477cdcca268c94d108a79c4d4cc48bbddd4"
+dependencies = [
+ "core-foundation 0.10.1",
+ "libc",
+ "memmap2",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
+ "wait-timeout",
+ "zeroize",
+]
+
+[[package]]
 name = "find-crate"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4377,6 +4395,15 @@ name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
+
+[[package]]
+name = "memmap2"
+version = "0.9.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b0ca1155a9ecc25aa12e8313a119f32edf0255fea2f44839c4ac0a12b2ac157"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "memoffset"
@@ -6332,6 +6359,7 @@ dependencies = [
  "dunce",
  "ed25519-dalek",
  "etcetera",
+ "file-lease",
  "futures-util",
  "google-cloud-gax",
  "google-cloud-secretmanager-v1",

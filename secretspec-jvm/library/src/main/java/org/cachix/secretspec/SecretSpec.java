@@ -151,7 +151,8 @@ public class SecretSpec {
                     response.profile(),
                     response.scope(),
                     response.secrets(),
-                    response.missingOptional()
+                    response.missingOptional(),
+                    response.fileLeaseId()
             );
         }
 

@@ -82,3 +82,16 @@ bash secretspec-php/scripts/build-ext.sh
 
 `tests/ConformanceTest.php` runs the shared cross-language conformance fixtures
 in `../conformance/fixtures`.
+
+## Files and cleanup
+
+`as_path` uses private temporary files. SDK cleanup releases visible files and
+hidden composition dependencies (0.22+). Files must be explicitly cleaned up;
+they are not removed automatically on process exit. See
+[file delivery and lifetimes](https://secretspec.dev/reference/configuration/#as_path-option).
+
+In **0.22+**, read file secrets with `$secret->open()`, then use
+`stream_get_contents()` and `fclose()`. The returned `php://memory` stream is
+seekable and contains a snapshot of the file. `get()` returns the path for
+external consumers. Call `$resolved->close()` after the last consumer to remove
+the result's files. Already-open streams retain their contents until closed.

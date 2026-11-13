@@ -107,7 +107,8 @@ public sealed class SecretSpecBuilder
             response.Profile,
             response.Scope,
             response.Secrets,
-            response.MissingOptional);
+            response.MissingOptional,
+            response.FileLeaseId);
     }
 
     /// <summary>

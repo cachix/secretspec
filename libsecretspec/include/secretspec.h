@@ -85,7 +85,18 @@ char *secretspec_resolve(const char *request_json);
  *   "options": { "provider": "dotenv://.env", "reason": "startup" }
  * }
  *
- * source.kind is exactly one of "search", "path" (with path), or "inline".
+ * SecretSpec 0.22+ also accepts memory-file cleanup requests:
+ * { "request_version": 1, "operation": "release_files",
+ *   "source": { "lease_id": "<response.file_lease_id>" } }
+ * The token is process-local and releases hidden file dependencies too.
+ * Repeated release is harmless; it never deletes arbitrary caller paths.
+ * SecretSpec 0.22+ can read a live result's file without canonicalizing its path:
+ * { "request_version": 1, "operation": "read_file",
+ *   "source": { "lease_id": "<response.file_lease_id>", "path": "<original path>" } }
+ * The response has schema_version 1 and base64-encoded bytes in "base64".
+ * Reads are limited to 64 MiB and reject paths outside the owning result.
+ *
+ * For resolve, source.kind is exactly one of "search", "path" (with path), or "inline".
  * Inline spec v2 (SecretSpec 0.21+) is strict JSON: profile declarations use a `secrets` object,
  * and unknown declaration fields are rejected. Its base_dir resolves relative
  * provider paths like Secrets::from_spec_at. project.extends is supported and

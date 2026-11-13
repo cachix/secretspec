@@ -112,6 +112,8 @@ class Resolved:
     missing_optional: list[str] = field(default_factory=list)
     scope: Optional[str] = None
 
+    _file_lease_id: Optional[str] = field(default=None, repr=False, compare=False)
+
     def set_as_env(self) -> None:
         """Export each resolved secret into ``os.environ`` by its declared name."""
         for name, secret in self.secrets.items():
@@ -132,19 +134,18 @@ class Resolved:
         return {name: secret.get for name, secret in self.secrets.items()}
 
     def close(self) -> None:
-        """Remove the temp files backing any ``as_path`` secrets in this result.
+        """Revoke this result's secret files, including hidden dependencies (0.22+).
 
-        The resolver persists those files (mode 0400) so their paths stay valid
-        after resolve returns; the caller owns their lifetime. Call ``close()``
-        (or use this object as a context manager) when done so secret files do
-        not accumulate in the temp dir. A file already gone is not an error.
-
-        Every file is attempted even if one cannot be removed; the first such
-        error is re-raised once the rest have been cleaned up. Stopping at the
-        first failure would leave the remaining secrets on disk, which is the
-        one outcome this method exists to prevent. Matches the Go SDK's
-        ``firstErr`` and the .NET SDK's ``firstError``.
+        Use a context manager or call this after the last consumer finishes.
+        Older runtimes use filesystem cleanup. Repeated calls are harmless.
         """
+        if self._file_lease_id is not None:
+            envelope = _call_envelope({"request_version": 1, "operation": "release_files",
+                                       "source": {"lease_id": self._file_lease_id}})
+            if not envelope.get("ok", False):
+                error = envelope.get("error", {})
+                raise SecretSpecError(error.get("kind", "unknown"), error.get("message", ""))
+            return
         first_error: Optional[OSError] = None
         for secret in self.secrets.values():
             if secret.as_path and secret.path is not None:
@@ -370,6 +371,7 @@ class _Builder:
             for name, entry in response.get("secrets", {}).items()
         }
         return Resolved(
+            _file_lease_id=response.get("file_lease_id"),
             provider=response["provider"],
             profile=response["profile"],
             secrets=secrets,

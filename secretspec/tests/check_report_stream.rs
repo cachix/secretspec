@@ -72,6 +72,22 @@ fn temp_files(project: &Path) -> Vec<PathBuf> {
     fs::read_dir(temp_dir(project))
         .unwrap()
         .map(|entry| entry.unwrap().path())
+        .flat_map(|path| {
+            // Windows reuses one private directory for secret files; only its
+            // contents count as files left behind.
+            if path.is_dir()
+                && path
+                    .file_name()
+                    .is_some_and(|name| name == "secretspec-files")
+            {
+                fs::read_dir(path)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect()
+            } else {
+                vec![path]
+            }
+        })
         .collect()
 }
 
@@ -117,14 +133,10 @@ fn failing_check_keeps_the_report_separate_from_diagnostics() {
 fn get_keeps_the_as_path_file_it_prints() {
     let project = project_with(true);
     let output = run(project.path(), true, &["get", SECRET_NAME]);
-
     assert!(output.status.success(), "{}", stderr(&output));
     let printed = PathBuf::from(stdout(&output).trim());
-    assert_eq!(temp_files(project.path()), vec![printed.clone()]);
-    assert_eq!(
-        fs::read_to_string(printed).unwrap(),
-        "postgres://localhost/example"
-    );
+    assert_eq!(fs::read(&printed).unwrap(), b"postgres://localhost/example");
+    fs::remove_file(printed).unwrap();
 }
 
 #[test]

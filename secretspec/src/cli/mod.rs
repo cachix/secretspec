@@ -928,6 +928,10 @@ fn load_secrets(
     .into_diagnostic()
     .wrap_err("Failed to load secretspec configuration")?;
 
+    // Printed file paths belong to the caller, including across a shell
+    // command substitution. Resolve that owner lazily only when handing off files.
+    secrets.detached_file_owner = crate::file_lease::DetachedOwner::Invoker;
+
     // Destination previews are CLI presentation. The core computes the
     // provider-specific metadata and invokes this observer only when a CLI
     // caller installs it; SDK/library writes remain free of preview output.
@@ -1143,6 +1147,9 @@ fn caller_context(cli: &Cli) -> Result<Option<CallerContext>> {
 /// * `Err` - If any error occurred during execution
 #[doc(hidden)]
 pub fn main() -> Result<()> {
+    if let Some(code) = crate::file_lease::maybe_run_keeper() {
+        std::process::exit(code);
+    }
     completion::complete();
     let matches = Cli::command().get_matches();
     let typed = TypedArgs::from_matches(&matches);

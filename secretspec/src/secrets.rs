@@ -1399,7 +1399,7 @@ fn warn_primary_provider_failure(display_uri: Option<&str>, err: &SecretSpecErro
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Materialize {
     /// Full pass: mint-and-store a missing generatable secret and write each
-    /// `as_path` secret to a temp file. Backs `validate()`/`resolve()`/`check`.
+    /// `as_path` secret to the selected file storage. Backs `validate()`/`resolve()`/`check`.
     Values,
     /// Full pass for `run`: the same materialization as `Values`, plus secure
     /// controlling-terminal input for declarations with `prompt = true`.
@@ -1441,7 +1441,8 @@ struct ResolutionExecution<'secrets, 'plan, 'filter, 'addresses> {
     missing_required: Vec<String>,
     missing_optional: Vec<String>,
     with_defaults: Vec<(String, String)>,
-    temp_files: Vec<tempfile::NamedTempFile>,
+    temp_files: Vec<crate::file_lease::SecretFile>,
+    file_storage: Arc<crate::file_lease::FileStorage>,
     resolution: Vec<SecretResolution>,
     group_uris: HashMap<Option<&'plan str>, String>,
     fetched_values: HashMap<String, ProviderValue>,
@@ -1482,6 +1483,13 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             missing_optional: Vec::new(),
             with_defaults: Vec::new(),
             temp_files: Vec::new(),
+            // A command can transfer its owner PID without changing the lifetime
+            // of results from earlier or concurrent SDK resolutions.
+            file_storage: if materialize.prompts() {
+                Arc::new(manager.file_storage.fresh())
+            } else {
+                manager.file_storage.clone()
+            },
             resolution: Vec::new(),
             group_uris: HashMap::new(),
             fetched_values: HashMap::new(),
@@ -1513,6 +1521,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
         self.manager.insert_resolved(
             &mut self.values,
             &mut self.temp_files,
+            &self.file_storage,
             &mut self.redactions,
             planned,
             diagnostic_name,
@@ -1534,6 +1543,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             GeneratedValue::Text(value) => self.manager.insert_resolved(
                 &mut self.values,
                 &mut self.temp_files,
+                &self.file_storage,
                 &mut self.redactions,
                 planned,
                 diagnostic_name,
@@ -1840,6 +1850,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                                     manager.insert_resolved(
                                         &mut self.values,
                                         &mut self.temp_files,
+                                        &self.file_storage,
                                         &mut self.redactions,
                                         planned,
                                         diagnostic_name,
@@ -1888,6 +1899,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                                     manager.insert_resolved(
                                         &mut self.values,
                                         &mut self.temp_files,
+                                        &self.file_storage,
                                         &mut self.redactions,
                                         planned,
                                         diagnostic_name,
@@ -2054,6 +2066,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                         self.manager.insert_resolved(
                             &mut self.values,
                             &mut self.temp_files,
+                            &self.file_storage,
                             &mut self.redactions,
                             planned,
                             Secrets::diagnostic_secret_name(&planned.name, self.output_filter),
@@ -2172,10 +2185,14 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             redactions.push(SecretBytes::from_slice(bytes));
         }
         if planned.as_path() {
-            let (owner, path) = self
-                .manager
-                .write_secret_to_temp_file(bytes, planned.config().file_suffix())?;
-            self.temp_files.push(owner);
+            let (owner, path) = self.manager.materialize_secret_file(
+                bytes,
+                planned.config().file_suffix(),
+                &self.file_storage,
+            )?;
+            if let Some(owner) = owner {
+                self.temp_files.push(owner);
+            }
             self.values
                 .insert(planned.name.clone(), SecretBytes::from_utf8(path));
         } else {
@@ -2265,6 +2282,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             return self.manager.insert_resolved(
                 &mut self.values,
                 &mut self.temp_files,
+                &self.file_storage,
                 &mut self.redactions,
                 planned,
                 diagnostic_name,
@@ -2297,6 +2315,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             crate::x509_identity::ProjectedValue::Text(value) => self.manager.insert_resolved(
                 &mut self.values,
                 &mut self.temp_files,
+                &self.file_storage,
                 &mut self.redactions,
                 planned,
                 diagnostic_name,
@@ -2423,7 +2442,9 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                     self.values,
                     report_provider_uri,
                     self.plan.profile.clone(),
-                ),
+                )
+                .with_as_path_materializer(self.manager.as_path_materializer.clone())
+                .with_temp_files(self.temp_files.clone()),
                 missing_optional: self.missing_optional,
                 with_defaults: self.with_defaults,
                 resolution: self.resolution,
@@ -2443,14 +2464,14 @@ impl<'secrets, 'plan, 'filter, 'addresses>
 enum PreparedSecret {
     Inline(SecretBytes),
     File {
-        owner: tempfile::NamedTempFile,
+        owner: Option<crate::file_lease::SecretFile>,
         path: String,
     },
 }
 
-/// Named resolution with temporary-file ownership retained by the caller.
-/// The resolver converts these owners into session leases; the embedded API
-/// persists them to preserve its existing one-shot path behavior.
+/// Named resolution with file ownership retained by the caller.
+/// Resolver sessions retain these owners; one-shot APIs hand files to the
+/// embedding process or the CLI's invoking process.
 pub(crate) enum OwnedNamedResolution<T = String> {
     Undeclared,
     Missing {
@@ -2466,10 +2487,10 @@ pub(crate) enum OwnedNamedResolution<T = String> {
         refresh_at_unix_ms: Option<u64>,
         #[cfg_attr(not(feature = "cli"), allow(dead_code))]
         revision: Option<secretspec_ipc::Revision>,
-        supporting_files: Vec<tempfile::NamedTempFile>,
+        supporting_files: Vec<crate::file_lease::SecretFile>,
     },
     File {
-        file: tempfile::NamedTempFile,
+        file: crate::file_lease::SecretFile,
         source: ResolvedSource,
         source_provider: Option<String>,
         #[cfg_attr(not(feature = "cli"), allow(dead_code))]
@@ -2478,12 +2499,12 @@ pub(crate) enum OwnedNamedResolution<T = String> {
         refresh_at_unix_ms: Option<u64>,
         #[cfg_attr(not(feature = "cli"), allow(dead_code))]
         revision: Option<secretspec_ipc::Revision>,
-        supporting_files: Vec<tempfile::NamedTempFile>,
+        supporting_files: Vec<crate::file_lease::SecretFile>,
     },
 }
 
 impl<T> OwnedNamedResolution<T> {
-    fn into_embedded(self) -> Result<NamedResolution<T>> {
+    fn into_embedded(self, owner: crate::file_lease::DetachedOwner) -> Result<NamedResolution<T>> {
         match self {
             Self::Undeclared => Ok(NamedResolution::Undeclared),
             Self::Missing { required } => Ok(NamedResolution::Missing { required }),
@@ -2494,7 +2515,7 @@ impl<T> OwnedNamedResolution<T> {
                 supporting_files,
                 ..
             } => {
-                keep_owned_files(supporting_files)?;
+                keep_owned_files(supporting_files, owner)?;
                 Ok(NamedResolution::Resolved(ResolvedSecret {
                     value: Some(value),
                     path: None,
@@ -2510,11 +2531,8 @@ impl<T> OwnedNamedResolution<T> {
                 supporting_files,
                 ..
             } => {
-                keep_owned_files(supporting_files)?;
-                let path = file
-                    .into_temp_path()
-                    .keep()
-                    .map_err(|error| SecretSpecError::Io(error.error))?;
+                keep_owned_files(supporting_files, owner)?;
+                let path = file.persist(owner)?;
                 Ok(NamedResolution::Resolved(ResolvedSecret {
                     value: None,
                     path: Some(path.to_string_lossy().into_owned()),
@@ -2547,11 +2565,12 @@ pub(crate) struct DeletedSecret {
     pub(crate) provider_uri: String,
 }
 
-fn keep_owned_files(files: Vec<tempfile::NamedTempFile>) -> Result<()> {
+fn keep_owned_files(
+    files: Vec<crate::file_lease::SecretFile>,
+    owner: crate::file_lease::DetachedOwner,
+) -> Result<()> {
     for file in files {
-        file.into_temp_path()
-            .keep()
-            .map_err(|error| SecretSpecError::Io(error.error))?;
+        file.persist(owner)?;
     }
     Ok(())
 }
@@ -2600,6 +2619,9 @@ fn find_config_file_from(start: PathBuf) -> Result<PathBuf> {
     }
 }
 
+pub(crate) type AsPathMaterializer =
+    dyn Fn(&[u8], Option<&str>) -> io::Result<PathBuf> + Send + Sync;
+
 /// The main entry point for the secretspec library
 ///
 /// `Secrets` manages the loading, validation, and retrieval of secrets
@@ -2629,6 +2651,9 @@ pub struct Secrets {
     /// Optional global user configuration
     global_config: Option<GlobalConfig>,
     retry_policy: Option<crate::provider::RetryPolicy>,
+    as_path_materializer: Option<Arc<AsPathMaterializer>>,
+    file_storage: Arc<crate::file_lease::FileStorage>,
+    pub(crate) detached_file_owner: crate::file_lease::DetachedOwner,
     /// The provider to use (if set via builder)
     provider: Option<String>,
     /// Resolver sessions fix provider selection at initialization and must not
@@ -2780,7 +2805,7 @@ pub(crate) enum ConfigEnv {
     /// Preserve ambient configuration overrides (the default).
     #[default]
     Inherit,
-    /// Remove manifest, profile, provider, scope, and reason overrides.
+    /// Remove configuration selection overrides.
     #[cfg(feature = "cli")]
     Clear,
 }
@@ -2958,6 +2983,9 @@ impl Secrets {
             config_dir: PathBuf::from("."),
             global_config,
             retry_policy: None,
+            as_path_materializer: None,
+            file_storage: Arc::default(),
+            detached_file_owner: crate::file_lease::DetachedOwner::Process(std::process::id()),
             provider,
             ignore_ambient_provider: false,
             profile,
@@ -3121,6 +3149,9 @@ impl Secrets {
             config_dir,
             global_config,
             retry_policy: None,
+            as_path_materializer: None,
+            file_storage: Arc::default(),
+            detached_file_owner: crate::file_lease::DetachedOwner::Process(std::process::id()),
             provider: None,
             ignore_ambient_provider: !use_ambient_session,
             profile: None,
@@ -3222,6 +3253,42 @@ impl Secrets {
     #[cfg(feature = "cli")]
     pub(crate) fn silence_progress(&mut self) {
         self.progress = false;
+    }
+
+    /// Select temporary or memory-backed `as_path` storage (0.22+).
+    ///
+    /// Temporary files are the default. This affects future resolutions;
+    /// existing results retain their original storage.
+    /// An explicitly installed custom materializer takes precedence.
+    pub fn set_file_storage(&mut self, mode: crate::FileStorageMode) {
+        self.file_storage = Arc::new(crate::file_lease::FileStorage::new(mode));
+    }
+
+    #[cfg(feature = "cli")]
+    pub(crate) fn set_file_storage_directory(
+        &mut self,
+        directory: tempfile::TempDir,
+    ) -> io::Result<()> {
+        self.file_storage = Arc::new(crate::file_lease::FileStorage::in_directory(directory)?);
+        Ok(())
+    }
+
+    /// Override `as_path` materialization (0.22+).
+    ///
+    /// The callback receives logical bytes after decoding and extraction, before
+    /// any temporary file is created. Its absolute UTF-8 path is also used when
+    /// composing dependent secrets. Captured owners remain alive with the
+    /// validation result and any typed or cloned [`crate::Resolved`] values.
+    ///
+    /// Use this with [`Self::validate`] or an owned command session. APIs that
+    /// detach paths from their owners, such as [`Self::resolve`] and
+    /// [`Self::export`], cannot persist custom resources and return an error.
+    /// A callback failure never falls back to writing a temporary file.
+    pub fn set_as_path_materializer<F>(&mut self, materializer: F)
+    where
+        F: Fn(&[u8], Option<&str>) -> io::Result<PathBuf> + Send + Sync + 'static,
+    {
+        self.as_path_materializer = Some(Arc::new(materializer));
     }
 
     /// Sets the provider to use for secret operations
@@ -4386,6 +4453,7 @@ impl Secrets {
         value: SecretBytes,
         representation: ResolvedRepresentation,
         redactions: &mut Option<Vec<SecretBytes>>,
+        storage: &crate::file_lease::FileStorage,
     ) -> Result<PreparedSecret> {
         let decoded = match (representation, planned.encoding()) {
             (ResolvedRepresentation::Stored, Some(encoding)) => {
@@ -4443,7 +4511,7 @@ impl Secrets {
                 .or_else(|| decoded.as_ref().map(|(_, decoded)| decoded.expose_secret()))
                 .unwrap_or_else(|| value.expose_secret());
             let (owner, path) =
-                self.write_secret_to_temp_file(bytes, planned.config().file_suffix())?;
+                self.materialize_secret_file(bytes, planned.config().file_suffix(), storage)?;
             Ok(PreparedSecret::File { owner, path })
         } else {
             Ok(PreparedSecret::Inline(
@@ -4456,26 +4524,36 @@ impl Secrets {
 
     /// Inserts a resolved secret into the working set, applying its optional
     /// storage decoding and extraction when the value crossed a storage
-    /// boundary, then transparently materializing an `as_path` value to an
-    /// owner-only temp file whose lifetime is tied to `temp_files`. Shared by
+    /// boundary, then transparently materializing an `as_path` value to a
+    /// file whose lifetime is tied to `temp_files`. Shared by
     /// every resolution branch so stored-value transforms cannot drift.
     #[allow(clippy::too_many_arguments)]
     fn insert_resolved(
         &self,
         secrets: &mut HashMap<String, SecretBytes>,
-        temp_files: &mut Vec<tempfile::NamedTempFile>,
+        temp_files: &mut Vec<crate::file_lease::SecretFile>,
+        storage: &crate::file_lease::FileStorage,
         redactions: &mut Option<Vec<SecretBytes>>,
         planned: &PlannedSecret,
         diagnostic_name: &str,
         value: SecretBytes,
         representation: ResolvedRepresentation,
     ) -> Result<()> {
-        match self.prepare_resolved(planned, diagnostic_name, value, representation, redactions)? {
+        match self.prepare_resolved(
+            planned,
+            diagnostic_name,
+            value,
+            representation,
+            redactions,
+            storage,
+        )? {
             PreparedSecret::Inline(value) => {
                 secrets.insert(planned.name.clone(), value);
             }
             PreparedSecret::File { owner, path } => {
-                temp_files.push(owner);
+                if let Some(owner) = owner {
+                    temp_files.push(owner);
+                }
                 secrets.insert(planned.name.clone(), SecretBytes::from_utf8(path));
             }
         }
@@ -6114,9 +6192,8 @@ impl Secrets {
         // them once, there) rather than maintaining a second single-secret path.
         match self.resolve_named_within(name, Surface::WholeProfile, |_, value| Ok(value))? {
             NamedResolution::Resolved(secret) => {
-                // `as_path` secrets are materialized and their temp file
-                // persisted during resolution, so a printed path is still valid
-                // after this process exits.
+                // File ownership was handed to the CLI caller (or embedding
+                // process), so returning does not invalidate the printed path.
                 if let Some(value) = secret.value {
                     out.write_all(value.expose_secret())?;
                     if interactive {
@@ -7037,65 +7114,39 @@ impl Secrets {
         }
     }
 
-    /// Writes secret bytes to a temporary file and returns the file handle and path
-    ///
-    /// # Arguments
-    ///
-    /// * `secret` - The secret bytes to write
-    ///
-    /// # Returns
-    ///
-    /// A tuple containing the temporary file handle and the path as a string
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the temporary file cannot be created or written to
-    fn write_secret_to_temp_file(
+    /// Materialize logical bytes in the selected storage, or invoke the caller's
+    /// explicit materializer. File-lease and custom failures never fall back to disk.
+    fn materialize_secret_file(
         &self,
         secret: &[u8],
         suffix: Option<&str>,
-    ) -> Result<(tempfile::NamedTempFile, String)> {
-        use std::io::Write;
-
-        let mut temp_file = tempfile::Builder::new()
-            .suffix(suffix.unwrap_or(""))
-            .tempfile()
-            .map_err(SecretSpecError::Io)?;
-
-        temp_file.write_all(secret).map_err(SecretSpecError::Io)?;
-
-        // Flush to ensure the data is written
-        temp_file.flush().map_err(SecretSpecError::Io)?;
-
-        // Set restrictive permissions (0o400) so only the owner can read
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = temp_file
-                .as_file()
-                .metadata()
-                .map_err(SecretSpecError::Io)?
-                .permissions();
-            perms.set_mode(0o400);
-            temp_file
-                .as_file()
-                .set_permissions(perms)
-                .map_err(SecretSpecError::Io)?;
+        storage: &crate::file_lease::FileStorage,
+    ) -> Result<(Option<crate::file_lease::SecretFile>, String)> {
+        if let Some(materialize) = &self.as_path_materializer {
+            let path = materialize(secret, suffix)?;
+            if !path.is_absolute() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Custom as_path materializer must return an absolute path",
+                )
+                .into());
+            }
+            let path = path.into_os_string().into_string().map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Custom as_path materializer must return a UTF-8 path",
+                )
+            })?;
+            return Ok((None, path));
         }
 
-        // Get the path as a string
-        let path_str = temp_file
+        let file = storage.materialize(secret, suffix)?;
+        let path = file
             .path()
             .to_str()
-            .ok_or_else(|| {
-                SecretSpecError::Io(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Temporary file path is not valid UTF-8",
-                ))
-            })?
-            .to_string();
-
-        Ok((temp_file, path_str))
+            .ok_or_else(|| io::Error::other("Non-UTF-8 secret file path"))?
+            .to_owned();
+        Ok((Some(file), path))
     }
 
     /// Validates all secrets in the specification
@@ -7161,12 +7212,12 @@ impl Secrets {
     /// the authoritative output other-language SDKs consume over the C ABI.
     ///
     /// Unlike [`Self::validate`], the returned payload **carries secret
-    /// values** (or, for `as_path` secrets, the path to a persisted temp file).
+    /// values** (or, for `as_path` secrets, a path in the selected file storage).
     /// Treat its bytes as sensitive. When a required secret is missing the
     /// resolution failed: `secrets` is empty and `missing_required` is
     /// populated, mirroring the derive crate's `load()`.
     ///
-    /// `as_path` temp files are persisted so the returned paths stay valid for
+    /// `as_path` files are handed to the embedding process so paths stay valid for
     /// the caller; this is a one-shot boundary and the caller owns their
     /// lifetime thereafter.
     /// Inline values must be UTF-8; use [`Self::resolve_bytes`] for arbitrary bytes.
@@ -7179,7 +7230,7 @@ impl Secrets {
     /// Resolve inline values as arbitrary bytes (0.21+).
     ///
     /// Like [`Self::resolve`], but without converting inline values to text.
-    /// `as_path` values still return paths to persisted temporary files.
+    /// `as_path` values return paths in the selected file storage.
     pub fn resolve_bytes(&self) -> Result<ResolveResponse<SecretBytes>> {
         self.resolve_impl(true, |_, value| Ok(value))
     }
@@ -7225,7 +7276,7 @@ impl Secrets {
     /// looks at the rest of it.
     ///
     /// Like [`Self::resolve`], this carries the value, mints a generatable
-    /// secret, and persists an `as_path` temp file so the returned path outlives
+    /// secret, and hands an `as_path` file to the embedding process so its path outlives
     /// the call. Treat the payload as sensitive.
     /// Inline values must be UTF-8; use [`Self::resolve_named_bytes`] for arbitrary bytes.
     ///
@@ -7380,8 +7431,17 @@ impl Secrets {
         surface: Surface,
         convert: impl FnOnce(&str, SecretBytes) -> Result<T>,
     ) -> Result<NamedResolution<T>> {
+        if self.as_path_materializer.is_some() {
+            // Named compositions can contain paths from hidden dependencies.
+            // NamedResolution cannot retain the callback that owns those paths.
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Custom as_path resources require a live owner and cannot be persisted",
+            )
+            .into());
+        }
         self.resolve_named_owned_within(name, surface, Materialize::Values, convert)?
-            .into_embedded()
+            .into_embedded(self.detached_file_owner)
     }
 
     fn resolve_named_owned_within<T>(
@@ -7640,13 +7700,18 @@ impl Secrets {
                 );
             }
 
-            if include_values {
-                validated.keep_temp_files()?;
-            }
+            let file_lease_id = if include_values {
+                crate::file_lease::retain_group(
+                    validated.keep_files_for(self.detached_file_owner)?,
+                )?
+            } else {
+                None
+            };
             let mut missing_optional = validated.missing_optional.clone();
             missing_optional.sort();
 
             Ok(ResolveResponse {
+                file_lease_id,
                 schema_version: RESOLVE_SCHEMA_VERSION,
                 provider: validated.resolved.provider.clone(),
                 profile: validated.resolved.profile.clone(),
@@ -7667,6 +7732,7 @@ impl Secrets {
                 let mut missing_optional = errors.missing_optional.clone();
                 missing_optional.sort();
                 Ok(ResolveResponse {
+                    file_lease_id: None,
                     schema_version: RESOLVE_SCHEMA_VERSION,
                     provider: errors.provider.clone(),
                     profile: errors.profile.clone(),
@@ -8252,9 +8318,13 @@ impl Secrets {
                     },
                 );
                 #[cfg(unix)]
-                if let Ok(pid) = spawned {
-                    signal_forwarder.start(pid);
+                if let Ok(pid) = &spawned {
+                    signal_forwarder.start(*pid);
                 }
+                if let Ok(pid) = spawned {
+                    validation_result.handoff_files_to(pid)?;
+                }
+                Ok(())
             })?;
             return Ok(command_exit_code(status));
         }
@@ -8289,6 +8359,16 @@ impl Secrets {
         #[cfg(unix)]
         signal_forwarder.start(child.id());
 
+        if let Err(error) = validation_result.handoff_files_to(child.id()) {
+            // A very short-lived consumer can exit before handoff is acknowledged.
+            if let Some(status) = child.try_wait()? {
+                return Ok(command_exit_code(status));
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error.into());
+        }
+
         let status = child.wait()?;
         Ok(command_exit_code(status))
     }
@@ -8298,8 +8378,8 @@ impl Secrets {
     /// counterpart to [`Secrets::run`]: it never prompts and errors when a
     /// required secret is missing, so CI can gate on it.
     ///
-    /// `as_path` secrets keep their backing temp files, like [`Secrets::check`],
-    /// so the emitted paths stay valid for whatever consumes the output.
+    /// Temporary files are persisted for the caller to clean up. With opt-in
+    /// file leases (0.22+), paths are handed to the caller's process instead.
     ///
     /// Output is written to `out` rather than directly to stdout, so an SDK/FFI
     /// caller can capture the formatted bytes and a broken pipe surfaces as a
@@ -8343,12 +8423,8 @@ impl Secrets {
             return Err(err);
         }
 
-        // Persist as_path temp files *before* emitting, so a persistence failure
-        // aborts up front rather than after the paths have already been written
-        // out (a consumer captures stdout regardless of the exit code) and the
-        // temp files are then deleted on drop. The path strings already live in
-        // `resolved.secrets`, so keeping first does not change what is emitted.
-        if let Err(e) = validated.keep_temp_files() {
+        // Complete ownership handoff before exposing paths to the consumer.
+        if let Err(e) = validated.keep_files_for(self.detached_file_owner) {
             let err = SecretSpecError::Io(e);
             self.record(
                 AuditAction::Export,
@@ -10087,6 +10163,23 @@ CERT = { description = "certificate", type = "x509_certificate", from = "ID" }
 mod output_redaction_tests {
     use super::*;
     use crate::config::{GenerateConfig, GenerateOptions, Secret};
+
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn run_handoff_preserves_existing_owned_results() {
+        let _env = crate::tests::scrub_resolution_env();
+        let config: Config = toml::from_str("[project]\nname='run-owner'\nrevision='1.0'\nrequire_reason=false\n[profiles.default]\nKEY={description='key',default='fixture',as_path=true}\n").unwrap();
+        let mut spec = Secrets::new(config, None, Some("null://".into()), None);
+        spec.set_file_storage(crate::FileStorageMode::FileLease);
+        let first = spec.validate().unwrap().unwrap();
+        let path = first.resolved.secrets["KEY"].try_as_utf8().unwrap();
+        assert_eq!(
+            spec.run_command_with_config_env(vec!["true".into()], ConfigEnv::Inherit)
+                .unwrap(),
+            0
+        );
+        assert_eq!(std::fs::read(path).unwrap(), b"fixture");
+    }
 
     #[test]
     fn sdk_redactor_captures_files_and_hidden_inputs_in_one_resolution() {

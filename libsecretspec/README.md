@@ -51,3 +51,31 @@ bash libsecretspec/scripts/cinstall.sh "$PREFIX" shared
 This is distinct from
 [`libsecretspec-resolver`](../libsecretspec-resolver/), the pure-C client for
 SecretSpec's out-of-process resolution protocol.
+
+## Secret-file cleanup (0.22+)
+
+`as_path` delivery uses private temporary files and does not need a helper.
+Files remain until explicitly cleaned up; process exit does not remove them.
+
+Resolve responses containing file dependencies carry an optional
+`file_lease_id`, including when only a composition using a hidden file is
+visible. Pass it to `secretspec_call` to revoke all files for that result:
+
+```json
+{"request_version":1,"operation":"release_files","source":{"lease_id":"<file_lease_id>"}}
+```
+
+The response is `{"ok":true,"response":{"schema_version":1,"released":1}}`.
+Release is idempotent and tokens belong to the originating process. SDK cleanup
+methods use this operation.
+
+**0.22+** also supports reading a file belonging to a live result:
+
+```json
+{"request_version":1,"operation":"read_file","source":{"lease_id":"<file_lease_id>","path":"<original path>"}}
+```
+
+The response contains `schema_version: 1` and the file bytes in `base64`.
+Unknown or released tokens and paths outside that result are rejected. Reads
+are bounded to 64 MiB. PHP's `ResolvedSecret::open()` uses this operation to
+populate a memory-only stream.

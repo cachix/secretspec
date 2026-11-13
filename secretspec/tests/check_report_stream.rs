@@ -72,6 +72,22 @@ fn temp_files(project: &Path) -> Vec<PathBuf> {
     fs::read_dir(temp_dir(project))
         .unwrap()
         .map(|entry| entry.unwrap().path())
+        .flat_map(|path| {
+            // Windows reuses one private directory for secret files; only its
+            // contents count as files left behind.
+            if path.is_dir()
+                && path
+                    .file_name()
+                    .is_some_and(|name| name == "secretspec-files")
+            {
+                fs::read_dir(path)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect()
+            } else {
+                vec![path]
+            }
+        })
         .collect()
 }
 

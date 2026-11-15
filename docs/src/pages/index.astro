@@ -598,7 +598,7 @@ const reelScriptData = {
 </section>
 
 <script is:inline define:vars={{ reelData: reelScriptData }}>
-  document.addEventListener('astro:page-load', function () {
+  (function () {
     const providerReel = document.querySelector('[data-reel="providers"]');
     const consumerReel = document.querySelector('[data-reel="consumers"]');
     const terminalBody = document.querySelector('[data-pipeline-terminal-body]');
@@ -1155,7 +1155,7 @@ const reelScriptData = {
       providerCtl.destroy();
       consumerCtl.destroy();
     }, { once: true });
-  });
+  })();
 </script>
 
 <!-- ============ BENTO ============ -->

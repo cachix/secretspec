@@ -16,7 +16,7 @@
   "dependencies": {
     "@astrojs/mdx": "^8.1.2",
     "@astrojs/starlight": "^0.42.8",
-    "@cachix/site-kit": "https://codeload.github.com/cachix/site-kit/tar.gz/7913535ff0c219fcdb6c17733b2687d20bea37db",
+    "@cachix/site-kit": "https://codeload.github.com/cachix/site-kit/tar.gz/2ad59aacdbfc86cd772da9815051bdb04bab554e",
     "astro": "^7.4.12",
     "hast-util-select": "^6.0.4",
     "rehype-parse": "^9.0.1",

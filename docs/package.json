@@ -16,7 +16,7 @@
   "dependencies": {
     "@astrojs/mdx": "^8.1.2",
     "@astrojs/starlight": "^0.42.8",
-    "@cachix/site-kit": "https://codeload.github.com/cachix/site-kit/tar.gz/1e9bb1e181430d4a8d632bc8c1487e16de946091",
+    "@cachix/site-kit": "https://codeload.github.com/cachix/site-kit/tar.gz/7913535ff0c219fcdb6c17733b2687d20bea37db",
     "astro": "^7.4.12",
     "hast-util-select": "^6.0.4",
     "rehype-parse": "^9.0.1",
@@ -31,6 +31,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "0.9.9",
+    "astro-vtbot": "3.1.0",
     "typescript": "6.0.3"
   }
 }

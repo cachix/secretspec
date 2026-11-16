@@ -1091,6 +1091,12 @@ const reelScriptData = {
       return {
         start: () => { if (!hovering && !dragState) startAuto(); },
         stop: () => { stopAuto(); stopAnim(); },
+        destroy: () => {
+          stopAuto();
+          stopAnim();
+          clearTimeout(resumeTimerId);
+          clearTimeout(wheelSettleId);
+        },
       };
     }
 
@@ -1112,8 +1118,9 @@ const reelScriptData = {
     });
 
     const section = document.querySelector('.landing-hero');
+    let io = null;
     if (section && 'IntersectionObserver' in window) {
-      const io = new IntersectionObserver((entries) => {
+      io = new IntersectionObserver((entries) => {
         entries.forEach((e) => {
           if (e.isIntersecting) {
             providerCtl.start();
@@ -1130,18 +1137,24 @@ const reelScriptData = {
       consumerCtl.start();
     }
 
-    if (REDUCE_MOTION) {
+    function onReduceMotionChange() {
       if (REDUCE_MOTION.matches) {
         providerCtl.stop();
         consumerCtl.stop();
       }
-      REDUCE_MOTION.addEventListener('change', function () {
-        if (REDUCE_MOTION.matches) {
-          providerCtl.stop();
-          consumerCtl.stop();
-        }
-      });
     }
+
+    if (REDUCE_MOTION) {
+      onReduceMotionChange();
+      REDUCE_MOTION.addEventListener('change', onReduceMotionChange);
+    }
+
+    document.addEventListener('astro:before-swap', () => {
+      if (io) io.disconnect();
+      if (REDUCE_MOTION) REDUCE_MOTION.removeEventListener('change', onReduceMotionChange);
+      providerCtl.destroy();
+      consumerCtl.destroy();
+    }, { once: true });
   })();
 </script>
 
@@ -1313,7 +1326,7 @@ const reelScriptData = {
 <script>
   import { createAstroMotionLifecycle } from '@cachix/site-kit/motion';
 
-  (() => {
+  document.addEventListener('astro:page-load', () => {
     const demo = document.querySelector<HTMLElement>('[data-profiles-demo]');
     if (!demo) return;
     const demoEl = demo;
@@ -1375,7 +1388,7 @@ const reelScriptData = {
       threshold: 0.2,
       onChange: (active) => active ? start() : stop(),
     });
-  })();
+  });
 </script>
 
 <!-- ============ SHOWCASE: scopes ============ -->
@@ -1429,7 +1442,7 @@ const reelScriptData = {
 <script>
   import { createAstroMotionLifecycle } from '@cachix/site-kit/motion';
 
-  (() => {
+  document.addEventListener('astro:page-load', () => {
     const demo = document.querySelector<HTMLElement>('[data-scopes-demo]');
     if (!demo) return;
     const demoEl = demo;
@@ -1487,7 +1500,7 @@ const reelScriptData = {
       threshold: 0.2,
       onChange: (active) => active ? start() : stop(),
     });
-  })();
+  });
 </script>
 
 <!-- ============ SHOWCASE: fallback chains ============ -->
@@ -1630,7 +1643,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
 <script>
   import { createAstroMotionLifecycle } from '@cachix/site-kit/motion';
 
-  (() => {
+  document.addEventListener('astro:page-load', () => {
     const demo = document.querySelector<HTMLElement>('[data-reference-demo]');
     if (!demo) return;
     const demoEl = demo;
@@ -1688,7 +1701,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       threshold: 0.2,
       onChange: (active) => active ? start() : stop(),
     });
-  })();
+  });
 </script>
 
 <!-- ============ SHOWCASE: audit & agent reason ============ -->
@@ -1744,7 +1757,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
 <script>
   import { createAstroMotionLifecycle } from '@cachix/site-kit/motion';
 
-  (() => {
+  document.addEventListener('astro:page-load', () => {
     const demo = document.querySelector<HTMLElement>('[data-audit-demo]');
     if (!demo) return;
     const demoEl = demo;
@@ -1802,7 +1815,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       threshold: 0.2,
       onChange: (active) => active ? start() : stop(),
     });
-  })();
+  });
 </script>
 
 <!-- ============ SHOWCASE: export and Actions ============ -->
@@ -1904,7 +1917,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
 <script>
   import { createAstroMotionLifecycle } from '@cachix/site-kit/motion';
 
-  (() => {
+  document.addEventListener('astro:page-load', () => {
     const demo = document.querySelector<HTMLElement>('[data-sdk-demo]');
     if (!demo) return;
     const demoEl = demo;
@@ -1994,7 +2007,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
       threshold: 0.2,
       onChange: (active) => active ? start() : stop(),
     });
-  })();
+  });
 </script>
 
 <!-- ============ SHOWCASE: remote secrets with a local cache ============ -->
@@ -2201,7 +2214,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
 <script>
   import { createAstroMotionLifecycle } from '@cachix/site-kit/motion';
 
-  (function () {
+  document.addEventListener('astro:page-load', function () {
     document.querySelectorAll<HTMLElement>('[data-flow-demo]').forEach((demoEl) => {
       const kind = demoEl.dataset.flowDemo;
       const mapEl = demoEl.querySelector<HTMLElement>('[data-remote-map]')!;
@@ -2633,7 +2646,7 @@ Enter access_token for provider 'bws': <span class="tok-str">****</span>
         },
       });
     });
-  })();
+  });
 </script>
 
 <!-- ============ SHOWCASE: migration ============ -->
@@ -2786,7 +2799,7 @@ REDIS_URL=redis://…</code></pre>
 <script>
   import { createAstroMotionLifecycle } from '@cachix/site-kit/motion';
 
-  (function () {
+  document.addEventListener('astro:page-load', function () {
     const providerList = document.querySelector<HTMLElement>('.landing-run-step.is-provider-list');
     const cursor = providerList?.querySelector<HTMLElement>('.landing-provider-cursor');
     const lines = Array.from(providerList?.querySelectorAll<HTMLElement>('.landing-provider-line') ?? []);
@@ -2900,7 +2913,7 @@ REDIS_URL=redis://…</code></pre>
 
     if ('ResizeObserver' in window) {
       let measured = false;
-      new ResizeObserver(function () {
+      const resizeObserver = new ResizeObserver(function () {
         // The first callback fires on observe, before anything has changed.
         if (!measured) {
           measured = true;
@@ -2914,7 +2927,9 @@ REDIS_URL=redis://…</code></pre>
             `translate(0.28rem, ${offset}px)`
           );
         }
-      }).observe(providerListEl);
+      });
+      resizeObserver.observe(providerListEl);
+      document.addEventListener('astro:before-swap', () => resizeObserver.disconnect(), { once: true });
     }
 
     const motion = createAstroMotionLifecycle({
@@ -2922,7 +2937,7 @@ REDIS_URL=redis://…</code></pre>
       threshold: 0.2,
       onChange: (active) => active ? startAutoSelect() : stopAutoSelect(),
     });
-  })();
+  });
 </script>
 
 </StarlightPage>

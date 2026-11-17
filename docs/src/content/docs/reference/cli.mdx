@@ -615,6 +615,10 @@ $ secretspec check --profile production --json
 
 ### get
 
+`as_path` secrets use private temporary files. Printed paths persist for the
+caller to remove. See [file lifetimes](/reference/configuration/#as_path-option).
+
+
 <VersionCompatibility version="0.21" kind="changed">
 When stdout is a pipe or a file, inline values are written as exact bytes,
 including non-UTF-8 data and NULs, without adding a newline. When stdout is a
@@ -962,8 +966,8 @@ $ secretspec run --config-env=inherit -- make deploy # 0.22+
 ```
 
 `clear` removes exactly `SECRETSPEC_FILE`, `SECRETSPEC_PROFILE`,
-`SECRETSPEC_PROVIDER`, `SECRETSPEC_SCOPE`, and `SECRETSPEC_REASON` from the spawned
-child's environment, even if those names are declared as application secrets.
+`SECRETSPEC_PROVIDER`, `SECRETSPEC_SCOPE`, and `SECRETSPEC_REASON` from the
+spawned child's environment, even if those names are declared as application secrets.
 It leaves other environment variables and injected application secrets available.
 Scope-excluded secrets continue to be removed in both modes.
 
@@ -991,6 +995,10 @@ See the configuration reference for limits and shutdown
 behavior. Other commands, including `get` and `export`, still return values.
 
 ### export
+
+`as_path` secrets use private temporary files. Printed paths persist for the
+caller to remove. See [file lifetimes](/reference/configuration/#as_path-option).
+
 Resolve every secret for the active profile and write it to stdout in a chosen format, without running a command. Unlike `run`, it never prompts and exits non-zero when a required secret is missing, so CI can gate on it.
 
 ```bash

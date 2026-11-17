@@ -212,7 +212,7 @@ let validated = match secrets.validate()? {
 };
 let redactor = validated.redactor()?;
 // Inject validated.resolved.secrets into your child environment.
-// Keep validated alive while the child needs its temporary files, or transfer
+// Keep validated alive while the child needs its files, or transfer
 // ownership with validated.into_resolved(your_environment_map).
 
 let mut stdout = redactor.stream();
@@ -368,3 +368,64 @@ to declare native retry ownership and mutation replay safety. The default reject
 mutation replay. Set the policy before first provider I/O and before sharing an
 `Arc` provider. See [transient failures](/concepts/providers/#transient-failures)
 for batching, authentication, and native SDK behavior.
+
+## Process-owned file lifetimes
+
+<VersionCompatibility version="0.22" />
+
+`as_path` uses private temporary files by default. Retain `ValidatedSecrets`
+or a typed/cloned `Resolved` value while using its paths; dropping the last
+owner removes them. One-shot resolve results provide `close()` to release
+visible and hidden file dependencies. Persisted temporary files are not revoked
+on process exit, so callers must clean them up.
+
+To use process-owned, memory-backed files instead (0.22+):
+
+```rust
+let mut spec = secretspec::Secrets::load()?;
+spec.set_file_storage(secretspec::FileStorageMode::FileLease);
+let validated = spec.validate()??;
+// Keep validated alive while its paths are in use.
+```
+
+`Secrets::set_file_storage(FileStorageMode::Temp)` selects ordinary temporary
+files explicitly. The setter affects future resolutions; existing results keep
+their original backend. Storage selection is explicit through the Rust API.
+
+The backend uses [`file-lease`](https://crates.io/crates/file-lease) on Linux
+and macOS. Install the matching `secretspec` executable beside the application
+or on PATH, or select it with `SECRETSPEC_BIN` (0.22+).
+
+`Secrets::run` hands leased files to its child. One-shot results retain them
+until explicit cleanup or embedding-process exit.
+
+For an explicitly selected consuming process, install a custom lease before
+owned validation:
+
+```rust
+let mut spec = secretspec::Secrets::load()?;
+let lease = secretspec::FileLease::new(std::process::id());
+lease.install(&mut spec);
+let validated = spec.validate()??;
+```
+
+The custom materializer takes precedence over the selected backend. Keep its
+owner alive with the result. Use owned validation and call `lease.handoff()`
+before `exec`, or `lease.handoff_to(manager_pid)` for a detached consumer.
+
+## Custom file lifetimes
+
+<VersionCompatibility version="0.22" />
+
+`Secrets::set_as_path_materializer` lets an embedding application deliver
+`as_path` values directly to its own storage, such as anonymous memory-backed
+files. The callback receives logical bytes after decoding and extraction and
+returns an absolute UTF-8 path. No temporary file is created first, and callback
+errors never fall back to filesystem storage. Composed secrets use the returned
+path too.
+
+Capture the resource owner in the callback. SecretSpec retains it with the
+validation result and with typed or cloned `Resolved` values. Resources must
+remain valid while any consumer uses their paths. Use `validate` for this owned
+flow; detached exports such as `resolve` and `export` cannot persist custom
+resources and return an error.

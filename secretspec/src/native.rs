@@ -39,6 +39,8 @@ struct CallRequest {
 #[serde(rename_all = "snake_case")]
 enum Operation {
     Resolve,
+    ReleaseFiles,
+    ReadFile,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -491,6 +493,41 @@ fn dispatch(request_json: &str) -> serde_json::Value {
     }
     match request.operation {
         Operation::Resolve => {}
+        Operation::ReadFile => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct ReadFile {
+                lease_id: String,
+                path: PathBuf,
+            }
+            let source: ReadFile = match serde_json::from_value(request.source) {
+                Ok(source) => source,
+                Err(error) => return error_envelope("invalid_request", error.to_string()),
+            };
+            return match crate::file_lease::read_group_file(&source.lease_id, &source.path) {
+                Ok(bytes) => serde_json::json!({"ok": true, "response": {
+                    "schema_version": 1, "base64": data_encoding::BASE64.encode(&bytes)
+                }}),
+                Err(error) => error_envelope("io", error.to_string()),
+            };
+        }
+        Operation::ReleaseFiles => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Release {
+                lease_id: String,
+            }
+            let source: Release = match serde_json::from_value(request.source) {
+                Ok(source) => source,
+                Err(error) => return error_envelope("invalid_request", error.to_string()),
+            };
+            return match crate::file_lease::release_group(&source.lease_id) {
+                Ok(released) => {
+                    serde_json::json!({"ok": true, "response": {"schema_version": 1, "released": released}})
+                }
+                Err(error) => error_envelope("io", error.to_string()),
+            };
+        }
     }
     let source = match parse_source(request.source) {
         Ok(source) => source,

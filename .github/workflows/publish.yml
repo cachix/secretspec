@@ -43,9 +43,10 @@ jobs:
         id: auth
 
       - name: Publish Rust crates
-        # Crates are published in dependency order: the main crate has a
-        # registry dependency on secretspec-ipc, and the derive crate on the
-        # main crate. Registry checks make retries
+        # Publish file-lease from cachix/file-lease before releasing SecretSpec.
+        # Workspace crates are published in dependency order: the main crate
+        # depends on secretspec-ipc, and the derive crate on the main crate.
+        # Registry checks make retries
         # idempotent when a previous run published successfully but failed
         # during cleanup.
         shell: bash
@@ -54,10 +55,12 @@ jobs:
           version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
           user_agent="secretspec-release/${version} (https://github.com/cachix/secretspec)"
 
+          metadata="$(devenv shell cargo metadata --no-deps --format-version 1)"
           for crate in secretspec-ipc secretspec secretspec-derive; do
+            crate_version="$(jq -er --arg name "$crate" '.packages[] | select(.name == $name) | .version' <<< "$metadata")"
             if curl -fsS -A "$user_agent" \
-              "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null; then
-              echo "${crate} ${version} is already published"
+              "https://crates.io/api/v1/crates/${crate}/${crate_version}" >/dev/null; then
+              echo "${crate} ${crate_version} is already published"
               continue
             fi
 
@@ -66,14 +69,14 @@ jobs:
             published=false
             for _ in $(seq 1 30); do
               if curl -fsS -A "$user_agent" \
-                "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null; then
+                "https://crates.io/api/v1/crates/${crate}/${crate_version}" >/dev/null; then
                 published=true
                 break
               fi
               sleep 10
             done
             if [[ "$published" != true ]]; then
-              echo "${crate} ${version} was not visible on crates.io after five minutes" >&2
+              echo "${crate} ${crate_version} was not visible on crates.io after five minutes" >&2
               exit 1
             fi
           done

@@ -49,3 +49,10 @@ all other language SDKs conform to its JSON schema; a generated object ABI would
 duplicate that contract without removing meaningful Swift code. Swift imports
 the C header as a Clang module, while the public package exposes only idiomatic
 Swift `Codable` models and errors.
+
+## Files and cleanup
+
+`as_path` uses private temporary files. SDK cleanup releases visible files and
+hidden composition dependencies (0.22+). Files must be explicitly cleaned up;
+they are not removed automatically on process exit. See
+[file delivery and lifetimes](https://secretspec.dev/reference/configuration/#as_path-option).

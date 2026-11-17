@@ -45,6 +45,7 @@ public final class Resolved {
     public let secrets: [String: ResolvedSecret]
     public let missingOptional: [String]
 
+    private let fileLeaseId: String?
     private var closed = false
 
     init(
@@ -52,8 +53,10 @@ public final class Resolved {
         profile: String,
         scope: String?,
         secrets: [String: ResolvedSecret],
-        missingOptional: [String]
+        missingOptional: [String],
+        fileLeaseId: String? = nil
     ) {
+        self.fileLeaseId = fileLeaseId
         self.provider = provider
         self.profile = profile
         self.scope = scope
@@ -106,9 +109,23 @@ public final class Resolved {
         try JSONEncoder().encode(fields())
     }
 
-    /// Removes temporary files backing `as_path` secrets.
+    /// Revokes files and hidden dependencies (0.22+) for `as_path` secrets.
     public func close() throws {
         guard !closed else {
+            return
+        }
+        if let fileLeaseId {
+            let request: [String: Any] = ["request_version": 1, "operation": "release_files",
+                                           "source": ["lease_id": fileLeaseId]]
+            let payload = try JSONSerialization.data(withJSONObject: request)
+            let raw = try Native.call(String(decoding: payload, as: UTF8.self))
+            let envelope = try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any]
+            guard envelope?["ok"] as? Bool == true else {
+                let error = envelope?["error"] as? [String: Any]
+                throw SecretSpecError(kind: error?["kind"] as? String ?? "unknown",
+                                      message: error?["message"] as? String ?? "release failed")
+            }
+            closed = true
             return
         }
         closed = true

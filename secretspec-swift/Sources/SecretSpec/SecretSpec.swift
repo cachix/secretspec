@@ -57,6 +57,7 @@ private struct Envelope<Response: Decodable>: Decodable {
 }
 
 private struct ResolveResponse: Decodable {
+    let fileLeaseId: String?
     let schemaVersion: Int
     let provider: String
     let profile: String
@@ -66,6 +67,7 @@ private struct ResolveResponse: Decodable {
     let missingOptional: [String]
 
     enum CodingKeys: String, CodingKey {
+        case fileLeaseId = "file_lease_id"
         case schemaVersion = "schema_version"
         case provider
         case profile
@@ -173,7 +175,8 @@ public struct SecretSpecBuilder: Sendable {
             profile: response.profile,
             scope: response.scope,
             secrets: response.secrets,
-            missingOptional: response.missingOptional
+            missingOptional: response.missingOptional,
+            fileLeaseId: response.fileLeaseId
         )
     }
 

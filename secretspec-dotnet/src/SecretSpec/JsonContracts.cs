@@ -76,6 +76,9 @@ internal sealed class ErrorContract
 
 internal sealed class ResolveResponseContract
 {
+    [JsonPropertyName("file_lease_id")]
+    public string? FileLeaseId { get; set; }
+
     [JsonPropertyName("schema_version")]
     public int SchemaVersion { get; set; }
 

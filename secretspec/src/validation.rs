@@ -2,11 +2,11 @@
 
 use crate::SecretBytes;
 use crate::config::Resolved;
+use crate::file_lease::SecretFile;
 use crate::report::{ResolutionReport, SecretResolution};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
-use tempfile::NamedTempFile;
 
 /// Container for validated secrets with metadata
 ///
@@ -15,7 +15,7 @@ use tempfile::NamedTempFile;
 pub struct ValidatedSecrets {
     /// Resolved secrets with provider and profile information.
     /// Inline values retain arbitrary bytes starting with 0.21; `as_path`
-    /// entries contain the UTF-8 bytes of their temporary-file paths.
+    /// entries contain the UTF-8 bytes of their materialized file paths.
     pub resolved: Resolved<HashMap<String, SecretBytes>>,
     /// List of optional secrets that are missing
     pub missing_optional: Vec<String>,
@@ -24,11 +24,9 @@ pub struct ValidatedSecrets {
     /// Value-free per-secret resolution provenance (which provider answered,
     /// generated, defaulted, as_path). Drives `check --json`/`--explain`.
     pub resolution: Vec<SecretResolution>,
-    /// Temporary files for secrets with as_path=true.
-    /// These are kept alive for the lifetime of ValidatedSecrets and automatically
-    /// cleaned up when dropped.
+    /// Files retained by this result and its resolved-value clones.
     #[doc(hidden)]
-    pub(crate) temp_files: Vec<NamedTempFile>,
+    pub(crate) temp_files: Vec<SecretFile>,
     /// Logical bytes captured before materialization and scope filtering. Never reported.
     pub(crate) redactions: Vec<SecretBytes>,
     /// Provider-reported absolute validity bound of the secret itself.
@@ -42,6 +40,16 @@ pub struct ValidatedSecrets {
 }
 
 impl ValidatedSecrets {
+    pub(crate) fn handoff_files_to(&self, owner: u32) -> std::io::Result<()> {
+        let mut transferred = std::collections::HashSet::new();
+        for file in &self.temp_files {
+            if transferred.insert(file.storage_id()) {
+                file.handoff_to(owner)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Build an output redactor from this validation snapshot (0.22+).
     ///
     /// Includes original `as_path` file contents and hidden scoped dependencies.
@@ -83,29 +91,48 @@ impl ValidatedSecrets {
         )
     }
 
-    /// Persist all temporary files, preventing automatic cleanup.
+    /// Hand file ownership to the embedding process (0.22+).
     ///
-    /// This method consumes the temporary file handles and persists them,
-    /// so they won't be automatically deleted when this struct is dropped.
-    /// This is useful when you want the temporary files to outlive the
-    /// ValidatedSecrets instance, such as in CLI commands.
-    ///
-    /// # Returns
-    ///
-    /// A vector of paths to the persisted files
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any file cannot be persisted
+    /// Temporary files remain on disk until explicitly removed. Opt-in leased
+    /// files remain memory-backed and are revoked when this process exits.
+    /// Returns the retained paths. Custom materializers must use their own
+    /// handoff API and return an error here.
     pub fn keep_temp_files(&mut self) -> Result<Vec<std::path::PathBuf>, std::io::Error> {
+        self.export_files(
+            crate::file_lease::DetachedOwner::Process(std::process::id()),
+            false,
+        )
+    }
+
+    pub(crate) fn keep_files_for(
+        &mut self,
+        owner: crate::file_lease::DetachedOwner,
+    ) -> Result<Vec<std::path::PathBuf>, std::io::Error> {
+        self.export_files(owner, true)
+    }
+
+    fn export_files(
+        &mut self,
+        owner: crate::file_lease::DetachedOwner,
+        tracked: bool,
+    ) -> Result<Vec<std::path::PathBuf>, std::io::Error> {
+        // A visible composition may refer to a hidden as_path dependency,
+        // so the visible resolution entries cannot determine ownership.
+        if self.resolved.has_as_path_materializer() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Custom as_path resources require a live owner and cannot be persisted",
+            ));
+        }
         let mut paths = Vec::new();
         let temp_files = std::mem::take(&mut self.temp_files);
 
         for temp_file in temp_files {
-            let temp_path = temp_file.into_temp_path();
-            let path = temp_path.keep().map_err(|e| {
-                std::io::Error::other(format!("Failed to persist temporary file: {}", e))
-            })?;
+            let path = if tracked {
+                temp_file.keep(owner)?
+            } else {
+                temp_file.persist(owner)?
+            };
             paths.push(path);
         }
 

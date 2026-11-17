@@ -75,7 +75,13 @@ var secrets = AppSecrets.FromJson(resolved.FieldsJson());
 
 ## Files and cleanup
 
-An `as_path` secret is materialized as a mode-0400 temporary file, and `Get()`
+`as_path` uses private temporary files. SDK cleanup releases visible files and
+hidden composition dependencies (0.22+). Files must be explicitly cleaned up;
+they are not removed automatically on process exit. See
+[file delivery and lifetimes](https://secretspec.dev/reference/configuration/#as_path-option).
+
+
+An `as_path` secret is delivered through a file (mode 0400 on Unix), and `Get()`
 returns its path. `Resolved` implements `IDisposable`; keep the result in a
 `using` declaration or call `Close()` to remove those files when finished.
 

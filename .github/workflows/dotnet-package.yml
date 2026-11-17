@@ -349,7 +349,7 @@ jobs:
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         if: matrix.musl == false
         with:
-          dotnet-version: "8.0.x"
+          global-json-file: secretspec-dotnet/tests/SecretSpec.PackageSmoke/global.json
       - name: Install Linux NativeAOT toolchain
         if: runner.os == 'Linux' && matrix.musl == false
         run: |
@@ -369,6 +369,7 @@ jobs:
           export NUGET_PACKAGES="$RUNNER_TEMP/nuget-packages"
           cp -R secretspec-dotnet/tests/SecretSpec.PackageSmoke "$test_root"
           project="$test_root/SecretSpec.PackageSmoke.csproj"
+          cd "$test_root"
 
           # Prime an isolated package cache from the artifact-only source. The
           # RID restore then adds NuGet.org for Microsoft runtime/AOT packs
@@ -380,7 +381,7 @@ jobs:
             --source https://api.nuget.org/v3/index.json \
             -p:Version="$version"
           (
-            cd "$RUNNER_TEMP"
+            cd "$test_root"
             unset SECRETSPEC_FFI_LIB
             dotnet run --project "$project" --configuration Release \
               --runtime "${{ matrix.rid }}" --no-restore -p:Version="$version"
@@ -419,6 +420,7 @@ jobs:
           Copy-Item -Recurse `
             "secretspec-dotnet/tests/SecretSpec.PackageSmoke/*" $testRoot
           $project = Join-Path $testRoot "SecretSpec.PackageSmoke.csproj"
+          Set-Location $testRoot
 
           # Prime an isolated package cache from the artifact-only source. The
           # RID/AOT restore then uses the runner's standard NuGet configuration
@@ -430,7 +432,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           Remove-Item Env:SECRETSPEC_FFI_LIB -ErrorAction SilentlyContinue
-          Push-Location $env:RUNNER_TEMP
+          Push-Location $testRoot
           try {
             dotnet run --project $project --configuration Release `
               --runtime "${{ matrix.rid }}" --no-restore `
@@ -464,7 +466,7 @@ jobs:
             --volume "$GITHUB_WORKSPACE:/workspace" \
             --volume "$RUNNER_TEMP:/runner" \
             --workdir /runner \
-            mcr.microsoft.com/dotnet/sdk:8.0-alpine@sha256:5f12aa62868b69dcb41de9cd7f8759822f7d1f56c3b31908048ad65df0981e67 \
+            mcr.microsoft.com/dotnet/sdk:8.0-alpine@sha256:4f4992f8f302150e4adb5e78c324731e968493a30c0638985ba29cb42a858cd6 \
             sh -c '
               set -eu
               apk add --no-cache build-base clang zlib-dev
@@ -477,6 +479,7 @@ jobs:
               cp -R /workspace/secretspec-dotnet/tests/SecretSpec.PackageSmoke \
                 "$test_root"
               project="$test_root/SecretSpec.PackageSmoke.csproj"
+              cd "$test_root"
 
               # Prime the isolated cache from the just-built package before
               # NuGet.org is enabled for Microsoft runtime/AOT packs.

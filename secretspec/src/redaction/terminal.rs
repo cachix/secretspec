@@ -110,12 +110,7 @@ impl TerminalRedactionStream {
         if self.text_active {
             // Finish this logical text region without allocating a new buffer
             // for each escape sequence. Syntax must follow all preceding text.
-            let filter = &mut self.text.filter;
-            filter.push(&[], true, output);
-            filter.state = 0;
-            filter.position = 0;
-            filter.intervals.clear();
-            filter.in_mask = false;
+            self.text.end_region(output);
             self.text_active = false;
         }
     }

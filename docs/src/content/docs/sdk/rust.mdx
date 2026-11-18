@@ -235,6 +235,16 @@ Control parameters, OSC color controls and command numbers, and DCS status
 queries are preserved even if they coincide
 with a secret. Use `stream()` when every literal byte must be masked.
 
+For embedders that already own a terminal parser (0.22+), use `stream()` on
+parser-classified text and call `end_region(&mut output)` at semantic boundaries,
+such as before applying a terminal control. This emits the pending filtered
+suffix and resets matching without rebuilding the matcher or its buffers.
+Matches cannot cross regions. Filter title and hyperlink text in separate
+regions before storing or forwarding it. Do not end a region at ordinary read
+boundaries or when a parser divides continuous text into chunks: values split
+between those chunks must still match. This lets the embedder keep one terminal
+parser instead of using `terminal_stream()` alongside its own parser.
+
 Use independent streams for stdout and stderr, retaining each stream across
 reads. Candidate prefixes are buffered until more input or EOF; call `finish`
 only at EOF. Dropping a stream discards its pending suffix. The API accepts

@@ -113,6 +113,8 @@ impl Redactor {
 /// disambiguates them. Output is appended to the caller's buffer, which may be
 /// drained and reused after every push. Dropping the stream discards its pending
 /// suffix; call [`Self::finish`] at EOF to emit the complete filtered output.
+/// Embedders that already parse their input can use [`Self::end_region`] at
+/// semantic boundaries without introducing another parser.
 pub struct RedactionStream {
     filter: Filter,
 }
@@ -132,6 +134,44 @@ impl RedactionStream {
         for chunk in input.chunks(CHUNK) {
             self.filter.push(chunk, false, output);
         }
+    }
+
+    /// End a logical text region, appending its remaining filtered bytes (0.22+).
+    ///
+    /// Emits any retained candidate prefix and resets matching state so values
+    /// cannot match across this boundary. The compiled matcher and allocated
+    /// buffers are retained for the next region. Empty regions emit nothing.
+    ///
+    /// Use this when an external parser identifies a semantic boundary, such as
+    /// a terminal control separating text regions. Call it before applying the
+    /// control, and feed only text to this stream. Ordinary read or parser text
+    /// chunk boundaries must use [`Self::push`] without ending the region, or
+    /// values split between those chunks could escape masking.
+    ///
+    /// Unlike [`Self::finish`], this leaves the stream ready for more input.
+    ///
+    /// ```
+    /// use secretspec::{Redactor, SecretBytes};
+    ///
+    /// let redactor = Redactor::new([SecretBytes::from_utf8("token")])?;
+    /// let mut stream = redactor.stream();
+    /// let mut output = Vec::new();
+    /// stream.push(b"tok", &mut output);
+    /// stream.end_region(&mut output);
+    /// assert_eq!(output, b"tok");
+    /// output.clear();
+    /// stream.push(b"en token", &mut output);
+    /// stream.finish(&mut output);
+    /// assert_eq!(output, b"en [REDACTED]");
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn end_region(&mut self, output: &mut Vec<u8>) {
+        let filter = &mut self.filter;
+        filter.push(&[], true, output);
+        filter.state = 0;
+        filter.position = 0;
+        filter.intervals.clear();
+        filter.in_mask = false;
     }
 
     /// Finish at EOF and append any remaining filtered output (0.22+).

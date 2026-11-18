@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Rust embedders can use `RedactionStream::end_region()` (0.22+) to reuse a
+  redaction stream across text regions identified by their own parser.
+
 - File delivery (0.22+) uses private temporary files by default, without a
   helper, on Windows, Linux, and macOS. Opt into process-owned memory-backed
   files through Rust's `Secrets::set_file_storage` API. Leased storage uses the

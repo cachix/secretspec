@@ -706,6 +706,9 @@ impl Secrets {
     /// what needs the whole config to see: nesting, and a cache sharing a store
     /// with its own sources.
     fn cached_route(&self, name: &str, alias: &crate::config::ProviderAlias) -> Result<Route> {
+        if self.managed_request().is_some() {
+            return Err(crate::request::unsupported("cached provider routes"));
+        }
         let cache = alias.cache().ok_or_else(|| {
             SecretSpecError::ProviderOperationFailed(format!(
                 "provider alias '{name}' does not declare a cache policy"

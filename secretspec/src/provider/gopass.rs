@@ -1,4 +1,5 @@
 use crate::SecretBytes;
+use crate::command::CommandOutput as _;
 use crate::config::NativeAddress;
 use crate::provider::{Address, ProviderUrl};
 use crate::{Provider, SecretSpecError};
@@ -46,6 +47,7 @@ impl TryFrom<&ProviderUrl> for GoPassConfig {
 }
 
 pub struct GoPassProvider {
+    request: Option<crate::request::RequestContext>,
     config: GoPassConfig,
 }
 
@@ -86,7 +88,10 @@ crate::register_provider! {
 impl GoPassProvider {
     /// Creates a new GoPassProvider with the given configuration.
     pub fn new(config: GoPassConfig) -> Self {
-        Self { config }
+        Self {
+            request: None,
+            config,
+        }
     }
 
     /// Formats the entry name for a secret.
@@ -121,8 +126,11 @@ impl GoPassProvider {
             .args(["show", "-y"])
             .arg(entry)
             .arg(BINARY_ENTRY_HEADER)
-            .output()
+            .output_for(self.request.as_ref())
             .map_err(|e| {
+                if e.is_resolution_terminal() {
+                    return e;
+                }
                 SecretSpecError::ProviderOperationFailed(format!(
                     "Failed to execute 'gopass' command: {}. Is gopass installed?",
                     e
@@ -173,8 +181,11 @@ impl Provider for GoPassProvider {
             .command()
             .args(["show", "-y", "-o"])
             .arg(&*entry_name)
-            .output()
+            .output_for(self.request.as_ref())
             .map_err(|e| {
+                if e.is_resolution_terminal() {
+                    return e;
+                }
                 SecretSpecError::ProviderOperationFailed(format!(
                     "Failed to execute 'gopass' command: {}. Is gopass installed?",
                     e
@@ -197,8 +208,11 @@ impl Provider for GoPassProvider {
                 .arg(&*entry_name)
                 // `cat` writes when stdin is a pipe; select its read mode.
                 .stdin(std::process::Stdio::null())
-                .output()
+                .output_for(self.request.as_ref())
                 .map_err(|e| {
+                    if e.is_resolution_terminal() {
+                        return e;
+                    }
                     SecretSpecError::ProviderOperationFailed(format!(
                         "Failed to execute 'gopass cat' command: {}",
                         e
@@ -323,7 +337,7 @@ impl Provider for GoPassProvider {
         let output = self
             .command()
             .args(["rm", "-f", &entry_name])
-            .output()
+            .output_for(self.request.as_ref())
             .map_err(|error| {
                 SecretSpecError::ProviderOperationFailed(format!(
                     "Failed to execute 'gopass' command: {error}. Is gopass installed?"
@@ -509,3 +523,10 @@ mod tests {
         assert!(err.to_string().contains("`field`"), "{err}");
     }
 }
+
+super::managed_read::register!(["gopass"], |url, credentials, request| {
+    let mut provider = GoPassProvider::new(GoPassConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(Box::new(provider))
+});

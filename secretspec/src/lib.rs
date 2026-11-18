@@ -46,6 +46,7 @@ mod audit;
 mod cache;
 mod caller;
 mod codegen;
+mod command;
 mod compiled_spec;
 mod composition;
 mod config;
@@ -55,11 +56,13 @@ pub(crate) mod fake_executable;
 pub(crate) mod generator;
 pub(crate) mod ini_field;
 pub(crate) mod json_field;
+mod managed_io;
 mod native;
 mod plan;
 mod prompt;
 mod redaction;
 mod report;
+mod request;
 mod resolve;
 mod revision;
 mod secret_value;
@@ -122,7 +125,7 @@ pub use config::{
 pub use error::{Result, SecretSpecError};
 pub use native::{
     INLINE_SPEC_SCHEMA_VERSION, MIN_INLINE_SPEC_SCHEMA_VERSION, NATIVE_CALL_REQUEST_VERSION,
-    call_json,
+    call_json, call_json_with_cancel,
 };
 pub use provider::RetryPolicy;
 pub use provider::external::{
@@ -140,6 +143,7 @@ pub use report::{
     Derivation, RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus,
     SecretResolution,
 };
+pub use request::CancellationHandle;
 pub use resolve::{
     NamedResolution, RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource,
     resolve_json,

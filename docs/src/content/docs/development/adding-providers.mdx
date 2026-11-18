@@ -5,6 +5,45 @@ description: Step-by-step guide for implementing custom provider backends
 
 import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
 
+## Opting into cancellable reads
+
+<VersionCompatibility version="0.22" />
+
+Implementing `Provider` or `AsyncProvider` does not automatically make a backend
+cancellable. In-tree implementations opt in beside their normal registration
+with `managed_read::register!`. Its factory receives an explicit `RequestContext`
+and is called only after static capability and credential-source checks.
+
+The factory must account for constructors, authentication, retries, batch reads,
+background workers and destruction. Use `SyncProviderAdapter::for_request` for
+native async work, `managed_io` for file reads and locks, and `command::output`
+for owned children. Existing CLI parsers can use `CommandOutput::output_for`
+to retain stdout/stderr and exit-status handling. Use `managed_read::preflight`
+for request-scoped authentication checks and `RetryPolicy::run_cancellable`
+for synchronous retries. Managed async work must not escape through the legacy shared-runtime
+helpers. If a dependency starts an independent OS thread, process or global
+client, manage and join it explicitly or keep that path unregistered.
+
+Keep terminal SecretSpec errors typed across SDK wrappers so retries and fallback
+cannot treat them as ordinary authentication or read failures.
+
+The shared synchronous resolver runs on a joined blocking worker while a
+request-owned Tokio runtime drives its async providers. Runtime shutdown joins
+dependency tasks, including blocking DNS, before the request commits its result.
+Do not substitute `shutdown_timeout`, detach a worker, or return early when only
+the cancellation notification has completed.
+
+Check cancellation before admitting each synchronous operation or future poll.
+An already admitted operation may finish after cancellation; do not hold the
+request state lock while running provider code or waking a waiter.
+
+Add conformance tests that wait for a real start signal, cancel during work,
+and verify cleanup before return. Include constructor/auth rejection before I/O,
+terminal errors through fallback, and metadata/address behavior. Test each
+supported authentication/OS path; registration is an explicit implementation
+contract, not proof that arbitrary dependency work is interruptible. See
+`request.rs`, `command.rs` and `secrets/managed.rs` for the shared lifecycle tests.
+
 ## Provider Trait
 
 <VersionCompatibility version="0.21" kind="changed">

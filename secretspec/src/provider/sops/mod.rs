@@ -1,3 +1,6 @@
+const CLI_NOT_INSTALLED_HELP: &str = "The 'sops' CLI is not installed. Install it from \
+                         https://github.com/getsops/sops or via your package manager.";
+
 use super::{Address, Provider, ProviderCredentials, ProviderUrl};
 use crate::SecretBytes;
 use crate::config::NativeAddress;
@@ -38,6 +41,7 @@ pub enum SopsMode {
 }
 
 pub struct SopsProvider {
+    request: Option<crate::request::RequestContext>,
     config: SopsConfig,
     credentials: ProviderCredentials,
 }
@@ -57,6 +61,7 @@ struct AddressParts<'a> {
 impl SopsProvider {
     pub fn new(config: SopsConfig) -> Self {
         Self {
+            request: None,
             config,
             credentials: ProviderCredentials::new(),
         }
@@ -154,11 +159,30 @@ impl SopsProvider {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        if let Some(request) = &self.request {
+            request.checkpoint()?;
+        }
         let mut command = Command::new("sops");
         command.args(args);
         self.apply_command_env(&mut command)?;
 
-        let output = if let Some(stdin) = stdin {
+        let output = if let Some(request) = &self.request {
+            crate::command::output(
+                &mut command,
+                stdin.map(|data| secrecy::zeroize::Zeroizing::new(data.to_vec())),
+                usize::MAX,
+                None,
+                Some(request),
+                true,
+            )
+            .map_err(|error| match error {
+                SecretSpecError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    SecretSpecError::ProviderOperationFailed(CLI_NOT_INSTALLED_HELP.into())
+                }
+                error => error,
+            })?
+            .into_std()
+        } else if let Some(stdin) = stdin {
             command
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -166,10 +190,7 @@ impl SopsProvider {
             let mut child = match command.spawn() {
                 Ok(child) => child,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    return Err(Self::provider_error(
-                        "The 'sops' CLI is not installed. Install it from \
-                         https://github.com/getsops/sops or via your package manager.",
-                    ));
+                    return Err(Self::provider_error(CLI_NOT_INSTALLED_HELP));
                 }
                 Err(error) => return Err(error.into()),
             };
@@ -196,10 +217,7 @@ impl SopsProvider {
             match command.output() {
                 Ok(output) => output,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    return Err(Self::provider_error(
-                        "The 'sops' CLI is not installed. Install it from \
-                         https://github.com/getsops/sops or via your package manager.",
-                    ));
+                    return Err(Self::provider_error(CLI_NOT_INSTALLED_HELP));
                 }
                 Err(error) => return Err(error.into()),
             }
@@ -237,6 +255,9 @@ impl SopsProvider {
     }
 
     fn decrypt(&self, path: &Path) -> Result<Vec<u8>> {
+        if let Some(request) = &self.request {
+            request.checkpoint()?;
+        }
         let mut args = self.command_with_input_type("decrypt");
         args.extend([
             "--output-type".to_string(),
@@ -808,6 +829,9 @@ impl Provider for SopsProvider {
         let mut values = HashMap::new();
 
         for (name, addr) in requests {
+            if let Some(request) = &self.request {
+                request.checkpoint()?;
+            }
             let parts = self.address_parts(*addr)?;
             let Some(path) = self.resolve_file_path(parts.project, parts.profile)? else {
                 continue;
@@ -873,3 +897,10 @@ impl Provider for SopsProvider {
         self.credentials = credentials;
     }
 }
+
+super::managed_read::register!(["sops"], |url, credentials, request| {
+    let mut provider = SopsProvider::new(SopsConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(Box::new(provider))
+});

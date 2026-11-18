@@ -435,6 +435,7 @@ fn strip_op_session_env(cmd: &mut Command) {
 /// secretspec get MY_SECRET --provider onepassword+token://Development
 /// ```
 pub struct OnePasswordProvider {
+    request: Option<crate::request::RequestContext>,
     /// Configuration for the provider including auth settings and default vault.
     config: OnePasswordConfig,
     /// The OnePassword CLI command to use (either "op" or a custom path).
@@ -478,6 +479,7 @@ impl OnePasswordProvider {
             }
         });
         Self {
+            request: None,
             config,
             op_command,
             credentials: ProviderCredentials::new(),
@@ -532,6 +534,10 @@ impl OnePasswordProvider {
         use std::io::Write;
         use std::process::Stdio;
 
+        if let Some(request) = &self.request {
+            request.checkpoint()?;
+        }
+
         let mut cmd = Command::new(&self.op_command);
         strip_op_session_env(&mut cmd);
 
@@ -563,7 +569,23 @@ impl OnePasswordProvider {
             cmd.stderr(Stdio::piped());
         }
 
-        let output = if let Some(data) = stdin_data {
+        let output = if let Some(request) = &self.request {
+            crate::command::output(
+                &mut cmd,
+                stdin_data.map(|data| secrecy::zeroize::Zeroizing::new(data.as_bytes().to_vec())),
+                usize::MAX,
+                None,
+                Some(request),
+                true,
+            )
+            .map_err(|error| match error {
+                SecretSpecError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    SecretSpecError::ProviderOperationFailed(OP_NOT_INSTALLED_HELP.into())
+                }
+                error => error,
+            })?
+            .into_std()
+        } else if let Some(data) = stdin_data {
             // Spawn process and write to stdin
             let mut child = match cmd.spawn() {
                 Ok(child) => child,
@@ -3522,3 +3544,22 @@ mod tests {
         assert_eq!(calls.iter().filter(|a| a[0] == "item").count(), 1);
     }
 }
+
+super::managed_read::register!(
+    ["onepassword", "onepassword+token", "op"],
+    |url, credentials, request| {
+        let mut provider = OnePasswordProvider::new(OnePasswordConfig::try_from(url)?);
+        if is_wsl2() && provider.op_command.to_ascii_lowercase().ends_with(".exe") {
+            return Err(crate::request::unsupported(
+                "Windows op.exe from WSL; use a native Linux op binary via SECRETSPEC_OPCLI_PATH",
+            ));
+        }
+        Provider::with_credentials(&mut provider, credentials);
+        provider.request = Some(request.clone());
+        Ok(super::managed_read::preflight(
+            provider,
+            request,
+            OnePasswordProvider::check_auth,
+        ))
+    }
+);

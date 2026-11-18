@@ -14,11 +14,43 @@ use std::collections::{HashMap, HashSet};
 /// Async callers can borrow `as_async()` to bypass the blocking boundary.
 pub struct SyncProviderAdapter<P> {
     inner: P,
+    request: Option<crate::request::RequestContext>,
 }
 
 impl<P> SyncProviderAdapter<P> {
     pub fn from_async(provider: P) -> Self {
-        Self { inner: provider }
+        Self {
+            inner: provider,
+            request: None,
+        }
+    }
+    #[cfg_attr(
+        not(any(
+            feature = "vault",
+            feature = "openbao",
+            feature = "akv",
+            feature = "aac",
+            feature = "infisical",
+            feature = "doppler",
+            feature = "scaleway",
+            feature = "setec"
+        )),
+        allow(dead_code)
+    )]
+    pub(crate) fn for_request(provider: P, request: crate::request::RequestContext) -> Self {
+        Self {
+            inner: provider,
+            request: Some(request),
+        }
+    }
+    fn block_on<T: Send>(
+        &self,
+        future: impl std::future::Future<Output = Result<T>> + Send,
+    ) -> Result<T> {
+        match &self.request {
+            Some(request) => request.block_on(future),
+            None => super::block_on(future),
+        }
     }
     pub fn as_async(&self) -> &P {
         &self.inner
@@ -43,7 +75,7 @@ impl<P> std::ops::DerefMut for SyncProviderAdapter<P> {
 impl<P: AsyncProvider> SyncProviderAdapter<P> {
     fn prepare_capabilities(&self) {
         if self.inner.requires_initialization() {
-            let _ = super::block_on(self.inner.initialize());
+            let _ = self.block_on(self.inner.initialize());
         }
     }
 }
@@ -62,7 +94,7 @@ impl<P: AsyncProvider> Provider for SyncProviderAdapter<P> {
     }
 
     fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
-        super::block_on(AsyncProvider::resolve_address(
+        self.block_on(AsyncProvider::resolve_address(
             &self.inner,
             Address::convention(project, profile, key),
         ))
@@ -79,7 +111,7 @@ impl<P: AsyncProvider> Provider for SyncProviderAdapter<P> {
     }
 
     fn resolve_coords<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
-        super::block_on(AsyncProvider::resolve_address(&self.inner, addr))
+        self.block_on(AsyncProvider::resolve_address(&self.inner, addr))
     }
 
     fn configured_entry_coordinates<'a>(
@@ -90,19 +122,19 @@ impl<P: AsyncProvider> Provider for SyncProviderAdapter<P> {
     }
 
     fn entry_coordinates<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
-        super::block_on(AsyncProvider::entry_coordinates(&self.inner, addr))
+        self.block_on(AsyncProvider::entry_coordinates(&self.inner, addr))
     }
 
     fn entry_coordinates_many(&self, addrs: &[Address<'_>]) -> Result<Vec<NativeAddress>> {
-        super::block_on(AsyncProvider::entry_coordinates_many(&self.inner, addrs))
+        self.block_on(AsyncProvider::entry_coordinates_many(&self.inner, addrs))
     }
 
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
-        super::block_on(AsyncProvider::get(&self.inner, addr))
+        self.block_on(AsyncProvider::get(&self.inner, addr))
     }
 
     fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<ProviderValue>> {
-        super::block_on(AsyncProvider::get_with_metadata(&self.inner, addr))
+        self.block_on(AsyncProvider::get_with_metadata(&self.inner, addr))
     }
 
     fn supports_read(&self) -> bool {
@@ -111,11 +143,11 @@ impl<P: AsyncProvider> Provider for SyncProviderAdapter<P> {
     }
 
     fn exists(&self, addr: Address<'_>) -> Result<bool> {
-        super::block_on(AsyncProvider::exists(&self.inner, addr))
+        self.block_on(AsyncProvider::exists(&self.inner, addr))
     }
 
     fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
-        super::block_on(AsyncProvider::set(&self.inner, addr, value))
+        self.block_on(AsyncProvider::set(&self.inner, addr, value))
     }
 
     fn set_expiring(
@@ -124,7 +156,7 @@ impl<P: AsyncProvider> Provider for SyncProviderAdapter<P> {
         value: &SecretBytes,
         max_age: std::time::Duration,
     ) -> Result<()> {
-        super::block_on(AsyncProvider::set_expiring(
+        self.block_on(AsyncProvider::set_expiring(
             &self.inner,
             addr,
             value,
@@ -133,7 +165,7 @@ impl<P: AsyncProvider> Provider for SyncProviderAdapter<P> {
     }
 
     fn delete(&self, addr: Address<'_>) -> Result<bool> {
-        super::block_on(AsyncProvider::delete(&self.inner, addr))
+        self.block_on(AsyncProvider::delete(&self.inner, addr))
     }
 
     fn supports_delete(&self) -> bool {
@@ -146,11 +178,11 @@ impl<P: AsyncProvider> Provider for SyncProviderAdapter<P> {
     }
 
     fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
-        super::block_on(AsyncProvider::check_deletable(&self.inner, addr))
+        self.block_on(AsyncProvider::check_deletable(&self.inner, addr))
     }
 
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
-        super::block_on(AsyncProvider::check_writable(&self.inner, addr))
+        self.block_on(AsyncProvider::check_writable(&self.inner, addr))
     }
 
     fn generated_value_persistence(&self) -> ProducedValuePersistence {
@@ -164,7 +196,7 @@ impl<P: AsyncProvider> Provider for SyncProviderAdapter<P> {
     }
 
     fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
-        super::block_on(AsyncProvider::write_target(&self.inner, addr))
+        self.block_on(AsyncProvider::write_target(&self.inner, addr))
     }
 
     fn auth_scope_key(&self) -> Option<String> {
@@ -225,22 +257,22 @@ impl<P: AsyncProvider> Provider for SyncProviderAdapter<P> {
     }
 
     fn reflect(&self, _context: DiscoveryContext<'_>) -> Result<HashMap<String, crate::Secret>> {
-        super::block_on(AsyncProvider::reflect(&self.inner, _context))
+        self.block_on(AsyncProvider::reflect(&self.inner, _context))
     }
 
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
-        super::block_on(AsyncProvider::get_many(&self.inner, requests))
+        self.block_on(AsyncProvider::get_many(&self.inner, requests))
     }
 
     fn get_many_with_metadata(
         &self,
         requests: &[(&str, Address<'_>)],
     ) -> Result<HashMap<String, ProviderValue>> {
-        super::block_on(AsyncProvider::get_many_with_metadata(&self.inner, requests))
+        self.block_on(AsyncProvider::get_many_with_metadata(&self.inner, requests))
     }
 
     fn exists_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashSet<String>> {
-        super::block_on(AsyncProvider::exists_many(&self.inner, requests))
+        self.block_on(AsyncProvider::exists_many(&self.inner, requests))
     }
 }
 

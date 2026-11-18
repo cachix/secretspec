@@ -39,7 +39,6 @@ use crate::file_lease::SecretFile;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, hash_map};
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -1088,18 +1087,46 @@ fn validate_composition_graph(
     Ok(())
 }
 
+fn read_config_text(
+    path: &Path,
+    request: Option<&crate::request::RequestContext>,
+) -> Result<String, ParseError> {
+    match request {
+        Some(request) => {
+            crate::managed_io::read_to_string(path, Some(request)).map_err(|error| match error {
+                crate::SecretSpecError::Io(error) => ParseError::Io(error),
+                error => ParseError::Io(io::Error::other(error)),
+            })
+        }
+        None => std::fs::read_to_string(path).map_err(ParseError::Io),
+    }
+}
+
+fn config_checkpoint(request: Option<&crate::request::RequestContext>) -> Result<(), ParseError> {
+    request.map_or(Ok(()), |request| {
+        request
+            .checkpoint()
+            .map_err(|error| ParseError::Io(io::Error::other(error)))
+    })
+}
+
 /// Loads an inheritance graph and emits each source exactly once in deterministic
 /// post-order. `active` detects genuine back-edges; `emitted` separately handles
 /// shared ancestors, which are valid DAG nodes rather than cycles.
-struct ConfigGraphLoader {
+struct ConfigGraphLoader<'a> {
+    request: Option<&'a crate::request::RequestContext>,
     active: HashSet<PathBuf>,
     emitted: HashSet<PathBuf>,
     documents: Vec<Config>,
 }
 
-impl ConfigGraphLoader {
-    fn load(path: &Path) -> Result<Config, ParseError> {
+impl<'a> ConfigGraphLoader<'a> {
+    fn load(
+        path: &Path,
+        request: Option<&'a crate::request::RequestContext>,
+    ) -> Result<Config, ParseError> {
         let mut loader = Self {
+            request,
             active: HashSet::new(),
             emitted: HashSet::new(),
             documents: Vec::new(),
@@ -1124,6 +1151,7 @@ impl ConfigGraphLoader {
 
     fn visit_extends(&mut self, config: &Config, base_dir: &Path) -> Result<(), ParseError> {
         for extend_path in config.project.extends.iter().flatten() {
+            config_checkpoint(self.request)?;
             let joined_path = base_dir.join(extend_path);
             let full_path = if extend_path.ends_with(".toml") {
                 joined_path
@@ -1141,6 +1169,7 @@ impl ConfigGraphLoader {
     }
 
     fn visit(&mut self, path: &Path) -> Result<(), ParseError> {
+        config_checkpoint(self.request)?;
         let canonical_path = path.canonicalize().map_err(|e| {
             ParseError::Io(io::Error::new(
                 e.kind(),
@@ -1158,7 +1187,7 @@ impl ConfigGraphLoader {
             )));
         }
 
-        let content = fs::read_to_string(&canonical_path)?;
+        let content = read_config_text(&canonical_path, self.request)?;
         let config = Config::parse_document(&content)?;
         // Resolve `extends` relative to the manifest's referenced location, not
         // its canonicalized target: a symlinked manifest inherits from paths
@@ -1200,14 +1229,30 @@ impl TryFrom<&Path> for Config {
     ///
     /// This supports configuration inheritance via `extends` and circular dependency detection.
     fn try_from(path: &Path) -> Result<Self, Self::Error> {
-        ConfigGraphLoader::load(path)
+        ConfigGraphLoader::load(path, None)
     }
 }
 
 impl Config {
     /// Merge an already parsed root document with its `extends` from `base_dir`.
     pub(crate) fn from_root_in(root: Self, base_dir: &Path) -> Result<Self, ParseError> {
+        Self::from_root_with_request(root, base_dir, None)
+    }
+
+    pub(crate) fn load_with_request(
+        path: &Path,
+        request: &crate::request::RequestContext,
+    ) -> Result<Self, ParseError> {
+        ConfigGraphLoader::load(path, Some(request))
+    }
+
+    pub(crate) fn from_root_with_request(
+        root: Self,
+        base_dir: &Path,
+        request: Option<&crate::request::RequestContext>,
+    ) -> Result<Self, ParseError> {
         let mut loader = ConfigGraphLoader {
+            request,
             active: HashSet::new(),
             emitted: HashSet::new(),
             documents: Vec::new(),
@@ -3667,7 +3712,15 @@ impl GlobalConfig {
     /// # Errors
     ///
     /// Returns an error if the config path cannot be checked/read or if parsing fails
+    #[cfg(any(feature = "cli", test))]
     pub fn load() -> Result<Option<Self>, ParseError> {
+        Self::load_with_request(None)
+    }
+
+    pub(crate) fn load_with_request(
+        request: Option<&crate::request::RequestContext>,
+    ) -> Result<Option<Self>, ParseError> {
+        config_checkpoint(request)?;
         let config_path = Self::path().map_err(ParseError::Io)?;
 
         #[cfg(target_os = "macos")]
@@ -3676,7 +3729,7 @@ impl GlobalConfig {
         if !config_path.try_exists().map_err(ParseError::Io)? {
             return Ok(None);
         }
-        let content = std::fs::read_to_string(&config_path).map_err(ParseError::Io)?;
+        let content = read_config_text(&config_path, request)?;
         toml::from_str(&content).map(Some).map_err(ParseError::Toml)
     }
 

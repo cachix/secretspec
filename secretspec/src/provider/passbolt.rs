@@ -6,6 +6,7 @@
 //! name and may select its password, username, URI, or description field.
 
 use crate::SecretBytes;
+use crate::command::CommandOutput as _;
 use crate::config::NativeAddress;
 use crate::provider::{
     Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl, credential_or_env,
@@ -208,6 +209,7 @@ impl TryFrom<&ProviderUrl> for PassboltConfig {
 /// child process's argv while that command runs. Authentication secrets are
 /// still kept off argv.
 pub struct PassboltProvider {
+    request: Option<crate::request::RequestContext>,
     config: PassboltConfig,
     cli_binary_path: String,
     credentials: ProviderCredentials,
@@ -231,6 +233,7 @@ crate::register_provider! {
 impl PassboltProvider {
     pub fn new(config: PassboltConfig) -> Self {
         Self {
+            request: None,
             config,
             cli_binary_path: std::env::var("SECRETSPEC_PASSBOLT_CLI_PATH")
                 .unwrap_or_else(|_| "passbolt".to_string()),
@@ -288,23 +291,26 @@ impl PassboltProvider {
     }
 
     fn run(&self, args: &[&str]) -> Result<String> {
+        if let Some(request) = &self.request {
+            request.checkpoint()?;
+        }
         let output = match self
             .command()?
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output()
+            .output_for(self.request.as_ref())
         {
             Ok(output) => output,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Err(SecretSpecError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
                 return Err(SecretSpecError::ProviderOperationFailed(
                     "Passbolt CLI is not installed. Install go-passbolt-cli and ensure the \
                      `passbolt` binary is on PATH, or set SECRETSPEC_PASSBOLT_CLI_PATH."
                         .to_string(),
                 ));
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error),
         };
 
         if !output.status.success() {
@@ -1163,3 +1169,14 @@ esac
         assert_eq!(list_count, 1);
     }
 }
+
+super::managed_read::register!(["passbolt"], |url, credentials, request| {
+    let mut provider = PassboltProvider::new(PassboltConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(super::managed_read::preflight(
+        provider,
+        request,
+        PassboltProvider::check_auth,
+    ))
+});

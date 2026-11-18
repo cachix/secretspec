@@ -1,4 +1,5 @@
 use crate::SecretBytes;
+use crate::command::CommandOutput as _;
 use crate::provider::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use serde::{Deserialize, Serialize};
@@ -97,6 +98,7 @@ impl TryFrom<&ProviderUrl> for LastPassConfig {
 /// let provider = LastPassProvider::new(config);
 /// ```
 pub struct LastPassProvider {
+    request: Option<crate::request::RequestContext>,
     #[allow(dead_code)]
     config: LastPassConfig,
 }
@@ -118,7 +120,10 @@ impl LastPassProvider {
     ///
     /// * `config` - The LastPass configuration to use
     pub fn new(config: LastPassConfig) -> Self {
-        Self { config }
+        Self {
+            request: None,
+            config,
+        }
     }
 
     /// Executes a LastPass CLI command and returns its output.
@@ -145,14 +150,14 @@ impl LastPassProvider {
         let mut cmd = Command::new("lpass");
         cmd.args(args);
 
-        let output = match cmd.output() {
+        let output = match cmd.output_for(self.request.as_ref()) {
             Ok(output) => output,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(SecretSpecError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Err(SecretSpecError::ProviderOperationFailed(
                     "LastPass CLI (lpass) is not installed.\n\nTo install it:\n  - macOS: brew install lastpass-cli\n  - Linux: Check your package manager (apt install lastpass-cli, yum install lastpass-cli, etc.)\n  - NixOS: nix-env -iA nixpkgs.lastpass-cli\n\nAfter installation, run 'lpass login <your-email>' to authenticate.".to_string(),
                 ));
             }
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e),
         };
 
         if !output.status.success() {
@@ -582,3 +587,14 @@ mod reference_tests {
         assert!(err.to_string().contains("`field`"), "{err}");
     }
 }
+
+super::managed_read::register!(["lastpass"], |url, credentials, request| {
+    let mut provider = LastPassProvider::new(LastPassConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(super::managed_read::preflight(
+        provider,
+        request,
+        LastPassProvider::check_auth,
+    ))
+});

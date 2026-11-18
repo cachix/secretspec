@@ -29,32 +29,15 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::process::Command;
+#[cfg(all(test, unix))]
+use std::process::Stdio;
+use std::time::Duration;
+#[cfg(all(test, unix))]
+use std::time::Instant;
 
-#[cfg(windows)]
-use std::os::windows::{io::AsRawHandle, process::CommandExt};
 #[cfg(unix)]
 use std::os::{fd::AsRawFd, fd::FromRawFd, unix::process::CommandExt};
-#[cfg(not(unix))]
-use wait_timeout::ChildExt;
-#[cfg(windows)]
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
-#[cfg(windows)]
-use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
-};
-#[cfg(windows)]
-use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, TerminateJobObject,
-};
-#[cfg(windows)]
-use windows_sys::Win32::System::Threading::{
-    CREATE_SUSPENDED, OpenThread, ResumeThread, THREAD_SUSPEND_RESUME,
-};
 
 const PRIVATE_KEY: &str = "private_key";
 const MAX_EJSON_BYTES: u64 = 16 * 1024 * 1024;
@@ -169,286 +152,6 @@ impl EncryptedSnapshot {
     fn configure_command(&self, _command: &mut Command) {}
 }
 
-#[cfg(windows)]
-struct OwnedWindowsHandle {
-    handle: HANDLE,
-}
-
-#[cfg(windows)]
-impl Drop for OwnedWindowsHandle {
-    fn drop(&mut self) {
-        // SAFETY: this type owns the live handle and closes it exactly once.
-        let _ = unsafe { CloseHandle(self.handle) };
-    }
-}
-
-#[cfg(windows)]
-fn resume_suspended_process(process_id: u32) -> std::io::Result<()> {
-    // SAFETY: this requests a read-only system snapshot handle.
-    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
-    if snapshot == INVALID_HANDLE_VALUE {
-        return Err(std::io::Error::last_os_error());
-    }
-    let snapshot = OwnedWindowsHandle { handle: snapshot };
-    let mut entry = THREADENTRY32 {
-        dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
-        ..Default::default()
-    };
-
-    // SAFETY: `entry` advertises its exact size and remains writable while the
-    // owned snapshot handle is live.
-    let mut found = unsafe { Thread32First(snapshot.handle, &mut entry) };
-    while found != 0 {
-        if entry.th32OwnerProcessID == process_id {
-            // SAFETY: the thread ID belongs to the newly created suspended
-            // process, and the requested access permits only suspend/resume.
-            let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
-            if thread.is_null() {
-                return Err(std::io::Error::last_os_error());
-            }
-            let thread = OwnedWindowsHandle { handle: thread };
-            // SAFETY: CREATE_SUSPENDED created this initial thread with a
-            // suspend count of one. `u32::MAX` reports failure.
-            if unsafe { ResumeThread(thread.handle) } == u32::MAX {
-                return Err(std::io::Error::last_os_error());
-            }
-            return Ok(());
-        }
-        // SAFETY: same initialized entry and live snapshot as Thread32First.
-        found = unsafe { Thread32Next(snapshot.handle, &mut entry) };
-    }
-
-    Err(std::io::Error::new(
-        std::io::ErrorKind::NotFound,
-        "failed to find the suspended EJSON CLI thread",
-    ))
-}
-
-#[cfg(windows)]
-struct WindowsJob {
-    handle: HANDLE,
-}
-
-#[cfg(windows)]
-impl WindowsJob {
-    fn assign(child: &Child) -> std::io::Result<Self> {
-        // SAFETY: null attributes and name create a private job object. Every
-        // returned handle is closed on error or by `Drop`.
-        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if handle.is_null() {
-            return Err(std::io::Error::last_os_error());
-        }
-
-        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        // SAFETY: `limits` has the exact layout and size required by this job
-        // information class, and `handle` remains live for the call.
-        if unsafe {
-            SetInformationJobObject(
-                handle,
-                JobObjectExtendedLimitInformation,
-                std::ptr::from_ref(&limits).cast(),
-                std::mem::size_of_val(&limits) as u32,
-            )
-        } == 0
-        {
-            let error = std::io::Error::last_os_error();
-            // SAFETY: `handle` is live and owned by this function.
-            let _ = unsafe { CloseHandle(handle) };
-            return Err(error);
-        }
-
-        // SAFETY: the child process handle stays live while `child` is live,
-        // and the job handle is valid. Descendants join the same job unless the
-        // job explicitly permits breakaway, which this job does not.
-        if unsafe { AssignProcessToJobObject(handle, child.as_raw_handle() as HANDLE) } == 0 {
-            let error = std::io::Error::last_os_error();
-            // SAFETY: `handle` is live and owned by this function.
-            let _ = unsafe { CloseHandle(handle) };
-            return Err(error);
-        }
-
-        Ok(Self { handle })
-    }
-
-    fn terminate(&self) -> std::io::Result<()> {
-        // SAFETY: `self.handle` remains valid until `Drop`.
-        if unsafe { TerminateJobObject(self.handle, 1) } == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(())
-    }
-}
-
-#[cfg(windows)]
-impl Drop for WindowsJob {
-    fn drop(&mut self) {
-        // Closing a kill-on-close job stops any descendant that still holds an
-        // inherited stdout handle after the direct EJSON process exits.
-        // SAFETY: this type owns the live handle and closes it exactly once.
-        let _ = unsafe { CloseHandle(self.handle) };
-    }
-}
-
-struct ManagedChild {
-    child: Child,
-    child_reaped: bool,
-    cleanup_complete: bool,
-    exit_observed: bool,
-    exit_status: Option<ExitStatus>,
-    #[cfg(windows)]
-    job: WindowsJob,
-}
-
-impl ManagedChild {
-    fn new(child: Child) -> std::io::Result<Self> {
-        #[cfg(windows)]
-        {
-            let mut child = child;
-            let job = match WindowsJob::assign(&child) {
-                Ok(job) => job,
-                Err(error) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(error);
-                }
-            };
-            if let Err(error) = resume_suspended_process(child.id()) {
-                let _ = job.terminate();
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error);
-            }
-            Ok(Self {
-                child,
-                child_reaped: false,
-                cleanup_complete: false,
-                exit_observed: false,
-                exit_status: None,
-                job,
-            })
-        }
-        #[cfg(not(windows))]
-        {
-            Ok(Self {
-                child,
-                child_reaped: false,
-                cleanup_complete: false,
-                exit_observed: false,
-                exit_status: None,
-            })
-        }
-    }
-
-    #[cfg(unix)]
-    fn wait_for_exit(&mut self, timeout: Duration) -> std::io::Result<bool> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
-            // `WNOWAIT` observes exit without reaping the group leader. Its PID
-            // therefore cannot be reused before process-group cleanup.
-            // SAFETY: `info` points to writable storage for one `siginfo_t`, and
-            // this call observes only the child PID owned by `self.child`.
-            let result = unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    self.child.id() as libc::id_t,
-                    info.as_mut_ptr(),
-                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-                )
-            };
-            if result == -1 {
-                let error = std::io::Error::last_os_error();
-                if error.kind() == std::io::ErrorKind::Interrupted {
-                    continue;
-                }
-                return Err(error);
-            }
-            // SAFETY: a successful `waitid` initialized `info`; `si_pid == 0`
-            // means the nonblocking observation found no exited child yet.
-            if unsafe { info.assume_init().si_pid() } != 0 {
-                self.exit_observed = true;
-                return Ok(true);
-            }
-
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Ok(false);
-            }
-            std::thread::sleep(remaining.min(Duration::from_millis(10)));
-        }
-    }
-
-    #[cfg(not(unix))]
-    fn wait_for_exit(&mut self, timeout: Duration) -> std::io::Result<bool> {
-        match self.child.wait_timeout(timeout)? {
-            Some(status) => {
-                self.child_reaped = true;
-                self.exit_observed = true;
-                self.exit_status = Some(status);
-                Ok(true)
-            }
-            None => Ok(false),
-        }
-    }
-
-    fn terminate_tree(&self) -> std::io::Result<()> {
-        #[cfg(unix)]
-        {
-            let process_group = -(self.child.id() as libc::pid_t);
-            // SAFETY: the child starts as leader of its own process group and
-            // remains unreaped until this signal succeeds or reports no group.
-            // macOS reports EPERM when only the unsignalable zombie leader
-            // remains; after exit observation that also means no live member
-            // owned by this process remains to stop.
-            if unsafe { libc::kill(process_group, libc::SIGKILL) } == -1 {
-                let error = std::io::Error::last_os_error();
-                let no_signalable_descendant =
-                    self.exit_observed && error.raw_os_error() == Some(libc::EPERM);
-                if error.raw_os_error() != Some(libc::ESRCH) && !no_signalable_descendant {
-                    return Err(error);
-                }
-            }
-        }
-        #[cfg(windows)]
-        self.job.terminate()?;
-        Ok(())
-    }
-
-    fn finish_after_exit(&mut self) -> std::io::Result<ExitStatus> {
-        self.terminate_tree()?;
-        let status = match self.exit_status.take() {
-            Some(status) => status,
-            None => self.child.wait()?,
-        };
-        self.child_reaped = true;
-        self.cleanup_complete = true;
-        Ok(status)
-    }
-
-    fn stop(&mut self) -> std::io::Result<()> {
-        if self.cleanup_complete {
-            return Ok(());
-        }
-        self.terminate_tree()?;
-        if !self.child_reaped {
-            let _ = self.child.kill();
-            self.child.wait()?;
-            self.child_reaped = true;
-        }
-        self.cleanup_complete = true;
-        Ok(())
-    }
-}
-
-impl Drop for ManagedChild {
-    fn drop(&mut self) {
-        // Explicit error paths call `stop` first. A failed attempt leaves the
-        // state incomplete so this final attempt can retry before handles drop.
-        let _ = self.stop();
-    }
-}
-
 /// Configuration for one encrypted EJSON file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EjsonConfig {
@@ -519,6 +222,7 @@ pub struct EjsonProvider {
     credentials: ProviderCredentials,
     cli_binary_path: PathBuf,
     cli_timeout: Duration,
+    request: Option<crate::request::RequestContext>,
 }
 
 crate::register_provider! {
@@ -534,6 +238,7 @@ impl EjsonProvider {
             credentials: ProviderCredentials::new(),
             cli_binary_path: PathBuf::from("ejson"),
             cli_timeout: DEFAULT_CLI_TIMEOUT,
+            request: None,
         }
     }
 
@@ -620,6 +325,18 @@ impl EjsonProvider {
     /// temporary file. The CLI receives only this immutable snapshot, so a
     /// replacement of the configured pathname cannot change the decrypted data.
     fn encrypted_snapshot(&self) -> Result<Option<EncryptedSnapshot>> {
+        if let Some(request) = &self.request {
+            request.checkpoint()?;
+            match std::fs::symlink_metadata(&self.config.path) {
+                Ok(metadata) if !metadata.is_file() => {
+                    return Err(crate::request::unsupported("non-regular EJSON source"));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error.into()),
+                _ => {}
+            }
+            request.checkpoint()?;
+        }
         let source = match Self::open_source(&self.config.path) {
             Ok(source) => source,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -643,6 +360,9 @@ impl EjsonProvider {
             ))
         })?;
         if !metadata.is_file() {
+            if self.request.is_some() {
+                return Err(crate::request::unsupported("non-regular EJSON source"));
+            }
             return Err(provider_err(format!(
                 "ejson path '{}' is not a regular file",
                 self.config.path.display()
@@ -663,12 +383,35 @@ impl EjsonProvider {
             ))
         })?;
         let mut limited = source.take(MAX_EJSON_BYTES + 1);
-        let copied = std::io::copy(&mut limited, snapshot.file_mut()).map_err(|error| {
+        let copy_error = |error| {
             provider_err(format!(
                 "failed to copy EJSON ciphertext into a temporary snapshot: {error}"
             ))
-        })?;
-        if copied as u64 > MAX_EJSON_BYTES {
+        };
+        let copied = if let Some(request) = &self.request {
+            let mut copied = 0;
+            let mut chunk = [0u8; 16 * 1024];
+            loop {
+                request.checkpoint()?;
+                let count = match limited.read(&mut chunk) {
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    result => result.map_err(copy_error)?,
+                };
+                if count == 0 {
+                    break;
+                }
+                request.checkpoint()?;
+                snapshot
+                    .file_mut()
+                    .write_all(&chunk[..count])
+                    .map_err(copy_error)?;
+                copied += count as u64;
+            }
+            copied
+        } else {
+            std::io::copy(&mut limited, snapshot.file_mut()).map_err(copy_error)?
+        };
+        if copied > MAX_EJSON_BYTES {
             return Err(provider_err(format!(
                 "ejson file '{}' exceeds the maximum supported size of {MAX_EJSON_BYTES} bytes",
                 self.config.path.display()
@@ -702,169 +445,50 @@ impl EjsonProvider {
         Ok(Zeroizing::new(value.to_string()))
     }
 
-    fn stop_child(child: &mut ManagedChild) {
-        let _ = child.stop();
-    }
-
-    /// Decrypts the file once. The official CLI currently emits the complete
-    /// document; callers select only declared pointers from the parsed value.
+    /// Decrypt once through the shared runner so legacy and cancellable reads
+    /// both join their child and pipe workers before returning.
     fn decrypt(&self) -> Result<Option<serde_json::Value>> {
+        let request = self.request.as_ref();
+        let checkpoint = || request.map_or(Ok(()), crate::request::RequestContext::checkpoint);
+        checkpoint()?;
         let Some(snapshot) = self.encrypted_snapshot()? else {
             return Ok(None);
         };
-        let private_key = self.private_key()?;
-        let deadline = Instant::now() + self.cli_timeout;
-
+        checkpoint()?;
+        let mut input = Zeroizing::new(self.private_key()?.as_bytes().to_vec());
+        input.extend_from_slice(if cfg!(windows) { b"\r\n" } else { b"\n" });
         let mut command = Command::new(&self.cli_binary_path);
         command
             .arg("decrypt")
             .arg("--key-from-stdin")
-            .arg(snapshot.command_path())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            // Child diagnostics are not trusted: a substituted executable sees
-            // the private key on stdin and could echo it. Return a generic error.
-            .stderr(Stdio::null());
+            .arg(snapshot.command_path());
         snapshot.configure_command(&mut command);
-        #[cfg(unix)]
-        command.process_group(0);
-        #[cfg(windows)]
-        command.creation_flags(CREATE_SUSPENDED);
-
-        let spawn_result = command.spawn();
-        let child = match spawn_result {
-            Ok(child) => child,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Err(provider_err(
+        let output = crate::command::output(
+            &mut command,
+            Some(input),
+            MAX_EJSON_BYTES as usize,
+            Some(self.cli_timeout),
+            request,
+            false,
+        )
+        .map_err(|error| match error {
+            SecretSpecError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                provider_err(
                     "The 'ejson' CLI is not installed. Install it through your package manager.",
-                ));
+                )
             }
-            Err(error) => {
-                return Err(provider_err(format!(
-                    "failed to start the EJSON CLI: {error}"
-                )));
-            }
-        };
-        let mut child = ManagedChild::new(child).map_err(|error| {
-            provider_err(format!(
-                "failed to secure the EJSON CLI process lifetime: {error}"
-            ))
+            error if error.is_resolution_terminal() => error,
+            error => provider_err(format!("EJSON CLI failed: {error}")),
         })?;
-
-        let Some(stdout) = child.child.stdout.take() else {
-            Self::stop_child(&mut child);
-            return Err(provider_err("failed to open stdout for the EJSON CLI"));
-        };
-        let (output_sender, output_receiver) = mpsc::sync_channel(1);
-        std::thread::spawn(move || {
-            let mut plaintext = Vec::new();
-            let result = stdout
-                .take(MAX_EJSON_BYTES + 1)
-                .read_to_end(&mut plaintext)
-                .map(|_| plaintext);
-            let _ = output_sender.send(result);
-        });
-
-        let Some(mut stdin) = child.child.stdin.take() else {
-            Self::stop_child(&mut child);
-            drop(output_receiver);
-            return Err(provider_err("failed to open stdin for the EJSON CLI"));
-        };
-        let (input_sender, input_receiver) = mpsc::sync_channel(1);
-        let key_terminator: &'static [u8] = if cfg!(windows) { b"\r\n" } else { b"\n" };
-        std::thread::spawn(move || {
-            let result = stdin
-                .write_all(private_key.as_bytes())
-                .and_then(|()| stdin.write_all(key_terminator));
-            let _ = input_sender.send(result);
-        });
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match input_receiver.recv_timeout(remaining) {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                Self::stop_child(&mut child);
-                drop(output_receiver);
-                return Err(provider_err(format!(
-                    "failed to send the private key to the EJSON CLI: {error}"
-                )));
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                Self::stop_child(&mut child);
-                drop(output_receiver);
-                return Err(provider_err(format!(
-                    "EJSON private-key delivery timed out after {} seconds",
-                    self.cli_timeout.as_secs_f64()
-                )));
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                Self::stop_child(&mut child);
-                drop(output_receiver);
-                return Err(provider_err(
-                    "EJSON private-key writer stopped unexpectedly",
-                ));
-            }
+        if !output.status.success() {
+            return Err(provider_err(
+                "EJSON decryption failed. Check the encrypted file, EJSON CLI compatibility, and `private_key` credential.",
+            ));
         }
-
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match child.wait_for_exit(remaining) {
-            Ok(true) => {}
-            Ok(false) => {
-                Self::stop_child(&mut child);
-                drop(output_receiver);
-                return Err(provider_err(format!(
-                    "EJSON decryption timed out after {} seconds",
-                    self.cli_timeout.as_secs_f64()
-                )));
-            }
-            Err(error) => {
-                Self::stop_child(&mut child);
-                drop(output_receiver);
-                return Err(provider_err(format!(
-                    "failed to wait for the EJSON CLI: {error}"
-                )));
-            }
-        }
-        let status = child.finish_after_exit().map_err(|error| {
-            provider_err(format!(
-                "failed to clean up the EJSON CLI process tree: {error}"
-            ))
-        })?;
-
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let plaintext = match output_receiver.recv_timeout(remaining) {
-            Ok(Ok(plaintext)) => plaintext,
-            Ok(Err(error)) => {
-                return Err(provider_err(format!(
-                    "failed to read output from the EJSON CLI: {error}"
-                )));
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                Self::stop_child(&mut child);
-                return Err(provider_err(format!(
-                    "EJSON output did not close within {} seconds",
-                    self.cli_timeout.as_secs_f64()
-                )));
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(provider_err("EJSON output reader stopped unexpectedly"));
-            }
-        };
-        if plaintext.len() as u64 > MAX_EJSON_BYTES {
-            return Err(provider_err(format!(
-                "EJSON decrypted output exceeds the maximum supported size of {MAX_EJSON_BYTES} bytes"
-            )));
-        }
-        if !status.success() {
-            return Err(provider_err(format!(
-                "EJSON decryption failed ({status}). Check the encrypted file, EJSON CLI compatibility, and `private_key` credential."
-            )));
-        }
-
-        serde_json::from_slice(&plaintext)
+        checkpoint()?;
+        serde_json::from_slice(output.stdout.expose_secret())
             .map(Some)
-            .map_err(|error| {
-                provider_err(format!("failed to parse JSON emitted by EJSON: {error}"))
-            })
+            .map_err(|_| provider_err("failed to parse JSON emitted by EJSON"))
     }
 
     fn select(document: &serde_json::Value, pointer: &str) -> Result<Option<SecretBytes>> {
@@ -1091,106 +715,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(value.expose_secret(), b"value");
-    }
-
-    #[cfg(windows)]
-    fn windows_job_helper_command(role: &str, ready: &Path) -> Command {
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        command
-            .args([
-                "--exact",
-                "provider::ejson::tests::windows_job_helper",
-                "--nocapture",
-            ])
-            .env("SECRETSPEC_EJSON_JOB_HELPER", role)
-            .env("SECRETSPEC_EJSON_JOB_READY", ready);
-        command
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_job_helper() {
-        let Ok(role) = std::env::var("SECRETSPEC_EJSON_JOB_HELPER") else {
-            return;
-        };
-        let ready = PathBuf::from(std::env::var_os("SECRETSPEC_EJSON_JOB_READY").unwrap());
-        match role.as_str() {
-            "parent" => {
-                let status = windows_job_helper_command("descendant", &ready)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::inherit())
-                    .stderr(Stdio::inherit())
-                    .spawn()
-                    .unwrap()
-                    .wait()
-                    .unwrap();
-                assert!(status.success());
-            }
-            "descendant" => {
-                // Publish only after this process has started and inherited
-                // stdout. Rename prevents the observer from reading a partial PID.
-                let pending = ready.with_extension("pending");
-                fs::write(&pending, std::process::id().to_string()).unwrap();
-                fs::rename(pending, ready).unwrap();
-                std::thread::sleep(Duration::from_secs(120));
-            }
-            _ => panic!("unknown EJSON job helper role"),
-        }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_suspended_job_stops_a_descendant_holding_stdout() {
-        use std::os::windows::process::CommandExt as _;
-        use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
-        use windows_sys::Win32::System::Threading::{
-            OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
-        };
-
-        let directory = tempfile::tempdir().unwrap();
-        let descendant_pid = directory.path().join("descendant-pid");
-        let diagnostics = directory.path().join("helper-stderr");
-        let mut command = windows_job_helper_command("parent", &descendant_pid);
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(fs::File::create(&diagnostics).unwrap())
-            .creation_flags(CREATE_SUSPENDED);
-        let child = command.spawn().unwrap();
-        let mut child = ManagedChild::new(child).unwrap();
-
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !descendant_pid.exists() && Instant::now() < deadline {
-            if child.wait_for_exit(Duration::from_millis(10)).unwrap() {
-                break;
-            }
-        }
-        if !descendant_pid.exists() {
-            let _ = child.stop();
-            panic!(
-                "suspended Windows helper did not record its descendant: {}",
-                fs::read_to_string(&diagnostics).unwrap(),
-            );
-        }
-        let pid: u32 = fs::read_to_string(descendant_pid)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        // SAFETY: this opens only the test descendant for synchronization. The
-        // returned handle is owned below and grants no mutation rights.
-        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
-        assert!(!handle.is_null(), "EJSON descendant {pid} is missing");
-        let handle = OwnedWindowsHandle { handle };
-        // SAFETY: the owned process handle remains live through both waits.
-        assert_eq!(
-            unsafe { WaitForSingleObject(handle.handle, 0) },
-            WAIT_TIMEOUT
-        );
-        child.stop().unwrap();
-        // SAFETY: the owned handle still identifies the same descendant after stop.
-        let wait = unsafe { WaitForSingleObject(handle.handle, 2_000) };
-        assert_eq!(wait, WAIT_OBJECT_0, "EJSON descendant {pid} survived");
     }
 
     #[test]
@@ -1427,6 +951,37 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results["API_KEY"].expose_secret(), b"one");
         assert_eq!(results["OTHER"].expose_secret(), b"two");
+        assert_eq!(fs::read_to_string(count).unwrap(), "x");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_decryption_keeps_snapshot_stdin_and_batch_semantics() {
+        let directory = tempfile::tempdir().unwrap();
+        let encrypted = directory.path().join("secrets.ejson");
+        fs::write(&encrypted, "{\"_public_key\":\"placeholder\"}").unwrap();
+        let count = directory.path().join("count");
+        let cli = fake_cli(
+            directory.path(),
+            r#"{"app":{"production":{"A":"one","B":"two"}}}"#,
+            &count,
+        );
+        let mut provider = EjsonProvider::new(EjsonConfig { path: encrypted }).with_cli_binary(cli);
+        provider.credentials.insert(
+            PRIVATE_KEY.to_string(),
+            SecretBytes::from_utf8(TEST_PRIVATE_KEY),
+        );
+        let values = crate::request::run(&crate::CancellationHandle::new(), move |request| {
+            provider.request = Some(request);
+            provider.get_many(&[
+                ("A", Address::convention("app", "production", "A")),
+                ("B", Address::convention("app", "production", "B")),
+            ])
+        })
+        .await
+        .unwrap();
+        assert_eq!(values["A"].expose_secret(), b"one");
+        assert_eq!(values["B"].expose_secret(), b"two");
         assert_eq!(fs::read_to_string(count).unwrap(), "x");
     }
 
@@ -1732,7 +1287,7 @@ mod tests {
             }))
             .unwrap_err()
             .to_string();
-        assert!(error.contains("decrypted output exceeds"));
+        assert!(error.contains("output limit"), "{error}");
     }
 
     #[cfg(unix)]
@@ -1873,3 +1428,10 @@ mod tests {
         assert!(error.to_string().contains("symbolic link"));
     }
 }
+
+super::managed_read::register!(["ejson"], |url, credentials, request| {
+    let mut provider = EjsonProvider::new(EjsonConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(Box::new(provider))
+});

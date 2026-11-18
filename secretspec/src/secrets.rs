@@ -1,5 +1,7 @@
 //! Core secrets management functionality
 
+mod managed;
+
 use crate::audit::{AuditAction, AuditContext, AuditLogger, AuditOutcome, AuditPurpose};
 use crate::cache::{self, CacheEntryStatus, CacheOwnership};
 use crate::compiled_spec::{CompiledSpec, MissingPolicy};
@@ -1559,6 +1561,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
     }
 
     fn run(mut self) -> ExecutionResult {
+        self.manager.request_checkpoint()?;
         if self.plan.secrets.is_empty() {
             return Ok(Ok(ValidatedSecrets {
                 resolved: Resolved::new(HashMap::new(), String::new(), self.plan.profile.clone()),
@@ -1575,7 +1578,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
 
         self.read_cached_values();
         self.fetch_primary_values()?;
-        self.fetch_fallback_values();
+        self.fetch_fallback_values()?;
         self.resolve_provider_backed_values()?;
         self.resolve_derived_values()?;
         self.finish()
@@ -1619,6 +1622,9 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                     group_fetches.push((provider_uri, group, provider));
                 }
                 Err(error) => {
+                    if error.is_resolution_terminal() {
+                        return Err(error);
+                    }
                     let shown = provider_uri.map(crate::audit::redact_uri_strict);
                     warn_primary_provider_failure(shown.as_deref(), &error);
                     self.failed_primary_uris.insert(provider_uri, error);
@@ -1668,6 +1674,9 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             match result {
                 Ok(batch_results) => self.fetched_values.extend(batch_results),
                 Err(error) => {
+                    if error.is_resolution_terminal() {
+                        return Err(error);
+                    }
                     let display_uri = self.group_uris.get(&provider_uri).map(String::as_str);
                     warn_primary_provider_failure(display_uri, &error);
                     self.failed_primary_uris.insert(provider_uri, error);
@@ -1677,7 +1686,8 @@ impl<'secrets, 'plan, 'filter, 'addresses>
         Ok(())
     }
 
-    fn fetch_fallback_values(&mut self) {
+    fn fetch_fallback_values(&mut self) -> Result<()> {
+        self.manager.request_checkpoint()?;
         let project = self.manager.config.project.name.as_str();
         let profile = self.plan.profile.as_str();
         let provider_cache = ProviderCache::default();
@@ -1695,7 +1705,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
             })
             .collect();
 
-        self.fallback_results = crate::provider::map_concurrently(
+        let results = crate::provider::map_concurrently(
             &pending_fallbacks,
             crate::provider::get_each_concurrency(),
             |planned| {
@@ -1721,9 +1731,16 @@ impl<'secrets, 'plan, 'filter, 'addresses>
                 );
                 (planned.name.clone(), result)
             },
-        )
-        .into_iter()
-        .collect();
+        );
+        for (name, result) in results {
+            match result {
+                Err(error) if error.is_resolution_terminal() => return Err(error),
+                result => {
+                    self.fallback_results.insert(name, result);
+                }
+            }
+        }
+        self.manager.request_checkpoint()
     }
 
     fn resolve_provider_backed_values(&mut self) -> Result<()> {
@@ -1735,6 +1752,7 @@ impl<'secrets, 'plan, 'filter, 'addresses>
         let profile = plan.profile.as_str();
 
         for planned in &plan.secrets {
+            manager.request_checkpoint()?;
             let Some(route) = &planned.route else {
                 continue;
             };
@@ -2413,15 +2431,23 @@ impl<'secrets, 'plan, 'filter, 'addresses>
     }
 
     fn finish(mut self) -> ExecutionResult {
-        let report_provider_uri = self.manager.validation_report_provider_uri(
-            self.plan.override_uri.as_deref(),
-            self.plan
-                .secrets
-                .iter()
-                .filter_map(|secret| secret.route.as_ref())
-                .map(|route| route.primary()),
-            Some(&self.plan.profile),
-        )?;
+        self.manager.request_checkpoint()?;
+        let report_provider_uri = if self.manager.request.is_some()
+            && self.plan.override_uri.is_none()
+            && self.group_uris.contains_key(&None)
+        {
+            self.group_uris[&None].clone()
+        } else {
+            self.manager.validation_report_provider_uri(
+                self.plan.override_uri.as_deref(),
+                self.plan
+                    .secrets
+                    .iter()
+                    .filter_map(|secret| secret.route.as_ref())
+                    .map(|route| route.primary()),
+                Some(&self.plan.profile),
+            )?
+        };
 
         self.apply_output_filter();
         let constraint_violations = self.constraint_violations();
@@ -2720,6 +2746,8 @@ pub struct Secrets {
     /// operator withheld the mutation methods; see
     /// [`Secrets::refuse_produced_writes`].
     refuse_produced_writes: bool,
+    refuse_file_values: bool,
+    request: Option<crate::request::RequestContext>,
 }
 
 /// Credential-free description of one provider write, computed after routing
@@ -3004,6 +3032,8 @@ impl Secrets {
             provider_credential_prompt: None,
             progress: true,
             refuse_produced_writes: false,
+            refuse_file_values: false,
+            request: None,
         }
     }
 
@@ -3074,7 +3104,7 @@ impl Secrets {
         // A Spec already owns the exact compiled view produced by validation,
         // so file and Rust frontends both arrive here without recompiling.
         let (config, manifest) = spec.into_parts();
-        Self::from_compiled_spec(config, manifest, base_dir.into(), true)
+        Self::from_compiled_spec(config, manifest, base_dir.into(), true, None)
     }
 
     /// Load an explicit path for a resolver session without consulting ambient
@@ -3087,7 +3117,7 @@ impl Secrets {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         let (config, manifest) = spec.into_parts();
-        Self::from_compiled_spec(config, manifest, config_dir, false)
+        Self::from_compiled_spec(config, manifest, config_dir, false, None)
     }
 
     /// Parse an inline resolver manifest with inheritance rooted at `base_dir`.
@@ -3095,7 +3125,7 @@ impl Secrets {
     pub(crate) fn load_inline_ipc(source: &str, base_dir: &Path) -> Result<Self> {
         let config = Config::from_inline(source, base_dir)?;
         let manifest = config.validate_and_compile()?;
-        Self::from_compiled_spec(config, manifest, base_dir.to_path_buf(), false)
+        Self::from_compiled_spec(config, manifest, base_dir.to_path_buf(), false, None)
     }
 
     fn from_compiled_spec(
@@ -3103,8 +3133,9 @@ impl Secrets {
         manifest: CompiledSpec,
         config_dir: PathBuf,
         use_ambient_session: bool,
+        request: Option<&crate::request::RequestContext>,
     ) -> Result<Self> {
-        let global_config = GlobalConfig::load()?;
+        let global_config = GlobalConfig::load_with_request(request)?;
         // Auditing is a per-machine concern configured in the user-global config
         // (`[audit]` in ~/.config/secretspec/config.toml), not the project. It is
         // on by default when unconfigured.
@@ -3123,6 +3154,9 @@ impl Secrets {
             use_ambient_session,
         );
         secrets.audit = audit;
+        if let Some(request) = request {
+            secrets = secrets.into_request(request.clone());
+        }
         Ok(secrets)
     }
 
@@ -3169,6 +3203,8 @@ impl Secrets {
             provider_credential_prompt: None,
             progress: true,
             refuse_produced_writes: false,
+            refuse_file_values: false,
+            request: None,
         }
     }
 
@@ -3228,14 +3264,19 @@ impl Secrets {
     /// means those writes too, so this closes the paths that would otherwise
     /// let a read reach the store. It does not touch SecretSpec's own cache:
     /// populating a derived copy is not a change to the secret.
-    #[cfg(feature = "cli")]
     pub(crate) fn refuse_produced_writes(&mut self) {
         self.refuse_produced_writes = true;
+    }
+
+    /// Rejects as_path declarations, including when resolving without values.
+    pub(crate) fn refuse_file_values(&mut self) {
+        self.refuse_file_values = true;
     }
 
     /// Rejects a produced value that would have to be stored, before it is
     /// generated or asked of a person.
     fn ensure_produced_write_allowed(&self, name: &str) -> Result<()> {
+        self.request_checkpoint()?;
         if self.refuse_produced_writes {
             return Err(SecretSpecError::ProducedValueWriteRefused(name.to_string()));
         }
@@ -3593,6 +3634,10 @@ impl Secrets {
 
         let profile = self.resolve_profile_name(profile);
         let resolved = self.resolve_provider_spec(spec.clone());
+        self.request_checkpoint()?;
+        if self.request.is_some() {
+            crate::provider::managed_read::check(&resolved)?;
+        }
         if crate::provider::spec_uses_dynamic_credentials(&resolved)? {
             let broker = self.external_provider_credential_broker(&spec, &resolved, &profile)?;
             let mut provider = crate::provider::external_provider_from_spec(&resolved, broker)
@@ -3748,8 +3793,13 @@ impl Secrets {
         // already-resolved URI (a `scheme://...` string is never an alias key), so
         // callers that pass pre-resolved URIs (the per-secret chain) are unaffected.
         let resolved = self.resolve_provider_spec(spec.to_string());
-        let mut provider = crate::provider::provider_from_spec(resolved.as_str(), credentials)
-            .map_err(|err| self.explain_unknown_provider(err, &resolved))?;
+        let mut provider = match &self.request {
+            Some(request) => {
+                crate::provider::managed_read::from_spec(&resolved, credentials, request)
+            }
+            None => crate::provider::provider_from_spec(&resolved, credentials),
+        }
+        .map_err(|err| self.explain_unknown_provider(err, &resolved))?;
         self.apply_provider_context(provider.as_mut(), profile);
         Ok(provider)
     }
@@ -4018,6 +4068,10 @@ impl Secrets {
     /// fallback links and the default provider included — enforces the same
     /// invariants instead of silently dropping a chained source's credentials.
     pub(crate) fn validate_credential_sources(&self, spec: &str) -> Result<()> {
+        self.request_checkpoint()?;
+        if self.request.is_some() {
+            crate::provider::managed_read::check(&self.resolve_provider_spec(spec.to_string()))?;
+        }
         let Some(alias) = self.lookup_provider_alias_entry(spec) else {
             return Ok(());
         };
@@ -4047,13 +4101,22 @@ impl Secrets {
             // `1password` -> `onepassword` hint, the defined-aliases listing)
             // that the other resolution paths give for the same mistakes.
             let context = |err: SecretSpecError| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "credential source for '{name}' in provider alias '{spec}': {err}"
-                ))
+                if err.is_resolution_terminal() {
+                    err
+                } else {
+                    SecretSpecError::ProviderOperationFailed(format!(
+                        "credential source for '{name}' in provider alias '{spec}': {err}"
+                    ))
+                }
             };
             let resolved = self
                 .resolve_one_provider(&source.provider)
                 .map_err(context)?;
+            if self.request.is_some() {
+                // Validate every source before fetching any credentials or
+                // consulting metadata that could discover an external provider.
+                crate::provider::managed_read::check(&resolved)?;
+            }
             // `resolve_one_provider` passes URI-form specs through untouched,
             // so gate the resolved spec's scheme against the registry here:
             // a typo'd scheme should fail at plan time, not surface later as
@@ -4116,6 +4179,50 @@ impl Secrets {
         fields: AuditFields<'_>,
     ) {
         if let Some(logger) = &self.audit {
+            if let Some(request) = &self.request
+                && matches!(action, AuditAction::Check)
+            {
+                // Cancellation can still win while dependency workers drain.
+                // Record this outcome only after the supervisor commits it.
+                let logger = logger.clone();
+                let project = self.config.project.name.clone();
+                let profile = profile.to_string();
+                let scope = self.resolve_scope_name(None);
+                let keys = fields.keys.to_vec();
+                let key = fields.key.map(str::to_string);
+                let command = fields.command.map(str::to_string);
+                let reason = self.reason.clone();
+                let caller = self.caller.clone();
+                let provider_uri = fields.provider_uri;
+                let reference = fields.reference.map(NativeAddress::render);
+                let error_kind = fields.error_kind.map(str::to_string);
+                request.on_finish(Box::new(move |final_error| {
+                    logger.record(
+                        action,
+                        AuditContext {
+                            project: &project,
+                            profile: &profile,
+                            scope: scope.as_deref(),
+                            key: key.as_deref(),
+                            keys: &keys,
+                            command: command.as_deref(),
+                            provider_uri,
+                            reference,
+                            outcome: if final_error.is_some() {
+                                AuditOutcome::Error
+                            } else {
+                                outcome
+                            },
+                            error_kind: final_error.or(error_kind.as_deref()),
+                            interaction: None,
+                            reason: reason.as_deref(),
+                            caller: caller.as_ref(),
+                            purpose: None,
+                        },
+                    );
+                }));
+                return;
+            }
             #[cfg(feature = "cli")]
             let ipc_purpose = IPC_AUDIT_PURPOSE.with(|slot| slot.borrow().clone());
             #[cfg(feature = "cli")]
@@ -4985,7 +5092,16 @@ impl Secrets {
         if let Some(uri) = self.lookup_provider_alias(spec) {
             return Ok(uri);
         }
-        if crate::provider::spec_names_known_provider(spec)? {
+        let known = if self.request.is_some() {
+            let builtin = crate::provider::spec_names_builtin_provider(spec)?;
+            if builtin || spec.contains(':') {
+                crate::provider::managed_read::check(spec)?;
+            }
+            builtin
+        } else {
+            crate::provider::spec_names_known_provider(spec)?
+        };
+        if known {
             return Ok(spec.to_string());
         }
         let known = self.known_provider_aliases();
@@ -5628,6 +5744,11 @@ impl Secrets {
             // A secret on the default provider, or no secrets at all.
             None => {
                 let spec = self.default_provider_spec(None)?;
+                if self.request.is_some() {
+                    return Ok(crate::audit::redact_uri_strict(
+                        &self.resolve_provider_spec(spec),
+                    ));
+                }
                 // A cached default alias cannot be constructed — it is a route,
                 // not a store — so name the store it reads first instead of
                 // failing a report that needed no provider at all.
@@ -5661,10 +5782,14 @@ impl Secrets {
         let mut last_reference: Option<NativeAddress> = None;
 
         for spec in request.provider_specs {
+            self.request_checkpoint()?;
             // Resolve each link only when the preceding providers have missed.
             let uri = match self.resolve_one_provider(spec) {
                 Ok(uri) => uri,
                 Err(error) => {
+                    if error.is_resolution_terminal() {
+                        return Err(error);
+                    }
                     warn_provider_failure(
                         &crate::audit::redact_uri_strict(spec),
                         request.diagnostic_name,
@@ -5682,6 +5807,9 @@ impl Secrets {
                 match self.shared_provider(provider_cache, spec, Some(request.profile), false) {
                     Ok(provider) => provider,
                     Err(error) => {
+                        if error.is_resolution_terminal() {
+                            return Err(error);
+                        }
                         warn_provider_failure(
                             &crate::audit::redact_uri_strict(&uri),
                             request.diagnostic_name,
@@ -5713,6 +5841,9 @@ impl Secrets {
                     any_healthy = true;
                 }
                 Err(error) => {
+                    if error.is_resolution_terminal() {
+                        return Err(error);
+                    }
                     warn_provider_failure(&provider_uri, request.diagnostic_name, &error);
                     last_error = Some(error);
                 }
@@ -6900,12 +7031,6 @@ impl Secrets {
             }
         };
 
-        let value = if secret_type == "x509_identity" {
-            GeneratedValue::Binary(crate::x509_identity::generate(gen_config)?)
-        } else {
-            GeneratedValue::Text(crate::generator::generate(secret_type, gen_config)?)
-        };
-
         // Store the generated value at the plan's address, through the plan's
         // write route: the same decisions every other write path executes.
         let route = planned
@@ -6920,8 +7045,26 @@ impl Secrets {
         )?;
         let addr = address.as_address();
         let backend = self.write_provider_for_route(route, Some(profile_name))?;
+        let ephemeral =
+            backend.generated_value_persistence() == ProducedValuePersistence::Ephemeral;
+        // Enforce write restrictions before running any persistent generator.
+        if !ephemeral {
+            self.ensure_produced_write_allowed(name)?;
+        }
+        self.request_checkpoint()?;
+        let value = if let Some(request) = &self.request {
+            GeneratedValue::Text(crate::generator::generate_managed(
+                secret_type,
+                gen_config,
+                request,
+            )?)
+        } else if secret_type == "x509_identity" {
+            GeneratedValue::Binary(crate::x509_identity::generate(gen_config)?)
+        } else {
+            GeneratedValue::Text(crate::generator::generate(secret_type, gen_config)?)
+        };
 
-        if backend.generated_value_persistence() == ProducedValuePersistence::Ephemeral {
+        if ephemeral {
             if self.progress {
                 eprintln!(
                     "{} {} - generated for this resolution without provider storage (profile: {})",
@@ -6932,11 +7075,6 @@ impl Secrets {
             }
             return Ok(Some(value));
         }
-
-        // Checked only on the persisting branch: an ephemeral provider returned
-        // above without touching a store, and refusing that would deny a read
-        // that never wrote anything.
-        self.ensure_produced_write_allowed(name)?;
 
         // The provider states why a write is refused; wrapping it here would
         // only nest a second "Provider operation failed" prefix.
@@ -8133,6 +8271,7 @@ impl Secrets {
         output_filter: Option<&HashSet<String>>,
         read_addresses: Option<&mut HashMap<String, NativeAddress>>,
     ) -> ExecutionResult {
+        self.check_managed_plan(plan, materialize)?;
         ResolutionExecution::new(self, plan, materialize, output_filter, read_addresses).run()
     }
 

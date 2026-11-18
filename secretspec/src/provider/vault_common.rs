@@ -529,6 +529,20 @@ pub(crate) struct KvSession<'a> {
 }
 
 impl KvProvider {
+    /// Freeze token-file authentication on the joined worker, before async
+    /// polling. Async token resolution must never open an untracked file.
+    pub(crate) fn prepare_managed_token(
+        &mut self,
+        request: &crate::request::RequestContext,
+    ) -> Result<()> {
+        request.checkpoint()?;
+        if !matches!(self.config.auth, AuthMethod::Token) {
+            return Ok(());
+        }
+        let token = self.resolve_token_auth(Some(request))?;
+        self.credentials.insert(TOKEN.to_string(), token);
+        Ok(())
+    }
     /// Creates the shared protocol client while retaining the product identity
     /// needed for environment lookup, diagnostics, and URI serialization.
     pub(crate) fn new(config: KvConfig, product: Product) -> Self {
@@ -848,7 +862,7 @@ impl KvProvider {
         match self.config.auth {
             // A configured token is opaque: SecretSpec cannot mint a
             // replacement and looking it up would itself consume one use.
-            AuthMethod::Token => self.resolve_token_auth().map(IssuedToken::static_token),
+            AuthMethod::Token => self.resolve_token_auth(None).map(IssuedToken::static_token),
             AuthMethod::AppRole => self.resolve_approle_auth().await,
             AuthMethod::Jwt => self.resolve_jwt_auth().await,
         }
@@ -857,7 +871,10 @@ impl KvProvider {
     /// Resolves static token authentication in decreasing precedence:
     /// provider credential, product environment, configured token path, and
     /// finally the CLI-compatible `~/.vault-token` default.
-    fn resolve_token_auth(&self) -> Result<SecretBytes> {
+    fn resolve_token_auth(
+        &self,
+        request: Option<&crate::request::RequestContext>,
+    ) -> Result<SecretBytes> {
         if let Some(token) = credential_or_envs(&self.credentials, TOKEN, self.product.token_envs())
         {
             return Ok(token);
@@ -871,12 +888,13 @@ impl KvProvider {
                     .map(|home| PathBuf::from(home).join(".vault-token"))
             });
 
-        if let Some(path) = token_path
-            && let Ok(token) = std::fs::read_to_string(&path)
-        {
-            let token = token.trim();
-            if !token.is_empty() {
-                return Ok(SecretBytes::from_utf8(token.to_string()));
+        if let Some(path) = token_path {
+            match crate::managed_io::read_to_string(&path, request) {
+                Ok(token) if !token.trim().is_empty() => {
+                    return Ok(SecretBytes::from_utf8(token.trim().to_string()));
+                }
+                Err(error) if error.is_resolution_terminal() => return Err(error),
+                _ => {}
             }
         }
 
@@ -1661,6 +1679,44 @@ mod tests {
 
     fn api_key_address() -> Address<'static> {
         Address::convention("project", "default", "API_KEY")
+    }
+
+    #[test]
+    fn managed_token_files_preserve_values_and_missing_token_diagnostics() {
+        let _lock = crate::tests::scrub_resolution_env();
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let empty = dir.path().join("empty");
+        let token = dir.path().join("token");
+        std::fs::write(&empty, " \n").unwrap();
+        std::fs::write(&token, " fixture-token\n").unwrap();
+        for path in [&missing, &empty, &token] {
+            let _vault = EnvVarGuard::set("VAULT_TOKEN_PATH", path.to_str().unwrap());
+            let _bao = EnvVarGuard::set("BAO_TOKEN_PATH", path.to_str().unwrap());
+            for product in [Product::Vault, Product::OpenBao] {
+                block_on(crate::request::run(
+                    &crate::CancellationHandle::new(),
+                    move |request| {
+                        let mut provider = KvProvider::new(KvConfig::default(), product);
+                        let legacy = provider.resolve_token_auth(None);
+                        let managed = provider
+                            .prepare_managed_token(&request)
+                            .and_then(|()| provider.resolve_token_auth(None));
+                        match (legacy, managed) {
+                            (Ok(legacy), Ok(managed)) => {
+                                assert_eq!(managed.expose_secret(), legacy.expose_secret());
+                            }
+                            (Err(legacy), Err(managed)) => {
+                                assert_eq!(managed.to_string(), legacy.to_string());
+                            }
+                            _ => panic!("managed token resolution changed the result"),
+                        }
+                        Ok(())
+                    },
+                ))
+                .unwrap();
+            }
+        }
     }
 
     fn approle_credentials() -> ProviderCredentials {

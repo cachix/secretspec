@@ -452,6 +452,7 @@ struct SyncToken {
 
 /// Azure App Configuration provider, available in SecretSpec 0.20+.
 pub struct AacProvider {
+    request: Option<crate::request::RequestContext>,
     retry_policy: super::RetryPolicy,
     config: AacConfig,
     credentials: ProviderCredentials,
@@ -475,6 +476,7 @@ crate::register_provider! {
 impl AacProvider {
     pub fn new(config: AacConfig) -> Self {
         Self {
+            request: None,
             config,
             credentials: ProviderCredentials::new(),
             retry_policy: super::RetryPolicy::default(),
@@ -510,8 +512,12 @@ impl AacProvider {
 
     fn resolve_auth(&self) -> Result<ResolvedAuth> {
         if let Some(method) = self.config.auth.entra_method() {
-            return super::akv::resolve_azure_credential(method, &self.credentials)
-                .map(ResolvedAuth::Entra);
+            return super::akv::resolve_azure_credential(
+                method,
+                &self.credentials,
+                self.request.as_ref(),
+            )
+            .map(ResolvedAuth::Entra);
         }
 
         let connection_string = credential_or_env(
@@ -634,10 +640,10 @@ impl AacProvider {
                     .get_token(&[scope.as_str()], None)
                     .await
                     .map_err(|error| {
-                        operation_error(format!(
-                            "failed to acquire Azure App Configuration token: {}",
-                            crate::error::display_error_chain(&error)
-                        ))
+                        super::azure_cancellation::operation_error(
+                            &error,
+                            "failed to acquire Azure App Configuration token",
+                        )
                     })?;
                 request.bearer_auth(token.token.secret())
             }
@@ -1421,9 +1427,11 @@ impl AacProvider {
             return Ok(Arc::clone(credential));
         }
         let credential = match self.config.key_vault_auth {
-            Some(KeyVaultAuth::Entra(auth)) => {
-                super::akv::resolve_azure_credential(auth, &self.credentials)?
-            }
+            Some(KeyVaultAuth::Entra(auth)) => super::akv::resolve_azure_credential(
+                auth,
+                &self.credentials,
+                self.request.as_ref(),
+            )?,
             Some(KeyVaultAuth::Inherit) | None => match self.auth()? {
                 ResolvedAuth::Entra(credential) => Arc::clone(credential),
                 ResolvedAuth::ConnectionString(_) => {
@@ -1495,6 +1503,9 @@ impl AacProvider {
         reference: &VaultReference,
     ) -> Result<SecretBytes> {
         self.resolve_vault_reference(reference).await.map_err(|error| {
+            if error.is_resolution_terminal() {
+                return error;
+            }
             operation_error(format!(
                 "failed to resolve Key Vault reference from Azure App Configuration key '{key}' through vault '{}': {error}",
                 reference.vault_host
@@ -1550,6 +1561,9 @@ impl AacProvider {
             get_each_concurrency(),
             |(reference, names, keys)| async {
                 let result = self.resolve_vault_reference(reference).await.map_err(|error| {
+                    if error.is_resolution_terminal() {
+                        return error;
+                    }
                     operation_error(format!(
                         "failed to resolve Key Vault reference for {} from Azure App Configuration key(s) {} through vault '{}': {error}",
                         names.join(", "),
@@ -2154,6 +2168,7 @@ mod tests {
     struct RecordingKeyVaultClient {
         paths: Mutex<Vec<String>>,
         value: String,
+        failure: Option<Arc<SecretSpecError>>,
     }
 
     impl RecordingKeyVaultClient {
@@ -2161,6 +2176,7 @@ mod tests {
             Arc::new(Self {
                 paths: Mutex::new(Vec::new()),
                 value: value.to_string(),
+                failure: None,
             })
         }
     }
@@ -2176,6 +2192,16 @@ mod tests {
             Self: 'async_trait,
         {
             self.paths.lock().unwrap().push(request.url().path().into());
+            if let Some(error) = &self.failure {
+                let error = Arc::clone(error);
+                return Box::pin(async move {
+                    Err(azure_core::Error::with_error(
+                        azure_core::error::ErrorKind::Credential,
+                        error,
+                        "fixture authentication failed",
+                    ))
+                });
+            }
             let body = json!({"value": self.value}).to_string();
             Box::pin(async move {
                 Ok(AsyncRawResponse::from_bytes(
@@ -3047,6 +3073,48 @@ mod tests {
     }
 
     #[test]
+    fn key_vault_terminal_errors_survive_single_and_batch_reads() {
+        for batch in [false, true] {
+            let fixture = HttpFixture::start(|_| {
+                vec![
+                    StubResponse::json(
+                        200,
+                        key_vault_value("https://shared.vault.azure.net/secrets/api-key"),
+                    )
+                    .with_request_key(),
+                ]
+            });
+            let provider = fixture_provider(&fixture.endpoint, "aac://shared");
+            let transport = Arc::new(RecordingKeyVaultClient {
+                paths: Mutex::new(Vec::new()),
+                value: String::new(),
+                failure: Some(Arc::new(crate::request::unsupported(
+                    "fixture token source",
+                ))),
+            });
+            provider.vaults.lock().unwrap().insert(
+                "shared.vault.azure.net".to_string(),
+                key_vault_provider("shared.vault.azure.net", transport),
+            );
+            let address = NativeAddress {
+                item: "key".into(),
+                ..Default::default()
+            };
+            let result = if batch {
+                provider
+                    .get_many(&[("VALUE", Address::Native(&address))])
+                    .map(|_| ())
+            } else {
+                provider.get(Address::Native(&address)).map(|_| ())
+            };
+            let error = result.unwrap_err();
+            assert_eq!(error.kind(), "cancellation_unsupported", "{error}");
+            assert!(error.is_resolution_terminal());
+            assert_eq!(fixture.finish().len(), 1);
+        }
+    }
+
+    #[test]
     fn get_many_reference_failure_names_every_affected_declaration() {
         let fixture = HttpFixture::start(|_| {
             let record = key_vault_value("https://shared.vault.azure.net/secrets/api-key");
@@ -3450,3 +3518,13 @@ mod tests {
         assert!(error.to_string().contains("nested"), "{error}");
     }
 }
+
+super::managed_read::register!(["aac"], |url, credentials, request| {
+    let mut provider = AacProvider::new(AacConfig::try_from(url)?);
+    super::ProviderBase::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(Box::new(super::SyncProviderAdapter::for_request(
+        provider,
+        request.clone(),
+    )))
+});

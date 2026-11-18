@@ -59,6 +59,10 @@ struct Options {
     #[serde(default)]
     no_values: bool,
     #[serde(default)]
+    read_only: bool,
+    #[serde(default)]
+    no_files: bool,
+    #[serde(default)]
     mode: Mode,
 }
 
@@ -444,6 +448,12 @@ enum Source {
 }
 
 fn apply_options(mut app: Secrets, options: Options) -> serde_json::Value {
+    if options.read_only {
+        app.refuse_produced_writes();
+    }
+    if options.no_files {
+        app.refuse_file_values();
+    }
     if let Some(provider) = options.provider {
         app.set_provider(provider);
     }
@@ -475,7 +485,10 @@ fn apply_options(mut app: Secrets, options: Options) -> serde_json::Value {
     }
 }
 
-fn dispatch(request_json: &str) -> serde_json::Value {
+fn dispatch(
+    request_json: &str,
+    context: Option<&crate::request::RequestContext>,
+) -> serde_json::Value {
     let request: CallRequest = match serde_json::from_str(request_json) {
         Ok(request) => request,
         Err(error) => {
@@ -489,6 +502,17 @@ fn dispatch(request_json: &str) -> serde_json::Value {
                 "unsupported request_version {}; expected {}",
                 request.request_version, NATIVE_CALL_REQUEST_VERSION
             ),
+        );
+    }
+    if context.is_some()
+        && !matches!(
+            (&request.operation, request.options.mode),
+            (Operation::Resolve, Mode::Resolve)
+        )
+    {
+        return error_envelope(
+            "cancellation_unsupported",
+            "cancellable calls require operation and mode to be 'resolve'",
         );
     }
     match request.operation {
@@ -534,8 +558,16 @@ fn dispatch(request_json: &str) -> serde_json::Value {
         Err(error) => return error_envelope("invalid_request", error),
     };
     let loaded = match source {
-        Source::Search => Secrets::load(),
-        Source::Path(path) => Secrets::load_from(PathBuf::from(path).as_path()),
+        Source::Search => match context {
+            Some(context) => Secrets::load_for_request(None, context),
+            None => Secrets::load(),
+        },
+        Source::Path(path) => match context {
+            Some(context) => {
+                Secrets::load_for_request(Some(PathBuf::from(path).as_path()), context)
+            }
+            None => Secrets::load_from(PathBuf::from(path).as_path()),
+        },
         Source::Inline {
             version,
             base_dir,
@@ -560,10 +592,13 @@ fn dispatch(request_json: &str) -> serde_json::Value {
                 Ok(config) => config,
                 Err(error) => return error_envelope("invalid_request", error),
             };
-            Config::from_root_in(config, &base_dir)
+            Config::from_root_with_request(config, &base_dir, context)
                 .map_err(Into::into)
                 .and_then(Spec::from_config_document)
-                .and_then(|spec| Secrets::from_spec_at(spec, base_dir))
+                .and_then(|spec| match context {
+                    Some(context) => Secrets::from_spec_for_request(spec, base_dir, context),
+                    None => Secrets::from_spec_at(spec, base_dir),
+                })
         }
     };
     match loaded {
@@ -578,12 +613,42 @@ fn dispatch(request_json: &str) -> serde_json::Value {
 /// different entry point from [`crate::resolve_json`] so inline declarations
 /// cannot be ignored by an older runtime.
 pub fn call_json(request_json: &str) -> String {
-    let envelope =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dispatch(request_json)))
-            .unwrap_or_else(|_| error_envelope("internal", "internal panic during native call"));
+    let envelope = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        dispatch(request_json, None)
+    }))
+    .unwrap_or_else(|_| error_envelope("internal", "internal panic during native call"));
     serde_json::to_string(&envelope).unwrap_or_else(|_| {
         "{\"ok\":false,\"error\":{\"kind\":\"serialize\",\"message\":\"failed to serialize response\"}}".to_string()
     })
+}
+
+/// Execute a native resolve request with cancellation (0.22+).
+///
+/// Manifest loading, provider work, conversion and cleanup belong to the same
+/// request. The synchronous boundary waits until that request has finished.
+pub fn call_json_with_cancel(
+    request_json: &str,
+    cancellation: &crate::CancellationHandle,
+) -> String {
+    let request_json = request_json.to_owned();
+    let result = crate::provider::block_on(crate::request::run(cancellation, move |context| {
+        context.checkpoint()?;
+        let envelope = dispatch(&request_json, Some(&context));
+        context.checkpoint()?;
+        serde_json::to_string(&envelope).map_err(Into::into)
+    }));
+    match result {
+        Ok(json) => json,
+        Err(error) => {
+            let mut envelope =
+                error_envelope(error.kind(), crate::error::display_error_chain(&error));
+            envelope["error"]["cancelled"] = serde_json::json!(error.is_cancelled());
+            if let crate::SecretSpecError::CleanupFailed { phase, .. } = error {
+                envelope["error"]["cleanup_phase"] = serde_json::json!(phase);
+            }
+            envelope.to_string()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -671,6 +736,54 @@ mod tests {
 
     fn call(request: &str) -> serde_json::Value {
         serde_json::from_str(&call_json(request)).unwrap()
+    }
+
+    #[test]
+    fn cancellable_calls_only_dispatch_secret_resolution() {
+        use serde_json::{Value, json};
+
+        let dir = tempfile::tempdir().unwrap();
+        let resolved = call(&inline_request(
+            2,
+            dir.path(),
+            json!({
+                "project": { "name": "native-file" },
+                "providers": { "empty": "null://" },
+                "defaults": { "providers": ["empty"] },
+                "profiles": { "default": { "secrets": {
+                    "KEY": { "description": "file", "as_path": true, "default": "fixture" }
+                }}}
+            }),
+        ));
+        assert_eq!(resolved["ok"], true, "{resolved}");
+        let result = &resolved["response"];
+        let id = result["file_lease_id"].as_str().expect("live file lease");
+        let path = result["secrets"]["KEY"]["path"].as_str().unwrap();
+        let read = json!({"request_version": 1, "operation": "read_file",
+            "source": {"lease_id": id, "path": path}});
+        let release = json!({"request_version": 1, "operation": "release_files",
+            "source": {"lease_id": id}});
+        let report = json!({"request_version": 1, "operation": "resolve", "options": {"mode": "report"},
+            "source": {"kind": "path", "path": dir.path().join("missing.toml")}});
+
+        let responses = [&read, &release, &report].map(|request| {
+            let json =
+                call_json_with_cancel(&request.to_string(), &crate::CancellationHandle::new());
+            serde_json::from_str::<Value>(&json).unwrap()
+        });
+        let contents = call(&read.to_string());
+        let released = call(&release.to_string());
+        for response in responses {
+            assert_eq!(
+                response["error"]["kind"], "cancellation_unsupported",
+                "{response}"
+            );
+        }
+        assert_eq!(
+            contents["response"]["base64"],
+            data_encoding::BASE64.encode(b"fixture")
+        );
+        assert_eq!(released["response"]["released"], 1);
     }
 
     #[test]

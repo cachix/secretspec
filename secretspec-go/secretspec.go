@@ -35,6 +35,10 @@ const resolveSchemaVersion = 2
 type Error struct {
 	Kind    string
 	Message string
+	// Cancelled reports whether native cancellation was accepted (0.22+).
+	Cancelled bool
+	// CleanupPhase identifies unfinished cleanup for cleanup_failed errors (0.22+).
+	CleanupPhase string
 }
 
 func (e *Error) Error() string {
@@ -228,6 +232,12 @@ func (b *Builder) WithCaller(caller CallerContext) *Builder {
 }
 func (b *Builder) WithNoValues(v bool) *Builder { return b.set("no_values", v) }
 
+// WithReadOnly refuses generated/prompted values that would be stored (0.22+).
+func (b *Builder) WithReadOnly(v bool) *Builder { return b.set("read_only", v) }
+
+// WithNoFiles rejects as_path declarations, including hidden dependencies (0.22+).
+func (b *Builder) WithNoFiles(v bool) *Builder { return b.set("no_files", v) }
+
 // WithInlineSpec resolves a strict, versioned inline declaration instead of a
 // filesystem manifest. `spec` is serialized as the native inline-spec v2 (0.21+)
 // document (project/profiles/secrets); `baseDir` resolves relative provider
@@ -252,8 +262,10 @@ type envelope[R any] struct {
 }
 
 type errorJSON struct {
-	Kind    string `json:"kind"`
-	Message string `json:"message"`
+	Kind         string `json:"kind"`
+	Message      string `json:"message"`
+	Cancelled    bool   `json:"cancelled"`
+	CleanupPhase string `json:"cleanup_phase"`
 }
 
 type secretJSON struct {
@@ -285,11 +297,13 @@ func parseEnvelope[R any](raw, kind string, expected int, schemaOf func(*R) int)
 		return nil, err
 	}
 	if !env.OK {
-		errKind, message := "unknown", ""
-		if env.Error != nil {
-			errKind, message = env.Error.Kind, env.Error.Message
+		if env.Error == nil {
+			return nil, &Error{Kind: "unknown"}
 		}
-		return nil, &Error{Kind: errKind, Message: message}
+		return nil, &Error{
+			Kind: env.Error.Kind, Message: env.Error.Message,
+			Cancelled: env.Error.Cancelled, CleanupPhase: env.Error.CleanupPhase,
+		}
 	}
 	if env.Response == nil {
 		return nil, &Error{Kind: "ffi", Message: "secretspec_resolve reported ok with no response"}
@@ -316,7 +330,10 @@ func (b *Builder) Load() (*Resolved, error) {
 	if err != nil {
 		return nil, err
 	}
+	return decodeResolved(raw)
+}
 
+func decodeResolved(raw string) (*Resolved, error) {
 	resp, err := parseEnvelope(raw, "resolve", resolveSchemaVersion, func(r *responseJSON) int { return r.SchemaVersion })
 	if err != nil {
 		return nil, err
@@ -425,16 +442,18 @@ func (b *Builder) execute(mode string) (string, error) {
 	if b.req == nil {
 		b.req = map[string]any{}
 	}
-	options := make(map[string]any, len(b.req)+1)
-	for k, v := range b.req {
-		options[k] = v
-	}
-	if mode != "" {
-		options["mode"] = mode
-	}
-	if b.inline == nil {
+	_, readOnly := b.req["read_only"]
+	_, noFiles := b.req["no_files"]
+	if b.inline == nil && !readOnly && !noFiles {
 		if err := ensureLoaded(); err != nil {
 			return "", err
+		}
+		options := make(map[string]any, len(b.req)+1)
+		for k, v := range b.req {
+			options[k] = v
+		}
+		if mode != "" {
+			options["mode"] = mode
 		}
 		payload, err := json.Marshal(options)
 		if err != nil {
@@ -445,17 +464,9 @@ func (b *Builder) execute(mode string) (string, error) {
 	if err := ensureCallLoaded(); err != nil {
 		return "", err
 	}
-	payload, err := json.Marshal(map[string]any{
-		"request_version": 1,
-		"operation":       "resolve",
-		"source": map[string]any{
-			"kind": "inline", "spec_version": 2,
-			"base_dir": b.inline.baseDir, "spec": b.inline.spec,
-		},
-		"options": options,
-	})
+	payload, err := b.callPayload(mode)
 	if err != nil {
 		return "", err
 	}
-	return nativeCall(string(payload))
+	return nativeCall(payload)
 }

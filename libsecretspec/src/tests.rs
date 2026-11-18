@@ -9,6 +9,34 @@ use crate::{secretspec_abi_version, secretspec_call, secretspec_free, secretspec
 use serde_json::Value;
 use tempfile::TempDir;
 
+#[test]
+fn cancellation_handle_pre_cancel_null_and_reuse() {
+    unsafe {
+        crate::secretspec_cancel(std::ptr::null());
+        crate::secretspec_cancel_free(std::ptr::null_mut());
+        let handle = crate::secretspec_cancel_new();
+        assert!(!handle.is_null());
+        crate::secretspec_cancel(handle);
+        crate::secretspec_cancel(handle);
+        let request = CString::new(r#"{"request_version":1,"operation":"resolve","source":{"kind":"path","path":"/must-not-be-opened"}}"#).unwrap();
+        let response = crate::secretspec_call_with_cancel(request.as_ptr(), handle);
+        let value: Value = serde_json::from_slice(CStr::from_ptr(response).to_bytes()).unwrap();
+        assert_eq!(value["error"]["kind"], "cancelled");
+        assert_eq!(value["error"]["cancelled"], true);
+        secretspec_free(response);
+        let response = crate::secretspec_call_with_cancel(request.as_ptr(), handle);
+        let value: Value = serde_json::from_slice(CStr::from_ptr(response).to_bytes()).unwrap();
+        assert_eq!(value["error"]["kind"], "cancellation_handle_used");
+        crate::secretspec_cancel_free(handle);
+        // Response memory remains independent after its handle is gone.
+        secretspec_free(response);
+        let response = crate::secretspec_call_with_cancel(request.as_ptr(), std::ptr::null());
+        let value: Value = serde_json::from_slice(CStr::from_ptr(response).to_bytes()).unwrap();
+        assert_eq!(value["error"]["kind"], "invalid_input");
+        secretspec_free(response);
+    }
+}
+
 /// Call the C ABI with a Rust string request and return the parsed JSON
 /// envelope, freeing the native allocation.
 fn resolve(request: &str) -> Value {

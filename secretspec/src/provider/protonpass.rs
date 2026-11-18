@@ -1,4 +1,9 @@
+const CLI_NOT_INSTALLED_HELP: &str = "Proton Pass CLI (pass-cli) is not installed.\n\n\
+                         Download it from: https://proton.me/pass/download\n\n\
+                         After installation, run 'pass-cli login' to authenticate.";
+
 use crate::SecretBytes;
+use crate::command::CommandOutput as _;
 use crate::provider::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use serde::{Deserialize, Serialize};
@@ -181,6 +186,7 @@ impl TryFrom<&ProviderUrl> for ProtonPassConfig {
 /// Vault: configured in the URI (defaults to "secretspec", must be created prior to usage).
 /// Item title: `{project}/{profile}/{key}` by default, customizable via the URI path.
 pub struct ProtonPassProvider {
+    request: Option<crate::request::RequestContext>,
     config: ProtonPassConfig,
     /// Path to `pass-cli` binary.
     /// Override with the `SECRETSPEC_PROTONPASS_CLI_PATH` environment variable.
@@ -210,6 +216,7 @@ impl ProtonPassProvider {
         let cli_binary_path = std::env::var("SECRETSPEC_PROTONPASS_CLI_PATH")
             .unwrap_or_else(|_| "pass-cli".to_string());
         Self {
+            request: None,
             config,
             cli_binary_path,
             session_reason: Mutex::new(None),
@@ -342,19 +349,35 @@ impl ProtonPassProvider {
     }
 
     fn run_pass_cli(&self, args: &[&str], stdin: Option<&str>) -> Result<String> {
+        if let Some(request) = &self.request {
+            request.checkpoint()?;
+        }
         let mut cmd = Self::pass_cli_command(&self.cli_binary_path, &self.agent_reason());
         cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        let output = if let Some(data) = stdin {
+        let output = if let Some(request) = &self.request {
+            crate::command::output(
+                &mut cmd,
+                stdin.map(|data| secrecy::zeroize::Zeroizing::new(data.as_bytes().to_vec())),
+                usize::MAX,
+                None,
+                Some(request),
+                true,
+            )
+            .map_err(|error| match error {
+                SecretSpecError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    SecretSpecError::ProviderOperationFailed(CLI_NOT_INSTALLED_HELP.into())
+                }
+                error => error,
+            })?
+            .into_std()
+        } else if let Some(data) = stdin {
             cmd.stdin(Stdio::piped());
             let mut child = match cmd.spawn() {
                 Ok(child) => child,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {
                     return Err(SecretSpecError::ProviderOperationFailed(
-                        "Proton Pass CLI (pass-cli) is not installed.\n\n\
-                         Download it from: https://proton.me/pass/download\n\n\
-                         After installation, run 'pass-cli login' to authenticate."
-                            .to_string(),
+                        CLI_NOT_INSTALLED_HELP.to_string(),
                     ));
                 }
                 Err(e) => return Err(e.into()),
@@ -370,10 +393,7 @@ impl ProtonPassProvider {
                 Ok(output) => output,
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {
                     return Err(SecretSpecError::ProviderOperationFailed(
-                        "Proton Pass CLI (pass-cli) is not installed.\n\n\
-                         Download it from: https://proton.me/pass/download\n\n\
-                         After installation, run 'pass-cli login' to authenticate."
-                            .to_string(),
+                        CLI_NOT_INSTALLED_HELP.to_string(),
                     ));
                 }
                 Err(e) => return Err(e.into()),
@@ -563,8 +583,6 @@ impl Provider for ProtonPassProvider {
     /// Serves every request, convention or `ref`, from one vault listing plus
     /// parallel `item view` calls for the titles that exist.
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
-        use std::thread;
-
         if requests.is_empty() {
             return Ok(HashMap::new());
         }
@@ -598,49 +616,55 @@ impl Provider for ProtonPassProvider {
             })
             .collect();
 
-        let cli_command = self.cli_binary_path.clone();
         let reason = self.agent_reason();
-
-        let handles: Vec<_> = keys_to_fetch
-            .into_iter()
-            .map(|(key, share_id, id, field)| {
-                let cmd = cli_command.clone();
-                let reason = reason.clone();
-                let key_owned = key.to_string();
-                thread::spawn(move || {
-                    let mut command = Self::pass_cli_command(&cmd, &reason);
-                    command.args(["item", "view", "--share-id", &share_id, "--item-id", &id]);
-                    match &field {
+        let fetched = super::map_concurrently(
+            &keys_to_fetch,
+            super::get_each_concurrency(),
+            |(key, share_id, id, field)| {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut command = Self::pass_cli_command(&self.cli_binary_path, &reason);
+                    command.args(["item", "view", "--share-id", share_id, "--item-id", id]);
+                    match field {
                         Some(field) => command.args(["--field", field]),
                         None => command.args(["--output", "json"]),
                     };
-                    match command.output() {
+                    match command.output_for(self.request.as_ref()) {
                         Ok(output) if output.status.success() => {
                             let stdout = String::from_utf8_lossy(&output.stdout);
                             if field.is_some() {
-                                return Self::parse_field_output(&stdout)
-                                    .map(|value| (key_owned, value));
+                                return Ok(Self::parse_field_output(&stdout)
+                                    .map(|value| ((*key).to_string(), value)));
                             }
                             if let Ok(res) = serde_json::from_str::<ProtonPassViewResponse>(&stdout)
                                 && let Some(note) = res.item.content.note.filter(|n| !n.is_empty())
                             {
-                                return Some((key_owned, SecretBytes::from_utf8(note)));
+                                return Ok(Some((
+                                    (*key).to_string(),
+                                    SecretBytes::from_utf8(note),
+                                )));
                             }
-                            None
+                            Ok(None)
                         }
-                        _ => None,
+                        Err(error) if error.is_resolution_terminal() => Err(error),
+                        _ => Ok(None),
+                    }
+                }))
+                .unwrap_or_else(|_| {
+                    if self.request.is_some() {
+                        Err(SecretSpecError::ResolutionPanicked)
+                    } else {
+                        Ok(None)
                     }
                 })
-            })
-            .collect();
-
+            },
+        );
+        // The shared batch helper has joined every worker before errors propagate.
         let mut results = HashMap::new();
-        for handle in handles {
-            if let Ok(Some((key, value))) = handle.join() {
+        for result in fetched {
+            if let Some((key, value)) = result? {
                 results.insert(key, value);
             }
         }
-
         Ok(results)
     }
 }
@@ -722,6 +746,7 @@ mod tests {
     #[cfg(unix)]
     fn provider_using_cli(cli: &std::path::Path) -> ProtonPassProvider {
         ProtonPassProvider {
+            request: None,
             config: ProtonPassConfig::default(),
             cli_binary_path: cli.to_string_lossy().into_owned(),
             session_reason: Mutex::new(None),
@@ -1037,3 +1062,14 @@ mod tests {
         );
     }
 }
+
+super::managed_read::register!(["protonpass"], |url, credentials, request| {
+    let mut provider = ProtonPassProvider::new(ProtonPassConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(super::managed_read::preflight(
+        provider,
+        request,
+        ProtonPassProvider::test_authentication,
+    ))
+});

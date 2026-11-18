@@ -112,7 +112,8 @@ mod preflight;
 mod registry;
 mod retry;
 pub use retry::{RetryOperation, RetryOwnership, RetryPolicy, RetryingProvider};
-mod runtime;
+pub(crate) mod managed_read;
+pub(crate) mod runtime;
 mod traits;
 mod url;
 
@@ -172,7 +173,8 @@ pub(crate) use preflight::ProviderWithPreflight;
 pub(crate) use registry::spec_provider_reads;
 pub(crate) use registry::{
     credential_names_for_spec, deleting_provider_names, provider_display_name_for_spec,
-    spec_names_known_provider, spec_uses_dynamic_credentials, static_delete_capability,
+    spec_names_builtin_provider, spec_names_known_provider, spec_uses_dynamic_credentials,
+    static_delete_capability,
 };
 pub(crate) use runtime::block_on;
 #[cfg(test)]
@@ -195,10 +197,14 @@ pub mod akv;
 pub mod awsps;
 #[cfg(feature = "awssm")]
 pub mod awssm;
+#[cfg(feature = "akv")]
+mod azure_cancellation;
 #[cfg(feature = "bw")]
 pub mod bw;
 #[cfg(feature = "bws")]
 pub mod bws;
+#[cfg(all(test, unix))]
+mod cancellation_tests;
 #[cfg(feature = "cloudflare")]
 pub mod cloudflare;
 pub mod dashlane;

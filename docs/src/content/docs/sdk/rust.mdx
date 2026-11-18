@@ -42,8 +42,7 @@ secretspec = "0.20"
 secretspec-derive = "0.20"
 ```
 
-
-The examples on this page are compiled as Cargo examples in
+The derive examples on this page are compiled as Cargo examples in
 `secretspec-derive`. They generate their types from this manifest:
 
 <Code code={exampleManifest} lang="toml" meta='title="secretspec.toml"' />
@@ -57,6 +56,81 @@ use with any declared profile:
 Required and defaulted secrets are generated as `String`; secrets that may be
 absent are `Option<String>`. Field names use Rust snake case, so `DATABASE_URL`
 becomes `database_url`.
+
+## Cancellable resolution
+
+<VersionCompatibility version="0.22" />
+
+`Secrets::resolve_cancellable(&CancellationHandle)` and
+`resolve_bytes_cancellable(&CancellationHandle)` are async alternatives to
+`resolve` and `resolve_bytes`. Create a fresh handle for each call. Another
+task can cancel through a clone. To request cancellation at a deadline, keep
+the resolution future alive and await it again after the timer expires.
+
+```rust
+use secretspec::CancellationHandle;
+use std::time::Duration;
+
+let cancellation = CancellationHandle::new();
+let mut resolution = std::pin::pin!(secrets.resolve_cancellable(&cancellation));
+let response = match tokio::time::timeout(Duration::from_secs(10), &mut resolution).await {
+    Ok(result) => result?,
+    Err(_) => {
+        cancellation.cancel();
+        resolution.await?
+    }
+};
+```
+
+Cancellation stops further resolution work at cancellation checkpoints.
+A synchronous operation or future poll already admitted may finish.
+The call returns after owned work has stopped or completed, including transport
+tasks, DNS workers, child processes and pipe workers. A result committed before
+cancellation remains successful. Dropping the Rust future requests cancellation
+but cannot synchronously wait for cleanup; await it to observe completion.
+
+| Read path | Cancellation behavior |
+| --- | --- |
+| `env`, `null` | Check between reads and before publishing the result |
+| `dotenv`, `file`, `systemd-credential` | Regular files only; check between read chunks |
+| `age` with native identities | Manage file reads and wait for started decryption |
+| `kdbx` | Interrupt lock waits and file reads; wait for started KDF/decryption |
+| `ejson`, `sops`, `lastpass`, `pass`, `gopass`, `dashlane`, `passbolt`, `onepassword` (including `onepassword+token`), `bw`, `bws`, `protonpass` | Stop the owned process group/Windows Job and join the child and pipe workers, including authentication and batch reads |
+| `keeper` | Cancel SDK HTTP and throttle waits; join the SDK worker |
+| `akv`, `aac` | Cancel SDK/HTTP work, supervise Azure CLI authentication, and join workload identity token-file reads |
+| `setec`, `doppler`, `scaleway`, `infisical`, `vault`, `openbao` | Cancel HTTP/authentication/retry work and shut down the request's transport runtime |
+
+SOPS decrypts inside the supervised process and supports its existing key
+services, including age and AWS KMS.
+
+Azure supports service principal, CLI, managed identity and workload identity
+authentication. App Configuration also supports connection strings and Key
+Vault references. Keeper supports file and in-memory configuration and SDK
+token binding. The call waits for synchronous SDK work to finish. Completed
+binding and configuration writes persist after cancellation.
+
+Credential sources must also use a supported path. Unused fallback entries are
+not constructed. All other providers, including external IPC providers and
+`keyring`, return `cancellation_unsupported` before construction or discovery.
+Age plugin identities are rejected before starting a plugin. Existing synchronous
+APIs retain their provider coverage.
+
+The initial cancellable API rejects cached routes, `as_path` materialization,
+registered typed decoding/projection, persistent generation and prompts.
+Nonpersistent command, password, passphrase, mnemonic, hex, base64, UUID and
+WireGuard key generation are supported. A stored value can still be read when
+its configured generator is unsupported.
+
+A deadline requests cancellation; it does not bound the duration of OS calls,
+synchronous cryptography or cleanup. In particular, cancellation cannot interrupt
+an already-running KDBX KDF. It also cannot roll back work accepted by a remote
+service or undo command side effects. Commands must keep descendants in their
+owned process group/Job; detached daemons and WSL Windows executables are outside
+this contract. For 1Password on WSL, select a native Linux `op` through
+`SECRETSPEC_OPCLI_PATH`; the default Windows `op.exe` is rejected by this API.
+Existing credential-agent and desktop-app services are not owned by the request.
+A cleanup failure is reported as `cleanup_failed`, rather than
+claiming that all work stopped.
 
 ## Describing secrets in Rust {/* #describing-secrets-in-rust-020 */}
 

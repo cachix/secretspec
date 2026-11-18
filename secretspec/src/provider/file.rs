@@ -77,6 +77,7 @@ impl TryFrom<&ProviderUrl> for FileConfig {
 /// secrets without allowing the address to escape the store.
 pub struct FileProvider {
     config: FileConfig,
+    request: Option<crate::request::RequestContext>,
 }
 
 crate::register_provider! {
@@ -92,7 +93,10 @@ crate::register_provider! {
 impl FileProvider {
     pub fn new(mut config: FileConfig) -> Self {
         config.directory = expand_tilde(config.directory);
-        Self { config }
+        Self {
+            config,
+            request: None,
+        }
     }
 
     fn operation_error(message: impl Into<String>) -> SecretSpecError {
@@ -285,7 +289,10 @@ impl Provider for FileProvider {
             return Ok(None);
         }
 
-        let value = fs::read(&path).map_err(|error| {
+        let value = crate::managed_io::read(&path, self.request.as_ref()).map_err(|error| {
+            if error.is_resolution_terminal() {
+                return error;
+            }
             Self::operation_error(format!(
                 "failed to read file provider entry '{}': {error}",
                 path.display()
@@ -674,3 +681,11 @@ mod tests {
         assert_eq!(reparsed.uri(), provider.uri());
     }
 }
+
+// Cancellable reads (0.22+). The factory runs on the request's joined worker.
+super::managed_read::register!(["file"], |url, credentials, request| {
+    let mut provider = FileProvider::new(FileConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(Box::new(provider))
+});

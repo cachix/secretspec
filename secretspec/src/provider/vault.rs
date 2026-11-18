@@ -278,3 +278,15 @@ mod tests {
         assert!(error.to_string().contains("`version`"), "{error}");
     }
 }
+
+// No SDK-owned threads or processes: all transport/auth work stays on the
+// request runtime and its shutdown joins dependency tasks (0.22+).
+super::managed_read::register!(["vault"], |url, credentials, request| {
+    let mut provider = VaultProvider::new(VaultConfig::try_from(url)?);
+    super::ProviderBase::with_credentials(&mut provider, credentials);
+    provider.core.prepare_managed_token(request)?;
+    Ok(Box::new(super::SyncProviderAdapter::for_request(
+        provider,
+        request.clone(),
+    )))
+});

@@ -85,6 +85,8 @@ pub(super) struct PreflightGuard {
     preflight: Option<Box<dyn Fn() -> Result<()> + Send + Sync>>,
     result: AuthCheckCache<(), Arc<SecretSpecError>>,
     policy: super::RetryPolicy,
+    request: Option<crate::request::RequestContext>,
+    managed_ready: Mutex<bool>,
 }
 
 impl PreflightGuard {
@@ -94,13 +96,34 @@ impl PreflightGuard {
             preflight: pwp.preflight,
             result: AuthCheckCache::default(),
             policy: super::RetryPolicy::default(),
+            request: None,
+            managed_ready: Mutex::new(false),
         }
+    }
+
+    pub(super) fn for_request(
+        pwp: ProviderWithPreflight,
+        request: crate::request::RequestContext,
+    ) -> Self {
+        let mut guard = Self::new(pwp);
+        guard.request = Some(request);
+        guard
     }
 
     fn check(&self) -> Result<()> {
         let Some(f) = &self.preflight else {
             return Ok(());
         };
+        if let Some(request) = &self.request {
+            // A cancelled request must never wait on, or poison, another request's probe.
+            let mut ready = crate::managed_io::lock(&self.managed_ready, Some(request))?;
+            if !*ready {
+                self.policy
+                    .run_cancellable(self.inner.name(), Some(request), f)?;
+                *ready = true;
+            }
+            return Ok(());
+        }
         let probe = || self.policy.run(self.inner.name(), f).map_err(Arc::new);
         let result = if let Some(scope) = self.inner.auth_scope_key() {
             PREFLIGHT_AUTH_CACHE.check((self.inner.name().to_string(), scope), probe)
@@ -359,6 +382,10 @@ mod tests {
             "profile-recording://".to_string()
         }
 
+        fn auth_scope_key(&self) -> Option<String> {
+            Some("preflight-cancellation-test".into())
+        }
+
         fn set_profile(&self, profile: &str) {
             *self.profile.lock().unwrap() = Some(profile.to_string());
         }
@@ -376,6 +403,62 @@ mod tests {
             assert_eq!(result, Ok(()));
         }
         assert_eq!(probes.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn managed_probes_do_not_wait_for_other_requests() {
+        use std::time::Duration;
+        let (started, start) = tokio::sync::oneshot::channel();
+        let handle = crate::CancellationHandle::new();
+        let cancel = handle.clone();
+        let task = tokio::spawn(async move {
+            crate::request::run(&handle, move |request| {
+                let started = Mutex::new(Some(started));
+                let probe_request = request.clone();
+                let guard = PreflightGuard::for_request(
+                    ProviderWithPreflight {
+                        provider: Box::new(ProfileRecordingProvider {
+                            profile: Arc::new(Mutex::new(None)),
+                        }),
+                        preflight: Some(Box::new(move || {
+                            if let Some(started) = started.lock().unwrap().take() {
+                                started.send(()).unwrap();
+                            }
+                            probe_request.wait(Duration::from_secs(30))
+                        })),
+                    },
+                    request,
+                );
+                guard.check()
+            })
+            .await
+        });
+        start.await.unwrap();
+        let second_handle = crate::CancellationHandle::new();
+        let second = crate::request::run(&second_handle, |request| {
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = Arc::clone(&calls);
+            let guard = PreflightGuard::for_request(
+                ProviderWithPreflight {
+                    provider: Box::new(ProfileRecordingProvider {
+                        profile: Arc::new(Mutex::new(None)),
+                    }),
+                    preflight: Some(Box::new(move || {
+                        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(())
+                    })),
+                },
+                request,
+            );
+            guard.check()?;
+            guard.check()?;
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+            Ok(())
+        });
+        let result = tokio::time::timeout(Duration::from_secs(2), second).await;
+        cancel.cancel();
+        result.unwrap().unwrap();
+        assert_eq!(task.await.unwrap().unwrap_err().kind(), "cancelled");
     }
 
     #[test]

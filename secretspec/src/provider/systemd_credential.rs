@@ -60,6 +60,7 @@ impl TryFrom<&ProviderUrl> for SystemdCredentialConfig {
 /// directory is owned and populated by the service manager.
 pub struct SystemdCredentialProvider {
     credentials_directory: Option<PathBuf>,
+    request: Option<crate::request::RequestContext>,
 }
 
 crate::register_provider! {
@@ -75,6 +76,7 @@ impl SystemdCredentialProvider {
     pub fn new(_config: SystemdCredentialConfig) -> Self {
         Self {
             credentials_directory: std::env::var_os(CREDENTIALS_DIRECTORY_ENV).map(PathBuf::from),
+            request: None,
         }
     }
 
@@ -82,6 +84,7 @@ impl SystemdCredentialProvider {
     fn with_directory(credentials_directory: Option<PathBuf>) -> Self {
         Self {
             credentials_directory,
+            request: None,
         }
     }
 
@@ -160,7 +163,10 @@ impl Provider for SystemdCredentialProvider {
             )));
         }
 
-        let value = fs::read(&path).map_err(|error| {
+        let value = crate::managed_io::read(&path, self.request.as_ref()).map_err(|error| {
+            if error.is_resolution_terminal() {
+                return error;
+            }
             SecretSpecError::ProviderOperationFailed(format!(
                 "failed to read systemd credential '{}': {error}",
                 path.display()
@@ -367,3 +373,11 @@ mod tests {
         }
     }
 }
+
+// Cancellable reads (0.22+). The factory runs on the request's joined worker.
+super::managed_read::register!(["systemd-credential"], |url, credentials, request| {
+    let mut provider = SystemdCredentialProvider::new(SystemdCredentialConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(Box::new(provider))
+});

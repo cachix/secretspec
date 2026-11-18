@@ -163,6 +163,7 @@ impl TryFrom<&ProviderUrl> for AgeConfig {
 pub struct AgeProvider {
     config: AgeConfig,
     credentials: ProviderCredentials,
+    request: Option<crate::request::RequestContext>,
 }
 
 crate::register_provider! {
@@ -172,16 +173,33 @@ crate::register_provider! {
 }
 
 impl AgeProvider {
+    fn check_managed_identity(&self, data: &[u8]) -> Result<()> {
+        if let Some(request) = &self.request {
+            request.checkpoint()?;
+            // age-core discards plugin Child handles. Reject before converting
+            // IdentityFile into plugin identities, which may launch a process.
+            if std::str::from_utf8(data).is_ok_and(|text| {
+                text.lines()
+                    .any(|line| line.trim().starts_with("AGE-PLUGIN-"))
+            }) {
+                return Err(crate::request::unsupported("age plugin identities"));
+            }
+        }
+        Ok(())
+    }
+
     pub fn new(config: AgeConfig) -> Self {
         Self {
             config,
             credentials: ProviderCredentials::new(),
+            request: None,
         }
     }
 
     /// Parses the configured identity from credential, env, or path.
     fn identity(&self) -> Result<ParsedIdentity> {
         if let Some(material) = credential_or_env(&self.credentials, IDENTITY, AGE_IDENTITY_ENV) {
+            self.check_managed_identity(material.expose_secret())?;
             return parse_identity(material.expose_secret(), None).map_err(|e| {
                 provider_err(format!(
                     "Failed to parse age identity: {}",
@@ -190,13 +208,17 @@ impl AgeProvider {
             });
         }
         if let Some(path) = &self.config.identity_path {
-            let data = std::fs::read(path).map_err(|e| {
+            let data = crate::managed_io::read(path, self.request.as_ref()).map_err(|e| {
+                if e.is_resolution_terminal() {
+                    return e;
+                }
                 provider_err(format!(
                     "Failed to read age identity file {}: {}",
                     path.display(),
                     e
                 ))
             })?;
+            self.check_managed_identity(&data)?;
             return parse_identity(&data, Some(path.display().to_string())).map_err(|e| {
                 provider_err(format!(
                     "Failed to parse age identity file {}: {}",
@@ -224,7 +246,7 @@ impl AgeProvider {
         if !self.config.path.exists() {
             return Ok(HashMap::new());
         }
-        let ciphertext = std::fs::read(&self.config.path)?;
+        let ciphertext = crate::managed_io::read(&self.config.path, self.request.as_ref())?;
         let identities = self.identity()?.into_identities()?;
 
         let reader = ArmoredReader::new(&ciphertext[..]);
@@ -615,6 +637,49 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
         key
     }
 
+    #[tokio::test]
+    async fn managed_native_read_and_plugin_rejection() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = write_identity(dir.path());
+        let provider = AgeProvider::new(AgeConfig {
+            path: dir.path().join("secrets.age"),
+            identity_path: Some(identity.clone()),
+            recipients_file: None,
+            armor: true,
+        });
+        provider
+            .set(
+                Address::convention("proj", "default", "TOKEN"),
+                &SecretBytes::from_utf8("value"),
+            )
+            .unwrap();
+        let spec = format!("{}?identity={}", provider.uri(), identity.display());
+        let native_spec = spec.clone();
+        let value = crate::request::run(&crate::CancellationHandle::new(), move |request| {
+            let reader = super::super::managed_read::from_spec(
+                &native_spec,
+                ProviderCredentials::new(),
+                &request,
+            )?;
+            reader.get(Address::convention("proj", "default", "TOKEN"))
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(value.expose_secret(), b"value");
+
+        // Rejection precedes even parsing the identity, so no plugin can start.
+        std::fs::write(identity, "AGE-PLUGIN-TEST-IDENTITY\n").unwrap();
+        let error = crate::request::run(&crate::CancellationHandle::new(), move |request| {
+            let reader =
+                super::super::managed_read::from_spec(&spec, ProviderCredentials::new(), &request)?;
+            reader.get(Address::convention("proj", "default", "TOKEN"))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind(), "cancellation_unsupported");
+    }
+
     #[test]
     fn solo_round_trip_preserves_other_keys() {
         let dir = tempfile::tempdir().unwrap();
@@ -790,3 +855,11 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
         );
     }
 }
+
+// Cancellable reads (0.22+). The factory runs on the request's joined worker.
+super::managed_read::register!(["age"], |url, credentials, request| {
+    let mut provider = AgeProvider::new(AgeConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(Box::new(provider))
+});

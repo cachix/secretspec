@@ -5,7 +5,7 @@
 /// strand pooled connections and background tasks when that runtime is
 /// dropped. One long-lived runtime keeps them alive across requests and
 /// providers.
-fn runtime() -> &'static tokio::runtime::Runtime {
+pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
     static PROVIDER_RUNTIME: std::sync::LazyLock<tokio::runtime::Runtime> =
         std::sync::LazyLock::new(|| {
             tokio::runtime::Builder::new_multi_thread()

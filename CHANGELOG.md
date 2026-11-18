@@ -32,6 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ResolvedSecret::open()` reads file secrets into memory-only streams,
   including Linux memfd paths that PHP's ordinary file functions cannot open.
 
+- Rust's `Secrets::resolve_cancellable` and `resolve_bytes_cancellable` (0.22+)
+  wait for work owned by a resolution to stop or finish before returning.
+  Supported reads include local files, native age identities, KDBX, EJSON,
+  SOPS, LastPass, pass, gopass, Dashlane, Passbolt, 1Password, Bitwarden,
+  Bitwarden Secrets Manager, Proton Pass, Keeper, Azure Key Vault, Azure App
+  Configuration, Setec, Doppler, Scaleway, Infisical, Vault and OpenBao.
+  Unsupported provider or authentication paths return `cancellation_unsupported`.
+  C callers can cancel a running resolution through a single-use handle.
+  Go's `LoadContext` preserves cleanup details alongside context errors.
+  Go also exposes `WithReadOnly` and `WithNoFiles` for embedded callers.
+
 - The SOPS provider supports deleting secrets (0.22+). `secretspec delete` and
   `secretspec import --delete-source` remove the value
   a read would return and leave the other keys in the file. A missing key or

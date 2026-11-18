@@ -6,6 +6,7 @@
 //! [`Provider::get`] and refuses every write.
 
 use crate::SecretBytes;
+use crate::command::CommandOutput as _;
 use crate::provider::{Address, Provider, ProviderUrl};
 use crate::{Result, SecretSpecError};
 use serde::{Deserialize, Serialize};
@@ -175,6 +176,7 @@ impl TryFrom<&ProviderUrl> for DashlaneConfig {
 /// Installation and authentication are covered at
 /// <https://secretspec.dev/providers/dashlane/>.
 pub struct DashlaneProvider {
+    request: Option<crate::request::RequestContext>,
     config: DashlaneConfig,
     credentials: crate::provider::ProviderCredentials,
 }
@@ -353,6 +355,7 @@ fn strip_ansi(input: &str) -> String {
 impl DashlaneProvider {
     pub fn new(config: DashlaneConfig) -> Self {
         Self {
+            request: None,
             config,
             credentials: Default::default(),
         }
@@ -364,6 +367,9 @@ impl DashlaneProvider {
     /// plaintext dump of vault items, so it must never reach a log or an error
     /// message.
     fn run(&self, args: &[&str]) -> Result<Vec<u8>> {
+        if let Some(request) = &self.request {
+            request.checkpoint()?;
+        }
         let mut cmd = Command::new("dcli");
         // Injected credentials reach `dcli` the only way it reads them,
         // without touching this process's own environment.
@@ -396,14 +402,14 @@ impl DashlaneProvider {
         // instead of hanging a `secretspec run`.
         cmd.stdin(Stdio::null());
 
-        let output = match cmd.output() {
+        let output = match cmd.output_for(self.request.as_ref()) {
             Ok(output) => output,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(SecretSpecError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Err(SecretSpecError::ProviderOperationFailed(
                     DCLI_NOT_INSTALLED_HELP.to_string(),
                 ));
             }
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e),
         };
 
         if !output.status.success() {
@@ -1239,3 +1245,14 @@ mod live {
         );
     }
 }
+
+super::managed_read::register!(["dashlane"], |url, credentials, request| {
+    let mut provider = DashlaneProvider::new(DashlaneConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(super::managed_read::preflight(
+        provider,
+        request,
+        DashlaneProvider::check_auth,
+    ))
+});

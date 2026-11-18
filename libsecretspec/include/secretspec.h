@@ -106,8 +106,28 @@ char *secretspec_resolve(const char *request_json);
  */
 char *secretspec_call(const char *request_json);
 
+/* Cancellable resolve (SecretSpec 0.22+).
+ * Both operation and options.mode must be "resolve" (the default mode).
+ * Use secretspec_call() for reports, read_file, and release_files.
+ * Each handle belongs to exactly one call. Cancel may run concurrently and is
+ * idempotent, including before the call starts. The call waits for owned work
+ * to stop or complete, so a deadline is not a hard bound on cleanup latency.
+ * Unsupported provider/auth/operation paths return cancellation_unsupported.
+ * Free only AFTER the call and ALL concurrent cancel invocations have returned.
+ * Cancel/free accept NULL; call_with_cancel rejects a NULL handle.
+ * Result strings are independent of the handle and use secretspec_free().
+ */
+#define SECRETSPEC_HAS_CANCELLATION 1
+typedef struct secretspec_cancel_handle secretspec_cancel_handle;
+secretspec_cancel_handle *secretspec_cancel_new(void);
+void secretspec_cancel(const secretspec_cancel_handle *handle);
+void secretspec_cancel_free(secretspec_cancel_handle *handle);
+char *secretspec_call_with_cancel(const char *request_json,
+                                const secretspec_cancel_handle *handle);
+
 /*
- * Free a string previously returned by secretspec_resolve() or secretspec_call().
+ * Free a string returned by secretspec_resolve(), secretspec_call(), or
+ * secretspec_call_with_cancel() (0.22+).
  * NULL is ignored.
  * Must not be called twice on the same pointer.
  */

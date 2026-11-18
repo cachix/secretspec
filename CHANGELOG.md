@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Bitwarden Secrets Manager, Proton Pass, Keeper, Azure Key Vault, Azure App
   Configuration, Setec, Doppler, Scaleway, Infisical, Vault and OpenBao.
   Unsupported provider or authentication paths return `cancellation_unsupported`.
+  C callers can cancel a running resolution through a single-use handle.
 
 - The SOPS provider supports deleting secrets (0.22+). `secretspec delete` and
   `secretspec import --delete-source` remove the value

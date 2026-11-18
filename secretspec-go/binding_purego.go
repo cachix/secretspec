@@ -19,15 +19,21 @@ import (
 )
 
 var (
-	loadOnce  sync.Once
-	loadErr   error
-	callOnce  sync.Once
-	callErr   error
-	libHandle uintptr
-	cResolve  func(string) uintptr
-	cCall     func(string) uintptr
-	cFree     func(uintptr)
-	cABI      func() uintptr
+	loadOnce        sync.Once
+	loadErr         error
+	callOnce        sync.Once
+	callErr         error
+	cancelOnce      sync.Once
+	cancelErr       error
+	cCancelNew      func() uintptr
+	cCancel         func(uintptr)
+	cCancelFree     func(uintptr)
+	cCallWithCancel func(string, uintptr) uintptr
+	libHandle       uintptr
+	cResolve        func(string) uintptr
+	cCall           func(string) uintptr
+	cFree           func(uintptr)
+	cABI            func() uintptr
 )
 
 func libNames() []string {
@@ -157,6 +163,46 @@ func nativeCall(payload string) (string, error) {
 	raw := goString(ptr)
 	cFree(ptr)
 	return raw, nil
+}
+
+func ensureCancelLoaded() error {
+	if err := ensureLoaded(); err != nil {
+		return err
+	}
+	cancelOnce.Do(func() {
+		defer func() {
+			if recover() != nil {
+				cancelErr = &Error{Kind: "capability", Message: cancellationUnavailable}
+			}
+		}()
+		purego.RegisterLibFunc(&cCancelNew, libHandle, "secretspec_cancel_new")
+		purego.RegisterLibFunc(&cCancel, libHandle, "secretspec_cancel")
+		purego.RegisterLibFunc(&cCancelFree, libHandle, "secretspec_cancel_free")
+		purego.RegisterLibFunc(&cCallWithCancel, libHandle, "secretspec_call_with_cancel")
+	})
+	return cancelErr
+}
+
+func newNativeCancellation() (*nativeCancellation, error) {
+	if err := ensureCancelLoaded(); err != nil {
+		return nil, err
+	}
+	handle := cCancelNew()
+	if handle == 0 {
+		return nil, &Error{Kind: "ffi", Message: "secretspec_cancel_new returned null"}
+	}
+	return &nativeCancellation{
+		cancel: func() { cCancel(handle) },
+		free:   func() { cCancelFree(handle) },
+		call: func(payload string) (string, error) {
+			ptr := cCallWithCancel(payload, handle)
+			if ptr == 0 {
+				return "", &Error{Kind: "ffi", Message: "secretspec_call_with_cancel returned null"}
+			}
+			defer cFree(ptr)
+			return goString(ptr), nil
+		},
+	}, nil
 }
 
 // nativeABIVersion returns the ABI version string (a static C string, not freed).

@@ -31,6 +31,42 @@ Go-side logic.
 A missing required secret returns `*MissingRequiredError`; any other failure
 returns `*Error` (with a stable `.Kind`).
 
+## Cancellation
+
+<VersionCompatibility version="0.22" />
+
+Use `builder.LoadContext(ctx)` with a non-nil Go context. Path, search and inline
+sources all use the native cancellable API; an older library returns a capability
+error. `context.Background()` uses the same supported-provider checks.
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+resolved, err := secretspec.New().WithProvider("dotenv://.env").LoadContext(ctx)
+```
+
+The method waits for native cleanup before returning, which can take longer than
+the context deadline. When native cancellation wins, `errors.Is(err,
+context.Canceled)` or `errors.Is(err, context.DeadlineExceeded)` works alongside
+`errors.As(err, &nativeError)` for the SecretSpec `*Error`. A successful result
+committed before cancellation is retained.
+
+`Error.Cancelled` records whether native cancellation was accepted. For
+`cleanup_failed`, `Error.CleanupPhase` identifies the cleanup step that failed;
+check this kind even when `errors.Is` also reports a cancelled context.
+
+See the [Rust cancellation contract](/sdk/rust/#cancellable-resolution) for
+supported providers, credential sources and operation restrictions. Unsupported
+paths return `cancellation_unsupported`; `LoadContext` never falls back to `Load`.
+
+`LoadContext` also supports SOPS reads. Cancelling the Go context stops the active SOPS command
+through the native resolver, with the same decryption configuration as `Load`.
+
+`WithReadOnly(true)` refuses generation/prompting that would store a value;
+it does not disable the ordinary API's cache maintenance. `WithNoFiles(true)`
+rejects selected `as_path` declarations, including hidden composition inputs,
+even when `WithNoValues(true)` is set. Both options require a 0.22+ native library.
+
 ## Caller context {/* #caller-context-020 */}
 
 <VersionCompatibility version="0.20" />

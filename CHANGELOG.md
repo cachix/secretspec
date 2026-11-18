@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Configuration, Setec, Doppler, Scaleway, Infisical, Vault and OpenBao.
   Unsupported provider or authentication paths return `cancellation_unsupported`.
   C callers can cancel a running resolution through a single-use handle.
+  Go's `LoadContext` preserves cleanup details alongside context errors.
+  Go also exposes `WithReadOnly` and `WithNoFiles` for embedded callers.
 
 - The SOPS provider supports deleting secrets (0.22+). `secretspec delete` and
   `secretspec import --delete-source` remove the value

@@ -1748,8 +1748,7 @@ mod tests {
         // that needs to remove captured values drops the append-only trigger
         // in its own SQL first. Reaching the state the verifier exists to
         // detect therefore has to be possible, which is the point of the test.
-        conn.execute_batch("PRAGMA foreign_keys = OFF;")
-            .unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
         conn.execute_batch(sql).unwrap();
     }
 

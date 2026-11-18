@@ -23,6 +23,8 @@ fn registered_cli_reads_cancel_after_start() {
         ("bws", "bws"),
         #[cfg(feature = "sops")]
         ("sops", "sops"),
+        #[cfg(feature = "aac")]
+        ("aac", "az"),
     ];
     for (scheme, binary) in cases {
         for phase in ["first", "read", "serial"] {
@@ -62,6 +64,7 @@ wait
             let spec = match scheme {
                 "sops" => format!("sops://{}", file.display()),
                 "bws" => "bws://11111111-1111-4111-8111-111111111111".into(),
+                "aac" => "aac://fixture?auth=cli".into(),
                 _ => format!("{scheme}://"),
             };
             let output = std::process::Command::new(std::env::current_exe().unwrap())

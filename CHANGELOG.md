@@ -36,8 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wait for work owned by a resolution to stop or finish before returning.
   Supported reads include local files, native age identities, KDBX, EJSON,
   SOPS, LastPass, pass, gopass, Dashlane, Passbolt, 1Password, Bitwarden,
-  Bitwarden Secrets Manager, Proton Pass, Setec, Doppler, Scaleway, Infisical,
-  Vault and OpenBao.
+  Bitwarden Secrets Manager, Proton Pass, Keeper, Azure Key Vault, Azure App
+  Configuration, Setec, Doppler, Scaleway, Infisical, Vault and OpenBao.
   Unsupported provider or authentication paths return `cancellation_unsupported`.
 
 - The SOPS provider supports deleting secrets (0.22+). `secretspec delete` and

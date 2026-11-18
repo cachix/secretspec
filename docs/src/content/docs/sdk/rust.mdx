@@ -96,10 +96,18 @@ but cannot synchronously wait for cleanup; await it to observe completion.
 | `age` with native identities | Manage file reads and wait for started decryption |
 | `kdbx` | Interrupt lock waits and file reads; wait for started KDF/decryption |
 | `ejson`, `sops`, `lastpass`, `pass`, `gopass`, `dashlane`, `passbolt`, `onepassword` (including `onepassword+token`), `bw`, `bws`, `protonpass` | Stop the owned process group/Windows Job and join the child and pipe workers, including authentication and batch reads |
+| `keeper` | Cancel SDK HTTP and throttle waits; join the SDK worker |
+| `akv`, `aac` | Cancel SDK/HTTP work, supervise Azure CLI authentication, and join workload identity token-file reads |
 | `setec`, `doppler`, `scaleway`, `infisical`, `vault`, `openbao` | Cancel HTTP/authentication/retry work and shut down the request's transport runtime |
 
 SOPS decrypts inside the supervised process and supports its existing key
 services, including age and AWS KMS.
+
+Azure supports service principal, CLI, managed identity and workload identity
+authentication. App Configuration also supports connection strings and Key
+Vault references. Keeper supports file and in-memory configuration and SDK
+token binding. The call waits for synchronous SDK work to finish. Completed
+binding and configuration writes persist after cancellation.
 
 Credential sources must also use a supported path. Unused fallback entries are
 not constructed. All other providers, including external IPC providers and

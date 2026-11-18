@@ -11,15 +11,17 @@ use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use keeper_secrets_manager_core::core::{ClientOptions, SecretsManager};
+use keeper_secrets_manager_core::custom_error::KSMRError;
 use keeper_secrets_manager_core::dto::dtos::{Record, RecordCreate};
 use keeper_secrets_manager_core::dto::field_structs::KeeperField;
+use keeper_secrets_manager_core::dto::{EncryptedPayload, KsmHttpResponse, TransmissionKey};
 use keeper_secrets_manager_core::enums::KvStoreType;
 use keeper_secrets_manager_core::storage::{FileKeyValueStorage, InMemoryKeyValueStorage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 const CONFIG: &str = "config";
 const TOKEN: &str = "token";
@@ -119,8 +121,64 @@ impl KeeperApi for SecretsManager {
 
 type KeeperClient = Mutex<Box<dyn KeeperApi>>;
 
+/// Replace only the SDK's blocking HTTP call; the SDK still builds and signs
+/// each encrypted payload and interprets status/body for binding and retries.
+struct KeeperTransport {
+    request: crate::request::RequestContext,
+    client: OnceLock<reqwest::Client>,
+}
+
+impl KeeperTransport {
+    fn send(
+        &self,
+        url: String,
+        key: TransmissionKey,
+        payload: EncryptedPayload,
+    ) -> std::result::Result<KsmHttpResponse, KSMRError> {
+        use keeper_secrets_manager_core::utils::bytes_to_base64;
+        self.request
+            .block_on(async {
+                let client = self.client.get().ok_or_else(|| {
+                    SecretSpecError::ProviderOperationFailed(
+                        "Keeper transport not initialized".into(),
+                    )
+                })?;
+                let http_error = |error: reqwest::Error| {
+                    SecretSpecError::ProviderOperationFailed(error.without_url().to_string())
+                };
+                let response = client
+                    .post(url)
+                    .header("Content-Type", "application/octet-stream")
+                    .header("Content-Length", payload.encrypted_payload.len())
+                    .header(
+                        "Authorization",
+                        format!(
+                            "Signature {}",
+                            bytes_to_base64(payload.signature.as_bytes())
+                        ),
+                    )
+                    .header("TransmissionKey", bytes_to_base64(&key.encrypted_key))
+                    .header("PublicKeyId", key.public_key_id)
+                    .header("Accept-Encoding", "gzip, deflate")
+                    .body(payload.encrypted_payload)
+                    .send()
+                    .await
+                    .map_err(http_error)?;
+                let status = response.status().as_u16();
+                let data = response.bytes().await.map_err(http_error)?;
+                Ok(KsmHttpResponse::new(
+                    status,
+                    data.to_vec(),
+                    String::from_utf8_lossy(&data).into_owned(),
+                ))
+            })
+            .map_err(|error| KSMRError::HTTPError(error.to_string()))
+    }
+}
+
 /// Keeper Secrets Manager provider backed by Keeper's official Rust SDK.
 pub struct KeeperProvider {
+    request: Option<crate::request::RequestContext>,
     config: KeeperConfig,
     credentials: ProviderCredentials,
     client: OnceLock<KeeperClient>,
@@ -132,6 +190,13 @@ crate::register_provider! {
     config: KeeperConfig,
     metadata: &super::catalog::KEEPER,
 }
+
+super::managed_read::register!(["keeper"], |url, credentials, request| {
+    let mut provider = KeeperProvider::new(KeeperConfig::try_from(url)?);
+    provider.with_credentials(credentials);
+    provider.request = Some(request.clone());
+    Ok(Box::new(provider))
+});
 
 #[derive(Clone)]
 struct KeeperTarget {
@@ -155,6 +220,7 @@ impl KeeperProvider {
     /// Creates a Keeper provider with lazy SDK initialization.
     pub fn new(config: KeeperConfig) -> Self {
         Self {
+            request: None,
             config,
             credentials: ProviderCredentials::new(),
             client: OnceLock::new(),
@@ -203,7 +269,7 @@ impl KeeperProvider {
         }
         .map_err(|error| error.to_string())?;
 
-        let options = match self.token() {
+        let mut options = match self.token() {
             Some(token) => ClientOptions::new_client_options_with_token(
                 token
                     .try_as_utf8()
@@ -213,7 +279,38 @@ impl KeeperProvider {
             ),
             None => ClientOptions::new_client_options(storage),
         };
-        let client = SecretsManager::new(options).map_err(|error| error.to_string())?;
+        let transport = self.request.as_ref().map(|request| {
+            let transport = Arc::new(KeeperTransport {
+                request: request.clone(),
+                client: OnceLock::new(),
+            });
+            let post = Arc::clone(&transport);
+            options.set_custom_post_function(move |url, key, payload| post.send(url, key, payload));
+            transport
+        });
+        let mut client = SecretsManager::new(options).map_err(|error| error.to_string())?;
+        if let Some(transport) = transport {
+            // Let the SDK resolve and validate its SSL/proxy settings first.
+            // Its constructor performs no POST; signing, encryption, binding
+            // and retries remain inside the SDK after installing this hook.
+            let mut http = reqwest::Client::builder()
+                // Match the SDK's reqwest::blocking default timeout.
+                .timeout(std::time::Duration::from_secs(30))
+                .danger_accept_invalid_certs(!client.verify_ssl_certs);
+            if let Some(proxy) = &client.proxy_url {
+                http = http.proxy(reqwest::Proxy::all(proxy).map_err(|e| e.to_string())?);
+            }
+            transport
+                .client
+                .set(http.build().map_err(|e| e.to_string())?)
+                .expect("Keeper transport initialized once");
+            client.set_custom_sleep_function(move |delay| {
+                // The SDK's sleep hook cannot return an error. The next POST
+                // checks cancellation before any I/O, and with_client restores
+                // the typed cancellation error after the SDK unwinds.
+                let _ = transport.request.wait(delay);
+            });
+        }
         Ok(Mutex::new(Box::new(client)))
     }
 
@@ -221,12 +318,16 @@ impl KeeperProvider {
         if let Some(client) = self.client.get() {
             return Ok(client);
         }
-        let _initialization = self.client_initialization.lock().map_err(|_| {
-            self.operation_error(
-                "initialize the SDK client",
-                "initialization lock was poisoned",
-            )
-        })?;
+        let _initialization = if self.request.is_some() {
+            crate::managed_io::lock(&self.client_initialization, self.request.as_ref())?
+        } else {
+            self.client_initialization.lock().map_err(|_| {
+                self.operation_error(
+                    "initialize the SDK client",
+                    "initialization lock was poisoned",
+                )
+            })?
+        };
         if let Some(client) = self.client.get() {
             return Ok(client);
         }
@@ -247,17 +348,37 @@ impl KeeperProvider {
         let result = std::thread::scope(|scope| {
             scope
                 .spawn(move || {
-                    let mut client = self.client()?.lock().map_err(|_| {
-                        SecretSpecError::ProviderOperationFailed(
-                            "Keeper SDK client lock was poisoned by an earlier failure".to_string(),
-                        )
-                    })?;
-                    operation(client.as_mut()).map_err(|error| self.operation_error(action, error))
+                    if let Some(request) = &self.request {
+                        request.checkpoint()?;
+                    }
+                    let mut client = if self.request.is_some() {
+                        crate::managed_io::lock(self.client()?, self.request.as_ref())?
+                    } else {
+                        self.client()?.lock().map_err(|_| {
+                            SecretSpecError::ProviderOperationFailed(
+                                "Keeper SDK client lock was poisoned by an earlier failure"
+                                    .to_string(),
+                            )
+                        })?
+                    };
+                    if let Some(request) = &self.request {
+                        request.checkpoint()?;
+                    }
+                    let result = operation(client.as_mut());
+                    if let Some(request) = &self.request {
+                        request.checkpoint()?;
+                    }
+                    result.map_err(|error| self.operation_error(action, error))
                 })
                 .join()
         });
-        result
-            .unwrap_or_else(|_| Err(self.operation_error(action, "the SDK worker thread panicked")))
+        result.unwrap_or_else(|_| {
+            Err(if self.request.is_some() {
+                SecretSpecError::ResolutionPanicked
+            } else {
+                self.operation_error(action, "the SDK worker thread panicked")
+            })
+        })
     }
 
     fn target(&self, addr: Address<'_>) -> Result<KeeperTarget> {
@@ -693,6 +814,202 @@ mod tests {
             .ok()
             .unwrap();
         (provider, state)
+    }
+
+    #[tokio::test]
+    async fn managed_sdk_panic_is_terminal() {
+        crate::request::run(&crate::CancellationHandle::new(), |request| {
+            let (mut provider, _) = provider_with_records(Vec::new());
+            provider.request = Some(request);
+            let error = provider
+                .with_client::<()>("retrieve records", |_| panic!("SDK fixture panic"))
+                .unwrap_err();
+            assert_eq!(error.kind(), "resolution_panicked");
+            assert!(error.is_resolution_terminal());
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn managed_http_preserves_responses_and_cancels_header_and_body_waits() {
+        use std::io::{BufRead, Read, Write};
+        use std::time::Duration;
+        const RESPONSE: &[u8] = b"\0\xffbody";
+        for (complete_status, partial_body) in [
+            (Some(200), false),
+            (Some(403), false),
+            (None, false),
+            (None, true),
+        ] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap());
+            let (started, start) = tokio::sync::oneshot::channel();
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = std::io::BufReader::new(socket.try_clone().unwrap());
+                let mut headers = String::new();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    headers.push_str(&line);
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+                let mut body = [0; 3];
+                reader.read_exact(&mut body).unwrap();
+                assert_eq!(body, [1, 2, 3]);
+                let headers = headers.to_ascii_lowercase();
+                assert!(headers.contains("authorization: signature "));
+                assert!(headers.contains("transmissionkey: aqid"));
+                assert!(headers.contains("publickeyid: 10"));
+                if let Some(status) = complete_status {
+                    write!(
+                        socket,
+                        "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\n\r\n",
+                        RESPONSE.len()
+                    )
+                    .unwrap();
+                    socket.write_all(RESPONSE).unwrap();
+                } else if partial_body {
+                    socket
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\npartial")
+                        .unwrap();
+                }
+                started.send(()).unwrap();
+                let closed = socket.read(&mut [0]);
+                assert!(
+                    matches!(closed, Ok(0))
+                        || closed.is_err_and(|e| e.kind() == std::io::ErrorKind::ConnectionReset)
+                );
+            });
+            let handle = crate::CancellationHandle::new();
+            let cancel = handle.clone();
+            let task = tokio::spawn(async move {
+                crate::request::run(&handle, move |request| {
+                    let transport = KeeperTransport {
+                        request,
+                        client: OnceLock::from(
+                            reqwest::Client::builder().no_proxy().build().unwrap(),
+                        ),
+                    };
+                    let signature = [0x30, 6, 2, 1, 1, 2, 1, 1].as_slice().try_into().unwrap();
+                    transport
+                        .send(
+                            url,
+                            TransmissionKey::new("10".into(), vec![], vec![1, 2, 3]),
+                            EncryptedPayload::new(vec![1, 2, 3], signature),
+                        )
+                        .map_err(|e| SecretSpecError::ProviderOperationFailed(e.to_string()))
+                })
+                .await
+            });
+            tokio::time::timeout(Duration::from_secs(5), start)
+                .await
+                .unwrap()
+                .unwrap();
+            if complete_status.is_none() {
+                cancel.cancel();
+            }
+            let result = tokio::time::timeout(Duration::from_secs(5), task)
+                .await
+                .unwrap()
+                .unwrap();
+            if let Some(status) = complete_status {
+                let response = result.unwrap();
+                assert_eq!(response.status_code, status);
+                assert_eq!(response.data, RESPONSE);
+                assert_eq!(
+                    response.http_response.unwrap(),
+                    String::from_utf8_lossy(RESPONSE)
+                );
+            } else {
+                assert_eq!(result.unwrap_err().kind(), "cancelled");
+            }
+            server.join().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn sdk_throttle_wait_cancels_without_another_post() {
+        use keeper_secrets_manager_core::{
+            config_keys::ConfigKeys, crypto::CryptoUtils, storage::KeyValueStorage,
+            utils::bytes_to_base64,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        let (started, start) = tokio::sync::oneshot::channel();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let posts = Arc::clone(&calls);
+        let handle = crate::CancellationHandle::new();
+        let cancel = handle.clone();
+        let task = tokio::spawn(async move {
+            crate::request::run(&handle, move |request| {
+                let mut storage =
+                    KvStoreType::InMemory(InMemoryKeyValueStorage::new(None).unwrap());
+                let key = CryptoUtils::generate_private_key_der().unwrap();
+                for (key, value) in [
+                    (ConfigKeys::KeyClientId, "fixture".into()),
+                    (ConfigKeys::KeyPrivateKey, bytes_to_base64(&key)),
+                    (ConfigKeys::KeyAppKey, bytes_to_base64(&[1; 32])),
+                    (ConfigKeys::KeyServerPublicKeyId, "10".into()),
+                    (ConfigKeys::KeyHostname, "keepersecurity.com".into()),
+                ] {
+                    storage.set(key, value).unwrap();
+                }
+                let mut options = ClientOptions::new_client_options(storage);
+                let post_request = request.clone();
+                options.set_custom_post_function(move |_, _, _| {
+                    post_request
+                        .checkpoint()
+                        .map_err(|e| KSMRError::HTTPError(e.to_string()))?;
+                    posts.fetch_add(1, Ordering::SeqCst);
+                    Ok(KsmHttpResponse::new(
+                        403,
+                        vec![],
+                        r#"{"error":"throttled","retry_after":60}"#.into(),
+                    ))
+                });
+                let mut client = SecretsManager::new(options).unwrap();
+                let started = Mutex::new(Some(started));
+                let sleep_request = request.clone();
+                client.set_custom_sleep_function(move |delay| {
+                    if let Some(started) = started.lock().unwrap().take() {
+                        started.send(()).unwrap();
+                    }
+                    let _ = sleep_request.wait(delay);
+                });
+                let mut provider = KeeperProvider::new(KeeperConfig::default());
+                // with_client must join the SDK and recover cancellation from
+                // its string errors, just as with the real HTTP hook.
+                provider.request = Some(request);
+                provider
+                    .client
+                    .set(Mutex::new(Box::new(client)))
+                    .ok()
+                    .unwrap();
+                provider.records()
+            })
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), start)
+            .await
+            .unwrap()
+            .unwrap();
+        cancel.cancel();
+        let error = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), "cancelled");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

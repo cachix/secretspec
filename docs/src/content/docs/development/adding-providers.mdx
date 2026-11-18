@@ -24,6 +24,10 @@ for synchronous retries. Managed async work must not escape through the legacy s
 helpers. If a dependency starts an independent OS thread, process or global
 client, manage and join it explicitly or keep that path unregistered.
 
+Prefer SDK hooks when available. `azure_cancellation.rs` supplies the Azure
+Identity executor and assertion-file hooks; `keeper.rs` supplies Keeper's POST
+and throttle-wait hooks. Dropping an async future alone does not stop a detached
+thread. Blocking hooks must observe the request and remain owned until joined.
 Keep terminal SecretSpec errors typed across SDK wrappers so retries and fallback
 cannot treat them as ordinary authentication or read failures.
 

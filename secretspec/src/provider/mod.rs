@@ -197,6 +197,8 @@ pub mod akv;
 pub mod awsps;
 #[cfg(feature = "awssm")]
 pub mod awssm;
+#[cfg(feature = "akv")]
+mod azure_cancellation;
 #[cfg(feature = "bw")]
 pub mod bw;
 #[cfg(feature = "bws")]

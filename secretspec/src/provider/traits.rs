@@ -2,6 +2,7 @@ use super::address::unsupported_coord_error;
 use super::{Address, ProviderCredentials};
 use crate::config::NativeAddress;
 use crate::{Result, SecretBytes, SecretSpecError};
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
@@ -67,6 +68,85 @@ impl ProviderValue {
     pub fn with_revision(mut self, revision: Option<secretspec_ipc::Revision>) -> Self {
         self.revision = revision;
         self
+    }
+}
+
+/// The result of verifying a provider's append-only history ledger.
+///
+/// Available starting with SecretSpec 0.22. A report always describes a
+/// ledger that was read: providers that keep no verifiable ledger answer
+/// [`Provider::verify_history`] with `None` instead. The report holds only
+/// what the ledger already records in the clear — sequences, hashes, and the
+/// on-disk schema version — never a secret value or a fragment of one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryReport {
+    /// Number of entries the ledger holds.
+    pub entries: u64,
+    /// Hash of the last entry, or the all-zero hash for an empty ledger.
+    pub head_hash: String,
+    /// Version of the on-disk ledger schema: `PRAGMA user_version` for the
+    /// sqlite provider.
+    pub schema_version: i64,
+    /// The first break found, or `None` when the ledger verified.
+    pub failure: Option<HistoryFailure>,
+}
+
+impl HistoryReport {
+    /// Whether every entry and the head pointer verified.
+    pub fn is_ok(&self) -> bool {
+        self.failure.is_none()
+    }
+}
+
+/// The first break found in a history ledger.
+///
+/// Only the location and kind of the break are reported: verification never
+/// needs the contents of the entry that failed to describe it, so nothing from
+/// the ledger beyond its sequences and digests leaves the provider.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryFailure {
+    /// Ledger sequence the break was found at: the missing sequence for a gap,
+    /// otherwise the entry that failed. `None` when the break belongs to the
+    /// ledger as a whole, as for a schema-version mismatch.
+    pub sequence: Option<i64>,
+    /// What is wrong, in machine-readable form.
+    pub reason: HistoryFailureReason,
+}
+
+/// Machine-readable kinds of history-ledger breakage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryFailureReason {
+    /// A sequence number is missing: the ledger does not start at 1, or has a
+    /// gap where an entry was removed.
+    MissingEntry,
+    /// An entry's `previous_hash` names neither the zero hash (first entry)
+    /// nor its predecessor's hash.
+    PreviousHashMismatch,
+    /// An entry's hash does not recompute from its own recorded contents.
+    EntryHashMismatch,
+    /// The head pointer does not name the last entry.
+    HeadMismatch,
+    /// The ledger schema version is not one this build understands.
+    SchemaVersionMismatch,
+}
+
+impl HistoryFailureReason {
+    /// The stable name used in JSON output and error messages.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::MissingEntry => "missing_entry",
+            Self::PreviousHashMismatch => "previous_hash_mismatch",
+            Self::EntryHashMismatch => "entry_hash_mismatch",
+            Self::HeadMismatch => "head_mismatch",
+            Self::SchemaVersionMismatch => "schema_version_mismatch",
+        }
+    }
+}
+
+impl std::fmt::Display for HistoryFailureReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -393,6 +473,38 @@ pub trait Provider: Send + Sync {
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         let _ = addr;
         Ok(())
+    }
+
+    /// Verifies this provider's append-only history ledger, when it keeps one.
+    /// Available since SecretSpec 0.22.
+    ///
+    /// `Ok(None)` means this provider keeps no verifiable ledger — a backend
+    /// that has no history feature, or a store where history is off or has
+    /// never recorded an entry — and is not an error. `Ok(Some(report))` means
+    /// a ledger was read: it names the entry count and head hash, and carries
+    /// the first break in `report.failure` rather than turning a tampered
+    /// chain into an error, so a caller can report what it found. `Err` is
+    /// reserved for a ledger that could not be read at all.
+    ///
+    /// The check is a read-only audit of what is already on disk: it must not
+    /// create, migrate, or repair the store, and it must not reveal a secret
+    /// value. It proves that the recorded chain is internally consistent, not
+    /// that the file is authentic — see the sqlite provider's documentation
+    /// for what a party with write access to the store can still do.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// match provider.verify_history()? {
+    ///     Some(report) if report.is_ok() => {
+    ///         println!("verified {} entries", report.entries)
+    ///     }
+    ///     Some(report) => eprintln!("broken: {:?}", report.failure),
+    ///     None => println!("no verifiable history"),
+    /// }
+    /// ```
+    fn verify_history(&self) -> Result<Option<HistoryReport>> {
+        Ok(None)
     }
 
     /// Controls whether SecretSpec persists a value produced by a declaration's

@@ -15,7 +15,7 @@
 //! History is off by default: a plain `sqlite:PATH` store has only the
 //! `secrets` table.
 
-use super::{Address, Provider, ProviderUrl};
+use super::{Address, HistoryFailure, HistoryFailureReason, HistoryReport, Provider, ProviderUrl};
 use crate::SecretBytes;
 use crate::config::{NativeAddress, expand_tilde};
 use crate::{Result, SecretSpecError};
@@ -377,6 +377,19 @@ impl Provider for SqliteProvider {
 
     fn supports_delete(&self) -> bool {
         true
+    }
+
+    fn verify_history(&self) -> Result<Option<HistoryReport>> {
+        let Some(conn) = self.open_for_verification()? else {
+            return Ok(None);
+        };
+        // The `entries` table, not the URI's `history` flag, is what makes a
+        // store auditable: a plain alias and a `?history=true` alias name the
+        // same rows, so either may point at a database that carries a ledger.
+        if !table_exists(&conn, "entries")? {
+            return Ok(None);
+        }
+        verify_ledger(&conn).map(Some)
     }
 
     fn name(&self) -> &str {
@@ -825,6 +838,194 @@ fn capture_history(conn: &Connection, operation: &str) -> Result<()> {
     .map_err(|e| operation_error(e.to_string()))?;
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// History verification (read-only)
+// ---------------------------------------------------------------------------
+
+impl SqliteProvider {
+    /// Opens the database with no possibility of writing, or answers `None`
+    /// when there is nothing on disk to audit.
+    ///
+    /// Verification must not create or migrate the file. A plain
+    /// [`connection`](Self::connection) would build the schema and stamp
+    /// `user_version`, which would both erase the evidence of an old layout and
+    /// make an empty store look like a verified one.
+    fn open_for_verification(&self) -> Result<Option<Connection>> {
+        if !self.config.path.exists() {
+            // A `?history=true` URI names a ledger that should be there, so a
+            // missing file is an error rather than a clean bill of health.
+            // Anything else has never recorded an entry: nothing to verify.
+            if self.config.history {
+                return Err(operation_error(format!(
+                    "sqlite history database '{}' does not exist",
+                    self.config.path.display()
+                )));
+            }
+            return Ok(None);
+        }
+        let conn = Connection::open_with_flags(
+            &self.config.path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(|error| {
+            operation_error(format!(
+                "failed to open sqlite database '{}' for verification: {error}",
+                self.config.path.display()
+            ))
+        })?;
+        Ok(Some(conn))
+    }
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        params![table],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|found| found.is_some())
+    .map_err(|error| operation_error(format!("failed to inspect sqlite schema: {error}")))
+}
+
+/// Walks the whole chain in one read-only pass and reports the first break.
+///
+/// The order of the checks is the order a reader walks the ledger, so the
+/// reported failure is the earliest one: a removed entry is reported as the
+/// missing sequence, not as the `previous_hash` mismatch it also causes in the
+/// entry after it. The head and the schema version are checked last because
+/// they are not entries: a break there only matters once the chain itself is
+/// intact.
+fn verify_ledger(conn: &Connection) -> Result<HistoryReport> {
+    let schema_version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|error| {
+            operation_error(format!("failed to read ledger schema version: {error}"))
+        })?;
+
+    let mut entries_stmt = conn
+        .prepare(
+            "SELECT sequence, timestamp_ns, operation, previous_hash, entry_hash \
+             FROM entries ORDER BY sequence",
+        )
+        .map_err(|error| operation_error(format!("failed to read ledger entries: {error}")))?;
+    let stored: Vec<(i64, i64, String, String, String)> = entries_stmt
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })
+        .and_then(|rows| rows.collect())
+        .map_err(|error| operation_error(format!("failed to read ledger entries: {error}")))?;
+
+    let mut report = HistoryReport {
+        entries: stored.len() as u64,
+        head_hash: stored
+            .last()
+            .map(|entry| entry.4.clone())
+            .unwrap_or_else(|| ZERO_HASH.to_string()),
+        schema_version,
+        failure: None,
+    };
+
+    let mut values_stmt = conn
+        .prepare(
+            "SELECT item, value_sha256 FROM captured_values \
+             WHERE sequence = ?1 ORDER BY item",
+        )
+        .map_err(|error| {
+            operation_error(format!("failed to read ledger captured values: {error}"))
+        })?;
+
+    let mut previous_hash = ZERO_HASH.to_string();
+    let mut expected_sequence = 1i64;
+    for (sequence, timestamp_ns, operation, entry_previous_hash, entry_hash) in &stored {
+        if *sequence != expected_sequence {
+            report.failure = Some(HistoryFailure {
+                sequence: Some(expected_sequence),
+                reason: HistoryFailureReason::MissingEntry,
+            });
+            return Ok(report);
+        }
+        if entry_previous_hash != &previous_hash {
+            report.failure = Some(HistoryFailure {
+                sequence: Some(*sequence),
+                reason: HistoryFailureReason::PreviousHashMismatch,
+            });
+            return Ok(report);
+        }
+        let values: Vec<CapturedValue> = values_stmt
+            .query_map(params![sequence], |row| {
+                Ok(CapturedValue {
+                    item: row.get(0)?,
+                    value_sha256: row.get(1)?,
+                })
+            })
+            .and_then(|rows| rows.collect())
+            .map_err(|error| {
+                operation_error(format!(
+                    "failed to read captured values for entry {sequence}: {error}"
+                ))
+            })?;
+        let entry = Entry {
+            sequence: *sequence,
+            timestamp_ns: *timestamp_ns,
+            operation: operation.clone(),
+            values,
+            previous_hash: entry_previous_hash.clone(),
+            entry_hash: String::new(),
+        };
+        if compute_entry_hash(&previous_hash, &entry) != *entry_hash {
+            report.failure = Some(HistoryFailure {
+                sequence: Some(*sequence),
+                reason: HistoryFailureReason::EntryHashMismatch,
+            });
+            return Ok(report);
+        }
+        previous_hash = entry_hash.clone();
+        expected_sequence += 1;
+    }
+
+    // The head pointer is the only part of the chain a writer reads before
+    // appending, so a stale head silently forks the ledger on the next write.
+    let head: Option<(i64, String)> = conn
+        .query_row(
+            "SELECT sequence, entry_hash FROM head WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| operation_error(format!("failed to read ledger head: {error}")))?;
+    let last_sequence = stored.last().map(|entry| entry.0);
+    let head_matches = match (&head, last_sequence) {
+        // An empty ledger has no head row yet: `capture_history` writes one
+        // together with the first entry.
+        (None, None) => true,
+        (Some((sequence, hash)), Some(last)) => *sequence == last && *hash == previous_hash,
+        _ => false,
+    };
+    if !head_matches {
+        report.failure = Some(HistoryFailure {
+            sequence: last_sequence,
+            reason: HistoryFailureReason::HeadMismatch,
+        });
+        return Ok(report);
+    }
+
+    if schema_version != SCHEMA_VERSION {
+        report.failure = Some(HistoryFailure {
+            sequence: None,
+            reason: HistoryFailureReason::SchemaVersionMismatch,
+        });
+    }
+
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -1523,6 +1724,213 @@ mod tests {
         assert_eq!(head_sequence, 3);
         assert_eq!(head_hash, previous);
         assert_eq!(entries[2].2, "delete", "the last entry records the delete");
+    }
+
+    /// A history provider holding three entries: `set` A, `set` B, `delete` A.
+    fn ledger_with_three_entries() -> (TempDir, PathBuf, SqliteProvider) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("secrets.db");
+        let provider = history_provider(path.clone());
+        provider
+            .set(convention("A"), &SecretBytes::from_utf8("one"))
+            .unwrap();
+        provider
+            .set(convention("B"), &SecretBytes::from_utf8("two"))
+            .unwrap();
+        provider.delete(convention("A")).unwrap();
+        (dir, path, provider)
+    }
+
+    fn tamper(path: &Path, sql: &str) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(sql).unwrap();
+    }
+
+    #[test]
+    fn verify_history_reports_a_clean_chain() {
+        let (_dir, path, provider) = ledger_with_three_entries();
+
+        let report = provider.verify_history().unwrap().expect("a ledger");
+        assert!(report.is_ok(), "unexpected failure: {:?}", report.failure);
+        assert_eq!(report.entries, 3);
+        assert_eq!(report.schema_version, SCHEMA_VERSION);
+        let expected_head: String = Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT entry_hash FROM entries ORDER BY sequence DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(report.head_hash, expected_head);
+    }
+
+    #[test]
+    fn verify_history_reports_an_empty_ledger_as_verified() {
+        let dir = TempDir::new().unwrap();
+        let provider = history_provider(dir.path().join("secrets.db"));
+        // Opening is what creates the history tables; no secret is written.
+        provider.connection().unwrap();
+
+        let report = provider.verify_history().unwrap().expect("a ledger");
+        assert!(report.is_ok(), "unexpected failure: {:?}", report.failure);
+        assert_eq!(report.entries, 0);
+        assert_eq!(report.head_hash, ZERO_HASH);
+    }
+
+    #[test]
+    fn verify_history_reports_a_mutated_entry_hash() {
+        let (_dir, path, provider) = ledger_with_three_entries();
+        let forged = "f".repeat(64);
+        tamper(
+            &path,
+            &format!("UPDATE entries SET entry_hash = '{forged}' WHERE sequence = 2"),
+        );
+
+        let report = provider.verify_history().unwrap().expect("a ledger");
+        assert!(!report.is_ok());
+        assert_eq!(
+            report.failure,
+            Some(HistoryFailure {
+                sequence: Some(2),
+                reason: HistoryFailureReason::EntryHashMismatch,
+            })
+        );
+    }
+
+    #[test]
+    fn verify_history_reports_a_deleted_middle_entry() {
+        let (_dir, path, provider) = ledger_with_three_entries();
+        tamper(&path, "DELETE FROM entries WHERE sequence = 2");
+
+        let report = provider.verify_history().unwrap().expect("a ledger");
+        assert_eq!(report.entries, 2, "the report counts the rows it found");
+        assert_eq!(
+            report.failure,
+            Some(HistoryFailure {
+                sequence: Some(2),
+                reason: HistoryFailureReason::MissingEntry,
+            }),
+            "the missing sequence is reported, not the hash break it causes"
+        );
+    }
+
+    #[test]
+    fn verify_history_reports_a_deleted_first_entry() {
+        let (_dir, path, provider) = ledger_with_three_entries();
+        tamper(&path, "DELETE FROM entries WHERE sequence = 1");
+
+        let report = provider.verify_history().unwrap().expect("a ledger");
+        assert_eq!(
+            report.failure,
+            Some(HistoryFailure {
+                sequence: Some(1),
+                reason: HistoryFailureReason::MissingEntry,
+            })
+        );
+    }
+
+    #[test]
+    fn verify_history_reports_a_rewritten_backlink() {
+        let (_dir, path, provider) = ledger_with_three_entries();
+        let forged = "c".repeat(64);
+        tamper(
+            &path,
+            &format!("UPDATE entries SET previous_hash = '{forged}' WHERE sequence = 2"),
+        );
+
+        let report = provider.verify_history().unwrap().expect("a ledger");
+        assert_eq!(
+            report.failure,
+            Some(HistoryFailure {
+                sequence: Some(2),
+                reason: HistoryFailureReason::PreviousHashMismatch,
+            })
+        );
+    }
+
+    #[test]
+    fn verify_history_reports_a_mutated_value_digest() {
+        let (_dir, path, provider) = ledger_with_three_entries();
+        let forged = "a".repeat(64);
+        tamper(
+            &path,
+            &format!(
+                "UPDATE captured_values SET value_sha256 = '{forged}' \
+                 WHERE sequence = 1 AND item = 'project/production/A'"
+            ),
+        );
+
+        let report = provider.verify_history().unwrap().expect("a ledger");
+        assert_eq!(
+            report.failure,
+            Some(HistoryFailure {
+                sequence: Some(1),
+                reason: HistoryFailureReason::EntryHashMismatch,
+            })
+        );
+    }
+
+    #[test]
+    fn verify_history_reports_a_rewritten_head() {
+        let (_dir, path, provider) = ledger_with_three_entries();
+        let forged = "b".repeat(64);
+        tamper(
+            &path,
+            &format!("UPDATE head SET entry_hash = '{forged}' WHERE singleton = 1"),
+        );
+
+        let report = provider.verify_history().unwrap().expect("a ledger");
+        assert_eq!(
+            report.failure,
+            Some(HistoryFailure {
+                sequence: Some(3),
+                reason: HistoryFailureReason::HeadMismatch,
+            })
+        );
+    }
+
+    #[test]
+    fn verify_history_reports_a_wrong_schema_version() {
+        let (_dir, path, provider) = ledger_with_three_entries();
+        tamper(&path, "PRAGMA user_version = 1");
+
+        let report = provider.verify_history().unwrap().expect("a ledger");
+        assert_eq!(
+            report.failure,
+            Some(HistoryFailure {
+                sequence: None,
+                reason: HistoryFailureReason::SchemaVersionMismatch,
+            })
+        );
+        assert_eq!(report.schema_version, 1);
+        assert_eq!(report.entries, 3, "the chain itself still walked cleanly");
+    }
+
+    #[test]
+    fn verify_history_is_none_without_a_ledger() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("secrets.db");
+        let plain = provider(path.clone());
+
+        // Nothing on disk yet: no ledger, and no file is created to look for
+        // one.
+        assert_eq!(plain.verify_history().unwrap(), None);
+        assert!(!path.exists(), "verification must not create the store");
+
+        plain
+            .set(convention("A"), &SecretBytes::from_utf8("one"))
+            .unwrap();
+        assert_eq!(plain.verify_history().unwrap(), None);
+    }
+
+    #[test]
+    fn verify_history_rejects_a_missing_history_file() {
+        let dir = TempDir::new().unwrap();
+        let provider = history_provider(dir.path().join("absent.db"));
+
+        let error = provider.verify_history().unwrap_err().to_string();
+        assert!(error.contains("does not exist"), "{error}");
     }
 
     /// A provider with history on, holding one captured value, plus the id of

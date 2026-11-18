@@ -379,6 +379,26 @@ enum Commands {
         #[arg(long)]
         explain: bool,
     },
+    /// Verify a provider's append-only history ledger (0.22+).
+    ///
+    /// Reads the ledger without writing: it checks that entries start at
+    /// sequence 1 and are contiguous, that every entry hashes to its recorded
+    /// hash and names its predecessor's, that the head pointer names the last
+    /// entry, and that the ledger schema version is the one this build
+    /// understands. Exits non-zero at the first break.
+    ///
+    /// Example: `secretspec verify-history --provider 'sqlite:./secrets.db?history=true' --json`
+    VerifyHistory {
+        /// Provider backend whose history to verify
+        #[arg(short, long, env = "SECRETSPEC_PROVIDER", add = clap_complete::ArgValueCompleter::new(completion::providers))]
+        provider: Option<String>,
+        /// Profile to use
+        #[arg(short = 'P', long, env = "SECRETSPEC_PROFILE", add = clap_complete::ArgValueCompleter::new(completion::profiles))]
+        profile: Option<String>,
+        /// Print the verification report as JSON (value-free)
+        #[arg(long)]
+        json: bool,
+    },
     /// Emit a JSON Schema for the manifest's typed shape.
     ///
     /// Feed this to [quicktype](https://quicktype.io) to generate an idiomatic
@@ -1836,6 +1856,12 @@ pub fn main() -> Result<()> {
                 .wrap_err("Failed to check secrets")?;
             Ok(())
         }
+        // Verify a provider's append-only history ledger, read-only (0.22+).
+        Commands::VerifyHistory {
+            provider,
+            profile,
+            json,
+        } => verify_history(&cli.file, &cli.reason, &caller, provider, profile, json),
         // Export typed-accessor or configuration editor schemas (value-free).
         Commands::Schema {
             profile,
@@ -1914,6 +1940,91 @@ pub fn main() -> Result<()> {
             json,
         } => show_audit_log(project, action, tail, json),
     }
+}
+
+/// What `verify-history --json` prints. The wrapper keeps the provider name and
+/// the "keeps no verifiable history" answer scriptable without changing the
+/// report shape a provider returns.
+#[derive(serde::Serialize)]
+struct VerifyHistoryOutput {
+    provider: String,
+    /// Whether this provider keeps a verifiable ledger at all.
+    verifiable: bool,
+    /// Whether the ledger verified (always true when there is none).
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    history: Option<crate::HistoryReport>,
+}
+
+/// `secretspec verify-history` (0.22+): a read-only audit of an append-only
+/// ledger. Like every other provider-taking command it resolves the provider
+/// from `--provider`, then `SECRETSPEC_PROVIDER`, then the user-global default,
+/// so aliases and relative paths behave the way `check` and `set` do.
+fn verify_history(
+    file: &Option<PathBuf>,
+    reason: &Option<String>,
+    caller: &Option<CallerContext>,
+    provider: Option<String>,
+    profile: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let mut app = load_secrets(file, reason, caller)?;
+    if let Some(profile) = profile {
+        app.set_profile(profile);
+    }
+    if let Some(provider) = provider {
+        app.set_provider(provider);
+    }
+
+    let provider = app
+        .get_provider(None, None)
+        .into_diagnostic()
+        .wrap_err("Failed to build provider")?;
+    let name = provider.name().to_string();
+    let report = provider
+        .verify_history()
+        .into_diagnostic()
+        .wrap_err("Failed to verify history")?;
+
+    if json {
+        let output = VerifyHistoryOutput {
+            provider: name,
+            verifiable: report.is_some(),
+            ok: report.as_ref().is_none_or(|report| report.is_ok()),
+            history: report.clone(),
+        };
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output)
+                .into_diagnostic()
+                .wrap_err("Failed to serialize verification report")?
+        );
+    } else {
+        match &report {
+            None => println!("provider '{name}' keeps no verifiable history"),
+            Some(report) => match &report.failure {
+                None => println!(
+                    "verified {} entries (head {})",
+                    report.entries, report.head_hash
+                ),
+                Some(failure) => match failure.sequence {
+                    Some(sequence) => eprintln!(
+                        "history verification failed at sequence {sequence}: {}",
+                        failure.reason
+                    ),
+                    None => eprintln!("history verification failed: {}", failure.reason),
+                },
+            },
+        }
+    }
+
+    // A broken ledger is the command's answer, not an internal error: it is
+    // reported in full first (JSON output included), then signalled the way
+    // `check --json` signals a missing required secret.
+    if report.as_ref().is_some_and(|report| !report.is_ok()) {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 /// Reads and prints the local audit log, applying optional filters.

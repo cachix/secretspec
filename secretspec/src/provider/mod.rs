@@ -132,7 +132,10 @@ pub use registry::providers;
 pub use sync_provider::SyncProviderAdapter;
 #[cfg(test)]
 pub(crate) use traits::get_each;
-pub use traits::{DiscoveryContext, ProducedValuePersistence, Provider, ProviderValue};
+pub use traits::{
+    DiscoveryContext, HistoryFailure, HistoryFailureReason, HistoryReport,
+    ProducedValuePersistence, Provider, ProviderValue,
+};
 
 /// Validates a value at a provider boundary that only accepts text.
 pub(crate) fn require_utf8<'a>(

@@ -1743,7 +1743,27 @@ mod tests {
 
     fn tamper(path: &Path, sql: &str) {
         let conn = Connection::open(path).unwrap();
+        // A tamperer holds the file, so the ledger's own guards only slow them
+        // down: foreign keys are disabled for this connection, and a caller
+        // that needs to remove captured values drops the append-only trigger
+        // in its own SQL first. Reaching the state the verifier exists to
+        // detect therefore has to be possible, which is the point of the test.
+        conn.execute_batch("PRAGMA foreign_keys = OFF;")
+            .unwrap();
         conn.execute_batch(sql).unwrap();
+    }
+
+    /// Removes one entry the way a tamperer must: the dependent captured values
+    /// first, past the append-only trigger, then the entry itself.
+    fn tamper_delete_entry(path: &Path, sequence: i64) {
+        tamper(
+            path,
+            &format!(
+                "DROP TRIGGER IF EXISTS captured_values_is_append_only;\
+                 DELETE FROM captured_values WHERE sequence = {sequence};\
+                 DELETE FROM entries WHERE sequence = {sequence}"
+            ),
+        );
     }
 
     #[test]
@@ -1801,7 +1821,7 @@ mod tests {
     #[test]
     fn verify_history_reports_a_deleted_middle_entry() {
         let (_dir, path, provider) = ledger_with_three_entries();
-        tamper(&path, "DELETE FROM entries WHERE sequence = 2");
+        tamper_delete_entry(&path, 2);
 
         let report = provider.verify_history().unwrap().expect("a ledger");
         assert_eq!(report.entries, 2, "the report counts the rows it found");
@@ -1818,7 +1838,7 @@ mod tests {
     #[test]
     fn verify_history_reports_a_deleted_first_entry() {
         let (_dir, path, provider) = ledger_with_three_entries();
-        tamper(&path, "DELETE FROM entries WHERE sequence = 1");
+        tamper_delete_entry(&path, 1);
 
         let report = provider.verify_history().unwrap().expect("a ledger");
         assert_eq!(

@@ -613,6 +613,68 @@ $ secretspec check --profile production --json
 }
 ```
 
+### verify-history {/* #verify-history-022 */}
+
+<VersionCompatibility version="0.22" />
+
+Verify a provider's append-only history ledger without writing to it.
+
+```bash
+$ secretspec verify-history [--provider <PROVIDER>] [--profile <PROFILE>] [--json]
+```
+
+**Options:**
+- `-p, --provider <PROVIDER>` - Provider backend whose history to verify. An
+  alias from `secretspec.toml` is accepted, as for `check`. Env:
+  `SECRETSPEC_PROVIDER`
+- `-P, --profile <PROFILE>` - Profile to use. Env: `SECRETSPEC_PROFILE`
+- `--json` - Print the verification report as JSON (value-free)
+
+A provider that keeps no verifiable ledger — any provider without a history
+feature, or a SQLite store without history — answers "keeps no verifiable
+history" and exits 0. That is an answer, not an error.
+
+For the [sqlite provider](/providers/sqlite/#history-022)'s history, the
+command checks in one read-only pass that entries start at sequence 1 and are
+contiguous, that every entry's hash recomputes from its recorded contents and
+names its predecessor's hash, that the head pointer names the last entry, and
+that the ledger schema version is the one this build understands. The first
+break is reported and the command exits 1; nothing is repaired.
+
+```bash
+$ secretspec verify-history --provider 'sqlite:./secrets.db?history=true'
+verified 42 entries (head 9f2c0b1e...)
+
+# A broken ledger names the sequence and the machine-readable reason
+$ secretspec verify-history --provider 'sqlite:./secrets.db?history=true'
+history verification failed at sequence 17: entry_hash_mismatch
+$ echo $?
+1
+```
+
+`--json` reports the same facts, with `verifiable` false when the provider
+keeps no ledger and `history.failure` null when the chain verified:
+
+```bash
+$ secretspec verify-history --provider 'sqlite:./secrets.db?history=true' --json
+{
+  "provider": "sqlite",
+  "verifiable": true,
+  "ok": true,
+  "history": {
+    "entries": 42,
+    "head_hash": "9f2c0b1e...",
+    "schema_version": 2,
+    "failure": null
+  }
+}
+```
+
+A failing run also prints its report before exiting 1, so a script reads one
+JSON document either way. Verification never reveals a secret value: the
+report carries only entry counts, sequences, digests, and the schema version
+that the ledger already records.
+
 ### get
 
 `as_path` secrets use private temporary files. Printed paths persist for the

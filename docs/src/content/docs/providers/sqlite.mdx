@@ -180,6 +180,50 @@ written to in the wrong shape.
 A `?history=true` alias and a plain alias naming the same file address the
 same rows: history changes what a write records, not where the value lives.
 
+## Verifying the ledger {/* #verifying-the-ledger-022 */}
+
+<VersionCompatibility version="0.22" />
+
+The chain is only evidence if you can check it, so `secretspec verify-history`
+reads a history database and confirms it, without writing to it:
+
+```bash
+$ secretspec verify-history --provider 'sqlite:./secrets.db?history=true'
+verified 42 entries (head 9f2c0b1e...)
+```
+
+The command walks every entry once and checks that sequences start at 1 and
+have no gaps, that each entry's `entry_hash` recomputes from its own sequence,
+timestamp, operation, and `(item, value_sha256)` snapshot, that each
+`previous_hash` names the entry before it (the first names all zeros), that the
+`head` row names the last entry, and that `user_version` is the schema version
+this build understands. The first break is reported with its sequence and a
+machine-readable reason — `missing_entry`, `previous_hash_mismatch`,
+`entry_hash_mismatch`, `head_mismatch`, or `schema_version_mismatch` — and the
+command exits non-zero. It never repairs anything. `--json` prints the same
+report for scripts; see [the CLI reference](/reference/cli/#verify-history-022).
+
+A plain `sqlite:PATH` store, or a database where history never recorded an
+entry, has no `entries` table and reports that the provider keeps no verifiable
+history. That is distinguishable from a broken chain: nothing to check is not a
+failure.
+
+The command resolves the provider the way the rest of the CLI does, so it runs
+where a `secretspec.toml` is (pass `--file` if it is elsewhere) and accepts an
+alias from `[providers]` as readily as a URI on the command line.
+
+:::note[What this proves, and what it does not]
+Verification proves the ledger is internally consistent: no recorded entry or
+snapshot was altered, reordered, or removed after the fact, and no write slipped
+in behind the chain. It does **not** prove the ledger is authentic. Anyone who
+can write the database file can rewrite the whole chain — and the `secrets`
+table with it — and every check above will pass. There is no signature and no
+external witness, so the guarantee is against accidental damage and tool-level
+mutation, not against an attacker who already owns the file. Keep a copy of the
+head hash somewhere the database's writer cannot reach (a CI log, another
+system) if you need to detect a wholesale rewrite.
+:::
+
 ## CI/CD and containers
 
 Give each job a private database path and let `{project}/{profile}/{key}`

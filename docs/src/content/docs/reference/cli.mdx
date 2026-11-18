@@ -631,8 +631,10 @@ $ secretspec verify-history [--provider <PROVIDER>] [--profile <PROFILE>] [--jso
 - `--json` - Print the verification report as JSON (value-free)
 
 A provider that keeps no verifiable ledger — any provider without a history
-feature, or a SQLite store without history — answers "keeps no verifiable
-history" and exits 0. That is an answer, not an error.
+feature, or a SQLite store without history — names the store it checked and
+answers "keeps no verifiable history", exiting 0. That is an answer, not an
+error. The named store is the credential-free provider URI, so a machine with
+several stores can tell which file answered.
 
 For the [sqlite provider](/providers/sqlite/#history-022)'s history, the
 command checks in one read-only pass that entries start at sequence 1 and are
@@ -652,13 +654,15 @@ $ echo $?
 1
 ```
 
-`--json` reports the same facts, with `verifiable` false when the provider
-keeps no ledger and `history.failure` null when the chain verified:
+`--json` reports the same facts, plus `uri` (the store that was checked),
+with `verifiable` false when the provider keeps no ledger and `history.failure`
+null when the chain verified:
 
 ```bash
 $ secretspec verify-history --provider 'sqlite:./secrets.db?history=true' --json
 {
   "provider": "sqlite",
+  "uri": "sqlite:./secrets.db?history=true",
   "verifiable": true,
   "ok": true,
   "history": {

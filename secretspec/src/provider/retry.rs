@@ -500,6 +500,17 @@ impl Provider for RetryingProvider {
     fn exists_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashSet<String>> {
         self.read(|| self.inner.exists_many(requests))
     }
+
+    /// Forwarded rather than left to the trait default.
+    ///
+    /// The default answers `Ok(None)` ("keeps no verifiable history"), and every
+    /// provider the CLI builds is wrapped here, so a decorator that skipped this
+    /// method would report an existing ledger as absent through the one path
+    /// users take. Verification is a read-only audit, so it rides the same read
+    /// retry policy as the other reads.
+    fn verify_history(&self) -> Result<Option<crate::HistoryReport>> {
+        self.read(|| self.inner.verify_history())
+    }
 }
 
 /// Serializes fallible initialization and remembers only successful attempts.

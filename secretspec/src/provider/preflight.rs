@@ -314,6 +314,16 @@ impl Provider for PreflightGuard {
         self.check()?;
         self.inner.exists_many(requests)
     }
+
+    /// Forwarded rather than left to the trait default, which would answer
+    /// `Ok(None)` for every guarded provider and report a real ledger as absent.
+    ///
+    /// Unlike the value paths above, this does not run [`Self::check`]: the
+    /// answer is a value-free, read-only audit of a ledger the provider already
+    /// has on disk, and an audit must not turn into a login or a prompt.
+    fn verify_history(&self) -> Result<Option<crate::HistoryReport>> {
+        self.inner.verify_history()
+    }
 }
 
 #[cfg(test)]

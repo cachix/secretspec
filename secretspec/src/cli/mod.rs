@@ -1948,6 +1948,9 @@ pub fn main() -> Result<()> {
 #[derive(serde::Serialize)]
 struct VerifyHistoryOutput {
     provider: String,
+    /// The credential-free URI of the store that was checked, so an operator
+    /// with several stores can tell which one answered.
+    uri: String,
     /// Whether this provider keeps a verifiable ledger at all.
     verifiable: bool,
     /// Whether the ledger verified (always true when there is none).
@@ -1981,6 +1984,8 @@ fn verify_history(
         .into_diagnostic()
         .wrap_err("Failed to build provider")?;
     let name = provider.name().to_string();
+    // Value-free: a provider URI carries a store address, never a secret.
+    let uri = provider.uri();
     let report = provider
         .verify_history()
         .into_diagnostic()
@@ -1989,6 +1994,7 @@ fn verify_history(
     if json {
         let output = VerifyHistoryOutput {
             provider: name,
+            uri,
             verifiable: report.is_some(),
             ok: report.as_ref().is_none_or(|report| report.is_ok()),
             history: report.clone(),
@@ -2001,7 +2007,7 @@ fn verify_history(
         );
     } else {
         match &report {
-            None => println!("provider '{name}' keeps no verifiable history"),
+            None => println!("provider '{name}' ({uri}) keeps no verifiable history"),
             Some(report) => match &report.failure {
                 None => println!(
                     "verified {} entries (head {})",

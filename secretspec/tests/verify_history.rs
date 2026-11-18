@@ -106,6 +106,15 @@ fn a_written_ledger_verifies_and_reports_its_head() {
     assert!(json.status.success());
     let report: Value = serde_json::from_slice(&json.stdout).unwrap();
     assert_eq!(report["provider"], "sqlite");
+    // The alias is expanded verbatim, so the store the command audited is the
+    // one the write went to; the query string that turns history on survives.
+    assert!(
+        report["uri"]
+            .as_str()
+            .unwrap()
+            .ends_with("secrets.db?history=true"),
+        "report: {report}"
+    );
     assert_eq!(report["verifiable"], true);
     assert_eq!(report["ok"], true);
     assert_eq!(report["history"]["entries"], 1);
@@ -134,6 +143,10 @@ fn json_reports_a_provider_without_a_ledger() {
     );
     assert!(output.status.success());
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        report["uri"].as_str().unwrap().ends_with("plain.db"),
+        "report: {report}"
+    );
     assert_eq!(report["verifiable"], false);
     assert_eq!(report["ok"], true);
     assert!(report.get("history").is_none());

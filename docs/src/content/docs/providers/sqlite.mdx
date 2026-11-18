@@ -206,7 +206,9 @@ report for scripts; see [the CLI reference](/reference/cli/#verify-history-022).
 A plain `sqlite:PATH` store, or a database where history never recorded an
 entry, has no `entries` table and reports that the provider keeps no verifiable
 history. That is distinguishable from a broken chain: nothing to check is not a
-failure.
+failure. Both the answer and the JSON report name the store that was checked, so
+a machine holding a plain store and a ledger at once can see which file
+answered.
 
 The command resolves the provider the way the rest of the CLI does, so it runs
 where a `secretspec.toml` is (pass `--file` if it is elsewhere) and accepts an

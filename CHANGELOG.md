@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `secretspec verify-history` (0.22+) now finds the ledger it is asked to
+  audit: every provider the CLI builds is wrapped for retries (and preflight),
+  and those wrappers reported "keeps no verifiable history" for a store that
+  had recorded one. Writes through a `[providers]` alias and its verification
+  now agree.
+
 - Concurrent `set` calls on the sqlite provider (0.22+) no longer fail
   intermittently with "database is locked": `set` now takes the write lock up
   front (`BEGIN IMMEDIATE`) so a second writer waits out `busy_timeout`

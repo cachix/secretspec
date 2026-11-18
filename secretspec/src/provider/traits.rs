@@ -1201,4 +1201,7 @@ impl<T: Provider> Provider for std::sync::Arc<T> {
     fn exists_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashSet<String>> {
         (**self).exists_many(requests)
     }
+    fn verify_history(&self) -> Result<Option<HistoryReport>> {
+        (**self).verify_history()
+    }
 }

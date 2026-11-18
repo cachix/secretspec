@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Concurrent `set` calls on the sqlite provider (0.22+) no longer fail
+  intermittently with "database is locked": `set` now takes the write lock up
+  front (`BEGIN IMMEDIATE`) so a second writer waits out `busy_timeout`
+  instead of being refused. Databases whose `secrets.value` column was created
+  as `STRICT` `TEXT` by an older build keep working: values are written as
+  text there, and non-UTF-8 values fail with a clear error instead of a bare
+  constraint violation.
+
 ### Added
 
 - Rust embedders can use `RedactionStream::end_region()` (0.22+) to reuse a

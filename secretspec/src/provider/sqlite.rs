@@ -243,6 +243,23 @@ impl SqliteProvider {
     }
 }
 
+/// Whether the `secrets.value` column of this database was created as `TEXT`.
+///
+/// Databases created before values became bytes declared the column `TEXT` in
+/// a `STRICT` table, and `CREATE TABLE IF NOT EXISTS` leaves that shape in
+/// place. A `STRICT` `TEXT` column refuses a `BLOB`, so such a store has to be
+/// written as text or every `set` would fail on an existing vault.
+fn stores_values_as_text(conn: &Connection) -> rusqlite::Result<bool> {
+    let declared: Option<String> = conn
+        .query_row(
+            "SELECT type FROM pragma_table_info('secrets') WHERE name = 'value'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(declared.is_some_and(|declared| declared.eq_ignore_ascii_case("TEXT")))
+}
+
 impl Provider for SqliteProvider {
     fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
         Ok(NativeAddress {
@@ -281,15 +298,42 @@ impl Provider for SqliteProvider {
         self.check_writable(addr)?;
         let item = super::flat_item(self, addr)?;
         let mut conn = self.connection()?;
-        let tx = conn.transaction().map_err(|error| {
-            operation_error(format!("failed to start sqlite transaction: {error}"))
+        // IMMEDIATE, not deferred: `set` reads the schema before it writes, and
+        // a deferred transaction that upgrades a read lock to a write lock
+        // fails at once with "database is locked" instead of waiting out
+        // `busy_timeout` when another connection holds the write lock.
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| {
+                operation_error(format!("failed to start sqlite transaction: {error}"))
+            })?;
+        let text_column = stores_values_as_text(&tx).map_err(|error| {
+            operation_error(format!(
+                "failed to inspect sqlite provider schema on '{}': {error}",
+                self.config.path.display()
+            ))
         })?;
-        tx.execute(
-            "INSERT INTO secrets (item, value) VALUES (?1, ?2) \
-             ON CONFLICT(item) DO UPDATE SET value = excluded.value",
-            params![item.as_ref(), value.expose_secret()],
-        )
-        .map_err(|error| {
+        let written = if text_column {
+            let text = std::str::from_utf8(value.expose_secret()).map_err(|_| {
+                operation_error(format!(
+                    "sqlite database '{}' stores values as TEXT and cannot hold the \
+                     non-UTF-8 value for '{item}'",
+                    self.config.path.display()
+                ))
+            })?;
+            tx.execute(
+                "INSERT INTO secrets (item, value) VALUES (?1, ?2) \
+                 ON CONFLICT(item) DO UPDATE SET value = excluded.value",
+                params![item.as_ref(), text],
+            )
+        } else {
+            tx.execute(
+                "INSERT INTO secrets (item, value) VALUES (?1, ?2) \
+                 ON CONFLICT(item) DO UPDATE SET value = excluded.value",
+                params![item.as_ref(), value.expose_secret()],
+            )
+        };
+        written.map_err(|error| {
             operation_error(format!(
                 "failed to write sqlite provider entry '{item}': {error}"
             ))
@@ -936,6 +980,57 @@ mod tests {
             )
             .unwrap();
         assert_eq!(blob, [0x00, 0xff, 0x80]);
+    }
+
+    /// A store created when `secrets.value` was a `STRICT` `TEXT` column keeps
+    /// that shape, because `CREATE TABLE IF NOT EXISTS` never alters it. Writes
+    /// must still succeed there, as text, or every existing vault breaks on
+    /// upgrade.
+    #[test]
+    fn a_legacy_text_value_column_is_still_written_and_read() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("secrets.db");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE secrets (item TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;\
+                 INSERT INTO secrets VALUES ('project/production/OLD', 'kept');",
+            )
+            .unwrap();
+        let provider = history_provider(path.clone());
+        provider
+            .set(convention("NEW"), &SecretBytes::from_utf8("fresh"))
+            .unwrap();
+        assert_eq!(
+            provider
+                .get(convention("NEW"))
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            b"fresh"
+        );
+        assert_eq!(
+            provider
+                .get(convention("OLD"))
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            b"kept"
+        );
+        let typed: String = Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT typeof(value) FROM secrets WHERE item = 'project/production/NEW'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(typed, "text");
+
+        let error = provider
+            .set(convention("BIN"), &SecretBytes::from_vec(vec![0xff, 0xfe]))
+            .unwrap_err();
+        assert!(error.to_string().contains("non-UTF-8"), "{error}");
     }
 
     #[test]

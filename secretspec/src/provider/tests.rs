@@ -1293,6 +1293,22 @@ mod integration_tests {
                     .expect("Should create file provider with path");
                 (provider, Some(temp_dir))
             }
+            #[cfg(feature = "sqlite")]
+            // "sqlite" runs the plain store, "sqlite-history" the same store
+            // with the opt-in append-only history ledger.
+            "sqlite" | "sqlite-history" => {
+                let temp_dir = TempDir::new().expect("Create temp directory");
+                let db_path = temp_dir.path().join("secrets.db");
+                let query = if provider_name == "sqlite-history" {
+                    "?history=true"
+                } else {
+                    ""
+                };
+                let provider_spec = format!("sqlite:{}{query}", db_path.display());
+                let provider = Box::<dyn Provider>::try_from(provider_spec.as_str())
+                    .expect("Should create sqlite provider with path");
+                (provider, Some(temp_dir))
+            }
             #[cfg(feature = "ejson")]
             "ejson" => create_ejson_provider(),
             "pass" => {

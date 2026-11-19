@@ -7,10 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `secretspec verify-history` (0.22+) now finds the ledger it is asked to
+  audit: every provider the CLI builds is wrapped for retries (and preflight),
+  and those wrappers reported "keeps no verifiable history" for a store that
+  had recorded one. Writes through a `[providers]` alias and its verification
+  now agree.
+
+- Concurrent `set` calls on the sqlite provider (0.22+) no longer fail
+  intermittently with "database is locked": `set` now takes the write lock up
+  front (`BEGIN IMMEDIATE`) so a second writer waits out `busy_timeout`
+  instead of being refused. Databases whose `secrets.value` column was created
+  as `STRICT` `TEXT` by an older build keep working: values are written as
+  text there, and non-UTF-8 values fail with a clear error instead of a bare
+  constraint violation.
+
 ### Added
 
 - Rust embedders can use `RedactionStream::end_region()` (0.22+) to reuse a
   redaction stream across text regions identified by their own parser.
+
+- `secretspec verify-history` (0.22+) makes the sqlite provider's opt-in
+  history ledger checkable: it walks the hash chain read-only and reports the
+  first break, its sequence, and a machine-readable reason (`missing_entry`,
+  `previous_hash_mismatch`, `entry_hash_mismatch`, `head_mismatch`,
+  `schema_version_mismatch`), exiting non-zero on failure. Providers that keep
+  no verifiable ledger say so instead. Rust embedders get the same check as
+  `Provider::verify_history()`, which returns a value-free `HistoryReport`
+  (entry count, head hash, ledger schema version, and any failure) or `None`.
 
 - File delivery (0.22+) uses private temporary files by default, without a
   helper, on Windows, Linux, and macOS. Opt into process-owned memory-backed
@@ -100,6 +125,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identity with `from`, `format`, and `credentials`, or select JSON/INI fields
   from another declared secret with `from` and `extract`. Dependencies resolve
   in order and scopes include hidden inputs without exposing their values.
+
+- A `sqlite` provider stores secrets in a local SQLite database file
+  (`sqlite:./secrets.db`), protected by filesystem permissions alone, with
+  read, write, delete, and batch reads. Appending `?history=true` turns on an
+  opt-in, append-only, hash-chained history of every write inside the same
+  file; history is off by default (0.22+). Concurrent history-enabled opens
+  serialize schema setup to avoid trigger creation races.
 
 - Provider reads now retry recognized transient failures with bounded exponential
   backoff, including CLI providers such as BWS. Set `[defaults.retry].max_attempts`

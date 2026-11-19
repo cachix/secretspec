@@ -55,6 +55,8 @@ disabled!("scaleway", SCALEWAY);
 disabled!("setec", SETEC);
 #[cfg(not(feature = "sops"))]
 disabled!("sops", SOPS);
+#[cfg(not(feature = "sqlite"))]
+disabled!("sqlite", SQLITE);
 #[cfg(not(feature = "vault"))]
 disabled!("vault", VAULT);
 
@@ -92,6 +94,24 @@ mod tests {
                 ref provider,
                 feature: "setec"
             } if provider == "setec"
+        ));
+    }
+
+    #[test]
+    #[cfg(not(feature = "sqlite"))]
+    fn disabled_sqlite_provider_reports_its_feature() {
+        let spec = "sqlite:./secrets.db";
+        assert!(super::super::spec_names_known_provider(spec).unwrap());
+        let error = match Box::<dyn super::super::Provider>::try_from(spec) {
+            Ok(_) => panic!("disabled sqlite provider unexpectedly constructed"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            crate::SecretSpecError::ProviderFeatureDisabled {
+                ref provider,
+                feature: "sqlite"
+            } if provider == "sqlite"
         ));
     }
 }

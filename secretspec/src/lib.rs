@@ -131,9 +131,10 @@ pub use provider::external::{
     ProviderDiscovery, ProviderEndpoint, RegistrationScope, set_provider_discovery,
 };
 pub use provider::{
-    Address, AsyncProvider, AsyncProviderAdapter, DiscoveryContext, ProducedValuePersistence,
-    Provider, ProviderBase, ProviderCredentials, ProviderInfo, ProviderValue, RetryOperation,
-    RetryOwnership, SyncProviderAdapter, providers,
+    Address, AsyncProvider, AsyncProviderAdapter, DiscoveryContext, HistoryFailure,
+    HistoryFailureReason, HistoryReport, ProducedValuePersistence, Provider, ProviderBase,
+    ProviderCredentials, ProviderInfo, ProviderValue, RetryOperation, RetryOwnership,
+    SyncProviderAdapter, providers,
 };
 pub use redaction::{RedactionStream, Redactor, TerminalRedactionStream};
 pub use report::{

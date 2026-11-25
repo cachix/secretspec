@@ -798,8 +798,8 @@ sops://secrets/{project}/{profile}.enc.json
 sops://secrets/{project}/.env.{profile}.enc?format=dotenv
 ```
 
-**Features**: Read/write, YAML, JSON, dotenv, and INI files, SOPS key-service
-support, and profile-aware templated paths
+**Features**: Read/write, delete (0.22+), YAML, JSON, dotenv, and INI files,
+SOPS key-service support, and profile-aware templated paths
 **Prerequisites**: The `sops` CLI and the required SOPS key configuration;
 build with `--features sops` (0.17+)
 **Authentication**: SOPS environment variables or the

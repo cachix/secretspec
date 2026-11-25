@@ -1484,10 +1484,16 @@ TEXT = { description = "encoded input", type = "x509_identity", as_path = true }
         .unwrap();
     spec.set_text("TEXT", &BASE64.encode(&bytes)).unwrap();
     let result = spec.resolve().unwrap();
-    for name in ["RAW", "TEXT"] {
-        let path = result.secrets[name].path.as_ref().unwrap();
+    let paths: Vec<_> = ["RAW", "TEXT"]
+        .into_iter()
+        .map(|name| result.secrets[name].path.clone().unwrap())
+        .collect();
+    for path in &paths {
         assert_eq!(fs::read(path).unwrap(), bytes);
-        fs::remove_file(path).unwrap();
+    }
+    result.close().unwrap();
+    for path in &paths {
+        assert!(!std::path::Path::new(path).exists(), "{path}");
     }
 }
 

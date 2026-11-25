@@ -121,6 +121,7 @@ final class Builder
                 $entry['as_path'] ?? false,
                 $entry['source'] ?? '',
                 $entry['source_provider'] ?? null,
+                $response['file_lease_id'] ?? null,
             );
         }
 
@@ -130,6 +131,7 @@ final class Builder
             $secrets,
             $response['missing_optional'] ?? [],
             $response['scope'] ?? null,
+            $response['file_lease_id'] ?? null,
         );
     }
 

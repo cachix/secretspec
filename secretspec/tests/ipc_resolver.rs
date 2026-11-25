@@ -193,6 +193,23 @@ UNRELATED = { description = "named resolution must not read this", required = tr
                                 0o400
                             );
                         }
+                        let parent = std::path::Path::new(&leased.path).parent().unwrap();
+                        assert!(
+                            parent
+                                .file_name()
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .starts_with("secretspec-ipc-")
+                        );
+                        #[cfg(unix)]
+                        assert!(
+                            std::fs::read_to_string(parent.join(".owner"))
+                                .unwrap()
+                                .parse::<u32>()
+                                .unwrap()
+                                > 0
+                        );
                         active_lease = Some((leased.path, leased.path_lease_id));
                         events.insert("lease_created");
                     }
@@ -222,6 +239,7 @@ UNRELATED = { description = "named resolution must not read this", required = tr
                     .await
                     .unwrap();
                 assert!(!std::path::Path::new(&path).exists());
+                assert!(!std::path::Path::new(&path).parent().unwrap().exists());
                 events.insert("disconnect_cleanup");
                 events.insert("closed");
             }
@@ -607,4 +625,62 @@ SESSION_TOKEN = { description = "session token", type = "password", generate = t
         "resolver leaked generation progress: {}",
         String::from_utf8_lossy(&diagnostics)
     );
+}
+
+#[tokio::test]
+async fn resolver_cleanup_preserves_replaced_paths() {
+    for explicit_release in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let session = ResolverSession::launch(
+            launch_options(), product(), limits(),
+            InitializeApplication {
+                manifest: Manifest::Inline {
+                    toml: "[project]\nname='replacement'\nrevision='1.0'\nrequire_reason=false\n[profiles.default]\nREVIEW_KEY={description='key',default='fixture',as_path=true}\n".into(),
+                    base_dir: root.path().to_string_lossy().into_owned(),
+                },
+                provider: Some("env".into()), profile: None, scope: None, reason: None,
+                requested_authorization_duration_ms: None,
+            }, deadline(Duration::from_secs(5)),
+        ).await.unwrap();
+        let GetResult::Path(file) = session
+            .get(
+                &GetParams {
+                    name: "REVIEW_KEY".into(),
+                    representation: Representation::Path,
+                    purpose: Purpose {
+                        consumer: "integration-test".into(),
+                        operation: "resolve".into(),
+                        host: None,
+                        path: None,
+                    },
+                },
+                deadline(Duration::from_secs(5)),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("expected a path")
+        };
+        std::fs::remove_file(&file.path).unwrap();
+        std::fs::write(&file.path, b"replacement").unwrap();
+        if explicit_release {
+            session
+                .release(
+                    &ReleaseParams {
+                        path_lease_ids: vec![file.path_lease_id],
+                    },
+                    deadline(Duration::from_secs(5)),
+                )
+                .await
+                .unwrap();
+        }
+        session
+            .close(deadline(Duration::from_secs(5)))
+            .await
+            .unwrap();
+        let preserved = std::fs::read(&file.path).ok();
+        let _ = std::fs::remove_file(&file.path);
+        let _ = std::fs::remove_dir(std::path::Path::new(&file.path).parent().unwrap());
+        assert_eq!(preserved.as_deref(), Some(b"replacement".as_slice()));
+    }
 }

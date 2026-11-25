@@ -1,4 +1,5 @@
 use crate::config::{Config, GlobalConfig, GlobalDefaults, Profile as ConfigProfile, Project};
+use crate::prompt::CheckedPrompt;
 #[cfg(feature = "kubernetes")]
 use crate::provider::kubernetes::{KubernetesKind, KubernetesProvider};
 use crate::provider::{Provider, providers, spec_names_known_provider};
@@ -137,7 +138,7 @@ fn prompt_provider_credential(
     };
     let entered = inquire::Password::new(&prompt)
         .without_confirmation()
-        .prompt()
+        .prompt_checked()
         .map_err(|_| {
             crate::SecretSpecError::ProviderOperationFailed(
                 "provider credential prompt failed".to_string(),
@@ -927,6 +928,10 @@ fn load_secrets(
     .into_diagnostic()
     .wrap_err("Failed to load secretspec configuration")?;
 
+    // Printed file paths belong to the caller, including across a shell
+    // command substitution. Resolve that owner lazily only when handing off files.
+    secrets.detached_file_owner = crate::file_lease::DetachedOwner::Invoker;
+
     // Destination previews are CLI presentation. The core computes the
     // provider-specific metadata and invokes this observer only when a CLI
     // caller installs it; SDK/library writes remain free of preview output.
@@ -1014,7 +1019,7 @@ fn select_config_init_provider(provider: Option<String>) -> Result<String> {
         .map(|info| info.display_with_examples())
         .collect();
     let selected_choice = Select::new("Select your preferred provider backend:", provider_choices)
-        .prompt()
+        .prompt_checked()
         .into_diagnostic()?;
 
     let selected_provider = selected_choice
@@ -1028,7 +1033,7 @@ fn select_config_init_provider(provider: Option<String>) -> Result<String> {
 
         let directory = Text::new("File provider root directory:")
             .with_help_message("Use a relative path such as ./.secrets or an absolute path")
-            .prompt()
+            .prompt_checked()
             .into_diagnostic()?;
         let spec = format!("file:{}", directory.trim());
         Box::<dyn Provider>::try_from(spec.as_str())
@@ -1046,14 +1051,14 @@ fn select_config_init_provider(provider: Option<String>) -> Result<String> {
                     "Select your preferred kubernetes object kind:",
                     kind_choices,
                 )
-                .prompt()
+                .prompt_checked()
                 .into_diagnostic()?;
                 let name = Text::new("Kubernetes object name:")
-                    .prompt()
+                    .prompt_checked()
                     .into_diagnostic()?;
                 let namespace = Text::new("Kubernetes namespace:")
                     .with_help_message("Leave empty to use the default cluster namespace")
-                    .prompt()
+                    .prompt_checked()
                     .into_diagnostic()?;
                 let namespace = if namespace.is_empty() {
                     None
@@ -1095,7 +1100,7 @@ fn select_config_init_profile(profile: Option<String>) -> Result<Option<String>>
     let profiles = vec!["development", "default", "none"];
     let profile_choice = Select::new("Select your default profile:", profiles)
         .with_help_message("'development' is recommended for local development environments")
-        .prompt()
+        .prompt_checked()
         .into_diagnostic()?;
 
     Ok((profile_choice != "none").then(|| profile_choice.to_string()))
@@ -1142,6 +1147,9 @@ fn caller_context(cli: &Cli) -> Result<Option<CallerContext>> {
 /// * `Err` - If any error occurred during execution
 #[doc(hidden)]
 pub fn main() -> Result<()> {
+    if let Some(code) = crate::file_lease::maybe_run_keeper() {
+        std::process::exit(code);
+    }
     completion::complete();
     let matches = Cli::command().get_matches();
     let typed = TypedArgs::from_matches(&matches);
@@ -1165,7 +1173,7 @@ pub fn main() -> Result<()> {
                 use inquire::Confirm;
                 let overwrite = Confirm::new("secretspec.toml already exists. Overwrite?")
                     .with_default(false)
-                    .prompt()
+                    .prompt_checked()
                     .into_diagnostic()?;
 
                 if !overwrite {
@@ -1293,7 +1301,7 @@ pub fn main() -> Result<()> {
             let description = match description {
                 Some(description) => description,
                 None => inquire::Text::new(&format!("Description for {name}:"))
-                    .prompt()
+                    .prompt_checked()
                     .into_diagnostic()?,
             };
             let description = description.trim();
@@ -1551,7 +1559,7 @@ pub fn main() -> Result<()> {
                                 source.display_provider()
                             ))
                             .without_confirmation()
-                            .prompt()
+                            .prompt_checked()
                             .into_diagnostic()?;
                             if entered.is_empty() {
                                 println!("✗ Skipped {credential_name} (empty)");
@@ -1685,7 +1693,7 @@ pub fn main() -> Result<()> {
                     if names.len() == 1 { "value" } else { "values" }
                 ))
                 .with_default(false)
-                .prompt()
+                .prompt_checked()
                 .into_diagnostic()?;
                 if !confirmed {
                     println!("Cancelled.");

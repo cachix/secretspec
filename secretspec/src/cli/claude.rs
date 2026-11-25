@@ -1,5 +1,6 @@
 use super::{TypedArgs, shell_quote};
 use crate::config::GlobalConfig;
+use crate::prompt::CheckedPrompt;
 use crate::{CallerContext, NamedResolution, Secret, Secrets, Spec};
 use clap::Subcommand;
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
@@ -431,7 +432,7 @@ fn read_credential() -> Result<String> {
     if std::io::stdin().is_terminal() {
         inquire::Password::new("Enter Claude Code API or gateway credential:")
             .without_confirmation()
-            .prompt()
+            .prompt_checked()
             .into_diagnostic()
     } else {
         let mut value = String::new();
@@ -997,7 +998,7 @@ fn confirm(yes: bool, prompt: &str) -> Result<bool> {
     }
     inquire::Confirm::new(prompt)
         .with_default(false)
-        .prompt()
+        .prompt_checked()
         .into_diagnostic()
 }
 

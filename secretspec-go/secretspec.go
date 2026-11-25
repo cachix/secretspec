@@ -97,8 +97,9 @@ func (s ResolvedSecret) Get() string {
 
 // Resolved is a successful resolution, mirroring the Rust Resolved wrapper.
 type Resolved struct {
-	Provider string
-	Profile  string
+	fileLeaseID *string
+	Provider    string
+	Profile     string
 	// Scope is the selected manifest scope, or nil for a full-profile resolve (0.17+).
 	Scope           *string
 	Secrets         map[string]ResolvedSecret
@@ -143,13 +144,26 @@ func (r *Resolved) FieldsJSON() ([]byte, error) {
 	return json.Marshal(r.Fields())
 }
 
-// Close removes the temp files backing any as_path secrets in this result. The
-// resolver persists those files (mode 0400) so their paths stay valid after
-// resolve returns; the caller owns their lifetime. Call it (e.g.
-// `defer resolved.Close()`) when done so secret files do not accumulate in the
-// temp dir. Non-as_path secrets and a no_values result hold no path and are
-// skipped, and a file already gone is not an error.
+// Close revokes the result's secret files, including hidden dependencies (0.22+).
+// Call it after the last consumer finishes. Older runtimes use filesystem cleanup.
+// Repeated calls are harmless.
 func (r *Resolved) Close() error {
+	if r.fileLeaseID != nil {
+		if err := ensureCallLoaded(); err != nil {
+			return err
+		}
+		payload, err := json.Marshal(map[string]any{"request_version": 1, "operation": "release_files",
+			"source": map[string]any{"lease_id": *r.fileLeaseID}})
+		if err != nil {
+			return err
+		}
+		raw, err := nativeCall(string(payload))
+		if err != nil {
+			return err
+		}
+		_, err = parseEnvelope(raw, "release_files", 1, func(r *responseJSON) int { return r.SchemaVersion })
+		return err
+	}
 	var firstErr error
 	for _, secret := range r.Secrets {
 		if secret.AsPath && secret.Path != nil {
@@ -251,6 +265,7 @@ type secretJSON struct {
 }
 
 type responseJSON struct {
+	FileLeaseID     *string               `json:"file_lease_id"`
 	SchemaVersion   int                   `json:"schema_version"`
 	Provider        string                `json:"provider"`
 	Profile         string                `json:"profile"`
@@ -321,6 +336,7 @@ func (b *Builder) Load() (*Resolved, error) {
 		}
 	}
 	return &Resolved{
+		fileLeaseID:     resp.FileLeaseID,
 		Provider:        resp.Provider,
 		Profile:         resp.Profile,
 		Scope:           resp.Scope,

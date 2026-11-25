@@ -10,6 +10,7 @@ use crate::provider::sops::pattern::SopsPathPattern;
 use crate::{Result, SecretSpecError};
 use etcetera::{BaseStrategy, choose_base_strategy};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
@@ -290,36 +291,33 @@ impl SopsProvider {
         }
     }
 
+    fn parse_json_document(content: &[u8]) -> Result<serde_json::Value> {
+        serde_json::from_slice(content).map_err(|error| {
+            Self::provider_error(format!(
+                "Failed to parse JSON emitted by the SOPS CLI: {error}"
+            ))
+        })
+    }
+
+    fn value_at<'a>(data: &'a serde_json::Value, path: &[String]) -> Option<&'a serde_json::Value> {
+        let mut current = data;
+        for segment in path {
+            match current {
+                serde_json::Value::Object(map) => current = map.get(segment)?,
+                _ => return None,
+            }
+        }
+        Some(current)
+    }
+
     fn parse_decrypted_json(
         &self,
         content: &[u8],
         parts: &AddressParts<'_>,
     ) -> Result<Option<String>> {
-        let data: serde_json::Value = serde_json::from_slice(content).map_err(|error| {
-            Self::provider_error(format!(
-                "Failed to parse JSON emitted by the SOPS CLI: {error}"
-            ))
-        })?;
-
+        let data = Self::parse_json_document(content)?;
         for path in self.lookup_paths(parts)? {
-            let mut current = &data;
-            let mut found = true;
-            for segment in path {
-                match current {
-                    serde_json::Value::Object(map) => match map.get(&segment) {
-                        Some(value) => current = value,
-                        None => {
-                            found = false;
-                            break;
-                        }
-                    },
-                    _ => {
-                        found = false;
-                        break;
-                    }
-                }
-            }
-            if found {
+            if let Some(current) = Self::value_at(&data, &path) {
                 return Ok(Some(match current {
                     serde_json::Value::String(value) => value.clone(),
                     other => other.to_string(),
@@ -330,12 +328,8 @@ impl SopsProvider {
         Ok(None)
     }
 
-    fn set_path(&self, parts: &AddressParts<'_>) -> Result<String> {
-        let paths = self.lookup_paths(parts)?;
-        let chosen = paths
-            .first()
-            .ok_or_else(|| Self::provider_error("No SOPS lookup path is available"))?;
-        Ok(chosen
+    fn encode_selector(path: &[String]) -> Result<String> {
+        Ok(path
             .iter()
             .map(|segment| {
                 serde_json::to_string(segment)
@@ -346,6 +340,44 @@ impl SopsProvider {
             })
             .collect::<Result<Vec<_>>>()?
             .join(""))
+    }
+
+    fn set_path(&self, parts: &AddressParts<'_>) -> Result<String> {
+        let paths = self.lookup_paths(parts)?;
+        let chosen = paths
+            .first()
+            .ok_or_else(|| Self::provider_error("No SOPS lookup path is available"))?;
+        Self::encode_selector(chosen)
+    }
+
+    /// Selector for the value `get` would return.
+    ///
+    /// Reads walk the write path and then older layouts. Only that first hit is
+    /// deleted. Unsetting every hit would also remove a project or profile
+    /// object when the secret name is that object's key, taking the other
+    /// secrets stored under it with it. A shadowed older copy is left in place
+    /// and is what the next read, and the next delete, see.
+    fn occupied_selector(
+        &self,
+        content: &[u8],
+        parts: &AddressParts<'_>,
+    ) -> Result<Option<String>> {
+        let data = Self::parse_json_document(content)?;
+        for path in self.lookup_paths(parts)? {
+            if let Some(value) = Self::value_at(&data, &path) {
+                // A legacy root or profile lookup can resolve to a namespace
+                // rather than a secret. Never hand a mapping to `sops unset`,
+                // which would recursively remove the secrets below it.
+                if value.is_object() {
+                    return Err(Self::provider_error(format!(
+                        "Refusing to delete SOPS mapping at {}; deleting a branch could remove other secrets. Use the SOPS CLI to manage branches explicitly.",
+                        Self::encode_selector(&path)?
+                    )));
+                }
+                return Ok(Some(Self::encode_selector(&path)?));
+            }
+        }
+        Ok(None)
     }
 
     /// Resolves the filesystem entry a write will replace without creating it
@@ -531,6 +563,12 @@ impl SopsProvider {
         Ok(args)
     }
 
+    fn unset_command_args(&self, path: &Path, selector: &str) -> Vec<String> {
+        let mut args = self.command_preserving_file_type("unset");
+        args.extend([path.to_string_lossy().into_owned(), selector.to_string()]);
+        args
+    }
+
     fn set_atomically(
         &self,
         path: &Path,
@@ -587,9 +625,97 @@ impl SopsProvider {
         })?;
         Ok(())
     }
+
+    fn delete_atomically(&self, path: &Path, parts: &AddressParts<'_>) -> Result<bool> {
+        // Decrypt only to see whether a value is there. A missing key is not
+        // an error and must leave the ciphertext untouched, so `sops unset`
+        // runs only when this read would return something.
+        let decrypted = self.decrypt(path)?;
+        let Some(selector) = self.occupied_selector(&decrypted, parts)? else {
+            return Ok(false);
+        };
+
+        let temporary = Self::temporary_file_for(path)?;
+        std::fs::copy(path, temporary.path()).map_err(|error| {
+            Self::provider_error(format!(
+                "Failed to copy SOPS file {} for an atomic update: {error}",
+                path.display()
+            ))
+        })?;
+        let args = self.unset_command_args(temporary.path(), &selector);
+        self.execute_sops_command(args)?;
+        temporary.as_file().sync_all().map_err(|error| {
+            Self::provider_error(format!(
+                "Failed to flush updated SOPS file {}: {error}",
+                path.display()
+            ))
+        })?;
+        temporary.persist(path).map_err(|error| {
+            Self::provider_error(format!(
+                "Failed to atomically replace SOPS file {}: {}",
+                path.display(),
+                error.error
+            ))
+        })?;
+        Ok(true)
+    }
 }
 
 impl Provider for SopsProvider {
+    fn entry_container_identity(&self) -> String {
+        // A template and a single-file URI can select the same file. Compare
+        // all SOPS entries using the resolved file AND selector below instead
+        // of excluding potentially overlapping providers by their URI.
+        "sops".to_string()
+    }
+
+    fn configured_entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<Cow<'a, NativeAddress>> {
+        let parts = self.address_parts(addr)?;
+        Ok(Cow::Owned(NativeAddress {
+            item: self
+                .resolved_write_target_path(parts.project, parts.profile)?
+                .to_string_lossy()
+                .into_owned(),
+            field: Some(self.set_path(&parts)?),
+            ..Default::default()
+        }))
+    }
+
+    fn entry_coordinates_many(&self, addrs: &[Address<'_>]) -> Result<Vec<NativeAddress>> {
+        let mut documents = HashMap::new();
+        addrs
+            .iter()
+            .map(|addr| {
+                let parts = self.address_parts(*addr)?;
+                let mut coords = self.configured_entry_coordinates(*addr)?.into_owned();
+                let path = PathBuf::from(&coords.item);
+                if path.is_file() {
+                    let data = match documents.entry(path) {
+                        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            let data = Self::parse_json_document(&self.decrypt(entry.key())?)?;
+                            entry.insert(data)
+                        }
+                    };
+                    for selector in self.lookup_paths(&parts)? {
+                        if Self::value_at(data, &selector).is_some() {
+                            coords.field = Some(Self::encode_selector(&selector)?);
+                            break;
+                        }
+                    }
+                }
+                Ok(coords)
+            })
+            .collect()
+    }
+
+    fn entry_coordinates<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
+        Ok(Cow::Owned(self.entry_coordinates_many(&[addr])?.remove(0)))
+    }
+
     fn convention_address(
         &self,
         _project: &str,
@@ -629,6 +755,52 @@ impl Provider for SopsProvider {
         let path = self.writable_target_path(parts.project, parts.profile)?;
         let _lock = Self::acquire_write_lock(&path)?;
         self.set_atomically(&path, &parts, value)
+    }
+
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        // `delete_atomically` checks the selected value under the write lock;
+        // preflight's separate read cannot replace that check.
+        self.check_writable(addr)?;
+        let parts = self.address_parts(addr)?;
+        // A missing file is already absent. Do not create it, or its parents,
+        // the way `set` does.
+        let Some(path) = self.resolve_file_path(parts.project, parts.profile)? else {
+            return Ok(false);
+        };
+        let path = match path.canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        // Same lock identity as `set`, which canonicalizes an existing file
+        // before locking it.
+        let _lock = Self::acquire_write_lock(&path)?;
+        if !path.is_file() {
+            if path.try_exists()? {
+                return Err(Self::provider_error(format!(
+                    "SOPS target {} is not a regular file",
+                    path.display()
+                )));
+            }
+            return Ok(false);
+        }
+        self.delete_atomically(&path, &parts)
+    }
+
+    fn supports_delete(&self) -> bool {
+        true
+    }
+
+    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        // Same address rules as a write: a templated URI still cannot name a
+        // native ref, and that has to fail in preflight rather than halfway
+        // through a deletion.
+        self.check_writable(addr)?;
+        let parts = self.address_parts(addr)?;
+        if let Some(path) = self.resolve_file_path(parts.project, parts.profile)? {
+            self.occupied_selector(&self.decrypt(&path)?, &parts)?;
+        }
+        Ok(())
     }
 
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {

@@ -4,6 +4,7 @@ description: Get up and running with SecretSpec in minutes
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
 
 ## Installation
 
@@ -82,6 +83,28 @@ Add to your `devenv.nix`:
 ```bash
 $ nix-env -iA secretspec -f https://github.com/NixOS/nixpkgs/tarball/nixpkgs-unstable
 ```
+
+</TabItem>
+<TabItem label="Docker (0.22+)">
+
+<VersionCompatibility version="0.22" />
+
+Copy the static binary into your Linux image from GitHub Container Registry:
+
+```dockerfile
+FROM ghcr.io/cachix/secretspec:0.22.0 AS secretspec-bin
+FROM alpine:3.23
+RUN apk add --no-cache ca-certificates
+COPY --from=secretspec-bin /secretspec /usr/local/bin/secretspec
+```
+
+The image supports `linux/amd64` and `linux/arm64` and contains only
+`/secretspec`. It works with both musl and glibc Linux images. Version tags omit
+the leading `v`; only stable releases are published, starting with 0.22.0.
+
+Keep CA certificates in your application image for HTTPS providers. Providers
+that call external tools also need those tools installed. The image has no
+shell, credential helpers, or standalone updater.
 
 </TabItem>
 </Tabs>

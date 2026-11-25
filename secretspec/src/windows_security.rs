@@ -416,6 +416,29 @@ mod tests {
     }
 
     #[test]
+    fn secret_files_do_not_inherit_permissive_temp_acls() {
+        let parent = tempfile::tempdir().unwrap();
+        set_world_access(
+            parent.path(),
+            FILE_ALL_ACCESS,
+            OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+        );
+        assert!(!path_acl_is_trusted(parent.path(), AclObjectKind::Directory, false).unwrap());
+        let directory = tempfile::tempdir_in(parent.path()).unwrap();
+        let directory_path = directory.path().to_owned();
+        let storage = crate::file_lease::FileStorage::in_directory(directory).unwrap();
+        let file = storage.materialize(b"private fixture", None).unwrap();
+        assert!(path_acl_is_trusted(&directory_path, AclObjectKind::Directory, false).unwrap());
+        assert!(path_acl_is_trusted(file.path(), AclObjectKind::File, false).unwrap());
+        assert_eq!(std::fs::read(file.path()).unwrap(), b"private fixture");
+        let path = file.path().to_owned();
+        drop(file);
+        assert!(!path.exists());
+        drop(storage);
+        assert!(!directory_path.exists());
+    }
+
+    #[test]
     fn private_acl_is_accepted_for_the_current_user() {
         let directory = tempfile::tempdir().unwrap();
         make_path_private(directory.path()).unwrap();

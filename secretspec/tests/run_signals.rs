@@ -3,7 +3,7 @@
 #![cfg(unix)]
 
 use std::fs;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -80,6 +80,90 @@ fn wait_until_started(child: &mut Child, ready: &std::path::Path) {
     panic!("timed out waiting for the child command to start");
 }
 
+fn wait_for_output(mut child: Child) -> Output {
+    let deadline = Instant::now() + START_TIMEOUT;
+    while Instant::now() < deadline {
+        if child.try_wait().unwrap().is_some() {
+            return child.wait_with_output().unwrap();
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    child.kill().unwrap();
+    let output = child.wait_with_output().unwrap();
+    panic!("timed out waiting for command shutdown: {output:?}");
+}
+
+#[test]
+fn finishes_after_a_successful_child_exit() {
+    for redacted in [false, true] {
+        let project = project(redacted);
+        let child = command(&project)
+            .args(["sh", "-c", "exit 0"])
+            .spawn()
+            .unwrap();
+        let output = wait_for_output(child);
+        assert!(output.status.success(), "{output:?}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn finishes_when_socket_wakeups_are_denied() {
+    use std::os::unix::process::CommandExt;
+
+    for redacted in [false, true] {
+        let project = project(redacted);
+        let mut command = command(&project);
+        // Reproduce a restrictive sandbox even when CI itself permits socket
+        // wake-ups. Only the spawned process receives this additional filter.
+        // SAFETY: the post-fork callback only builds stack data and invokes
+        // prctl; it neither allocates nor acquires locks.
+        unsafe {
+            command.pre_exec(|| {
+                let mut filter = [
+                    libc::sock_filter {
+                        code: (libc::BPF_LD | libc::BPF_W | libc::BPF_ABS) as u16,
+                        jt: 0,
+                        jf: 0,
+                        k: 0, // seccomp_data.nr
+                    },
+                    libc::sock_filter {
+                        code: (libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K) as u16,
+                        jt: 0,
+                        jf: 1,
+                        k: libc::SYS_sendto as u32,
+                    },
+                    libc::sock_filter {
+                        code: (libc::BPF_RET | libc::BPF_K) as u16,
+                        jt: 0,
+                        jf: 0,
+                        k: libc::SECCOMP_RET_ERRNO | libc::EPERM as u32,
+                    },
+                    libc::sock_filter {
+                        code: (libc::BPF_RET | libc::BPF_K) as u16,
+                        jt: 0,
+                        jf: 0,
+                        k: libc::SECCOMP_RET_ALLOW,
+                    },
+                ];
+                let program = libc::sock_fprog {
+                    len: filter.len() as u16,
+                    filter: filter.as_mut_ptr(),
+                };
+                if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == -1
+                    || libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &program) == -1
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let child = command.args(["sh", "-c", "exit 0"]).spawn().unwrap();
+        let output = wait_for_output(child);
+        assert!(output.status.success(), "{output:?}");
+    }
+}
+
 #[test]
 fn forwards_termination_signals_to_the_child() {
     for redacted in [false, true] {
@@ -108,7 +192,7 @@ fn forwards_termination_signals_to_the_child() {
             wait_until_started(&mut child, &ready);
             assert_eq!(unsafe { libc::kill(child.id() as libc::pid_t, signal) }, 0);
 
-            let output = child.wait_with_output().unwrap();
+            let output = wait_for_output(child);
             assert!(
                 output.status.success(),
                 "forwarding {name} failed with {}:\n{}",
@@ -128,10 +212,11 @@ fn maps_child_signal_deaths_to_conventional_exit_codes() {
     for redacted in [false, true] {
         for (name, expected) in [("TERM", 143), ("KILL", 137)] {
             let project = project(redacted);
-            let output = command(&project)
+            let child = command(&project)
                 .args(["sh", "-c", &format!("kill -{name} $$")])
-                .output()
+                .spawn()
                 .unwrap();
+            let output = wait_for_output(child);
 
             assert_eq!(
                 output.status.code(),

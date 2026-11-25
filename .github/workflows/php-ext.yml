@@ -94,7 +94,18 @@ jobs:
 
       - name: Install Linux build dependencies (clang for bindgen)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y llvm-dev libclang-dev clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-dev libclang-dev clang
+          # Bindgen must load libclang and discover headers from the same LLVM.
+          llvm_bindir="$(llvm-config --bindir)"
+          llvm_libdir="$(llvm-config --libdir)"
+          {
+            echo "CLANG_PATH=$llvm_bindir/clang"
+            echo "LIBCLANG_PATH=$llvm_libdir"
+            echo "LLVM_CONFIG_PATH=$llvm_bindir/llvm-config"
+          } >> "$GITHUB_ENV"
+          "$llvm_bindir/clang" --version
 
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install
@@ -110,7 +121,7 @@ jobs:
       # per-PHP-version bindings into the build dir. (The Windows rows build
       # on nightly, whose daily version bump naturally expires their cache.)
       - name: Cache Rust builds
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           key: ${{ matrix.target }}-php${{ matrix.php }}
 

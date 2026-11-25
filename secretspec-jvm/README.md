@@ -75,7 +75,13 @@ var secrets = io.quicktype.Converter.fromJson(resolved.fieldsJson());
 
 ## Files and cleanup
 
-An `as_path` secret is materialized as a mode-0400 temporary file, and `get()`
+`as_path` uses private temporary files. SDK cleanup releases visible files and
+hidden composition dependencies (0.22+). Files must be explicitly cleaned up;
+they are not removed automatically on process exit. See
+[file delivery and lifetimes](https://secretspec.dev/reference/configuration/#as_path-option).
+
+
+An `as_path` secret is delivered through a file (mode 0400 on Unix), and `get()`
 returns its path. `Resolved` implements `AutoCloseable`; keep the result in a
 `try-with-resources` declaration or call `close()` to remove those files when finished.
 

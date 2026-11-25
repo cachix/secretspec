@@ -136,6 +136,7 @@ data Resolved = Resolved
   , resolvedScope           :: Maybe Text
   , resolvedSecrets         :: Map Text ResolvedSecret
   , resolvedMissingOptional :: [Text]
+  , resolvedFileLeaseId :: Maybe Text
   } deriving (Show, Eq)
 
 -- | The value-free resolution outcome for one declared secret: how it would
@@ -259,11 +260,14 @@ setAsEnv r =
       Just v  -> Env.setEnv (T.unpack name) (T.unpack v) True
       Nothing -> pure ()
 
--- | Remove the temp files backing any @as_path@ secrets in this result. The
--- resolver persists those files (mode 0400) so their paths stay valid after
--- resolve returns; the caller owns their lifetime. Call 'close' when done so the
--- secret files do not accumulate in the temp dir. A file already gone is ignored.
+-- | Revoke this result's secret files, including hidden dependencies (0.22+).
+-- Older runtimes use filesystem cleanup. Repeated calls are harmless.
 close :: Resolved -> IO ()
+close r | Just leaseId <- resolvedFileLeaseId r = do
+  response <- callNative True (encode (object ["request_version" .= (1 :: Int),
+    "operation" .= ("release_files" :: Text), "source" .= object ["lease_id" .= leaseId]]))
+  _ <- responseValue response 1 "release_files"
+  pure ()
 close r =
   forM_ (Map.elems (resolvedSecrets r)) $ \secret ->
     case (secretAsPath secret, secretPath secret) of
@@ -286,19 +290,20 @@ load :: Builder -> IO Resolved
 load b = do
   resp <- callNative (isInline b) (requestBytes b Nothing)
   value <- responseValue resp resolveSchemaVersion "resolve"
-  (prov, prof, scope, secs, mreq, mopt) <- fromResult (parseEither pResolve value)
+  (prov, prof, scope, secs, mreq, mopt, leaseId) <- fromResult (parseEither pResolve value)
   case mreq of
-    [] -> pure (Resolved prov prof scope secs mopt)
+    [] -> pure (Resolved prov prof scope secs mopt leaseId)
     xs -> throwIO (MissingRequiredError xs)
   where
     pResolve = withObject "response" $ \o ->
-      (,,,,,)
+      (,,,,,,)
         <$> o .: "provider"
         <*> o .: "profile"
         <*> o .:? "scope"
         <*> o .:? "secrets" .!= Map.empty
         <*> o .:? "missing_required" .!= []
         <*> o .:? "missing_optional" .!= []
+        <*> o .:? "file_lease_id"
 
 -- | Resolve a value-free 'Report' (the inventory\/preflight view, the same one
 -- the CLI exposes as @check --json@). Unlike 'load', it does not throw when a

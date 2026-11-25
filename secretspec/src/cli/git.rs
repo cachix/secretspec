@@ -1,6 +1,7 @@
 use super::{TypedArgs, load_secrets, shell_quote};
 use crate::config::GlobalConfig;
 use crate::integration::git::canonical_target;
+use crate::prompt::CheckedPrompt;
 use crate::{CallerContext, Secrets};
 use clap::Subcommand;
 use miette::{IntoDiagnostic, Result, WrapErr, miette};
@@ -1078,7 +1079,7 @@ fn confirm_global(scope: Scope, yes: bool, prompt: &str) -> Result<bool> {
     }
     let confirmed = inquire::Confirm::new(prompt)
         .with_default(false)
-        .prompt()
+        .prompt_checked()
         .into_diagnostic()?;
     if confirmed {
         Ok(true)

@@ -3,13 +3,18 @@ title: age Provider
 description: Store secrets in an age-encrypted file committed alongside code
 ---
 
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
 import ProviderCredentials from '../../../components/ProviderCredentials.astro';
 
-:::note[Version compatibility]
-The age provider is added in SecretSpec 0.17.
-:::
+<VersionCompatibility version="0.17" />
 
-The age provider keeps secrets in a single [age](https://age-encryption.org)-encrypted file that you can commit to your repository. The plaintext inside is a dotenv-style `KEY=value` blob that SecretSpec encrypts to one or more age recipients and decrypts with your age identity. A read decrypts the blob; a write decrypts it, updates one key, and re-encrypts the whole blob to the current recipients.
+The [age](https://age-encryption.org) provider keeps secrets in a single
+age-encrypted file that you can commit to your repository. The plaintext inside
+is a dotenv-style `KEY=value` blob that SecretSpec encrypts to one or more age
+recipients and decrypts with your age identity. A read decrypts the blob; a
+write decrypts it, updates one key, and re-encrypts the whole blob to the
+current recipients.
 
 ## At a glance
 
@@ -17,7 +22,7 @@ The age provider keeps secrets in a single [age](https://age-encryption.org)-enc
 | --- | --- |
 | Provider | `age` |
 | URI | `age://<path>[?options]` |
-| Access | Read and write |
+| Access | Read, write, and delete (0.20+) |
 | Best for | Encrypted secrets committed alongside code |
 | Authentication | An age identity (private key) |
 | Build feature | `age` |
@@ -31,8 +36,10 @@ library currently accesses this key type through the non-interactive
 
 ```bash
 $ mkdir -p "$HOME/.config/age"
+
 $ age-keygen -pq -o "$HOME/.config/age/keys.txt"
 Public key: age1pq1...
+
 $ age-plugin-pq -identity -o "$HOME/.config/age/plugin-identity.txt" "$HOME/.config/age/keys.txt"
 
 $ secretspec set DATABASE_URL --provider "age://secrets.age?identity=$HOME/.config/age/plugin-identity.txt"
@@ -94,7 +101,9 @@ post-quantum protection.
 
 ## Configuration
 
-### Discover declarations (0.18+)
+### Discover declarations {/* #discover-declarations-018 */}
+
+<VersionCompatibility version="0.18" />
 
 SecretSpec 0.18+ can initialize a manifest from the key names already in an
 age file. Reflection decrypts the file in memory to enumerate its keys but
@@ -143,6 +152,11 @@ Each developer configures their own identity through the `identity` credential, 
 
 Every secret is one `KEY=value` entry inside the blob, keyed by the secret name. Project and profile do not appear in the file; point separate profiles at separate blobs to keep them apart, for example `secrets.prod.age` and `secrets.dev.age`.
 
+Starting in SecretSpec 0.20+, this plaintext uses dotenv-ng syntax: `$` remains
+literal, and values are quoted only when needed to round-trip. Keys may include
+hyphens, leading digits, leading dots, and Unicode, but not whitespace, `=`,
+`#`, or control characters.
+
 ## Use existing secrets
 
 A secret's [`ref`](/reference/configuration/#secret-references) names the key to read inside the blob, so a declared secret can map to a differently named entry. The age provider has no sub-address, so a `ref` sets only `item`.
@@ -158,6 +172,7 @@ Commit the blob and its roster, and give the job an identity to decrypt with. Th
 
 ```bash
 $ export AGE_IDENTITY="$CI_AGE_IDENTITY"
+
 $ secretspec run --provider "age://secrets.age" -- deploy
 ```
 

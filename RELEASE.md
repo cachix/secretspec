@@ -1,6 +1,6 @@
 # Releasing the language SDKs
 
-Each SDK is a thin client over the Rust core (the `secretspec-ffi` C ABI, a
+Each SDK is a thin client over the Rust core (the `libsecretspec` C ABI, a
 pyo3 extension for Python, or the napi-rs addon for Node). A release builds the
 native artifact per platform and publishes it through that ecosystem's
 registry or as a checksummed SwiftPM binary, so users install with no native
@@ -10,7 +10,111 @@ Version tags are `vX.Y.Z`; the publish jobs trigger on them. After the Go
 release build succeeds, CI also creates the submodule tag
 `secretspec-go/vX.Y.Z`, which is the version the Go module proxy resolves.
 
+## SecretSpec 0.20 native-library rename
+
+SecretSpec 0.20 renames the embedded native library from `secretspec-ffi` /
+`secretspec_ffi` to `libsecretspec` without renaming its exported C symbols.
+Before tagging 0.20:
+
+1. Run the SDK workflow and every platform packaging workflow from the release
+   commit, including the Windows native assets.
+2. Verify Go purego, .NET, and PHP FFI discover the pre-0.20 shared-library
+   filenames for legacy operations. Static-link SDKs must use the matching 0.20
+   archive because their source references the new `secretspec_call` symbol.
+3. Verify newly packaged artifacts contain only the new public filename and
+   that `SECRETSPEC_FFI_LIB` can explicitly select either compatible library.
+4. Test one clean install per SDK without a source checkout or Cargo `target/`
+   directory present, so development fallback discovery cannot hide a missing
+   packaged asset.
+5. Keep `libsecretspec` and each SDK at the same release version. Filename
+   fallback preserves loading, not newer request fields or behavior in an old
+   library.
+
+The detailed compatibility matrix is maintained in
+[`libsecretspec/README.md`](libsecretspec/README.md).
+
+## SecretSpec 0.22 X.509 dependency release
+
+The X.509 backend uses `p12-keystore` 0.4.1 from crates.io, which includes the
+[Unicode certificate-label fix](https://github.com/ancwrd1/p12-keystore/pull/14)
+and the bag-preserving archive API. The minimum dependency version is 0.4.1,
+so packaged crates retain both fixes without a Git override.
+Before publishing 0.22:
+
+1. Align the workspace `secretspec-ipc` dependency with the release version
+   and publish that crate before `secretspec`, as `publish.yml` already does.
+   Current `main` uses `secretspec_ipc::MAX_JSON_INTEGER`, which the published
+   0.21.1 IPC crate does not provide. Package verification against that older
+   registry crate fails even though the archive API is available.
+2. Run the Rust tests, SDK CI, Unicode-subject interoperability checks, and
+   `cargo package -p secretspec` with the published dependencies. Verify the
+   packaged manifest resolves the fixed registry version without a Git override.
+3. Keep the documented BMP password restriction until
+   [RustCrypto/formats#2477](https://github.com/RustCrypto/formats/pull/2477)
+   ships and the `pkcs12` dependency resolves to that release. Then add
+   supplementary-Unicode interoperability coverage before lifting the check.
+
+The OpenSSL-generated test archives live in `secretspec/tests/fixtures/x509`.
+They allow the Rust test suite to check imports without compiling OpenSSL.
+
+## Installer gateway
+
+`install.secretspec.dev` uses a Scarf file package to redirect to cargo-dist's
+published installer assets. Configure these routes on that domain:
+
+| Incoming path | Outgoing URL |
+| --- | --- |
+| `/` | `https://github.com/cachix/secretspec/releases/latest/download/secretspec-installer.sh` |
+| `/v{version}` | `https://github.com/cachix/secretspec/releases/download/v{version}/secretspec-installer.sh` |
+
+The `version` variable is the release version without a leading `v`, for
+example `0.21.1`. The incoming pattern supplies the literal `v` prefix, so the
+public URL is `/v0.21.1`. Replace the old `/{version}` pattern rather than keeping
+both: the old pattern can match `/` with an empty version and interfere with the
+latest-release redirect. The literal prefix prevents that overlap.
+
+Scarf substitutes the captured version into the GitHub release URL. The selected
+release's installer retains its own platform detection, checksums, updater, and
+receipt. No installer rewriting or cargo-dist workflow customization is needed.
+
+Before publishing documentation for the versioned URL, activate the Scarf
+route and verify both redirects:
+
+```bash
+curl -fsSI https://install.secretspec.dev/
+curl -fsSI https://install.secretspec.dev/v0.21.1
+```
+
+The first must still redirect to `releases/latest/download`; the second must
+redirect to `releases/download/v0.21.1/secretspec-installer.sh`. Also verify that
+the selected URL serves the same installer as the direct GitHub release URL.
+A version without an installer asset must fail rather than install latest.
+
 ## After every release
+
+### Container image (0.22+)
+
+Starting with 0.22, cargo-dist calls `publish-container.yml` after hosting a
+stable release. The workflow verifies the checksums of the existing musl
+archives, tests `/secretspec --version` on amd64 and arm64, and publishes one
+multi-platform image to `ghcr.io/cachix/secretspec:X.Y.Z`. Prereleases are
+skipped. There are no floating tags. The scratch image contains only
+`/secretspec`; users copy it into their application image.
+
+The publisher uses `GITHUB_TOKEN` with `contents: read` and `packages: write`.
+After the first publication, verify that the GHCR package has public visibility
+so users can pull it without authentication. Check both platforms:
+
+```bash
+docker run --rm --platform linux/amd64 ghcr.io/cachix/secretspec:X.Y.Z --version
+docker run --rm --platform linux/arm64 ghcr.io/cachix/secretspec:X.Y.Z --version
+```
+
+If publication fails after the GitHub Release is created, rerun the failed
+container job in the Release workflow. Keep its cargo-dist hook and permissions
+in `dist-workspace.toml`, then regenerate CI with `dist generate --mode ci`.
+
+### Nixpkgs
 
 Once the release artifacts are available, update the `secretspec` package in
 Nixpkgs. From a Nixpkgs checkout, let `nix-update` update the crate source and
@@ -23,7 +127,10 @@ nix-update --version=X.Y.Z --build secretspec
 Commit the generated package change as `secretspec: OLD -> X.Y.Z`, include the
 GitHub release URL in the commit body, and submit it to Nixpkgs.
 
-## Before your first release
+## One-time registry setup
+
+External registry status was last verified on 2026-08-31. Recheck every item
+still marked pending before tagging a release.
 
 Trusted Publishing works differently per registry. PyPI and RubyGems let you
 register a **pending publisher** before anything is published — the first
@@ -33,48 +140,64 @@ attach a Trusted Publisher to it, so the very first version has to go up with
 a temporary token. Do each of these once; every release after it needs no
 secrets (except Hackage, which has no Trusted Publishing at all yet).
 
-### crates.io — already done
+### crates.io: first `secretspec-ipc` publish pending
+
+`publish.yml` publishes `secretspec-ipc`, `secretspec`, and
+`secretspec-derive` in that order, because `secretspec` has a registry
+dependency on `secretspec-ipc` and `secretspec-derive` on `secretspec`.
 
 `secretspec` and `secretspec-derive` already exist on crates.io and Trusted
-Publishing is already wired up in `publish.yml` (this predates the SDK work
-that added the other languages). Nothing to do, beyond confirming the linked
-GitHub repo is still correct at
-https://crates.io/crates/secretspec/settings if this repo is ever renamed or
-transferred.
+Publishing is already wired up for them. Confirm the linked GitHub repo is
+still correct at https://crates.io/crates/secretspec/settings if this repo is
+ever renamed or transferred.
 
-### PyPI — pending publisher configured, done
+`secretspec-ipc` is new in 0.21 and does not exist on crates.io yet. Like npm,
+crates.io only accepts a Trusted Publisher for a crate that already exists, so
+its first version goes up by hand. After the release PR merges and before
+pushing the tag, publish it from the merged `main` with a temporary API token
+scoped to `publish-new`:
 
-The `pypi` GitHub Environment exists and a pending publisher is configured on
-PyPI (project `secretspec`, owner `cachix`, repo `secretspec`, workflow
-`python-wheels.yml`, environment `pypi`). Nothing left to do — the first
-`vX.Y.Z` tag's OIDC-authenticated publish will create the `secretspec` project
-on PyPI automatically and convert the pending publisher into a normal one.
-⚠️ if someone else registers the `secretspec` name on PyPI before that first
-tag, the pending publisher is invalidated and the project would need a
-different name.
+```bash
+devenv shell cargo publish -p secretspec-ipc --token <temporary token>
+```
 
-### RubyGems — pending publisher configured, done
+Then add a Trusted Publisher at https://crates.io/crates/secretspec-ipc/settings
+(repository `cachix/secretspec`, workflow `publish.yml`) and revoke the token.
+The tag's publish run finds the version already on crates.io, skips it, and
+continues with `secretspec`.
 
-A pending trusted publisher is configured on rubygems.org (gem `secretspec`,
-repository owner `cachix`, repository name `secretspec`, workflow filename
-`ruby-gems.yml`, environment `release`). Nothing left to do — the first
-`vX.Y.Z` tag's push creates the gem and makes the publishing workflow its
-owner automatically.
+### PyPI — trusted publishing active, done
 
-### npm — already done
+The `pypi` GitHub Environment and PyPI Trusted Publisher are active for project
+`secretspec` (owner `cachix`, repo `secretspec`, workflow
+`python-wheels.yml`, environment `pypi`). OIDC-authenticated releases have
+published through 0.19.1; no token or additional setup is needed.
+
+### RubyGems — trusted publishing active, done
+
+The RubyGems Trusted Publisher is active for gem `secretspec` (repository owner
+`cachix`, repository name `secretspec`, workflow filename `ruby-gems.yml`,
+environment `release`). OIDC-authenticated releases have published through
+0.19.1; no token or additional setup is needed.
+
+### npm — trusted publishing active, done
 
 npm has no pending-publisher mechanism, so this needed a manual first publish
 for the main `secretspec` package **and every platform sub-package**
 (`secretspec-linux-x64-gnu`, `secretspec-linux-arm64-gnu`,
-`secretspec-darwin-arm64`, `secretspec-win32-x64-msvc`) — 5 packages that each
+`secretspec-linux-x64-musl`, `secretspec-linux-arm64-musl`,
+`secretspec-darwin-arm64`, `secretspec-win32-x64-msvc`) — 7 packages that each
 had to exist before a Trusted Publisher could be attached. This has been done:
-all 5 packages are published (bootstrap-published once with a temporary
+all 7 packages are published (bootstrap-published once with a temporary
 granular access token, "All Packages" / "Read and write" scope — narrower
 "select packages" scopes 404 on brand-new package names, since that picker
 can't reference a package that doesn't exist yet), each has a Trusted
 Publisher configured (GitHub Actions, repo `cachix/secretspec`, workflow
-`node-addon.yml`, no environment), and the bootstrap token has been revoked.
-Nothing left to do — every release from here publishes via OIDC.
+`node-addon.yml`, no environment). Revoke every temporary bootstrap token
+immediately after setup; release automation does not use or store one. Every
+release from here publishes via OIDC. `napi pre-publish` skips a platform
+package version that is already present, so the manually bootstrapped 0.20
+musl packages do not make the tag workflow fail.
 
 ### Hackage — token set, done
 
@@ -82,7 +205,7 @@ Hackage doesn't support OIDC yet (tracked upstream:
 [haskell/hackage-server#1443](https://github.com/haskell/hackage-server/issues/1443),
 open as of this writing), so this stays a long-lived token rather than a
 one-time setup step. The `HACKAGE_TOKEN` repo secret is set. Nothing left to
-do — the first `vX.Y.Z` tag's `haskell-build.yml` publish job uploads with it.
+do — each `vX.Y.Z` tag's `haskell-build.yml` publish job uploads with it.
 
 ### Go — nothing to set up
 
@@ -91,20 +214,21 @@ directly from git. `go-embed.yml` creates that tag after its full platform
 matrix succeeds and attaches the per-platform cdylibs to the GitHub Release for
 the optional self-contained build.
 
-### Packagist (PHP) — not yet set up
+### Packagist (PHP) — configured, done
 
 Packagist has no OIDC/Trusted-Publishing mechanism; it reads a git repo and its
 root `composer.json` directly. This repo publishes the PHP package straight from
 the monorepo — the manifest lives at the repository root (`/composer.json`, with
 `vendor-dir` pointed into `secretspec-php/` and autoload sourcing
-`secretspec-php/src/`), so no split/mirror repo is needed. One-time setup:
+`secretspec-php/src/`), so no split/mirror repo is needed.
 
-1. Submit `https://github.com/cachix/secretspec` on
-   [packagist.org](https://packagist.org) as package `cachix/secretspec`.
-2. Enable the GitHub auto-update hook (the Packagist GitHub app), so each
-   `vX.Y.Z` tag becomes a Composer version automatically.
+The [`cachix/secretspec`](https://packagist.org/packages/cachix/secretspec)
+package and its GitHub auto-update integration are active; Packagist has
+ingested releases through 0.19.1. No split/mirror repository, CI workflow, or
+token is needed. Packagist pulls each `vX.Y.Z` tag automatically.
 
-No CI workflow or token is involved — Packagist pulls from the tag on push.
+For recovery after a missed update, ask Packagist to refresh the package or
+reconnect its GitHub hook.
 
 ### NuGet (.NET) — trusted publishing set up, done
 
@@ -148,6 +272,50 @@ intentionally leaves the checksum alone, making a missing checksum refresh
 visible during release review. There is no Swift registry credential or
 separate repository.
 
+### Maven Central (JVM, 0.20+)
+
+The JVM workflow builds and tests the multi-platform JAR on version tags, then
+signs and publishes it automatically to Maven Central. It waits for the
+asynchronous Central deployment to reach `PUBLISHED`, so a successful workflow
+run means the package is publicly available. A manual dispatch from a release
+tag with `publish: true` can retry JVM publication independently.
+
+Publishing uses the `org.cachix` namespace and these GitHub Actions secrets:
+
+- `MAVEN_CENTRAL_SIGNING_KEY`: ASCII-armored OpenPGP private key. Its public
+  key must be available from a Maven Central-supported key server.
+- `MAVEN_CENTRAL_SIGNING_PASSPHRASE`: passphrase for the signing key, or empty
+  when the stored key has no passphrase.
+- `MAVEN_CENTRAL_TOKEN_USERNAME` and `MAVEN_CENTRAL_TOKEN_PASSWORD`: publisher
+  token credentials generated by the Maven Central Portal.
+
+### WinGet — manual post-release submission
+
+`Cachix.SecretSpec` was bootstrapped manually in
+[microsoft/winget-pkgs#413776](https://github.com/microsoft/winget-pkgs/pull/413776)
+and is updated with a manual pull request after each stable GitHub Release.
+WinGet is intentionally not published from GitHub Actions: cross-repository
+submission would require storing a classic GitHub personal access token with
+access to every public repository the release operator can write to.
+
+After the stable release and its Windows ZIP are published:
+
+1. Generate an updated `Cachix.SecretSpec` manifest with
+   [`wingetcreate update`](https://github.com/microsoft/winget-create/blob/main/doc/update.md),
+   using version `<version>` and installer URL
+   `https://github.com/cachix/secretspec/releases/download/v<version>/secretspec-x86_64-pc-windows-msvc.zip`.
+   Write the manifest to a local output directory; do not use `--submit` or
+   provide a token.
+2. Add the generated version directory to the existing
+   `domenkozar/winget-pkgs` fork, based on the latest `microsoft/winget-pkgs`
+   default branch.
+3. Review the version, installer URL, and SHA-256, then open a pull request from
+   the fork to `microsoft/winget-pkgs`. Use the release operator's normal local
+   GitHub or browser login; no SecretSpec Actions secret is needed.
+4. Confirm the upstream validation checks pass and follow the pull request
+   through merge. The WinGet update is a post-release distribution step, not a
+   gate for creating the SecretSpec version tag.
+
 ## Python (PyPI) — `python-wheels.yml`
 
 - **Build:** the Rust resolver is statically linked into a pyo3 extension
@@ -159,20 +327,20 @@ separate repository.
   so no separate `auditwheel` step is needed. macOS builds natively; a Windows
   wheel is a follow-up.
 - **Publish:** `pypa/gh-action-pypi-publish` via **PyPI Trusted Publishing**
-  (OIDC); no token needed. One-time setup already done — see "Before your
-  first release" above.
+  (OIDC); no token needed. One-time setup is complete; see "One-time registry
+  setup" above.
 
 ## Ruby (RubyGems) — `ruby-gems.yml`
 
 - **Build:** a platform gem (`Gem::Platform::CURRENT`) bundling the
-  `secretspec-ffi` staticlib in `vendor/`. At `gem install`, mkmf compiles a tiny
+  `libsecretspec` staticlib in `vendor/`. At `gem install`, mkmf compiles a tiny
   C glue and statically links that archive, so the resolver is embedded in the
   extension and one platform gem serves every Ruby ABI (install needs a C
   compiler and Ruby headers).
 - **Publish:** `gem push` for each platform gem, authenticated via **RubyGems
   Trusted Publishing** (OIDC) through `rubygems/configure-rubygems-credentials`
-  — no token stored in CI. One-time setup already done — see "Before your
-  first release" above.
+  — no token stored in CI. One-time setup is complete; see "One-time registry
+  setup" above.
 - **Gap:** the Linux gem currently links the runner's glibc; for a portable gem,
   build the staticlib on an old-glibc baseline (e.g. a `manylinux` container, as
   the Python job does, or `rake-compiler-dock`) and bundle that. Tracked
@@ -189,7 +357,7 @@ history permanently and ships every platform's lib in the module zip.)
 
 So the Go SDK follows the purego norm: the cdylib is provided at runtime, not
 shipped through the module. Consumers either set `SECRETSPEC_FFI_LIB` to an
-installed/built `libsecretspec_ffi`, or build with `-tags embed_lib` after
+installed/built `libsecretspec`, or build with `-tags embed_lib` after
 staging the per-platform library into `secretspec-go/lib/` themselves (a
 self-contained, vendored build — not a module-proxy install).
 
@@ -206,11 +374,11 @@ self-contained, vendored build — not a module-proxy install).
 
 ## Haskell (Hackage) — `haskell-build.yml`
 
-- **Build:** statically links the `secretspec-ffi` archive at build time via
+- **Build:** statically links the `libsecretspec` archive at build time via
   the GHC FFI, so the Rust resolver is embedded in the binary with no runtime
   loader path.
 - **Publish:** `cabal upload --publish` with the `HACKAGE_TOKEN` secret — see
-  "Before your first release" above. Hackage has no Trusted Publishing yet
+  "One-time registry setup" above. Hackage has no Trusted Publishing yet
   ([haskell/hackage-server#1443](https://github.com/haskell/hackage-server/issues/1443)),
   so this stays a long-lived token.
 - **Note:** Hackage's own build bots cannot compile this package (it statically
@@ -221,7 +389,7 @@ self-contained, vendored build — not a module-proxy install).
 ## Swift (0.18+, SwiftPM + XCFramework) — `swift-package.yml`
 
 - **Build:** native Intel and Apple-silicon macOS runners build the
-  `secretspec-ffi` cdylib with a macOS 12 deployment target.
+  `libsecretspec` cdylib with a macOS 12 deployment target.
   `scripts/build-swift-xcframework.sh` gives each dylib an `@rpath` install
   name, combines the slices into a universal dylib, adds the public header and
   Clang module map, and wraps it with `xcodebuild -create-xcframework`.
@@ -246,8 +414,12 @@ self-contained, vendored build — not a module-proxy install).
   main `secretspec` package references via `optionalDependencies` and loads at
   runtime — the layout `@napi-rs/cli` automates (`napi create-npm-dirs` /
   `napi pre-publish`). Authenticated via **npm Trusted Publishing** (OIDC); no
-  token stored in CI.
-- **One-time setup:** already done — see "Before your first release" above.
+  token stored in CI. `napi.targets` in `secretspec-node/package.json` is the
+  source of truth for the platform list; `napi pre-publish` derives
+  `optionalDependencies` from it at publish time.
+- **One-time setup:** done for the four glibc, macOS, and Windows packages. The
+  two musl packages added in 0.20 still need it — see "One-time registry
+  setup" above.
 
 ## PHP (Packagist + extension) — `php-ext.yml`
 
@@ -269,7 +441,7 @@ through Composer.
   attached to the release. Users install it by dropping the `.so` in and
   `extension=` / `docker-php-ext-enable`, or by building from source with cargo.
 - **ext-ffi fallback library.** For the no-extension path, `ffi-build.yml`
-  attaches the per-target `secretspec-ffi` library (with a `.sha256`) to the
+  attaches the per-target `libsecretspec` library (with a `.sha256`) to the
   release; the client's `vendor/bin/secretspec-install-lib` command downloads the
   right one on demand. It is a deliberate opt-in command, not a Composer
   post-install hook (a dependency's install scripts do not run in the consumer
@@ -285,25 +457,21 @@ through Composer.
   phpize, which does not fit a Cargo extension); and the release-asset uploads
   race cargo-dist's release creation, so they wait-then-`--clobber`.
 
-### First PHP release — checklist
+### PHP release verification
 
-Everything through the CI is green, but the live Packagist + release-asset paths
-can only be exercised for real once the package is registered and a tag exists.
-In order:
+The first-release Packagist registration is complete. For each release:
 
-1. **Merge to `main`** so the repo-root `composer.json` is on the default branch.
-2. **Register on Packagist** — the one-time "Packagist (PHP)" setup above.
-3. **Smoke-test off `main` before tagging.** In a scratch project, confirm the
-   manifest resolves:
+1. **Smoke-test off the release commit before tagging.** In a scratch project,
+   confirm the manifest resolves:
 
    ```bash
    composer require cachix/secretspec:dev-main
    ```
 
-4. **Cut the `vX.Y.Z` tag.** Packagist ingests the tag as a version, and
+2. **Cut the `vX.Y.Z` tag.** Packagist ingests the tag as a version, and
    `php-ext.yml` / `ffi-build.yml` attach the extension + cdylib binaries to the
    GitHub Release.
-5. **Verify against the live release** (the one path CI cannot cover): in a clean
+3. **Verify against the live release** (the one path CI cannot cover): in a clean
    project, `composer require cachix/secretspec`, then exercise **both** backends —
    `vendor/bin/secretspec-install-lib` for the ext-ffi path, and a downloaded
    `secretspec-php-native` `.so` (`extension=…`) for the extension path — and
@@ -315,7 +483,7 @@ In order:
   managed package dependencies. It invokes the stable JSON C ABI through
   source-generated P/Invoke and exposes the same builder, resolved value,
   report, and typed-error vocabulary as the other SDKs.
-- **Native assets:** one NuGet package carries `secretspec-ffi` under the
+- **Native assets:** one NuGet package carries `libsecretspec` under the
   standard `runtimes/<rid>/native/` layout for glibc and musl Linux x64/Arm64,
   macOS x64/Arm64, and Windows x64/Arm64. Glibc builds use a manylinux 2.28
   baseline, and Windows builds statically link the MSVC runtime.

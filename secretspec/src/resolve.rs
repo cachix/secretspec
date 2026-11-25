@@ -23,6 +23,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
 
 /// Version of the [`ResolveResponse`] wire format.
 pub const RESOLVE_SCHEMA_VERSION: u32 = 2;
@@ -37,19 +38,27 @@ pub enum ResolvedSource {
     Generated,
     /// The manifest's committed `default` value.
     Default,
-    /// Derived from other declared secrets using a strict template.
+    /// Derived from other declared secrets: a strict `composed` template, or a
+    /// `from` conversion or selection. The serialized name remains `composed`
+    /// for wire compatibility.
     ///
-    /// Available since SecretSpec 0.16.
+    /// Template composition is available since SecretSpec 0.16; `from`
+    /// derivation is available since SecretSpec 0.22.
     Composed,
 }
 
 /// One resolved secret. Exactly one of `value` or `path` is set: `path` when
 /// the secret is materialized to a temp file (`as_path`), `value` otherwise.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResolvedSecret {
+/// The default inline type is `String` for text/JSON APIs. Byte resolution
+/// APIs use [`crate::SecretBytes`] starting with 0.21.
+///
+/// `Debug` output redacts `value`, so logging a resolution never prints the
+/// secret itself.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedSecret<T = String> {
     /// The secret value, when exposed inline.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
+    pub value: Option<T>,
     /// Path to the temp file holding the value, when `as_path` is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -63,9 +72,36 @@ pub struct ResolvedSecret {
     pub source_provider: Option<String>,
 }
 
+impl<T> fmt::Debug for ResolvedSecret<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        struct Redacted;
+
+        impl fmt::Debug for Redacted {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("[REDACTED]")
+            }
+        }
+
+        formatter
+            .debug_struct("ResolvedSecret")
+            .field("value", &self.value.as_ref().map(|_| Redacted))
+            .field("path", &self.path)
+            .field("as_path", &self.as_path)
+            .field("source", &self.source)
+            .field("source_provider", &self.source_provider)
+            .finish()
+    }
+}
+
 /// A complete value-carrying resolution result for one profile.
+/// The default `String` payload is the JSON wire format; Rust byte resolution
+/// uses `ResolveResponse<SecretBytes>` (0.21+) without a Serde representation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResolveResponse {
+pub struct ResolveResponse<T = String> {
+    /// Opaque, process-local file ownership token (0.22+). Includes hidden
+    /// dependencies. Use [`Self::close`] to revoke the result's file paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_lease_id: Option<String>,
     /// Wire-format version; see [`RESOLVE_SCHEMA_VERSION`].
     pub schema_version: u32,
     /// Credential-free URI of the provider the resolution reported against.
@@ -82,7 +118,7 @@ pub struct ResolveResponse {
     pub scope: Option<String>,
     /// Resolved secrets by name. Empty when a required secret is missing.
     /// `BTreeMap` keeps the JSON object key order deterministic.
-    pub secrets: BTreeMap<String, ResolvedSecret>,
+    pub secrets: BTreeMap<String, ResolvedSecret<T>>,
     /// Required secrets that were not found anywhere. Non-empty means the
     /// resolution failed; `secrets` is then empty.
     pub missing_required: Vec<String>,
@@ -90,7 +126,16 @@ pub struct ResolveResponse {
     pub missing_optional: Vec<String>,
 }
 
-impl ResolveResponse {
+impl<T> ResolveResponse<T> {
+    /// Revoke this result's memory-backed files, including hidden dependencies
+    /// (0.22+). Repeated calls are harmless. Tokens belong to the process that
+    /// resolved the result; otherwise files are retained until that process exits.
+    pub fn close(&self) -> std::io::Result<()> {
+        if let Some(id) = &self.file_lease_id {
+            crate::file_lease::release_group(id)?;
+        }
+        Ok(())
+    }
     /// True when no required secret is missing (the resolution succeeded).
     pub fn is_ok(&self) -> bool {
         self.missing_required.is_empty()
@@ -99,12 +144,42 @@ impl ResolveResponse {
     /// Drop every inline value, keeping structure and provenance. Useful for an
     /// inventory/policy consumer that wants the resolve shape without secrets.
     pub fn without_values(mut self) -> Self {
+        self.file_lease_id = None;
         for secret in self.secrets.values_mut() {
             secret.value = None;
             secret.path = None;
         }
         self
     }
+}
+
+/// The outcome of resolving one secret by name with
+/// [`crate::Secrets::resolve_named`].
+///
+/// The three variants separate the questions a batch resolve conflates: whether
+/// the name exists on the active surface at all, whether it produced a value,
+/// and whether its absence is an error. A genuine provider or configuration
+/// failure is never one of these variants; it surfaces as `Err` from the call.
+///
+/// Available since SecretSpec 0.19.
+/// Byte resolution uses `NamedResolution<SecretBytes>` starting with 0.21.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NamedResolution<T = String> {
+    /// The name is not declared on the active resolution surface: either absent
+    /// from the merged profile, or declared but hidden by the active scope. The
+    /// caller asked about a secret this configuration does not offer, which is
+    /// usually a bug in the caller rather than a missing value.
+    Undeclared,
+    /// The secret is declared but produced no value.
+    Missing {
+        /// Whether the profile declares this secret required, which is what
+        /// makes the absence an error for a whole-profile resolve. Reported here
+        /// rather than decided: a named resolve returns this variant either way
+        /// and leaves the policy to the caller.
+        required: bool,
+    },
+    /// The secret produced a value.
+    Resolved(ResolvedSecret<T>),
 }
 
 /// Which resolution shape a request asks for.
@@ -133,6 +208,10 @@ struct JsonRequest {
     scope: Option<String>,
     #[serde(default)]
     reason: Option<String>,
+    /// Structured software-integration identity (SecretSpec 0.20+). This is
+    /// informational context and does not satisfy `require_reason`.
+    #[serde(default)]
+    caller: Option<crate::CallerContext>,
     #[serde(default)]
     no_values: bool,
     #[serde(default)]
@@ -177,6 +256,9 @@ fn dispatch(request_json: &str) -> serde_json::Value {
     if let Some(reason) = request.reason {
         app = app.with_reason(reason);
     }
+    if let Some(caller) = request.caller {
+        app = app.with_caller(caller);
+    }
 
     match request.mode {
         // Value-free report: never fails on a missing required secret, so an
@@ -206,16 +288,17 @@ fn dispatch(request_json: &str) -> serde_json::Value {
 /// `{"ok": false, "error": {"kind", "message"}}`.
 ///
 /// This is the shared JSON boundary used by every native binding (the C ABI in
-/// `secretspec-ffi` and the napi-rs Node addon), so the envelope contract is
+/// `libsecretspec` and the napi-rs Node addon), so the envelope contract is
 /// defined in exactly one place. The request accepts optional `path`,
-/// `provider`, `profile`, `scope`, `reason`, `no_values`, and `mode`
+/// `provider`, `profile`, `scope`, `reason`, `caller` (SecretSpec 0.20+),
+/// `no_values`, and `mode`
 /// (`"resolve"` by default, or `"report"` for the value-free
 /// [`crate::report::ResolutionReport`]).
 /// A `resolve` response carries secret values; treat its bytes as sensitive. A
 /// `report` response never does.
 pub fn resolve_json(request_json: &str) -> String {
     // Catch panics here, at the one place both native boundaries funnel through
-    // (the C ABI in `secretspec-ffi` and the napi-rs Node addon). Unwinding across
+    // (the C ABI in `libsecretspec` and the napi-rs Node addon). Unwinding across
     // either is undefined behavior, and turning a panic into the same
     // `{"ok":false,"error":...}` envelope every binding already parses means all
     // bindings behave identically — the C ABI no longer needs to be the only one
@@ -227,4 +310,94 @@ pub fn resolve_json(request_json: &str) -> String {
     serde_json::to_string(&envelope).unwrap_or_else(|_| {
         "{\"ok\":false,\"error\":{\"kind\":\"serialize\",\"message\":\"failed to serialize response\"}}".to_string()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_caller_context_is_structured_and_separate_from_reason() {
+        let request: JsonRequest = serde_json::from_value(serde_json::json!({
+            "caller": {
+                "name": "git",
+                "version": "2.51.0",
+                "operation": "credential_get",
+                "resource": "github.com"
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            request.caller,
+            Some(
+                crate::CallerContext::new("git")
+                    .with_version("2.51.0")
+                    .with_operation("credential_get")
+                    .with_resource("github.com")
+            )
+        );
+        assert_eq!(request.reason, None);
+    }
+
+    #[test]
+    fn json_caller_requires_a_name() {
+        let response: serde_json::Value = serde_json::from_str(&resolve_json(
+            r#"{"caller":{"operation":"credential_get"}}"#,
+        ))
+        .unwrap();
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["kind"], "invalid_request");
+    }
+
+    #[test]
+    fn debug_redacts_inline_values_through_every_wrapper() {
+        let secret = ResolvedSecret {
+            value: Some("hunter2".to_string()),
+            path: None,
+            as_path: false,
+            source: ResolvedSource::Provider,
+            source_provider: Some("keyring://".to_string()),
+        };
+        let response = ResolveResponse {
+            file_lease_id: None,
+            schema_version: RESOLVE_SCHEMA_VERSION,
+            provider: "keyring://".to_string(),
+            profile: "default".to_string(),
+            scope: None,
+            secrets: BTreeMap::from([("PASSWORD".to_string(), secret.clone())]),
+            missing_required: Vec::new(),
+            missing_optional: Vec::new(),
+        };
+
+        for rendered in [
+            format!("{secret:?}"),
+            format!("{secret:#?}"),
+            format!("{response:?}"),
+            format!("{:?}", NamedResolution::Resolved(secret.clone())),
+        ] {
+            assert!(!rendered.contains("hunter2"), "{rendered}");
+            assert!(rendered.contains("[REDACTED]"), "{rendered}");
+        }
+        assert_eq!(
+            format!("{secret:?}"),
+            "ResolvedSecret { value: Some([REDACTED]), path: None, as_path: false, \
+             source: Provider, source_provider: Some(\"keyring://\") }"
+        );
+    }
+
+    #[test]
+    fn debug_keeps_as_path_file_paths_visible() {
+        let secret: ResolvedSecret = ResolvedSecret {
+            value: None,
+            path: Some("/tmp/.tmpABC".to_string()),
+            as_path: true,
+            source: ResolvedSource::Provider,
+            source_provider: None,
+        };
+
+        let rendered = format!("{secret:?}");
+
+        assert!(rendered.contains("value: None"), "{rendered}");
+        assert!(rendered.contains("/tmp/.tmpABC"), "{rendered}");
+    }
 }

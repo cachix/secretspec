@@ -1,0 +1,10 @@
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "status": "found",
+    "value": "IPC_CANARY_NOT_A_REAL_SECRET",
+    "expires_at_unix_ms": 1786766460000,
+    "revision": "provider:version-1"
+  }
+}

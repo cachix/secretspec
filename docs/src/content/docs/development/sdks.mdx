@@ -1,0 +1,242 @@
+---
+title: SDK Development
+description: How the language SDKs are built, packaged, and released, and which platforms each one supports
+---
+
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+SecretSpec ships SDKs for Rust, Python, Go, Ruby, Node.js/TypeScript, Haskell,
+PHP, C#, Swift (0.18+), JVM languages (0.20+), and Elixir (0.22+). This page is for
+contributors: how the SDKs are put together, how each one is packaged and
+released, which platforms each artifact covers, and what to update when adding
+a platform or a new SDK. For the user-facing architecture and API, see the
+[SDK overview](/sdk/overview).
+
+:::note[Native library name]
+Starting with SecretSpec 0.20, the embedded C ABI is named `libsecretspec` and
+ships `libsecretspec.*` artifacts. Releases through 0.19 used
+the component name `secretspec-ffi` and `secretspec_ffi` artifact stem.
+:::
+
+## One resolver, many packages
+
+All resolution logic lives in the `secretspec` Rust crate. The SDKs reach it
+two ways:
+
+- **Through the C ABI** (`libsecretspec`, which builds a `cdylib` for dynamic
+  loading and a `staticlib` for embedding): Ruby (mkmf extension statically
+  links the archive), Go (purego `dlopen` of the cdylib, or cgo against the
+  archive with `-tags static`), Haskell (GHC FFI against the archive), C#
+  (P/Invoke against per-runtime cdylibs in the NuGet package), Swift (0.18+;
+  Clang C import from an XCFramework), JVM languages (0.20+; JNA against native
+  assets in the JAR), and PHP's `ext-ffi` fallback (runtime `dlopen` of the
+  cdylib).
+
+The C ABI crate and artifacts are named `libsecretspec` in SecretSpec 0.20+;
+they were named `secretspec-ffi` / `secretspec_ffi` through 0.19.
+- **As an embedded extension**: Python ([pyo3](https://pyo3.rs/)), Node.js
+  ([napi-rs](https://napi.rs/)), and PHP's preferred backend
+  ([ext-php-rs](https://github.com/davidcole1340/ext-php-rs)) compile the
+  resolver directly into a language-native extension module.
+
+Every SDK exchanges the same JSON request/response with the core, and the
+cross-language conformance suite (`conformance/`, run by
+`.github/workflows/sdks.yml` on every PR) asserts they all reduce the same
+inputs to the same result.
+
+This embedded boundary remains supported. SecretSpec 0.21+'s
+[IPC architecture](/reference/ipc-architecture) adds an explicit resolver option
+for applications that cannot or should not link the resolver and its provider
+graph. Its [Secret Resolution Protocol](/reference/resolver-protocol) is a
+versioned process boundary; it does not replace `libsecretspec` or silently
+change how existing SDK packages run. See
+[Implementing SecretSpec IPC](/development/ipc-implementation) for the 0.21+
+component layout and conformance requirements.
+
+Package versions for the non-Rust SDKs are not hand-edited: release workflows
+run `scripts/sync-sdk-versions.sh`, which stamps the Cargo workspace version
+into every package manifest.
+
+## Packaging workflows
+
+Each SDK has a dedicated distribution workflow that builds artifacts per
+platform and publishes on a version tag:
+
+| SDK | Package | Workflow |
+| --- | --- | --- |
+| Rust | `secretspec` on crates.io (source) | `publish.yml` |
+| Python | `secretspec` wheels on PyPI | `python-wheels.yml` |
+| Node.js | `secretspec` + per-platform packages on npm | `node-addon.yml` |
+| Go | Go module (source) + `libsecretspec` release assets | `go-embed.yml`, `go-static.yml`, `ffi-build.yml` |
+| Ruby | `secretspec` platform gems on RubyGems | `ruby-gems.yml` |
+| C# | `Cachix.SecretSpec` on NuGet | `dotnet-package.yml` |
+| Swift (0.18+) | SwiftPM source package + XCFramework release asset | `swift-package.yml` |
+| PHP | Composer package (source) + prebuilt extension binaries and `libsecretspec` release assets | `php-ext.yml`, `ffi-build.yml` |
+| Haskell | `secretspec` on Hackage (source) | `haskell-build.yml` |
+| Elixir (0.22+) | `secretspec` on Hex.pm, using `secretspec serve` | `elixir-package.yml` |
+
+<VersionCompatibility version="0.22" />
+
+The Elixir SDK is available from SecretSpec 0.22 and uses the shared resolver IPC protocol.
+
+## Platform support
+
+Platforms each released artifact covers. Windows support for the Python wheel,
+the Ruby gem, and the PHP extension binaries is added in SecretSpec 0.17.
+
+| SDK | Linux x64 | Linux arm64 | macOS Intel | macOS Apple silicon | Windows x64 | Windows arm64 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Rust (source crate) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Python | ✓ | ✓ | — | ✓ | ✓ (0.17+) | — |
+| Node.js | ✓ (glibc and musl 0.20+) | ✓ (glibc and musl 0.20+) | — | ✓ | ✓ | — |
+| Go | ✓ | ✓ | — | ✓ | ✓ | — |
+| Ruby | ✓ | ✓ | — | ✓ | ✓ (0.17+) | — |
+| C# | ✓ (glibc and musl) | ✓ (glibc and musl) | ✓ | ✓ | ✓ | ✓ |
+| Swift (0.18+) | — | — | ✓ | ✓ | — | — |
+| PHP | ✓ | ✓ | — | ✓ | ✓ (0.17+) | — |
+| Haskell (source) | ✓ (CI-covered) | — | — | — | ✓ (CI-covered, 0.17+) | — |
+| JVM (0.20+) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Elixir (0.22+) | ✓ | ✓ | — | ✓ | ✓ | — |
+
+Notes:
+
+- Most Linux binary artifacts build inside manylinux_2_28 containers so they
+  run on any distro with glibc >= 2.28 (the Ruby Linux gem still links the
+  build runner's glibc; a baseline toolchain there is a tracked follow-up).
+  The keyring provider uses a Rust-native D-Bus transport on Linux and does not
+  require system libdbus.
+- Hackage distributes source only; the Haskell column records which platforms
+  CI builds and tests, since users link `libsecretspec` themselves.
+- The Swift package targets macOS 12+ only. Its XCFramework contains native
+  Intel and Apple-silicon slices; mobile Apple platforms are intentionally out
+  of scope for a development-workflow resolver that launches provider CLIs and
+  reads desktop files and credential stores.
+- The fully-static Go binary (`-tags static`, musl) is Linux x64 only.
+
+## Why Swift uses the C ABI
+
+Swift interoperates with C directly through Clang modules, and SwiftPM
+distributes native Apple binaries as XCFramework binary targets. That fits the
+existing `libsecretspec` boundary exactly: ownership-audited C functions
+carry one already-versioned JSON contract.
+
+[UniFFI](https://mozilla.github.io/uniffi-rs/latest/) is a good default for a
+new object-rich Rust API that needs generated Swift and Kotlin bindings. It
+would be the wrong layer here: SecretSpec already has a deliberately narrow ABI
+shared by several SDKs, and introducing UniFFI would create a second exported
+ABI, generated Rust scaffolding, and another schema to version. The hand-written
+Swift layer is limited to `Codable` request/response models and idiomatic errors;
+resolution remains entirely in Rust.
+
+## Versioned native calls {/* #versioned-native-calls-020 */}
+
+<VersionCompatibility version="0.20" />
+
+`secretspec_resolve` remains the compatibility request for path and search
+resolution. SDKs that need a declaration held in application code call the new
+`secretspec_call` symbol with request version 1 instead. A separately versioned
+`source` is exactly one of `search`, `path`, or `inline`; an inline source also
+carries a logical `base_dir`, used for relative provider paths as
+`Secrets::from_spec_at` does.
+
+The inline specification is strict JSON, not the private Rust `Config` or a
+serialized compiled manifest. Its v2 shape contains `project`, `profiles`, and
+a `secrets` object per profile, with optional provider aliases, scopes, and
+the normal secret declaration fields. `project.extends` uses paths relative to
+the inline declaration's `base_dir`, so the full configuration model—including
+inheritance—is supported. Unknown request and declaration fields, unsupported
+versions, and unsupported operations are rejected. SDKs bind `secretspec_call`
+only when using inline specs: an older library therefore reports the missing
+capability instead of silently ignoring an unknown field and loading a
+filesystem manifest.
+
+Inline schema v2 adds project-level `defaults.providers` in SecretSpec 0.21+.
+
+`scripts/build-swift-xcframework.sh` changes Cargo's target-local dylib install
+name to `@rpath`, merges the native slices into a universal dylib, adds the C
+header and module map, and invokes
+`xcodebuild -create-xcframework`. `swift-package.yml` builds each architecture
+natively, tests the final universal artifact, computes SwiftPM's SHA-256
+checksum, and attaches the ZIP to the GitHub release. See `RELEASE.md` for the
+required pre-tag checksum step.
+
+## Windows toolchains
+
+Windows artifacts split across two Rust targets, and the split is load-bearing:
+
+- **MSVC (`x86_64-pc-windows-msvc`)** for artifacts loaded by MSVC-built
+  hosts: the CLI, the FFI cdylib, the Python wheel, the Node addon, the NuGet
+  natives, and the PHP extension. PHP is the special case: PHP's Windows ABI
+  uses the vectorcall calling convention, which stable Rust does not expose,
+  so `php-ext.yml` builds that one artifact on nightly Rust (the same setup
+  ext-php-rs's own CI uses). ext-php-rs downloads the PHP development pack
+  matching the installed `php.exe` during the build.
+- **MinGW (`x86_64-pc-windows-gnu`, declared in `rust-toolchain.toml`)** for
+  artifacts linked by MinGW toolchains, which cannot consume MSVC `.lib`
+  archives: the staticlib bundled in the Ruby gem (RubyInstaller's devkit) and
+  the one the Haskell CI job links (GHC's bundled toolchain). Building it
+  needs a MinGW C compiler for the archive's C dependencies (aws-lc-sys,
+  SQLite, zstd) and NASM for aws-lc's assembly.
+
+A `staticlib` does not carry its native link-time dependencies; consumers
+capture them from `cargo rustc ... -- --print native-static-libs`. On
+`windows-gnu` that list names import libraries that ship inside cargo registry
+crates (`libwindows.*.a` from `windows_x86_64_gnu`, `libwinapi_*.a` from
+`winapi-x86_64-pc-windows-gnu`) and exist in no MinGW distribution.
+`scripts/copy-mingw-import-libs.sh` stages exactly the referenced ones next to
+the archive — the Ruby gem bundles them in `vendor/`, the Haskell job points
+GHC's linker at them.
+
+## Linking through pkg-config {/* #linking-through-pkg-config-019 */}
+
+<VersionCompatibility version="0.19" />
+
+`libsecretspec/scripts/cinstall.sh PREFIX static|shared` uses
+[cargo-c](https://github.com/lu-zero/cargo-c) to install one library type, the
+header, and a `libsecretspec.pc` carrying its full link line. This lets
+pkg-config consumers skip the `native-static-libs` capture above. Use separate
+prefixes for the two modes: both metadata files use `-lsecretspec`, and the
+linker prefers a shared library when both forms are present.
+
+## Adding a platform to an SDK
+
+1. Add the platform to the SDK's distribution workflow matrix, and make the
+   publish job consume the new artifact.
+2. Build natively on a runner of that platform where possible; the workflows
+   deliberately avoid cross-compiling because the crate links system
+   libraries.
+3. Keep the artifact self-contained: vendor or statically link anything an end
+   user's machine will not have (see the manylinux and MinGW import library
+   notes above).
+4. Smoke test in the same workflow: install or load the built artifact and
+   call one function through it.
+5. Update the platform table above, the [SDK overview](/sdk/overview) platform
+   section, and label the platform with its target release (for example
+   `(0.17+)`) until that release ships.
+6. Add a user-facing CHANGELOG entry.
+
+## Adding a new SDK
+
+1. Create the binding crate/package as a workspace sibling
+   (`secretspec-<lang>/`), thin: marshal the JSON envelope, expose the
+   builder/resolve API mirroring the existing SDKs' vocabulary.
+2. Wire the package manifest into `scripts/sync-sdk-versions.sh` so its
+   version tracks the workspace.
+3. Add the SDK to the conformance suite and to `.github/workflows/sdks.yml`.
+4. Create a distribution workflow following an existing one
+   (`ruby-gems.yml` and `python-wheels.yml` are the smallest), including
+   publish-on-tag with trusted publishing where the registry supports it.
+5. Document it: `docs/src/content/docs/sdk/<lang>.md`, the sidebar in
+   `docs/astro.config.ts`, the [SDK overview](/sdk/overview), and the platform
+   tables on this page and the overview.
+6. Follow the same release-visibility rules as providers: label everything
+   with the target version until the release ships (see
+   [Adding Providers](/development/adding-providers)).
+
+If the SDK offers resolver mode (SecretSpec 0.21+), keep it an explicit backend choice and run the
+IPC conformance suite in addition to the embedded SDK suite. Resolver mode must
+use the Rust `secretspec-ipc` client in Rust or bind the pure-C
+`libsecretspec-resolver` client in non-Rust SDKs. The wire protocol remains canonical
+for independent implementations, but supported language bindings must not
+create a different request format or another client state machine. CI runs both
+clients through the same conformance and differential cases.

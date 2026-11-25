@@ -9,6 +9,207 @@ use std::{
 use tempfile::TempDir;
 use url::Url;
 
+fn sops_import_config() -> crate::config::Config {
+    toml::from_str(
+        r#"
+[project]
+name = "review"
+revision = "1.0"
+require_reason = false
+[profiles.default]
+API_KEY = { description = "API key" }
+"#,
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_sops_import_delete_source_rejects_equivalent_uris() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("secrets.enc.yaml");
+    let provider = build_sops_provider(&path.to_string_lossy(), None);
+    let addr = Address::convention("review", "default", "API_KEY");
+    provider.set(addr, &SecretBytes::from_utf8("keep")).unwrap();
+    let source = provider.uri();
+    let destination = format!("{source}&aws_region=us-east-1");
+    let config = sops_import_config();
+    let spec = crate::Secrets::new(config, None, Some(destination), None);
+    let result = spec.import_with_delete_source(&source);
+    let error = result.expect_err("same physical entry must be rejected before deletion");
+    assert!(error.to_string().contains("same provider entry"), "{error}");
+    assert!(provider.get(addr).unwrap().is_some());
+}
+
+#[test]
+fn test_sops_import_delete_source_checks_resolved_files_and_legacy_keys() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("review.default.enc.yaml");
+    let source = build_sops_provider(&path.to_string_lossy(), None);
+    let native = NativeAddress {
+        item: "API_KEY".to_string(),
+        ..Default::default()
+    };
+    source
+        .set(Address::Native(&native), &SecretBytes::from_utf8("keep"))
+        .unwrap();
+    let template = build_sops_provider(
+        &format!("{}/{{project}}.{{profile}}.enc.yaml", temp.path().display()),
+        None,
+    );
+    let config = sops_import_config();
+    let before = fs::read(&path).unwrap();
+    let spec = crate::Secrets::new(config.clone(), None, Some(template.uri()), None);
+    let error = spec.import_with_delete_source(&source.uri()).unwrap_err();
+    assert!(error.to_string().contains("same provider entry"), "{error}");
+    assert_eq!(fs::read(&path).unwrap(), before);
+
+    // Separate files are valid move targets despite sharing the SOPS container
+    // identity used to select candidates for the detailed overlap check.
+    let destination = build_sops_provider(
+        &temp.path().join("destination.enc.yaml").to_string_lossy(),
+        None,
+    );
+    let spec = crate::Secrets::new(config, None, Some(destination.uri()), None);
+    spec.import_with_delete_source(&source.uri()).unwrap();
+    assert!(source.get(Address::Native(&native)).unwrap().is_none());
+    assert_eq!(
+        destination
+            .get(Address::convention("review", "default", "API_KEY"))
+            .unwrap()
+            .unwrap()
+            .expose_secret(),
+        b"keep"
+    );
+}
+
+#[test]
+fn test_sops_repeated_delete_of_project_named_key_preserves_siblings() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("secrets.enc.yaml");
+    let provider = build_sops_provider(&path.to_string_lossy(), None);
+    let addr = Address::convention("myapp", "production", "myapp");
+    let other = Address::convention("myapp", "production", "OTHER");
+    let other_profile = Address::convention("myapp", "development", "OTHER");
+    provider
+        .set(addr, &SecretBytes::from_utf8("delete"))
+        .unwrap();
+    provider
+        .set(other, &SecretBytes::from_utf8("keep"))
+        .unwrap();
+    provider
+        .set(other_profile, &SecretBytes::from_utf8("keep-dev"))
+        .unwrap();
+    assert!(provider.delete(addr).unwrap());
+    let before = fs::read(&path).unwrap();
+    let error = provider.delete(addr).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Refusing to delete SOPS mapping"),
+        "{error}"
+    );
+    assert_eq!(
+        provider.check_deletable(addr).unwrap_err().to_string(),
+        error.to_string()
+    );
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert!(
+        provider.get(other).unwrap().is_some(),
+        "deleting the same key twice must not destroy siblings"
+    );
+    assert!(provider.get(other_profile).unwrap().is_some());
+}
+
+#[test]
+fn test_sops_entry_identity_resolves_legacy_selectors_and_templates() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("myapp.production.enc.yaml");
+    let single = build_sops_provider(&path.to_string_lossy(), None);
+    let templated = build_sops_provider(
+        &format!("{}/{{project}}.{{profile}}.enc.yaml", temp.path().display()),
+        None,
+    );
+    let native = NativeAddress {
+        item: "API_KEY".to_string(),
+        ..Default::default()
+    };
+    let addr = Address::convention("myapp", "production", "API_KEY");
+    single
+        .set(Address::Native(&native), &SecretBytes::from_utf8("legacy"))
+        .unwrap();
+    assert!(single.same_entries(addr, templated.as_ref(), addr).unwrap());
+    assert!(
+        single
+            .same_entries(addr, single.as_ref(), Address::Native(&native))
+            .unwrap()
+    );
+
+    // Once a namespaced value shadows the root value, the entries differ.
+    single
+        .set(addr, &SecretBytes::from_utf8("current"))
+        .unwrap();
+    assert!(!single.same_entries(addr, templated.as_ref(), addr).unwrap());
+    let other_profile = Address::convention("myapp", "development", "API_KEY");
+    single
+        .set(other_profile, &SecretBytes::from_utf8("dev"))
+        .unwrap();
+    assert!(
+        !single
+            .same_entries(addr, single.as_ref(), other_profile)
+            .unwrap()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_sops_entry_identity_resolves_symlinks_and_distinguishes_files() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("secrets.enc.yaml");
+    let link = temp.path().join("link.enc.yaml");
+    let provider = build_sops_provider(&path.to_string_lossy(), None);
+    let addr = Address::convention("myapp", "production", "API_KEY");
+    provider
+        .set(addr, &SecretBytes::from_utf8("secret"))
+        .unwrap();
+    std::os::unix::fs::symlink(&path, &link).unwrap();
+    let alias = build_sops_provider(&link.to_string_lossy(), None);
+    assert!(provider.same_entries(addr, alias.as_ref(), addr).unwrap());
+    assert_eq!(
+        provider.configured_entry_coordinates(addr).unwrap(),
+        alias.configured_entry_coordinates(addr).unwrap()
+    );
+
+    let other = build_sops_provider(&temp.path().join("other.enc.yaml").to_string_lossy(), None);
+    assert!(!provider.same_entries(addr, other.as_ref(), addr).unwrap());
+}
+
+#[test]
+fn test_sops_delete_refuses_legacy_profile_and_native_mapping_branches() {
+    let provider = SopsProvider::new(SopsConfig {
+        mode: SopsMode::SingleFile(PathBuf::from("secrets.enc.yaml")),
+        ..Default::default()
+    });
+    let parts = AddressParts {
+        project: "myapp",
+        profile: "production",
+        key: "development",
+    };
+    let content = br#"{"production":{"development":{"API_KEY":"keep"}}}"#;
+    assert!(
+        provider
+            .occupied_selector(content, &parts)
+            .unwrap_err()
+            .to_string()
+            .contains("Refusing to delete SOPS mapping")
+    );
+    let native = AddressParts {
+        project: "",
+        profile: "",
+        key: "production",
+    };
+    assert!(provider.occupied_selector(content, &native).is_err());
+}
+
 fn build_sops_provider(
     path: &str,
     query_parameters: Option<HashMap<&str, &str>>,
@@ -129,6 +330,110 @@ fn test_sops_dotenv_writes_use_a_flat_key() {
 }
 
 #[test]
+fn test_sops_write_target_describes_file_and_nested_selector() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("secrets.enc.yaml");
+    let provider = SopsProvider::new(SopsConfig {
+        format: SopsFormat::Yaml,
+        mode: SopsMode::SingleFile(path.clone()),
+        ..Default::default()
+    });
+
+    let target = provider
+        .describe_write_target(Address::convention("my-app", "production", "API_KEY"))
+        .unwrap();
+    let expected_path = temp.path().canonicalize().unwrap().join("secrets.enc.yaml");
+    assert_eq!(
+        target,
+        format!(
+            r#"{} ["my-app"]["production"]["API_KEY"]"#,
+            expected_path.display()
+        )
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_sops_write_target_resolves_existing_file_symlink() {
+    let temp = TempDir::new().unwrap();
+    let physical_path = temp.path().join("physical.enc.yaml");
+    fs::write(&physical_path, "").unwrap();
+    let configured_path = temp.path().join("configured.enc.yaml");
+    std::os::unix::fs::symlink(&physical_path, &configured_path).unwrap();
+    let provider = SopsProvider::new(SopsConfig {
+        format: SopsFormat::Yaml,
+        mode: SopsMode::SingleFile(configured_path),
+        ..Default::default()
+    });
+
+    let target = provider
+        .describe_write_target(Address::convention("my-app", "production", "API_KEY"))
+        .unwrap();
+    assert_eq!(
+        target,
+        format!(
+            r#"{} ["my-app"]["production"]["API_KEY"]"#,
+            physical_path.canonicalize().unwrap().display()
+        )
+    );
+}
+
+#[test]
+fn test_sops_templated_write_target_describes_flat_selector() {
+    let temp = TempDir::new().unwrap();
+    let provider = SopsProvider::new(SopsConfig {
+        format: SopsFormat::Json,
+        mode: SopsMode::Directory {
+            path: temp.path().to_path_buf(),
+            pattern: SopsPathPattern::try_from("{project}/{profile}.enc.json").unwrap(),
+            format: SopsFormat::Json,
+        },
+        ..Default::default()
+    });
+
+    let target = provider
+        .describe_write_target(Address::convention("my-app", "production", "API_KEY"))
+        .unwrap();
+    let expected_path = temp
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("my-app")
+        .join("production.enc.json");
+    assert_eq!(
+        target,
+        format!(r#"{} ["API_KEY"]"#, expected_path.display())
+    );
+}
+
+#[test]
+fn test_sops_ini_ref_write_target_describes_default_section() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("secrets.enc.ini");
+    let provider = SopsProvider::new(SopsConfig {
+        format: SopsFormat::Ini,
+        mode: SopsMode::SingleFile(path.clone()),
+        ..Default::default()
+    });
+    let native = NativeAddress {
+        item: "existing_token".to_string(),
+        ..Default::default()
+    };
+
+    let target = provider
+        .describe_write_target(Address::Native(&native))
+        .unwrap();
+    let expected_path = temp.path().canonicalize().unwrap().join("secrets.enc.ini");
+    assert_eq!(
+        target,
+        format!(
+            r#"{} ["DEFAULT"]["existing_token"]"#,
+            expected_path.display()
+        )
+    );
+}
+
+#[test]
 fn test_sops_set_reads_the_value_from_stdin() {
     let provider = SopsProvider::new(SopsConfig {
         format: SopsFormat::Json,
@@ -174,7 +479,7 @@ fn run_sops_single_file_test(ext: &str) {
             .get(Address::convention("some-project-name", profile, "foobar"))
             .expect("Failed to fetch secret")
         {
-            let secret = value.expose_secret();
+            let secret = value.try_as_utf8().unwrap();
 
             assert_eq!(
                 expected_value, secret,
@@ -212,7 +517,7 @@ fn test_sops_directory_get_json() {
         match provider.get(Address::convention("some-project-name", profile, "foobar")) {
             Ok(value) => match value {
                 Some(secret_box) => {
-                    let secret = secret_box.expose_secret();
+                    let secret = secret_box.try_as_utf8().unwrap();
 
                     assert_eq!(
                         expected_value, secret,
@@ -244,7 +549,7 @@ fn test_sops_directory_nested_get_json() {
         match provider.get(Address::convention("some-project-name", profile, "foobar")) {
             Ok(value) => match value {
                 Some(secret_box) => {
-                    let secret = secret_box.expose_secret();
+                    let secret = secret_box.try_as_utf8().unwrap();
 
                     assert_eq!(
                         expected_value, secret,
@@ -276,7 +581,7 @@ fn test_sops_directory_get_dotenv() {
         match provider.get(Address::convention("some-project-name", profile, "foobar")) {
             Ok(value) => match value {
                 Some(secret_box) => {
-                    let secret = secret_box.expose_secret();
+                    let secret = secret_box.try_as_utf8().unwrap();
 
                     assert_eq!(
                         expected_value, secret,
@@ -305,11 +610,11 @@ fn test_sops_set_directory_dotenv_with_format_override() {
     let addr = Address::convention("myapp", "production", "API_KEY");
 
     provider
-        .set(addr, &SecretString::new("dotenv-value".into()))
+        .set(addr, &SecretBytes::from_utf8("dotenv-value"))
         .expect("set failed");
     let value = provider.get(addr).unwrap().expect("missing value");
 
-    assert_eq!(value.expose_secret(), "dotenv-value");
+    assert_eq!(value.expose_secret(), b"dotenv-value");
 }
 
 #[test]
@@ -323,11 +628,11 @@ fn test_sops_set_single_file_dotenv_uses_a_flat_key() {
     let addr = Address::convention("myapp", "production", "API_KEY");
 
     provider
-        .set(addr, &SecretString::new("flat-value".into()))
+        .set(addr, &SecretBytes::from_utf8("flat-value"))
         .expect("set failed");
     let value = provider.get(addr).unwrap().expect("missing value");
 
-    assert_eq!(value.expose_secret(), "flat-value");
+    assert_eq!(value.expose_secret(), b"flat-value");
 }
 
 #[test]
@@ -341,11 +646,11 @@ fn test_sops_json_override_works_with_ini_extension() {
     let addr = Address::convention("myapp", "production", "API_KEY");
 
     provider
-        .set(addr, &SecretString::new("json-value".into()))
+        .set(addr, &SecretBytes::from_utf8("json-value"))
         .expect("set failed");
     let value = provider.get(addr).unwrap().expect("missing value");
 
-    assert_eq!(value.expose_secret(), "json-value");
+    assert_eq!(value.expose_secret(), b"json-value");
 }
 
 #[test]
@@ -362,7 +667,7 @@ fn test_sops_age_key_provider_credential_overrides_the_environment() {
         .find(|line| line.starts_with("AGE-SECRET-KEY-"))
         .unwrap();
     let mut credentials = ProviderCredentials::new();
-    credentials.insert(AGE_KEY.to_string(), SecretString::new(age_key.into()));
+    credentials.insert(AGE_KEY.to_string(), SecretBytes::from_utf8(age_key));
     provider.with_credentials(credentials);
 
     let value = provider
@@ -374,7 +679,7 @@ fn test_sops_age_key_provider_credential_overrides_the_environment() {
         .unwrap()
         .expect("missing value");
 
-    assert_eq!(value.expose_secret(), "baz");
+    assert_eq!(value.expose_secret(), b"baz");
 }
 
 #[test]
@@ -388,7 +693,7 @@ fn test_sops_set_single_file_creates_tree_and_sets_value() {
     provider
         .set(
             Address::convention("myapp", "production", "database_url"),
-            &SecretString::new("postgres://prod".into()),
+            &SecretBytes::from_utf8("postgres://prod"),
         )
         .expect("set failed");
 
@@ -397,7 +702,7 @@ fn test_sops_set_single_file_creates_tree_and_sets_value() {
         .expect("get failed")
         .expect("missing value");
 
-    assert_eq!(value.expose_secret(), "postgres://prod");
+    assert_eq!(value.expose_secret(), b"postgres://prod");
 }
 
 #[test]
@@ -419,7 +724,7 @@ fn test_sops_set_directory_creates_file_and_sets_value() {
     provider
         .set(
             Address::convention("myapp", "development", "api_key"),
-            &SecretString::new("xyz123".into()),
+            &SecretBytes::from_utf8("xyz123"),
         )
         .expect("set failed");
 
@@ -432,7 +737,7 @@ fn test_sops_set_directory_creates_file_and_sets_value() {
         .expect("get failed")
         .expect("missing value");
 
-    assert_eq!(value.expose_secret(), "xyz123");
+    assert_eq!(value.expose_secret(), b"xyz123");
 }
 
 #[test]
@@ -448,14 +753,14 @@ fn test_sops_set_overwrites_existing_value() {
     provider
         .set(
             Address::convention("proj", "dev", "token"),
-            &SecretString::new("first".into()),
+            &SecretBytes::from_utf8("first"),
         )
         .expect("set failed");
 
     provider
         .set(
             Address::convention("proj", "dev", "token"),
-            &SecretString::new("second".into()),
+            &SecretBytes::from_utf8("second"),
         )
         .expect("set failed");
 
@@ -464,7 +769,241 @@ fn test_sops_set_overwrites_existing_value() {
         .expect("get failed")
         .expect("missing value");
 
-    assert_eq!(value.expose_secret(), "second");
+    assert_eq!(value.expose_secret(), b"second");
+}
+
+#[test]
+fn test_sops_delete_preserves_other_keys_and_is_idempotent_in_each_format() {
+    for extension in ["yaml", "json", "env", "ini"] {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join(format!("secrets.enc.{extension}"));
+        let provider = build_sops_provider(&path.to_string_lossy(), None);
+        let api = Address::convention("myapp", "production", "API_KEY");
+        let other = Address::convention("myapp", "production", "OTHER");
+        provider
+            .set(api, &SecretBytes::from_utf8("secret"))
+            .unwrap();
+        provider
+            .set(other, &SecretBytes::from_utf8("keep"))
+            .unwrap();
+
+        assert!(provider.supports_delete());
+        assert!(provider.delete(api).unwrap(), "{extension}");
+        assert!(provider.get(api).unwrap().is_none(), "{extension}");
+        assert_eq!(
+            provider.get(other).unwrap().unwrap().expose_secret(),
+            b"keep",
+            "{extension}"
+        );
+        let before = fs::read(&path).unwrap();
+        assert!(!provider.delete(api).unwrap(), "{extension}");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before,
+            "{extension}: a missing key must not rewrite the file"
+        );
+    }
+}
+
+#[test]
+fn test_sops_delete_of_a_missing_file_does_not_create_it() {
+    let temp = TempDir::new().unwrap();
+    let file_path = temp.path().join("nested").join("secrets.enc.yaml");
+    let provider = build_sops_provider(&file_path.to_string_lossy(), None);
+    let address = Address::convention("myapp", "production", "API_KEY");
+
+    provider
+        .check_deletable(address)
+        .expect("a convention address is deletable");
+    assert!(!provider.delete(address).expect("missing file is absent"));
+    assert!(!file_path.exists());
+    assert!(!file_path.parent().unwrap().exists());
+}
+
+#[test]
+fn test_sops_delete_in_one_profile_file_leaves_another_untouched() {
+    let temp = TempDir::new().unwrap();
+    let base = temp.path();
+    let provider = build_sops_provider(
+        format!(
+            "{}/{{project}}/{{profile}}.enc.yaml",
+            base.to_string_lossy()
+        )
+        .as_str(),
+        None,
+    );
+    let dev = Address::convention("myapp", "development", "API_KEY");
+    let prod = Address::convention("myapp", "production", "API_KEY");
+    provider
+        .set(dev, &SecretBytes::from_utf8("dev-secret"))
+        .unwrap();
+    provider
+        .set(prod, &SecretBytes::from_utf8("prod-secret"))
+        .unwrap();
+    let prod_file = base.join("myapp/production.enc.yaml");
+    let before = fs::read(&prod_file).unwrap();
+
+    assert!(provider.delete(dev).unwrap());
+    assert!(provider.get(dev).unwrap().is_none());
+    assert_eq!(
+        provider.get(prod).unwrap().unwrap().expose_secret(),
+        b"prod-secret"
+    );
+    assert_eq!(fs::read(&prod_file).unwrap(), before);
+}
+
+#[test]
+fn test_sops_delete_removes_a_legacy_root_value_that_get_returns() {
+    let temp = TempDir::new().unwrap();
+    let file_path = temp.path().join("secrets.enc.yaml");
+    let provider = build_sops_provider(&file_path.to_string_lossy(), None);
+    let native = NativeAddress {
+        item: "API_KEY".to_string(),
+        ..Default::default()
+    };
+    let legacy = Address::Native(&native);
+    let convention = Address::convention("myapp", "production", "API_KEY");
+    let other = NativeAddress {
+        item: "OTHER".to_string(),
+        ..Default::default()
+    };
+
+    provider
+        .set(legacy, &SecretBytes::from_utf8("from-old-layout"))
+        .unwrap();
+    provider
+        .set(Address::Native(&other), &SecretBytes::from_utf8("keep"))
+        .unwrap();
+    assert_eq!(
+        provider.get(convention).unwrap().unwrap().expose_secret(),
+        b"from-old-layout"
+    );
+
+    assert!(provider.delete(convention).unwrap());
+    assert!(provider.get(convention).unwrap().is_none());
+    assert!(provider.get(legacy).unwrap().is_none());
+    assert_eq!(
+        provider
+            .get(Address::Native(&other))
+            .unwrap()
+            .unwrap()
+            .expose_secret(),
+        b"keep"
+    );
+}
+
+#[test]
+fn test_sops_delete_leaves_a_shadowed_legacy_copy() {
+    // The read walks the write path first. Delete removes that one value.
+    // An older root copy of the same name stays, and is what the next read
+    // returns; a second delete removes it. Unsetting every lookup path in one
+    // call would also delete a project object when the secret is named after
+    // the project.
+    let temp = TempDir::new().unwrap();
+    let file_path = temp.path().join("secrets.enc.yaml");
+    let provider = build_sops_provider(&file_path.to_string_lossy(), None);
+    let native = NativeAddress {
+        item: "API_KEY".to_string(),
+        ..Default::default()
+    };
+    let legacy = Address::Native(&native);
+    let convention = Address::convention("myapp", "production", "API_KEY");
+    let sibling = Address::convention("myapp", "production", "OTHER");
+
+    provider
+        .set(convention, &SecretBytes::from_utf8("current"))
+        .unwrap();
+    provider
+        .set(legacy, &SecretBytes::from_utf8("older"))
+        .unwrap();
+    provider
+        .set(sibling, &SecretBytes::from_utf8("keep"))
+        .unwrap();
+
+    assert!(provider.delete(convention).unwrap());
+    assert_eq!(
+        provider.get(convention).unwrap().unwrap().expose_secret(),
+        b"older"
+    );
+    assert_eq!(
+        provider.get(sibling).unwrap().unwrap().expose_secret(),
+        b"keep"
+    );
+
+    assert!(provider.delete(convention).unwrap());
+    assert!(provider.get(convention).unwrap().is_none());
+    assert_eq!(
+        provider.get(sibling).unwrap().unwrap().expose_secret(),
+        b"keep"
+    );
+}
+
+#[test]
+fn test_sops_directory_ref_cannot_be_deleted() {
+    let temp = TempDir::new().unwrap();
+    let provider = build_sops_provider(
+        format!(
+            "{}/{{project}}/{{profile}}.enc.json",
+            temp.path().to_string_lossy()
+        )
+        .as_str(),
+        None,
+    );
+    let native = NativeAddress {
+        item: "API_KEY".to_string(),
+        ..Default::default()
+    };
+    let address = Address::Native(&native);
+
+    let preflight = provider.check_deletable(address).unwrap_err().to_string();
+    let deleted = provider.delete(address).unwrap_err().to_string();
+    assert_eq!(preflight, deleted);
+    assert!(deleted.contains("single-file provider URI"), "{deleted}");
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn test_sops_failed_decrypt_on_delete_does_not_modify_the_original_file() {
+    let temp = TempDir::new().unwrap();
+    let file_path = temp.path().join("secrets.enc.json");
+    fs::copy(
+        "src/provider/sops/test_fixtures/single_file/some-project-name.enc.json",
+        &file_path,
+    )
+    .unwrap();
+    let mut provider = SopsProvider::new(SopsConfig {
+        format: SopsFormat::Json,
+        mode: SopsMode::SingleFile(file_path.clone()),
+        ..Default::default()
+    });
+    let mut credentials = ProviderCredentials::new();
+    credentials.insert(
+        AGE_KEY.to_string(),
+        SecretBytes::from_utf8(
+            "AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE",
+        ),
+    );
+    provider.with_credentials(credentials);
+    let before = fs::read(&file_path).unwrap();
+
+    let result = provider.delete(Address::convention(
+        "some-project-name",
+        "production",
+        "foobar",
+    ));
+
+    assert!(result.is_err());
+    assert_eq!(fs::read(&file_path).unwrap(), before);
+}
+
+#[test]
+fn test_sops_provider_advertises_deletion() {
+    let registration = crate::provider::PROVIDER_REGISTRY
+        .iter()
+        .find(|registration| registration.metadata.info.name == "sops")
+        .unwrap();
+    assert!(registration.metadata.deletes);
+    assert!(registration.metadata.reads);
 }
 
 #[test]
@@ -478,7 +1017,7 @@ fn test_sops_set_single_file_default_profile() {
     provider
         .set(
             Address::convention("myapp", "default", "service_url"),
-            &SecretString::new("http://localhost".into()),
+            &SecretBytes::from_utf8("http://localhost"),
         )
         .expect("set failed");
 
@@ -487,7 +1026,7 @@ fn test_sops_set_single_file_default_profile() {
         .expect("get failed")
         .expect("missing value");
 
-    assert_eq!(value.expose_secret(), "http://localhost");
+    assert_eq!(value.expose_secret(), b"http://localhost");
 }
 
 #[test]
@@ -499,13 +1038,13 @@ fn test_sops_single_file_default_profile_keeps_project_namespaces_separate() {
     provider
         .set(
             Address::convention("project-a", "default", "API_KEY"),
-            &SecretString::new("value-a".into()),
+            &SecretBytes::from_utf8("value-a"),
         )
         .unwrap();
     provider
         .set(
             Address::convention("project-b", "default", "API_KEY"),
-            &SecretString::new("value-b".into()),
+            &SecretBytes::from_utf8("value-b"),
         )
         .unwrap();
 
@@ -514,7 +1053,7 @@ fn test_sops_single_file_default_profile_keeps_project_namespaces_separate() {
             .get(Address::convention(project, "default", "API_KEY"))
             .unwrap()
             .unwrap();
-        assert_eq!(value.expose_secret(), expected);
+        assert_eq!(value.expose_secret(), expected.as_bytes());
     }
 }
 
@@ -528,11 +1067,11 @@ fn test_sops_templated_ini_set_round_trips_through_default_section() {
     let address = Address::convention("myapp", "production", "API_KEY");
 
     provider
-        .set(address, &SecretString::new("ini-value".into()))
+        .set(address, &SecretBytes::from_utf8("ini-value"))
         .unwrap();
     let value = provider.get(address).unwrap().unwrap();
 
-    assert_eq!(value.expose_secret(), "ini-value");
+    assert_eq!(value.expose_secret(), b"ini-value");
 }
 
 #[test]
@@ -547,11 +1086,11 @@ fn test_sops_single_file_ini_native_ref_uses_default_section() {
     let address = Address::Native(&native);
 
     provider
-        .set(address, &SecretString::new("native-ini-value".into()))
+        .set(address, &SecretBytes::from_utf8("native-ini-value"))
         .unwrap();
     let value = provider.get(address).unwrap().unwrap();
 
-    assert_eq!(value.expose_secret(), "native-ini-value");
+    assert_eq!(value.expose_secret(), b"native-ini-value");
 }
 
 #[test]
@@ -570,7 +1109,7 @@ fn test_sops_concurrent_writes_preserve_every_key() {
                 provider
                     .set(
                         Address::convention("myapp", "production", &format!("KEY_{index}")),
-                        &SecretString::new(format!("value-{index}").into()),
+                        &SecretBytes::from_utf8(format!("value-{index}")),
                     )
                     .unwrap();
             });
@@ -584,7 +1123,7 @@ fn test_sops_concurrent_writes_preserve_every_key() {
             .get(Address::convention("myapp", "production", &key))
             .unwrap()
             .unwrap();
-        assert_eq!(value.expose_secret(), format!("value-{index}"));
+        assert_eq!(value.expose_secret(), format!("value-{index}").as_bytes());
     }
 }
 
@@ -597,10 +1136,10 @@ fn test_sops_get_many_reads_multiple_keys_from_one_file() {
     let token = Address::convention("myapp", "production", "API_TOKEN");
 
     provider
-        .set(database, &SecretString::new("postgres://db".into()))
+        .set(database, &SecretBytes::from_utf8("postgres://db"))
         .unwrap();
     provider
-        .set(token, &SecretString::new("token-value".into()))
+        .set(token, &SecretBytes::from_utf8("token-value"))
         .unwrap();
 
     let values = provider
@@ -608,11 +1147,11 @@ fn test_sops_get_many_reads_multiple_keys_from_one_file() {
         .unwrap();
     assert_eq!(
         values.get("DATABASE_URL").unwrap().expose_secret(),
-        "postgres://db"
+        b"postgres://db"
     );
     assert_eq!(
         values.get("API_TOKEN").unwrap().expose_secret(),
-        "token-value"
+        b"token-value"
     );
 }
 
@@ -638,11 +1177,11 @@ fn test_sops_creation_rules_are_discovered_from_the_manifest_directory() {
     let address = Address::convention("myapp", "production", "API_KEY");
 
     provider
-        .set(address, &SecretString::new("project-config-value".into()))
+        .set(address, &SecretBytes::from_utf8("project-config-value"))
         .unwrap();
     let value = provider.get(address).unwrap().unwrap();
 
-    assert_eq!(value.expose_secret(), "project-config-value");
+    assert_eq!(value.expose_secret(), b"project-config-value");
 }
 
 #[test]
@@ -662,8 +1201,8 @@ fn test_sops_failed_decrypt_does_not_modify_the_original_file() {
     let mut credentials = ProviderCredentials::new();
     credentials.insert(
         AGE_KEY.to_string(),
-        SecretString::new(
-            "AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE".into(),
+        SecretBytes::from_utf8(
+            "AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE",
         ),
     );
     provider.with_credentials(credentials);
@@ -671,11 +1210,32 @@ fn test_sops_failed_decrypt_does_not_modify_the_original_file() {
 
     let result = provider.set(
         Address::convention("some-project-name", "production", "foobar"),
-        &SecretString::new("must-not-be-written".into()),
+        &SecretBytes::from_utf8("must-not-be-written"),
     );
 
     assert!(result.is_err());
     assert_eq!(fs::read(&file_path).unwrap(), before);
+}
+
+#[test]
+fn test_sops_refuses_non_utf8_before_running_sops() {
+    // A value sops can never store is refused before any subprocess runs:
+    // encrypting the initial file would contact the key service (and here,
+    // create the target) for a write that is going to be rejected anyway.
+    let temp = TempDir::new().unwrap();
+    let file_path = temp.path().join("secrets.enc.yaml");
+    let provider = build_sops_provider(&file_path.to_string_lossy(), None);
+
+    let error = provider
+        .set(
+            Address::convention("myapp", "production", "blob"),
+            &SecretBytes::from_slice(b"\xff\xfe"),
+        )
+        .unwrap_err();
+
+    assert!(error.to_string().contains("requires UTF-8"), "{error}");
+    assert!(!file_path.exists(), "no sops encrypt may have run");
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
 }
 
 #[test]
@@ -696,14 +1256,14 @@ fn test_sops_set_directory_multiple_profiles() {
     provider
         .set(
             Address::convention("myapp", "development", "db"),
-            &SecretString::new("dev-db".into()),
+            &SecretBytes::from_utf8("dev-db"),
         )
         .expect("set failed");
 
     provider
         .set(
             Address::convention("myapp", "production", "db"),
-            &SecretString::new("prod-db".into()),
+            &SecretBytes::from_utf8("prod-db"),
         )
         .expect("set failed");
 
@@ -711,14 +1271,16 @@ fn test_sops_set_directory_multiple_profiles() {
         .get(Address::convention("myapp", "development", "db"))
         .unwrap()
         .unwrap()
-        .expose_secret()
+        .try_as_utf8()
+        .unwrap()
         .to_string();
 
     let prod = provider
         .get(Address::convention("myapp", "production", "db"))
         .unwrap()
         .unwrap()
-        .expose_secret()
+        .try_as_utf8()
+        .unwrap()
         .to_string();
 
     assert_eq!(dev, "dev-db");
@@ -737,9 +1299,38 @@ fn test_sops_provider_advertises_credentials() {
         "google_oauth_access_token",
     ];
     assert_eq!(
-        crate::provider::credential_names_for_spec("sops://secrets.enc.yaml"),
+        crate::provider::credential_names_for_spec("sops://secrets.enc.yaml").unwrap(),
         expected
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn sourced_credentials_preserve_bytes_in_the_child_environment() {
+    let mut provider = SopsProvider::new(SopsConfig::default());
+    let expected = SecretBytes::from_slice(b"do-not-leak\xff\x80\n");
+    provider.with_credentials(HashMap::from([(AGE_KEY.to_string(), expected.clone())]));
+    let mut command = Command::new("sh");
+    command.args(["-c", "printf '%s' \"$SOPS_AGE_KEY\""]);
+    command.env("SOPS_AGE_KEY", "must-be-overridden");
+    provider.apply_command_env(&mut command).unwrap();
+    let output = command.output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, expected.expose_secret());
+}
+
+#[test]
+fn sourced_nul_credential_fails_before_starting_sops() {
+    let mut provider = SopsProvider::new(SopsConfig::default());
+    provider.with_credentials(HashMap::from([(
+        AGE_KEY.to_string(),
+        SecretBytes::from_slice(b"do-not-leak\0"),
+    )]));
+    let error = provider
+        .execute_sops_command_with_stdin(["--version"], None)
+        .unwrap_err();
+    assert!(error.to_string().contains("NUL"));
+    assert!(!error.to_string().contains("do-not-leak"));
 }
 
 #[test]

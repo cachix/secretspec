@@ -3,14 +3,16 @@ title: OpenBao Provider
 description: OpenBao integration, available in SecretSpec 0.17+
 ---
 
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
 import ProviderCredentials from '../../../components/ProviderCredentials.astro';
 
-The OpenBao provider integrates with OpenBao's KV (Key-Value) secrets engine
-using OpenBao's own provider identity and configuration conventions.
+<VersionCompatibility version="0.17" />
 
-:::caution[Version compatibility]
-The `openbao` provider is added in SecretSpec 0.17.
-:::
+The [OpenBao](https://openbao.org/) provider integrates with OpenBao's KV
+(Key-Value) secrets engine using OpenBao's own provider identity and
+configuration conventions.
+
 
 ## At a glance
 
@@ -28,6 +30,7 @@ The `openbao` provider is added in SecretSpec 0.17.
 
 ```bash
 $ export BAO_TOKEN=hvs.your-token-here
+
 $ secretspec set DATABASE_URL --provider openbao://bao.example.com:8200
 Enter value for DATABASE_URL: postgresql://localhost/mydb
 ✓ Secret 'DATABASE_URL' saved to openbao (profile: default)
@@ -67,11 +70,20 @@ $ export BAO_TOKEN=hvs.your-token-here
 
 ### AppRole authentication
 
+<VersionCompatibility version="0.18" kind="changed">
+
+`BAO_SECRET_ID` (or its `VAULT_SECRET_ID`
+fallback) and the `secret_id` provider credential may be omitted when the
+AppRole is configured with `bind_secret_id=false`. SecretSpec then sends only
+`role_id` and lets OpenBao apply the role's remaining login constraints.
+
+</VersionCompatibility>
 Select AppRole with `?auth=approle`. OpenBao roles bind a SecretID by default,
 so the usual configuration provides both inputs:
 
 ```bash
 $ export BAO_ROLE_ID=your-role-id
+
 $ export BAO_SECRET_ID=your-secret-id
 ```
 
@@ -88,22 +100,14 @@ role_id = { provider = "onepassword", ref = { vault = "Infra", item = "bao-appro
 secret_id = { provider = "onepassword", ref = { vault = "Infra", item = "bao-approle", field = "secret_id" } }
 ```
 
-:::note[Version compatibility]
-Starting with SecretSpec 0.18, `BAO_SECRET_ID` (or its `VAULT_SECRET_ID`
-fallback) and the `secret_id` provider credential may be omitted when the
-AppRole is configured with `bind_secret_id=false`. SecretSpec then sends only
-`role_id` and lets OpenBao apply the role's remaining login constraints.
-:::
 
 Disabling SecretID binding removes AppRole's usual second credential. Keep the
 server default unless the workload deliberately relies on another trust
 boundary, such as a tightly controlled Agent host and network constraints.
 
-### Custom authentication mounts (0.18+)
+### Custom authentication mounts {/* #custom-authentication-mounts-018 */}
 
-:::note[Version compatibility]
-Custom authentication mounts are available starting with SecretSpec 0.18.
-:::
+<VersionCompatibility version="0.18" />
 
 AppRole and JWT methods mounted somewhere other than their defaults can be
 selected with `?auth_mount=`. The value is relative to `/v1/auth`:
@@ -228,7 +232,9 @@ AppRole avoids placing a user token in the CI environment:
 
 ```bash
 $ export BAO_ROLE_ID="$CI_ROLE_ID"
+
 $ export BAO_SECRET_ID="$CI_SECRET_ID"
+
 $ secretspec export --format gha --provider "openbao://bao.example.com:8200/secret?auth=approle"
 ```
 
@@ -253,6 +259,7 @@ $ secretspec set DATABASE_URL --provider "openbao://bao.example.com:8200/secret?
 $ secretspec check --provider openbao://team-a@bao.example.com:8200/secret
 
 $ export BAO_NAMESPACE=team-a
+
 $ secretspec check --provider openbao://bao.example.com:8200/secret
 ```
 
@@ -260,6 +267,8 @@ $ secretspec check --provider openbao://bao.example.com:8200/secret
 
 ```bash
 $ bao server -dev -dev-root-token-id="dev-only-token"
+
 $ export BAO_TOKEN="dev-only-token"
+
 $ secretspec check --provider "openbao://127.0.0.1:8200/secret?tls=false"
 ```

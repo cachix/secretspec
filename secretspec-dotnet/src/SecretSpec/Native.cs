@@ -6,7 +6,7 @@ namespace Cachix.SecretSpec;
 
 internal static partial class Native
 {
-    private const string LibraryName = "secretspec_ffi";
+    private const string LibraryName = "secretspec";
 
     static Native()
     {
@@ -14,15 +14,29 @@ internal static partial class Native
     }
 
     internal static string Resolve(string requestJson)
+        => Invoke(secretspec_resolve, requestJson, "secretspec_resolve", false);
+
+    internal static string Call(string requestJson)
+        => Invoke(secretspec_call, requestJson, "secretspec_call", true);
+
+    private static string Invoke(
+        Func<string, IntPtr> function,
+        string requestJson,
+        string symbol,
+        bool missingSymbolIsCapability)
     {
         IntPtr response = IntPtr.Zero;
         try
         {
-            response = secretspec_resolve(requestJson);
+            response = function(requestJson);
             if (response == IntPtr.Zero)
-                throw new SecretSpecException("ffi", "secretspec_resolve returned null");
+                throw new SecretSpecException("ffi", $"{symbol} returned null");
             return Marshal.PtrToStringUTF8(response)
                 ?? throw new SecretSpecException("ffi", "secretspec_resolve returned invalid UTF-8");
+        }
+        catch (EntryPointNotFoundException error) when (missingSymbolIsCapability)
+        {
+            throw new SecretSpecException("capability", error.Message, error);
         }
         catch (Exception error) when (
             error is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
@@ -67,14 +81,17 @@ internal static partial class Native
         // normal loader search path); the source-checkout scan below is a
         // development fallback that must not stat ancestor directories, or shadow
         // the packaged asset, in a deployed application.
-        if (NativeLibrary.TryLoad(libraryName, assembly, searchPath, out var packaged))
-            return packaged;
+        foreach (var candidateName in new[] { "libsecretspec", libraryName, "secretspec_ffi" })
+        {
+            if (NativeLibrary.TryLoad(candidateName, assembly, searchPath, out var packaged))
+                return packaged;
+        }
 
-        var fileName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-            ? "secretspec_ffi.dll"
+        var fileNames = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+            ? new[] { "libsecretspec.dll", "secretspec.dll", "secretspec_ffi.dll" }
             : RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
-                ? "libsecretspec_ffi.dylib"
-                : "libsecretspec_ffi.so";
+                ? new[] { "libsecretspec.dylib", "libsecretspec_ffi.dylib" }
+                : new[] { "libsecretspec.so", "libsecretspec_ffi.so" };
 
         foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
         {
@@ -88,12 +105,15 @@ internal static partial class Native
                 var newestTime = DateTime.MinValue;
                 foreach (var profile in new[] { "release", "debug" })
                 {
-                    var candidate = new FileInfo(
-                        Path.Combine(directory.FullName, "target", profile, fileName));
-                    if (candidate.Exists && candidate.LastWriteTimeUtc >= newestTime)
+                    foreach (var fileName in fileNames)
                     {
-                        newest = candidate.FullName;
-                        newestTime = candidate.LastWriteTimeUtc;
+                        var candidate = new FileInfo(
+                            Path.Combine(directory.FullName, "target", profile, fileName));
+                        if (candidate.Exists && candidate.LastWriteTimeUtc >= newestTime)
+                        {
+                            newest = candidate.FullName;
+                            newestTime = candidate.LastWriteTimeUtc;
+                        }
                     }
                 }
                 if (newest is not null)
@@ -107,6 +127,10 @@ internal static partial class Native
     [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     private static partial IntPtr secretspec_resolve(string requestJson);
+
+    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial IntPtr secretspec_call(string requestJson);
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

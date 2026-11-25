@@ -1,0 +1,226 @@
+---
+title: PHP SDK
+description: Resolve SecretSpec secrets from PHP, Laravel, and Symfony
+---
+
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+import { Code } from 'astro:components';
+import quickStartExample from '../../../../../secretspec-php/examples/quick_start.php?raw';
+import oneShotExample from '../../../../../secretspec-php/examples/one_shot.php?raw';
+import scopesExample from '../../../../../secretspec-php/examples/scopes.php?raw';
+import laravelExample from '../../../../../secretspec-php/examples/laravel.php?raw';
+import symfonyExample from '../../../../../secretspec-php/examples/symfony.php?raw';
+import plainPhpExample from '../../../../../secretspec-php/examples/plain_php.php?raw';
+import typedAccessExample from '../../../../../secretspec-php/examples/typed_access.php?raw';
+import asPathExample from '../../../../../secretspec-php/examples/as_path.php?raw';
+
+<VersionCompatibility version="0.20" kind="changed">
+
+`libsecretspec` was named `secretspec-ffi` through SecretSpec 0.19. The PHP
+loader prefers the new artifact name and still accepts pre-0.20 shared
+libraries.
+
+</VersionCompatibility>
+
+The PHP SDK (`cachix/secretspec`) is a thin client over the same Rust resolver
+every other SecretSpec SDK uses, so it inherits every provider, chain, profile,
+and generator with no PHP-side logic. It reaches the resolver through one of two
+native backends over an identical JSON contract:
+
+- **The `secretspec` PHP extension** (built with
+  [ext-php-rs](https://github.com/davidcole1340/ext-php-rs)) embeds the resolver
+  the way `pdo` or `redis` do. It needs no `ffi.enable` and works under PHP-FPM
+  and the web SAPI out of the box — the recommended path for Laravel and Symfony.
+- **`ext-ffi`** dlopens the `libsecretspec` shared library at runtime. Nothing
+  to compile, ideal for CLI tools and local development; requires the FFI
+  extension enabled.
+
+
+The SDK prefers the extension whenever it is loaded and transparently falls back
+to `ext-ffi`, so your application code is the same either way.
+
+## Install
+
+```bash
+$ composer require cachix/secretspec
+```
+
+That installs the pure-PHP client. Then provide the native resolver with **one**
+of the backends below.
+
+### Option A — the PHP extension (recommended for web / FPM)
+
+The `secretspec-php-native` extension embeds the resolver, so it works under
+PHP-FPM with no `ffi.enable` and nothing to locate at runtime — the same
+operational model as `ext-redis` or `ext-imagick` (the binary is provisioned at
+the image/host level, not by Composer). Install it one of three ways:
+
+- **Prebuilt binary** — download the `secretspec-php-native-<php>-nts-<target>`
+  shared object for your PHP version and platform from the
+  [GitHub release](https://github.com/cachix/secretspec/releases), then enable
+  it in `php.ini`:
+
+  ```ini
+  extension=/path/to/secretspec-php-native.so
+  ```
+
+  In an official PHP Docker image, drop it into the extension dir and
+  `docker-php-ext-enable secretspec-php-native`.
+
+- **Build from source** (needs the Rust toolchain, `php-config`, and libclang):
+
+  ```bash
+  cargo build --release -p secretspec-php-native
+  # then point extension= at target/release/libsecretspec_php_native.so
+  ```
+
+Once loaded, `php -m` lists `secretspec-php-native` and the SDK uses it
+automatically.
+
+### Option B — ext-ffi (quick start / CLI)
+
+The FFI backend dlopens the `libsecretspec` library at runtime. Enable the
+bundled FFI extension — in CLI it is on by default; for the web SAPI set:
+
+```ini
+extension=ffi
+ffi.enable=true
+```
+
+Then fetch the native library for your platform (a one-time step; Composer does
+not run it automatically):
+
+```bash
+$ vendor/bin/secretspec-install-lib
+```
+
+That downloads the right `libsecretspec` library from the matching GitHub
+release into the package. Alternatively, point `SECRETSPEC_FFI_LIB` at a library
+you built or placed yourself. The SDK looks at `SECRETSPEC_FFI_LIB` first, then
+the downloaded copy, then a local Cargo `target/` directory.
+
+## Quick start
+
+<Code code={quickStartExample} lang="php" meta='title="quick_start.php"' />
+
+A missing required secret throws `Secretspec\MissingRequiredException` (with a
+`->missing` list); any other failure throws `Secretspec\SecretSpecException`
+(with a stable `->kind`).
+
+There is also a one-shot form using named arguments:
+
+<Code code={oneShotExample} lang="php" meta='title="one_shot.php"' />
+
+## Caller context {/* #caller-context-020 */}
+
+<VersionCompatibility version="0.20" />
+
+```php
+use Secretspec\CallerContext;
+use Secretspec\SecretSpec;
+
+$builder = SecretSpec::builder()->withCaller(new CallerContext(
+    name: 'git',
+    version: '2.51.0',
+    operation: 'credential_get',
+    resource: 'github.com',
+));
+```
+
+Caller context identifies the invoking integration in audit records but never
+satisfies `require_reason`. Do not put credentials or secret values in it.
+
+## Inline specifications {/* #inline-specifications-020 */}
+
+<VersionCompatibility version="0.20" />
+
+Use `withInlineSpec($spec, $baseDir)` to resolve a strict inline-spec v2 PHP
+array (SecretSpec 0.21+). The embedded extension or FFI fallback uses the
+versioned native call; an older cdylib raises a capability error instead of
+searching for a manifest.
+
+## Scopes {/* #scopes-017 */}
+
+<VersionCompatibility version="0.17" />
+
+Use `withScope('api')` to resolve only a named `[scopes.api]` subset. The
+selected name is available as `$resolved->scope` and `$report->scope`:
+
+<Code code={scopesExample} lang="php" meta='title="scopes.php"' />
+
+## Laravel
+
+Resolve your secrets early and export them so Laravel's `env()` and config see
+them. A service provider is a natural home:
+
+<Code code={laravelExample} lang="php" meta='title="laravel.php"' />
+
+Register it first in `bootstrap/providers.php` so the secrets are present before
+other providers read configuration. Because `setAsEnv()` also populates `$_ENV`
+and `$_SERVER`, the `env()` helper and any `config/*.php` that calls `env(...)`
+resolve normally.
+
+> If you run `php artisan config:cache`, configuration is frozen at cache time
+> and `env()` is not read per request. Either resolve before caching, or bind the
+> `Resolved` into the container and read secrets from it directly where you need
+> them.
+
+## Symfony
+
+Export the secrets in the front controller and `bin/console`, before the kernel
+boots, so `%env(DATABASE_URL)%` in your config resolves:
+
+<Code code={symfonyExample} lang="php" meta='title="symfony.php"' />
+
+`setAsEnv()` sets `$_ENV`, `$_SERVER`, and `putenv()`, all three of which
+Symfony's env-var processors read, so no bundle or extra configuration is needed.
+
+## Plain PHP
+
+Point the builder at a specific manifest and provider and read the values back:
+
+<Code code={plainPhpExample} lang="php" meta='title="plain_php.php"' />
+
+## Typed access (codegen)
+
+Generate a typed class with `secretspec schema` plus
+[quicktype](https://quicktype.io), then build it from `$resolved->fields()`:
+
+```bash
+$ secretspec schema | quicktype -s schema --top-level SecretSpec --lang php -o SecretSpecTyped.php
+```
+
+<Code code={typedAccessExample} lang="php" meta='title="typed_access.php"' />
+
+## Files (`as_path`)
+
+<VersionCompatibility version="0.22" kind="changed">
+
+`as_path` uses private temporary files. SDK cleanup releases visible files and
+hidden composition dependencies (0.22+). Files must be explicitly cleaned up;
+they are not removed automatically on process exit. See
+[file delivery and lifetimes](/reference/configuration/#as_path-option).
+
+</VersionCompatibility>
+
+
+In **0.22+**, use `$secret->open()` to read a file secret in PHP. It returns a
+seekable `php://memory` stream containing a snapshot of the bytes. Use `fclose()`
+when finished with the stream.
+
+`$secret->get()` returns the path for external consumers. Call
+`$resolved->close()` after the last consumer to remove the result's files.
+Already-open streams retain their contents until closed.
+
+<Code code={asPathExample} lang="php" meta='title="as_path.php"' />
+
+## Native backends
+
+The SDK chooses a backend automatically: if the `secretspec-php-native` extension
+is loaded it is used directly (no `ffi.enable`, no library to locate); otherwise
+the SDK dlopens the `libsecretspec` library via `ext-ffi`, looking first at
+`SECRETSPEC_FFI_LIB`, then the copy `vendor/bin/secretspec-install-lib` places in
+the package, then a local Cargo `target/` directory. Both backends call the
+identical Rust `resolve_json`, so the result is the same — a cross-language
+conformance suite asserts it.

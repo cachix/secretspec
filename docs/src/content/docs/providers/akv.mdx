@@ -3,13 +3,15 @@ title: Azure Key Vault Provider
 description: Azure Key Vault integration
 ---
 
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
 import ProviderCredentials from '../../../components/ProviderCredentials.astro';
 
-The Azure Key Vault provider integrates with Azure for centralized secret management.
+<VersionCompatibility version="0.15" />
 
-:::note[Version compatibility]
-Available since SecretSpec 0.15.
-:::
+The [Azure Key Vault](https://azure.microsoft.com/en-us/products/key-vault)
+provider integrates with Azure for centralized secret management.
+
 
 ## At a glance
 
@@ -112,7 +114,10 @@ be confused with component data.
 A secret's
 [`ref`](/reference/configuration/#secret-references) field names an
 existing secret instead: `item` is the secret name (`field` and `version` are
-not yet supported). References are **read-only** in this provider, and `item`
+both rejected through SecretSpec 0.18). `field` remains unsupported. SecretSpec
+0.20+ accepts `version` as a 32-character ASCII alphanumeric Azure Key Vault
+version identifier; omission reads the latest version. References are
+**read-only** in this provider, and `item`
 must already be a valid Azure Key Vault secret name (letters, digits, and
 hyphens only) — unlike convention secrets, it is validated but never rewritten,
 since silently rewriting a `ref` could point at a different secret than the
@@ -120,7 +125,11 @@ one you named.
 
 ```toml
 [profiles.production]
-DATABASE_URL = { description = "DB", ref = { item = "database-url" }, providers = ["akv://myvault"] }
+DATABASE_URL = {
+  description = "DB",
+  ref = { item = "database-url", version = "0123456789abcdef0123456789abcdef" }, # version: 0.20+
+  providers = ["akv://myvault"]
+}
 ```
 
 ## CI/CD
@@ -145,6 +154,7 @@ Store all three declared credentials, then use the alias:
 
 ```bash
 $ secretspec config provider login azure
+
 $ secretspec run --provider azure -- deploy
 ```
 
@@ -154,7 +164,9 @@ to its matching conventional environment variable:
 ```bash
 # Set credentials
 $ export AZURE_TENANT_ID="..."
+
 $ export AZURE_CLIENT_ID="..."
+
 $ export AZURE_CLIENT_SECRET="..."
 
 # Run command

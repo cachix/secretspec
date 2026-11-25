@@ -37,13 +37,17 @@
 //! secretspec check --provider scaleway://fr-par?project_id=…
 //! ```
 
+use super::ProviderBase as _;
 use super::{
-    Address, Provider, ProviderCredentials, ProviderUrl, credential_or_envs, preferred_env,
+    Address, ProviderCredentials, ProviderUrl, credential_or_envs, join_slash_path, preferred_env,
 };
+#[cfg(test)]
+use super::{Provider, SyncProviderAdapter};
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use data_encoding::BASE64;
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 
 /// Semantic credential name for the Scaleway API secret key.
@@ -127,6 +131,7 @@ fn normalize_path(path: &str) -> String {
 
 /// Scaleway Secret Manager provider.
 pub struct ScalewayProvider {
+    retry_policy: super::RetryPolicy,
     config: ScalewayConfig,
     credentials: ProviderCredentials,
 }
@@ -134,11 +139,8 @@ pub struct ScalewayProvider {
 crate::register_provider! {
     struct: ScalewayProvider,
     config: ScalewayConfig,
-    name: "scaleway",
-    description: "Scaleway Secret Manager",
-    schemes: ["scaleway"],
-    examples: ["scaleway://fr-par", "scaleway://nl-ams?project_id=PROJECT_UUID", "scaleway://fr-par?project_id=PROJECT_UUID&path=/myteam"],
-    credential_names: [SECRET_KEY],
+    metadata: &super::catalog::SCALEWAY,
+    native_async: true,
 }
 
 /// One secret in a `ListSecrets` response (only the fields we consume).
@@ -171,6 +173,7 @@ impl ScalewayProvider {
         Self {
             config,
             credentials: ProviderCredentials::new(),
+            retry_policy: super::RetryPolicy::default(),
         }
     }
 
@@ -185,10 +188,8 @@ impl ScalewayProvider {
                 )));
             }
         }
-        // `base` is already normalized ("/" or "/prefix"); trim its slash so we
-        // never emit a double slash when composing the hierarchy.
-        let base = base.trim_end_matches('/');
-        Ok(format!("{base}/secretspec/{project}/{profile}/{key}"))
+        let convention_name = format!("secretspec/{project}/{profile}/{key}");
+        Ok(join_slash_path(base, &convention_name))
     }
 
     /// Splits an absolute item path into `(secret_path, secret_name)`. The path
@@ -208,15 +209,13 @@ impl ScalewayProvider {
         }
     }
 
-    fn secret_key(&self) -> Result<SecretString> {
-        credential_or_envs(&self.credentials, SECRET_KEY, &[SECRET_KEY_ENV])
-            .map(|k| SecretString::new(k.into()))
-            .ok_or_else(|| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "No Scaleway secret key found. Configure the {SECRET_KEY} provider \
+    fn secret_key(&self) -> Result<SecretBytes> {
+        credential_or_envs(&self.credentials, SECRET_KEY, &[SECRET_KEY_ENV]).ok_or_else(|| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "No Scaleway secret key found. Configure the {SECRET_KEY} provider \
                      credential or set {SECRET_KEY_ENV}."
-                ))
-            })
+            ))
+        })
     }
 
     fn project_id(&self) -> Result<String> {
@@ -239,15 +238,15 @@ impl ScalewayProvider {
         )
     }
 
-    fn client(secret_key: &SecretString) -> Result<reqwest::Client> {
+    fn client(secret_key: &SecretBytes) -> Result<reqwest::Client> {
         use reqwest::header::{HeaderMap, HeaderValue};
         let mut headers = HeaderMap::new();
-        let mut token = HeaderValue::from_str(secret_key.expose_secret()).map_err(|e| {
+        let mut token = HeaderValue::from_bytes(secret_key.expose_secret()).map_err(|e| {
             SecretSpecError::ProviderOperationFailed(format!("Invalid Scaleway secret key: {e}"))
         })?;
         token.set_sensitive(true);
         headers.insert("X-Auth-Token", token);
-        reqwest::Client::builder()
+        super::http::client_builder()
             .default_headers(headers)
             .build()
             .map_err(|e| {
@@ -260,17 +259,17 @@ impl ScalewayProvider {
 
     /// Extracts one key from a JSON secret value (for `key_value` secrets),
     /// mirroring the AWS provider's `field` semantics.
-    fn extract_json_key(name: &str, value: &str, json_key: &str) -> Result<Option<SecretString>> {
+    fn extract_json_key(name: &str, value: &str, json_key: &str) -> Result<Option<SecretBytes>> {
         let json: serde_json::Value = serde_json::from_str(value).map_err(|e| {
             SecretSpecError::ProviderOperationFailed(format!(
                 "secret '{name}' is not JSON, cannot extract key '{json_key}': {e}"
             ))
         })?;
-        match json.get(json_key) {
-            Some(serde_json::Value::String(s)) => Ok(Some(SecretString::new(s.clone().into()))),
-            Some(other) => Ok(Some(SecretString::new(other.to_string().into()))),
-            None => Ok(None),
-        }
+        // See the AWS provider: flat-key selection, shared rendering.
+        Ok(json
+            .get(json_key)
+            .and_then(crate::json_field::render_field)
+            .map(|value| SecretBytes::from_utf8(value.expose_secret())))
     }
 
     async fn get_async(
@@ -278,7 +277,7 @@ impl ScalewayProvider {
         item: &str,
         field: Option<&str>,
         version: Option<&str>,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Option<SecretBytes>> {
         let (secret_path, secret_name) = Self::split_item(item)?;
         let project_id = self.project_id()?;
         let secret_key = self.secret_key()?;
@@ -289,34 +288,35 @@ impl ScalewayProvider {
             self.region_base(),
             revision
         );
-        let response = Self::client(&secret_key)?
-            .get(&url)
-            .query(&[
+        let response = super::http::send(
+            self.retry_policy,
+            "Scaleway",
+            Self::client(&secret_key)?.get(&url).query(&[
                 ("project_id", project_id.as_str()),
                 ("secret_name", secret_name.as_str()),
                 ("secret_path", secret_path.as_str()),
-            ])
-            .send()
-            .await
-            .map_err(|e| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to reach Scaleway Secret Manager: {}",
-                    crate::error::display_error_chain(&e)
-                ))
-            })?;
+            ]),
+            false,
+        )
+        .await?;
 
         match response.status().as_u16() {
             200 => {
                 let body: AccessResponse = response.json().await.map_err(|e| {
-                    SecretSpecError::ProviderOperationFailed(format!(
-                        "Failed to parse Scaleway access response: {}",
-                        crate::error::display_error_chain(&e)
-                    ))
+                    super::http::body_error(
+                        SecretSpecError::ProviderOperationFailed(format!(
+                            "Failed to parse Scaleway access response: {}",
+                            crate::error::display_error_chain(&e)
+                        )),
+                        e,
+                    )
                 })?;
                 let decoded = decode_payload(item, &body.data)?;
                 match field {
-                    None => Ok(Some(SecretString::new(decoded.into()))),
-                    Some(json_key) => Self::extract_json_key(item, &decoded, json_key),
+                    None => Ok(Some(decoded)),
+                    Some(json_key) => {
+                        Self::extract_json_key(item, decoded.try_as_utf8_for(item)?, json_key)
+                    }
                 }
             }
             404 => Ok(None),
@@ -329,7 +329,7 @@ impl ScalewayProvider {
         }
     }
 
-    async fn set_async(&self, item: &str, value: &SecretString) -> Result<()> {
+    async fn set_async(&self, item: &str, value: &SecretBytes) -> Result<()> {
         let (secret_path, secret_name) = Self::split_item(item)?;
         let project_id = self.project_id()?;
         let secret_key = self.secret_key()?;
@@ -340,19 +340,15 @@ impl ScalewayProvider {
             .await?;
 
         // Payloads are transmitted base64-encoded.
-        let data = BASE64.encode(value.expose_secret().as_bytes());
+        let data = BASE64.encode(value.expose_secret());
         let url = format!("{}/secrets/{}/versions", self.region_base(), secret_id);
-        let response = client
-            .post(&url)
-            .json(&serde_json::json!({ "data": data }))
-            .send()
-            .await
-            .map_err(|e| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to reach Scaleway Secret Manager: {}",
-                    crate::error::display_error_chain(&e)
-                ))
-            })?;
+        let response = super::http::send(
+            self.retry_policy,
+            "Scaleway",
+            client.post(&url).json(&serde_json::json!({ "data": data })),
+            false,
+        )
+        .await?;
 
         match response.status().as_u16() {
             200 | 201 => Ok(()),
@@ -371,35 +367,44 @@ impl ScalewayProvider {
         secret_name: &str,
     ) -> Result<String> {
         let create_url = format!("{}/secrets", self.region_base());
-        let response = client
-            .post(&create_url)
-            .json(&serde_json::json!({
+        let response = super::http::send(
+            self.retry_policy,
+            "Scaleway",
+            client.post(&create_url).json(&serde_json::json!({
                 "project_id": project_id,
                 "name": secret_name,
                 "path": secret_path,
-            }))
-            .send()
-            .await
-            .map_err(|e| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to reach Scaleway Secret Manager: {}",
-                    crate::error::display_error_chain(&e)
-                ))
-            })?;
+            })),
+            false,
+        )
+        .await?;
 
         match response.status().as_u16() {
             200 | 201 => {
                 let created: CreatedSecret = response.json().await.map_err(|e| {
-                    SecretSpecError::ProviderOperationFailed(format!(
-                        "Failed to parse Scaleway create-secret response: {}",
-                        crate::error::display_error_chain(&e)
-                    ))
+                    super::http::body_error(
+                        SecretSpecError::ProviderOperationFailed(format!(
+                            "Failed to parse Scaleway create-secret response: {}",
+                            crate::error::display_error_chain(&e)
+                        )),
+                        e,
+                    )
                 })?;
                 Ok(created.id)
             }
             409 => {
                 self.lookup_secret_id(client, project_id, secret_path, secret_name)
                     .await
+            }
+            // Scaleway answers a name that is already taken with 400, not 409.
+            400 => {
+                let body = read_body(response).await;
+                if is_duplicate_name(&body) {
+                    self.lookup_secret_id(client, project_id, secret_path, secret_name)
+                        .await
+                } else {
+                    Err(status_error("creating secret", 400, &body))
+                }
             }
             status => Err(http_error("creating secret", status, response).await),
         }
@@ -413,23 +418,19 @@ impl ScalewayProvider {
         secret_name: &str,
     ) -> Result<String> {
         let url = format!("{}/secrets", self.region_base());
-        let response = client
-            .get(&url)
-            .query(&[
+        let response = super::http::send(
+            self.retry_policy,
+            "Scaleway",
+            client.get(&url).query(&[
                 ("project_id", project_id),
                 ("name", secret_name),
                 ("path", secret_path),
                 // Required by the API; deletion-scheduled secrets are excluded.
                 ("scheduled_for_deletion", "false"),
-            ])
-            .send()
-            .await
-            .map_err(|e| {
-                SecretSpecError::ProviderOperationFailed(format!(
-                    "Failed to reach Scaleway Secret Manager: {}",
-                    crate::error::display_error_chain(&e)
-                ))
-            })?;
+            ]),
+            false,
+        )
+        .await?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -437,10 +438,13 @@ impl ScalewayProvider {
         }
 
         let body: ListSecretsResponse = response.json().await.map_err(|e| {
-            SecretSpecError::ProviderOperationFailed(format!(
-                "Failed to parse Scaleway list-secrets response: {}",
-                crate::error::display_error_chain(&e)
-            ))
+            super::http::body_error(
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to parse Scaleway list-secrets response: {}",
+                    crate::error::display_error_chain(&e)
+                )),
+                e,
+            )
         })?;
 
         // The `name`/`path` filters are not guaranteed exact, so match both.
@@ -457,36 +461,66 @@ impl ScalewayProvider {
     }
 }
 
-/// Decodes a base64 payload into a UTF-8 string.
-fn decode_payload(item: &str, data: &str) -> Result<String> {
+/// Decodes a base64 payload without imposing a text representation.
+fn decode_payload(item: &str, data: &str) -> Result<SecretBytes> {
     let bytes = BASE64.decode(data.as_bytes()).map_err(|e| {
         SecretSpecError::ProviderOperationFailed(format!(
             "Scaleway secret '{item}' payload is not valid base64: {e}"
         ))
     })?;
-    String::from_utf8(bytes).map_err(|e| {
-        SecretSpecError::ProviderOperationFailed(format!(
-            "Scaleway secret '{item}' payload is not valid UTF-8: {e}"
-        ))
-    })
+    Ok(SecretBytes::from_vec(bytes))
 }
 
 /// Builds an error for a non-success HTTP response, including the body.
 async fn http_error(action: &str, status: u16, response: reqwest::Response) -> SecretSpecError {
-    let body = match response.text().await {
-        Ok(body) => body,
-        Err(error) => format!(
-            "<failed to read response body: {}>",
-            crate::error::display_error_chain(&error)
-        ),
-    };
+    status_error(action, status, &read_body(response).await)
+}
+
+fn status_error(action: &str, status: u16, body: &str) -> SecretSpecError {
     SecretSpecError::ProviderOperationFailed(format!(
         "Scaleway returned HTTP {status} while {action}: {body}"
     ))
 }
 
-impl Provider for ScalewayProvider {
-    /// Convention secrets live at `[{base}/]secretspec/{project}/{profile}/{key}`.
+async fn read_body(response: reqwest::Response) -> String {
+    match response.text().await {
+        Ok(body) => body,
+        Err(error) => format!(
+            "<failed to read response body: {}>",
+            crate::error::display_error_chain(&error)
+        ),
+    }
+}
+
+/// Whether a create-secret 400 is Scaleway's "name already taken in this path".
+fn is_duplicate_name(body: &str) -> bool {
+    #[derive(Deserialize)]
+    struct InvalidArguments {
+        #[serde(default)]
+        details: Vec<ArgumentError>,
+    }
+    #[derive(Deserialize)]
+    struct ArgumentError {
+        argument_name: String,
+        help_message: String,
+    }
+    serde_json::from_str::<InvalidArguments>(body).is_ok_and(|error| {
+        error.details.iter().any(|detail| {
+            detail.argument_name == "name"
+                && detail.help_message.contains("cannot have same secret name")
+        })
+    })
+}
+
+impl super::ProviderBase for ScalewayProvider {
+    fn retry_ownership(&self) -> super::RetryOwnership {
+        super::RetryOwnership::Managed
+    }
+
+    fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
+        self.retry_policy = policy;
+    }
+
     fn convention_address(&self, project: &str, profile: &str, key: &str) -> Result<NativeAddress> {
         Ok(NativeAddress {
             item: Self::format_item(&self.config.path, project, profile, key)?,
@@ -498,7 +532,7 @@ impl Provider for ScalewayProvider {
         self.credentials = credentials;
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -523,31 +557,30 @@ impl Provider for ScalewayProvider {
         }
     }
 
-    /// `field` extracts a key from a JSON (`key_value`) secret; `version` pins a
-    /// revision (default `latest_enabled`).
     fn supported_coords(&self) -> &'static [&'static str] {
         &["field", "version"]
     }
+}
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+#[async_trait::async_trait]
+impl super::AsyncProvider for ScalewayProvider {
+    async fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let coords = self.resolve_coords(addr)?;
-        super::block_on(self.get_async(
+        self.get_async(
             &coords.item,
             coords.field.as_deref(),
             coords.version.as_deref(),
-        ))
+        )
+        .await
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
-        self.check_writable(addr)?;
+    async fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        super::AsyncProvider::check_writable(self, addr).await?;
         let coords = self.resolve_coords(addr)?;
-        super::block_on(self.set_async(&coords.item, value))
+        self.set_async(&coords.item, value).await
     }
 
-    /// Native references name secrets managed outside SecretSpec and are
-    /// read-only: a `field` write would append a version that discards the
-    /// other JSON keys, and the revision is server-assigned.
-    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+    async fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         match addr {
             Address::Convention { .. } => Ok(()),
             Address::Native(_) => Err(SecretSpecError::ProviderOperationFailed(
@@ -564,6 +597,17 @@ mod tests {
 
     fn config(spec: &str) -> ScalewayConfig {
         ScalewayConfig::try_from(&ProviderUrl::new(Url::parse(spec).unwrap())).unwrap()
+    }
+
+    #[test]
+    fn duplicate_name_is_recognized() {
+        // verbatim from Scaleway, setting a secret that already exists
+        let taken = r#"{"details":[{"argument_name":"name","help_message":"cannot have same secret name in same path","reason":"format"}],"message":"invalid argument(s)","type":"invalid_arguments"}"#;
+        assert!(is_duplicate_name(taken));
+
+        let bad_path = r#"{"details":[{"argument_name":"path","help_message":"must start with /","reason":"format"}],"message":"invalid argument(s)","type":"invalid_arguments"}"#;
+        assert!(!is_duplicate_name(bad_path));
+        assert!(!is_duplicate_name("not json"));
     }
 
     #[test]
@@ -642,7 +686,9 @@ mod tests {
 
     #[test]
     fn convention_address_uses_the_folder_hierarchy() {
-        let p = ScalewayProvider::new(config("scaleway://fr-par?path=/myteam"));
+        let p = SyncProviderAdapter::from_async(ScalewayProvider::new(config(
+            "scaleway://fr-par?path=/myteam",
+        )));
         let addr = p.convention_address("app", "default", "A").unwrap();
         assert_eq!(addr.item, "/myteam/secretspec/app/default/A");
         assert_eq!(addr.field, None);
@@ -651,16 +697,17 @@ mod tests {
 
     #[test]
     fn uri_round_trips() {
-        let p = ScalewayProvider::new(config(
+        let p = SyncProviderAdapter::from_async(ScalewayProvider::new(config(
             "scaleway://nl-ams?project_id=11111111-2222-3333-4444-555555555555&path=/myteam",
-        ));
+        )));
         assert_eq!(
             p.uri(),
             "scaleway://nl-ams?project_id=11111111-2222-3333-4444-555555555555&path=/myteam"
         );
         // Bare region, default path: no query string.
         assert_eq!(
-            ScalewayProvider::new(config("scaleway://fr-par")).uri(),
+            SyncProviderAdapter::from_async(ScalewayProvider::new(config("scaleway://fr-par")))
+                .uri(),
             "scaleway://fr-par"
         );
     }
@@ -669,8 +716,21 @@ mod tests {
     fn uri_omits_no_secret_material() {
         // The secret key comes from a credential/env, never the URI, so uri()
         // cannot leak it regardless of config.
-        let p = ScalewayProvider::new(config("scaleway://fr-par?project_id=abc"));
+        let p = SyncProviderAdapter::from_async(ScalewayProvider::new(config(
+            "scaleway://fr-par?project_id=abc",
+        )));
         assert!(!p.uri().contains("SCW_SECRET_KEY"));
+    }
+
+    #[test]
+    fn extract_json_key_null_is_none_not_the_string_null() {
+        // Mirrors the AWS provider: a null value is no value.
+        let v = r#"{"user": "admin", "password": null}"#;
+        assert!(
+            ScalewayProvider::extract_json_key("s", v, "password")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -681,14 +741,14 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "admin"
+            b"admin"
         );
         assert_eq!(
             ScalewayProvider::extract_json_key("s", v, "port")
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "5432"
+            b"5432"
         );
         assert!(
             ScalewayProvider::extract_json_key("s", v, "missing")
@@ -700,14 +760,21 @@ mod tests {
 
     #[test]
     fn decode_payload_round_trips() {
-        let encoded = BASE64.encode(b"s3cret");
-        assert_eq!(decode_payload("s", &encoded).unwrap(), "s3cret");
+        for bytes in [b"s3cret".as_slice(), b"\0\xff\x80\r\n".as_slice(), b""] {
+            let encoded = BASE64.encode(bytes);
+            assert_eq!(
+                decode_payload("s", &encoded).unwrap().expose_secret(),
+                bytes
+            );
+        }
         assert!(decode_payload("s", "!!!not-base64!!!").is_err());
     }
 
     #[test]
     fn native_reference_is_read_only() {
-        let p = ScalewayProvider::new(config("scaleway://fr-par?project_id=abc"));
+        let p = SyncProviderAdapter::from_async(ScalewayProvider::new(config(
+            "scaleway://fr-par?project_id=abc",
+        )));
         let addr = NativeAddress {
             item: "/prod/db-url".into(),
             ..Default::default()
@@ -715,7 +782,7 @@ mod tests {
         let refusal = p.check_writable(Address::Native(&addr)).unwrap_err();
         assert!(refusal.to_string().contains("read-only"), "{refusal}");
         let err = p
-            .set(Address::Native(&addr), &SecretString::new("v".into()))
+            .set(Address::Native(&addr), &SecretBytes::from_utf8("v"))
             .unwrap_err();
         assert_eq!(err.to_string(), refusal.to_string());
     }
@@ -741,14 +808,16 @@ mod tests {
         assert!(
             super::super::PROVIDER_REGISTRY
                 .iter()
-                .any(|r| r.info.name == "scaleway"),
+                .any(|r| r.metadata.info.name == "scaleway"),
             "scaleway missing from PROVIDER_REGISTRY"
         );
     }
 
     #[test]
     fn native_reference_rejects_unsupported_coordinate() {
-        let p = ScalewayProvider::new(config("scaleway://fr-par?project_id=abc"));
+        let p = SyncProviderAdapter::from_async(ScalewayProvider::new(config(
+            "scaleway://fr-par?project_id=abc",
+        )));
         let addr = NativeAddress {
             item: "/prod/db-url".into(),
             section: Some("x".into()),

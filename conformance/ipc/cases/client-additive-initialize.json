@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "id": "client.additive-initialize",
+  "targets": ["c-client", "rust-client"],
+  "timeout_ms": 10000,
+  "actions": [
+    {"kind": "initialize", "protocol": "secretspec.resolver", "version": 1, "peer_result": "additive_members"},
+    {"kind": "close", "deadline_after_ms": 1000}
+  ],
+  "required_events": ["initialized", "closed"]
+}

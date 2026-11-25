@@ -1,7 +1,38 @@
 #[cfg(test)]
 mod tests {
-    use secretspec::Config;
-    use secretspec::codegen::capitalize;
+    use secretspec::__private::Config;
+    use secretspec::__private::codegen::{CodegenIr, IrField, IrProfile, capitalize};
+
+    fn codegen_ir(config: &Config) -> CodegenIr {
+        let mut profile_fields: Vec<IrProfile> = config
+            .profiles
+            .iter()
+            .map(|(name, profile)| {
+                let mut fields: Vec<IrField> = profile
+                    .secrets
+                    .keys()
+                    .map(|name| IrField {
+                        name: name.clone(),
+                        optional: false,
+                        as_path: false,
+                        description: None,
+                    })
+                    .collect();
+                fields.sort_by(|a, b| a.name.cmp(&b.name));
+                IrProfile {
+                    name: name.clone(),
+                    fields,
+                }
+            })
+            .collect();
+        profile_fields.sort_by(|a, b| a.name.cmp(&b.name));
+        CodegenIr {
+            project: config.project.name.clone(),
+            profiles: profile_fields.iter().map(|p| p.name.clone()).collect(),
+            union: Vec::new(),
+            profile_fields,
+        }
+    }
 
     #[test]
     fn test_capitalize() {
@@ -150,8 +181,8 @@ revision = "1.0"
 HAS_DEFAULT = { description = "Secret with default", required = false, default = "some-default" }
 "#;
 
-        let config: Config = toml::from_str(toml_str).unwrap();
-        let ir = secretspec::codegen::build_ir(&config);
+        let spec = secretspec::Spec::from_toml(toml_str).unwrap();
+        let ir = secretspec::__private::codegen::build_ir(&spec);
         assert!(!ir.union[0].optional, "a default always supplies a value");
     }
 
@@ -182,7 +213,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
     #[test]
     fn test_validate_rust_identifiers() {
         use crate::validate_rust_identifiers;
-        use secretspec::{Profile, Project, Secret};
+        use secretspec::__private::{Profile, Project, Secret};
         use std::collections::HashMap;
 
         let mut errors = Vec::new();
@@ -220,6 +251,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
         );
 
         let valid_config = Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -229,7 +261,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
             scopes: None,
         };
 
-        validate_rust_identifiers(&valid_config, &mut errors);
+        validate_rust_identifiers(&codegen_ir(&valid_config), &mut errors);
         assert!(
             errors.is_empty(),
             "Valid identifiers should not produce errors"
@@ -268,6 +300,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
         );
 
         let invalid_config = Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -278,7 +311,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
         };
 
         errors.clear();
-        validate_rust_identifiers(&invalid_config, &mut errors);
+        validate_rust_identifiers(&codegen_ir(&invalid_config), &mut errors);
         assert_eq!(
             errors.len(),
             2,
@@ -301,7 +334,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
     #[test]
     fn test_validate_rust_keywords() {
         use crate::validate_rust_identifiers;
-        use secretspec::{Profile, Project, Secret};
+        use secretspec::__private::{Profile, Project, Secret};
         use std::collections::HashMap;
 
         let mut errors = Vec::new();
@@ -349,6 +382,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
         );
 
         let keyword_config = Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -358,7 +392,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
             scopes: None,
         };
 
-        validate_rust_identifiers(&keyword_config, &mut errors);
+        validate_rust_identifiers(&codegen_ir(&keyword_config), &mut errors);
         assert_eq!(errors.len(), 3, "Should have errors for all Rust keywords");
         let error_text = errors.join(" ");
         assert!(
@@ -381,7 +415,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
     #[test]
     fn test_validate_duplicate_field_names() {
         use crate::validate_rust_identifiers;
-        use secretspec::{Profile, Project, Secret};
+        use secretspec::__private::{Profile, Project, Secret};
         use std::collections::HashMap;
 
         let mut errors = Vec::new();
@@ -429,6 +463,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
         );
 
         let duplicate_config = Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -438,7 +473,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
             scopes: None,
         };
 
-        validate_rust_identifiers(&duplicate_config, &mut errors);
+        validate_rust_identifiers(&codegen_ir(&duplicate_config), &mut errors);
         // Should have 2 duplicate errors (3 secrets, 2 duplicates)
         let duplicate_errors: Vec<_> = errors
             .iter()
@@ -454,7 +489,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
     #[test]
     fn test_validate_profile_identifiers() {
         use crate::validate_profile_identifiers;
-        use secretspec::{Profile, Project};
+        use secretspec::__private::{Profile, Project};
         use std::collections::HashMap;
 
         let mut errors = Vec::new();
@@ -484,6 +519,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
         );
 
         let valid_config = Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -493,7 +529,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
             scopes: None,
         };
 
-        validate_profile_identifiers(&valid_config, &mut errors);
+        validate_profile_identifiers(&codegen_ir(&valid_config), &mut errors);
         assert!(
             errors.is_empty(),
             "Valid profile names should not produce errors"
@@ -517,6 +553,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
         );
 
         let invalid_config = Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -527,7 +564,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
         };
 
         errors.clear();
-        validate_profile_identifiers(&invalid_config, &mut errors);
+        validate_profile_identifiers(&codegen_ir(&invalid_config), &mut errors);
         assert_eq!(
             errors.len(),
             2,
@@ -605,7 +642,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
     #[test]
     fn test_validate_config_for_codegen() {
         use crate::validate_config_for_codegen;
-        use secretspec::{Profile, Project, Secret};
+        use secretspec::__private::{Profile, Project, Secret};
         use std::collections::HashMap;
 
         // Test valid config
@@ -648,6 +685,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
         );
 
         let valid_config = Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -657,7 +695,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
             scopes: None,
         };
 
-        let result = validate_config_for_codegen(&valid_config);
+        let result = validate_config_for_codegen(&codegen_ir(&valid_config));
         assert!(result.is_ok(), "Valid config should pass validation");
 
         // Test invalid config
@@ -693,6 +731,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
         );
 
         let invalid_config = Config {
+            defaults: None,
             project: Project {
                 name: "test".to_string(),
                 ..Default::default()
@@ -702,7 +741,7 @@ HAS_DEFAULT = { description = "Secret with default", required = false, default =
             scopes: None,
         };
 
-        let result = validate_config_for_codegen(&invalid_config);
+        let result = validate_config_for_codegen(&codegen_ir(&invalid_config));
         assert!(result.is_err(), "Invalid config should fail validation");
         let errors = result.unwrap_err();
         assert!(!errors.is_empty(), "Should have validation errors");

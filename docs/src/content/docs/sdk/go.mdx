@@ -1,0 +1,165 @@
+---
+title: Go SDK
+description: Resolve SecretSpec secrets from Go
+---
+
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+import { Code } from 'astro:components';
+import quickStartExample from '../../../../../secretspec-go/examples/quick_start/main.go?raw';
+import scopesExample from '../../../../../secretspec-go/examples/scopes/main.go?raw';
+import typedAccessExample from '../../../../../secretspec-go/examples/typed_access/main.go?raw';
+
+<VersionCompatibility version="0.20" kind="changed">
+
+`libsecretspec` was named `secretspec-ffi` through SecretSpec 0.19. The current
+Go loader prefers the new artifact name and still accepts pre-0.20 shared
+libraries.
+
+</VersionCompatibility>
+
+The Go SDK (`secretspec-go`) is a thin client over the `libsecretspec` C ABI,
+loaded via [purego](https://github.com/ebitengine/purego) (dlopen, no cgo).
+Resolution happens in the Rust core, so the SDK inherits every provider with no
+Go-side logic.
+
+
+## Quick start
+
+<Code code={quickStartExample} lang="go" meta='title="quick_start/main.go"' />
+
+A missing required secret returns `*MissingRequiredError`; any other failure
+returns `*Error` (with a stable `.Kind`).
+
+## Caller context {/* #caller-context-020 */}
+
+<VersionCompatibility version="0.20" />
+
+```go
+builder := secretspec.New().WithCaller(secretspec.CallerContext{
+    Name: "git",
+    Version: "2.51.0",
+    Operation: "credential_get",
+    Resource: "github.com",
+})
+```
+
+Caller context identifies the invoking integration in audit records but never
+satisfies `require_reason`. Do not put credentials or secret values in it.
+
+## Inline specifications {/* #inline-specifications-020 */}
+
+<VersionCompatibility version="0.20" />
+
+Applications that own their declarations in code can resolve a strict JSON
+inline specification without creating a temporary `secretspec.toml` file. Pass
+the wire document to `WithInlineSpec`; `baseDir` resolves relative provider
+paths just as a manifest's directory would. The current SDK sends inline
+schema v2, which requires SecretSpec 0.21+.
+
+```go
+spec := map[string]any{
+    "project": map[string]any{"name": "my-app"},
+    "profiles": map[string]any{
+        "default": map[string]any{"secrets": map[string]any{
+            "API_TOKEN": map[string]any{"description": "API token"},
+        }},
+    },
+}
+resolved, err := secretspec.New().
+    WithInlineSpec(spec, "/logical/project").
+    WithReason("application startup").
+    Load()
+```
+
+Inline specification v2 (SecretSpec 0.21+) uses `project`, `profiles`, and each
+profile's `secrets` object; optional `providers`, `scopes`, project `defaults`,
+profile `defaults`, and the normal secret declaration fields are also
+supported. A 0.21+ library still accepts the v1 documents sent by 0.20 SDKs.
+Unknown declaration fields are rejected. `project.extends` resolves parent
+manifests relative to `baseDir`.
+The SDK requires the native `secretspec_call` capability for inline specs; an
+older library returns a capability error rather than falling back to a
+filesystem search.
+
+## Scopes {/* #scopes-017 */}
+
+<VersionCompatibility version="0.17" />
+
+Use `WithScope("api")` to resolve only a named `[scopes.api]` subset. The
+selected name is available as `Resolved.Scope` and `Report.Scope`:
+
+<Code code={scopesExample} lang="go" meta='title="scopes/main.go"' />
+
+## Typed access (codegen)
+
+Generate typed structs with `secretspec schema` plus
+[quicktype](https://quicktype.io), then unmarshal `resolved.FieldsJSON()`:
+
+```bash
+$ secretspec schema | quicktype -s schema --top-level SecretSpec --lang go -o secrets_gen.go
+```
+
+<Code code={typedAccessExample} lang="go" meta='title="typed_access/main.go"' />
+
+## Library discovery
+
+The native `libsecretspec` cdylib is resolved at runtime, in order:
+
+1. The `SECRETSPEC_FFI_LIB` environment variable (an explicit path).
+2. A library embedded at build time with `-tags embed_lib`.
+3. A Cargo `target` directory found by searching up from the working directory
+   (the development path).
+
+The SDK uses [purego](https://github.com/ebitengine/purego), so the cdylib is
+loaded at runtime, not linked. Either install/build `libsecretspec` and set
+`SECRETSPEC_FFI_LIB`, or stage the per-platform library into `lib/` and build
+with `-tags embed_lib` for a self-contained binary. The embedded library is
+extracted to a per-user, owner-only cache directory at first use, and is not
+distributed through the Go module proxy.
+
+## Static linking
+
+For a self-contained binary with no runtime library to locate, build with
+`-tags static` instead. This uses cgo and links `libsecretspec.a` directly
+into the Go binary. In a development checkout:
+
+```bash
+$ bash scripts/stage-staticlib.sh
+
+$ CGO_ENABLED=1 go build -tags static ./...
+```
+
+## Linking with pkg-config {/* #linking-with-pkg-config-019 */}
+
+<VersionCompatibility version="0.19" />
+
+Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
+
+```bash
+# Use "static" (the default) or "shared"; use separate prefixes for both.
+$ bash libsecretspec/scripts/cinstall.sh "$PREFIX" static
+```
+
+Then use the same build command for either type:
+
+```bash
+$ PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" CGO_ENABLED=1 go build -tags pkgconfig ./...
+```
+
+Unlike staging, this also works for a `go get` dependency. A shared install in
+a non-system prefix also requires `PREFIX/lib` in the platform's runtime
+library search path.
+## Files (`as_path`)
+
+<VersionCompatibility version="0.22" kind="changed">
+
+`as_path` uses private temporary files. SDK cleanup releases visible files and
+hidden composition dependencies (0.22+). Files must be explicitly cleaned up;
+they are not removed automatically on process exit. See
+[file delivery and lifetimes](/reference/configuration/#as_path-option).
+
+</VersionCompatibility>
+
+Keep the result alive while consuming its paths, and call the SDK's cleanup
+method afterward. Temporary files remain until explicit cleanup.

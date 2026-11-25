@@ -4,8 +4,14 @@ inputs:
     inputs:
       nixpkgs:
         follows: nixpkgs
+  # Pinned to a nixpkgs master commit rather than nixos-25.11 because
+  # libsecretspec-resolver resolves yyjson through pkg-config and CMake instead
+  # of vendoring it. Both nixos-25.11 and nixos-unstable still ship a yyjson.pc
+  # whose libdir/includedir double apply the prefix, so discovery is broken
+  # there. Master carries the upstream fix (ibireme/yyjson#295). Move back to a
+  # release channel once that patch reaches one.
   nixpkgs:
-    url: github:NixOS/nixpkgs/nixos-25.11
+    url: github:NixOS/nixpkgs/2f3aa44ed8975f834c76d5ca91b11c42c3158097
   rust-overlay:
     url: github:oxalica/rust-overlay
     inputs:

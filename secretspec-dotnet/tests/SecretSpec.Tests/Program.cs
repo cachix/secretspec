@@ -22,7 +22,10 @@ internal static class Program
     private static readonly List<(string Name, Action Test)> Tests =
     [
         ("ABI version", TestAbiVersion),
+        ("caller context", TestCallerContext),
         ("load values and provenance", TestLoad),
+        ("inline specification", TestInlineSpec),
+        ("null inline specification does not fall back", TestNullInlineSpec),
         ("scoped resolution", TestScope),
         ("missing required exception", TestMissingRequired),
         ("invalid manifest exception", TestInvalidManifest),
@@ -63,6 +66,22 @@ internal static class Program
     private static void TestAbiVersion() =>
         Assert(!string.IsNullOrWhiteSpace(SecretSpecClient.AbiVersion()), "ABI version was empty");
 
+    private static void TestCallerContext()
+    {
+        using var project = Project.Create(Manifest, "DATABASE_URL=postgres://db\n");
+        using var resolved = project.Builder()
+            .WithCaller(new CallerContext
+            {
+                Name = "git",
+                Version = "2.51.0",
+                Operation = "credential_get",
+                Resource = "github.com",
+            })
+            .WithReason("push the release tag")
+            .Load();
+        Equal("postgres://db", resolved.Secrets["DATABASE_URL"].Get());
+    }
+
     private static void TestLoad()
     {
         using var project = Project.Create(Manifest, "DATABASE_URL=postgres://db\n");
@@ -79,6 +98,48 @@ internal static class Program
 
         var fields = JsonNode.Parse(resolved.FieldsJson());
         Equal("postgres://db", fields?["DATABASE_URL"]?.GetValue<string>());
+    }
+
+    private static void TestInlineSpec()
+    {
+        using var project = Project.Create(Manifest, "");
+        var dir = Path.GetDirectoryName(project.ManifestPath)!;
+        File.WriteAllText(Path.Combine(dir, "inline.env"), "TOKEN=inline-dotnet\n");
+        var spec = """
+            {
+              "project": { "name": "dotnet-inline" },
+              "providers": { "env": "dotenv://inline.env" },
+              "profiles": { "default": { "secrets": {
+                "TOKEN": { "description": "token", "providers": ["env"] }
+              } } }
+            }
+            """;
+        using var resolved = SecretSpecClient.Builder()
+            .WithInlineSpec(spec, dir)
+            .WithReason("C# inline test")
+            .Load();
+        Equal("inline-dotnet", resolved.Secrets["TOKEN"].Get());
+    }
+
+    private static void TestNullInlineSpec()
+    {
+        using var project = Project.Create(Manifest, "DATABASE_URL=postgres://db\n");
+        var directory = Path.GetDirectoryName(project.ManifestPath)!;
+        var before = Directory.GetCurrentDirectory();
+        try
+        {
+            Directory.SetCurrentDirectory(directory);
+            var error = Throws<SecretSpecException>(() =>
+                SecretSpecClient.Builder()
+                    .WithInlineSpec("null", directory)
+                    .WithReason("C# null inline test")
+                    .Load());
+            Equal("invalid_request", error.Kind);
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(before);
+        }
     }
 
     private static void TestScope()

@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Fetch the platform `secretspec-ffi` shared library into the package's lib/
+ * Fetch the platform `libsecretspec` shared library into the package's lib/
  * directory, so the `ext-ffi` backend works after a plain `composer require`
  * with no `SECRETSPEC_FFI_LIB` to set.
  *
@@ -60,7 +60,7 @@ if (is_string($override) && $override !== '') {
 // comes from Native so the download target and the loader agree on one name.
 $target = secretspec_target();
 if ($target === null) {
-    note('no prebuilt secretspec-ffi library for this platform; set '
+    note('no prebuilt libsecretspec library for this platform; set '
         . 'SECRETSPEC_FFI_LIB or install the secretspec extension.');
 }
 if (!class_exists(\Secretspec\Native::class)) {
@@ -77,10 +77,10 @@ if (is_file($dest)) {
 $version = secretspec_installed_version();
 if ($version === null) {
     note('could not determine the installed package version (dev checkout?); '
-        . 'build the cdylib with `cargo build -p secretspec-ffi` instead.');
+        . 'build the cdylib with `cargo build -p libsecretspec` instead.');
 }
 
-$asset = "secretspec-ffi-{$target}." . pathinfo($libName, PATHINFO_EXTENSION);
+$asset = "libsecretspec-{$target}." . pathinfo($libName, PATHINFO_EXTENSION);
 $base = "https://github.com/cachix/secretspec/releases/download/v{$version}";
 $url = "{$base}/{$asset}";
 
@@ -112,7 +112,7 @@ exit(0);
 
 /**
  * The release target triple for the running platform, or null if no prebuilt
- * secretspec-ffi library is published for it.
+ * libsecretspec library is published for it.
  */
 function secretspec_target(): ?string
 {

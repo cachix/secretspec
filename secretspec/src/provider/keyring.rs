@@ -1,8 +1,136 @@
 use super::{Address, Provider, ProviderUrl};
+use crate::SecretBytes;
 use crate::{Result, SecretSpecError};
 use keyring::Entry;
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+
+#[cfg(target_os = "macos")]
+mod macos {
+    //! Legacy macOS keychain items are bound to the code signature of the
+    //! build that created them. A new ad hoc signed build may need the user's
+    //! approval to read or modify an existing item. A per-query silent lookup
+    //! identifies this case without changing the process-wide interaction
+    //! setting or deleting the item during a read.
+    use keyring::{Entry, Error};
+    use security_framework::item::{ItemClass, ItemSearchOptions, SearchResult};
+    use security_framework::os::macos::keychain::{SecKeychain, SecPreferencesDomain};
+
+    /// `errSecInvalidOwnerEdit`: modifying an item another build owns.
+    const INVALID_OWNER_EDIT: i32 = -25244;
+    /// `errSecDuplicateItem`: the write could not see the item it collided with.
+    const DUPLICATE_ITEM: i32 = -25299;
+
+    fn os_status(err: &Error) -> Option<i32> {
+        let inner = match err {
+            Error::PlatformFailure(inner) | Error::NoStorageAccess(inner) => inner,
+            _ => return None,
+        };
+        inner
+            .downcast_ref::<security_framework::base::Error>()
+            .map(|err| err.code())
+    }
+
+    /// Whether this build could not update an item it does not yet control.
+    pub(super) fn access_refused(err: &Error) -> bool {
+        matches!(os_status(err), Some(DUPLICATE_ITEM | INVALID_OWNER_EDIT))
+    }
+
+    /// What to do about a prompt that keeps coming back.
+    pub(super) const ALWAYS_ALLOW_HINT: &str =
+        "choose \"Always Allow\" in the keychain dialog so this build keeps access";
+
+    /// A lookup that skips items needing authentication, without changing
+    /// keychain interaction state for any other thread or provider.
+    pub(super) fn read_without_prompt(service: &str, account: &str) -> Option<Vec<u8>> {
+        let keychain = SecKeychain::default_for_domain(SecPreferencesDomain::User).ok()?;
+        let mut options = ItemSearchOptions::new();
+        options
+            .keychains(&[keychain])
+            .class(ItemClass::generic_password())
+            .service(service)
+            .account(account)
+            .load_data(true)
+            .skip_authenticated_items(true);
+        match options.search().ok()?.into_iter().next()? {
+            SearchResult::Data(secret) => Some(secret),
+            _ => None,
+        }
+    }
+
+    /// Reads without a dialog if access is already granted. An interactive
+    /// fallback never modifies the item, including entries addressed by `ref`.
+    pub(super) fn read(entry: &Entry, service: &str, account: &str) -> keyring::Result<Vec<u8>> {
+        if let Some(secret) = read_without_prompt(service, account) {
+            return Ok(secret);
+        }
+        let secret = entry.get_secret()?;
+        eprintln!(
+            "{} keychain item {} needed access from this build; if macOS asked whether to allow access, {}",
+            colored::Colorize::yellow("warning:"),
+            service,
+            ALWAYS_ALLOW_HINT
+        );
+        Ok(secret)
+    }
+
+    /// A failed lookup inside the keyring crate can make a write try to add
+    /// a duplicate item. Reading with a dialog grants access before retrying
+    /// the in-place update. The existing item is never deleted.
+    pub(super) fn write(entry: &Entry, secret: &[u8]) -> keyring::Result<()> {
+        match entry.set_secret(secret) {
+            Ok(()) => Ok(()),
+            Err(err) if access_refused(&err) => {
+                let _existing = match entry.get_secret() {
+                    Ok(existing) => secrecy::zeroize::Zeroizing::new(existing),
+                    Err(_) => return Err(err),
+                };
+                entry.set_secret(secret)
+            }
+            Err(err) => Err(err),
+        }
+    }
+}
+
+// An unpaired UTF-16 low surrogate cannot begin a legacy Windows password.
+// Keep the discriminator in the same blob so overwrites are atomic.
+#[cfg(any(windows, test))]
+const WINDOWS_BINARY_PREFIX: &[u8] = b"\x00\xdcSecretSpec\x00bytes\x01";
+
+#[cfg(any(windows, test))]
+fn encode_windows_secret(value: &SecretBytes) -> SecretBytes {
+    let bytes = match std::str::from_utf8(value.expose_secret()) {
+        Ok(text) => text.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+        Err(_) => [WINDOWS_BINARY_PREFIX, value.expose_secret()].concat(),
+    };
+    SecretBytes::from_vec(bytes)
+}
+
+#[cfg(any(windows, test))]
+fn decode_windows_secret(value: SecretBytes) -> Result<SecretBytes> {
+    use secrecy::zeroize::Zeroizing;
+
+    let bytes = value.expose_secret();
+    if let Some(binary) = bytes.strip_prefix(WINDOWS_BINARY_PREFIX) {
+        return Ok(SecretBytes::from_slice(binary));
+    }
+    let invalid_password = || {
+        SecretSpecError::ProviderOperationFailed(
+            "keyring password is not valid UTF-16LE".to_string(),
+        )
+    };
+    if !bytes.len().is_multiple_of(2) {
+        return Err(invalid_password());
+    }
+    let words = Zeroizing::new(
+        bytes
+            .chunks_exact(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect::<Vec<_>>(),
+    );
+    String::from_utf16(&words)
+        .map(SecretBytes::from_utf8)
+        .map_err(|_| invalid_password())
+}
 
 /// Configuration for the keyring provider.
 ///
@@ -64,11 +192,7 @@ pub struct KeyringProvider {
 crate::register_provider! {
     struct: KeyringProvider,
     config: KeyringConfig,
-    name: "keyring",
-    description: "Uses system keychain (Recommended)",
-    schemes: ["keyring"],
-    examples: ["keyring://", "keyring://secretspec/shared/{profile}/{key}"],
-    deletes: true,
+    metadata: &super::catalog::KEYRING,
 }
 
 impl KeyringProvider {
@@ -106,11 +230,11 @@ impl KeyringProvider {
     /// service, `field` the account, defaulting to the current system
     /// username (the account convention entries live under).
     fn entry_target(&self, addr: Address<'_>) -> Result<(String, String)> {
-        let coords = self.resolve_coords(addr)?;
-        let account = match &coords.field {
-            Some(account) => account.clone(),
-            None => Self::current_username()?,
-        };
+        let coords = self.entry_coordinates(addr)?;
+        let account = coords
+            .field
+            .clone()
+            .expect("entry coordinates always contain the keyring account");
         Ok((coords.item.clone(), account))
     }
 
@@ -122,6 +246,46 @@ impl KeyringProvider {
                 crate::error::display_error_chain(&e)
             ))
         })
+    }
+}
+
+impl KeyringProvider {
+    /// Reads the entry's bytes. macOS uses a per-query silent lookup before
+    /// allowing an interactive read.
+    fn read_entry(entry: &Entry, service: &str, account: &str) -> keyring::Result<Vec<u8>> {
+        #[cfg(target_os = "macos")]
+        {
+            macos::read(entry, service, account)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (service, account);
+            entry.get_secret()
+        }
+    }
+
+    /// Writes the entry's bytes. macOS retries an in-place update after an
+    /// interactive read when another build's item hid from the first lookup.
+    fn write_entry(entry: &Entry, secret: &[u8], service: &str) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        {
+            macos::write(entry, secret).map_err(|err| {
+                if macos::access_refused(&err) {
+                    SecretSpecError::ProviderOperationFailed(format!(
+                        "macOS refused to change keychain item {service}: {err}; {}, or review \
+                         the item's access settings in Keychain Access",
+                        macos::ALWAYS_ALLOW_HINT
+                    ))
+                } else {
+                    err.into()
+                }
+            })
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = service;
+            Ok(entry.set_secret(secret)?)
+        }
     }
 }
 
@@ -146,7 +310,18 @@ impl Provider for KeyringProvider {
         &["field"]
     }
 
-    fn name(&self) -> &'static str {
+    fn configured_entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<std::borrow::Cow<'a, crate::config::NativeAddress>> {
+        let mut coords = self.resolve_coords(addr)?.into_owned();
+        if coords.field.is_none() {
+            coords.field = Some(Self::current_username()?);
+        }
+        Ok(std::borrow::Cow::Owned(coords))
+    }
+
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -170,11 +345,16 @@ impl Provider for KeyringProvider {
     /// by the folder_prefix format string (defaults to `secretspec/{project}/{profile}/{key}`).
     ///
     /// The current system username is used as the account identifier.
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let (service, username) = self.entry_target(addr)?;
         let entry = Entry::new(&service, &username)?;
-        match entry.get_password() {
-            Ok(password) => Ok(Some(SecretString::new(password.into()))),
+        match Self::read_entry(&entry, &service, &username) {
+            Ok(secret) => {
+                let secret = SecretBytes::from_vec(secret);
+                #[cfg(windows)]
+                let secret = decode_windows_secret(secret)?;
+                Ok(Some(secret))
+            }
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -187,10 +367,12 @@ impl Provider for KeyringProvider {
     ///
     /// The current system username is used as the account identifier.
     /// If a secret already exists with the same key, it will be overwritten.
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         let (service, username) = self.entry_target(addr)?;
         let entry = Entry::new(&service, &username)?;
-        entry.set_password(value.expose_secret())?;
+        #[cfg(windows)]
+        let value = &encode_windows_secret(value);
+        Self::write_entry(&entry, value.expose_secret(), &service)?;
         Ok(())
     }
 
@@ -203,12 +385,75 @@ impl Provider for KeyringProvider {
             Err(error) => Err(error.into()),
         }
     }
+
+    fn supports_delete(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use url::Url;
+
+    proptest! {
+        #[test]
+        fn windows_arbitrary_bytes_round_trip(bytes in prop::collection::vec(any::<u8>(), 0..2048)) {
+            let value = SecretBytes::from_vec(bytes);
+            let decoded = decode_windows_secret(encode_windows_secret(&value)).unwrap();
+            prop_assert_eq!(decoded.expose_secret(), value.expose_secret());
+        }
+
+        #[test]
+        fn windows_legacy_unicode_never_matches_binary_marker(text in any::<String>()) {
+            let legacy = SecretBytes::from_vec(
+                text.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+            );
+            prop_assert!(!legacy.expose_secret().starts_with(WINDOWS_BINARY_PREFIX));
+            let decoded = decode_windows_secret(legacy).unwrap();
+            prop_assert_eq!(decoded.expose_secret(), text.as_bytes());
+        }
+    }
+
+    #[test]
+    fn windows_legacy_passwords_remain_readable() {
+        for text in ["", "password", "héllo 🔑", "a\0b", "YWJjZA==", "line\r\n"] {
+            let legacy =
+                SecretBytes::from_vec(text.encode_utf16().flat_map(u16::to_le_bytes).collect());
+            assert_eq!(
+                decode_windows_secret(legacy).unwrap().expose_secret(),
+                text.as_bytes()
+            );
+            let value = SecretBytes::from_utf8(text);
+            assert_eq!(
+                encode_windows_secret(&value).expose_secret(),
+                text.encode_utf16()
+                    .flat_map(u16::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    #[test]
+    fn windows_binary_values_round_trip_without_legacy_ambiguity() {
+        for bytes in [b"\xff\0\xfe".as_slice(), WINDOWS_BINARY_PREFIX, b"\x00\xdc"] {
+            let value = SecretBytes::from_slice(bytes);
+            let stored = encode_windows_secret(&value);
+            assert!(stored.expose_secret().starts_with(WINDOWS_BINARY_PREFIX));
+            assert_eq!(
+                decode_windows_secret(stored).unwrap().expose_secret(),
+                bytes
+            );
+        }
+    }
+
+    #[test]
+    fn windows_invalid_legacy_passwords_are_rejected() {
+        for bytes in [b"\xff".as_slice(), b"\x00\xdc", b"\x00\xd8"] {
+            assert!(decode_windows_secret(SecretBytes::from_slice(bytes)).is_err());
+        }
+    }
 
     fn provider_url(s: &str) -> ProviderUrl {
         ProviderUrl::new(Url::parse(s).unwrap())
@@ -299,6 +544,31 @@ mod tests {
         assert_eq!(account, whoami::username().unwrap());
     }
 
+    #[test]
+    fn same_entries_treats_the_implicit_account_as_the_current_username() {
+        let provider = KeyringProvider::new(KeyringConfig::default());
+        let implicit = crate::config::NativeAddress {
+            item: "com.example.app".into(),
+            ..Default::default()
+        };
+        let explicit = crate::config::NativeAddress {
+            item: "com.example.app".into(),
+            field: Some(whoami::username().unwrap()),
+            ..Default::default()
+        };
+
+        assert!(
+            provider
+                .same_entries(
+                    Address::Native(&implicit),
+                    &provider,
+                    Address::Native(&explicit),
+                )
+                .unwrap(),
+            "addresses that operations send to one keyring entry must compare equal"
+        );
+    }
+
     /// Keyring entries have no versions; the coordinate is rejected.
     #[test]
     fn native_address_rejects_version() {
@@ -310,5 +580,104 @@ mod tests {
         };
         let err = p.entry_target(Address::Native(&addr)).unwrap_err();
         assert!(err.to_string().contains("`version`"), "{err}");
+    }
+}
+
+/// Keychain tests need a real keychain. Enable them with
+/// `SECRETSPEC_TEST_PROVIDERS=keyring`. None of them shows a dialog.
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use super::macos;
+    use keyring::Entry;
+    use std::process::Command;
+
+    fn keyring_tests_enabled() -> bool {
+        std::env::var("SECRETSPEC_TEST_PROVIDERS")
+            .map(|list| list.split(',').any(|name| name.trim() == "keyring"))
+            .unwrap_or(false)
+    }
+
+    const ACCOUNT: &str = "secretspec-test";
+
+    fn test_entry(name: &str) -> (Entry, String) {
+        let service = format!("secretspec-test/{}/{name}", std::process::id());
+        (Entry::new(&service, ACCOUNT).unwrap(), service)
+    }
+
+    /// The keychain the keyring crate writes to, named explicitly because
+    /// `security` does not always resolve the default keychain the same way.
+    fn default_keychain() -> String {
+        let output = Command::new("/usr/bin/security")
+            .args(["default-keychain", "-d", "user"])
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .trim()
+            .trim_matches('"')
+            .to_string()
+    }
+
+    /// Runs `security` against the default keychain and returns its stdout.
+    fn security(args: &[&str]) -> Option<String> {
+        let output = Command::new("/usr/bin/security")
+            .args(args)
+            .arg(default_keychain())
+            .output()
+            .unwrap();
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8(output.stdout).unwrap())
+    }
+
+    /// Creates the entry's item through Apple's `security` tool, so this
+    /// test binary is in neither its access control list nor its partition
+    /// list, exactly like an item written by an earlier SecretSpec build.
+    fn create_foreign_item(service: &str, value: &str) {
+        security(&[
+            "add-generic-password",
+            "-s",
+            service,
+            "-a",
+            ACCOUNT,
+            "-w",
+            value,
+        ])
+        .unwrap();
+    }
+
+    #[test]
+    fn own_items_round_trip_without_prompting() {
+        if !keyring_tests_enabled() {
+            eprintln!("skipping: SECRETSPEC_TEST_PROVIDERS does not name keyring");
+            return;
+        }
+        let (entry, service) = test_entry("own");
+        macos::write(&entry, b"first").unwrap();
+        macos::write(&entry, b"second").unwrap();
+        assert_eq!(
+            macos::read_without_prompt(&service, ACCOUNT),
+            Some(b"second".to_vec())
+        );
+        assert_eq!(macos::read(&entry, &service, ACCOUNT).unwrap(), b"second");
+        entry.delete_credential().unwrap();
+    }
+
+    /// Skipping authentication leaves an item from another signer intact.
+    #[test]
+    fn foreign_item_is_kept_by_silent_lookup() {
+        if !keyring_tests_enabled() {
+            eprintln!("skipping: SECRETSPEC_TEST_PROVIDERS does not name keyring");
+            return;
+        }
+        let (_entry, service) = test_entry("foreign");
+        create_foreign_item(&service, "theirs");
+
+        assert!(macos::read_without_prompt(&service, ACCOUNT).is_none());
+
+        let kept = security(&["find-generic-password", "-s", &service, "-a", ACCOUNT, "-w"]);
+        assert_eq!(kept.as_deref().map(str::trim), Some("theirs"));
+        security(&["delete-generic-password", "-s", &service, "-a", ACCOUNT]).unwrap();
     }
 }

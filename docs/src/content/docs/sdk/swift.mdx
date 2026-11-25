@@ -1,0 +1,147 @@
+---
+title: Swift SDK
+description: Resolve SecretSpec secrets from Swift on macOS
+---
+
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+import { Code } from 'astro:components';
+import quickStartExample from '../../../../../secretspec-swift/Examples/QuickStart.swift?raw';
+import errorsExample from '../../../../../secretspec-swift/Examples/Errors.swift?raw';
+import oneShotExample from '../../../../../secretspec-swift/Examples/OneShot.swift?raw';
+import scopesExample from '../../../../../secretspec-swift/Examples/Scopes.swift?raw';
+import reportExample from '../../../../../secretspec-swift/Examples/Report.swift?raw';
+import typedAccessExample from '../../../../../secretspec-swift/Examples/TypedAccess.swift?raw';
+
+<VersionCompatibility version="0.18" />
+
+The Swift SDK is a thin `Codable` wrapper over the same Rust resolver and
+versioned C ABI as the other language SDKs. Every provider, fallback chain,
+profile, scope, generator, reference, and `as_path` secret therefore works
+without Swift-side resolution logic.
+
+## Install {/* #install-018 */}
+
+<VersionCompatibility version="0.18" />
+
+In Xcode, choose **File → Add Package Dependencies** and enter:
+
+```text
+https://github.com/cachix/secretspec
+```
+
+Or add the package to `Package.swift`:
+
+```swift
+dependencies: [
+    .package(
+        url: "https://github.com/cachix/secretspec",
+        from: "0.18.0"
+    ),
+],
+targets: [
+    .target(
+        name: "MyApp",
+        dependencies: [
+            .product(name: "SecretSpec", package: "secretspec"),
+        ]
+    ),
+]
+```
+
+The package supports macOS 12 or later on Intel and Apple silicon. Its
+checksummed XCFramework contains the native Rust resolver, so consumers need
+neither Rust nor a separately installed SecretSpec library. SecretSpec is a
+development-workflow secrets manager with filesystem, process, and desktop
+credential-store integrations; the SDK does not target iOS, watchOS, tvOS, or
+visionOS.
+
+## Quick start
+
+<Code code={quickStartExample} lang="swift" meta='title="QuickStart.swift"' />
+
+`get()` returns the inline value, or the readable file path for an `as_path`
+secret. A missing required secret throws `MissingRequiredError`; its `missing`
+property contains the unresolved names. Other failures throw
+`SecretSpecError`, whose `kind` property is a stable error category:
+
+<Code code={errorsExample} lang="swift" meta='title="Errors.swift"' />
+
+A one-shot form is also available:
+
+<Code code={oneShotExample} lang="swift" meta='title="OneShot.swift"' />
+
+## Caller context {/* #caller-context-020 */}
+
+<VersionCompatibility version="0.20" />
+
+```swift
+let builder = SecretSpec.builder().withCaller(CallerContext(
+    name: "git",
+    version: "2.51.0",
+    operation: "credential_get",
+    resource: "github.com"
+))
+```
+
+Caller context identifies the invoking integration in audit records but never
+satisfies `require_reason`. Do not put credentials or secret values in it.
+
+## Inline specifications {/* #inline-specifications-020 */}
+
+<VersionCompatibility version="0.20" />
+
+Use `try builder.withInlineSpec(spec, baseDir: ...)` with an `Encodable`
+declaration to resolve strict inline-spec v2 JSON (SecretSpec 0.21+). The base
+directory resolves relative provider paths; an older XCFramework fails to link
+the versioned call.
+
+## Scopes
+
+Use `withScope("api")` to resolve only a named `[scopes.api]` subset. The
+selected name is available through `resolved.scope` and `report.scope`:
+
+<Code code={scopesExample} lang="swift" meta='title="Scopes.swift"' />
+
+## Value-free preflight
+
+`report()` returns the inventory view exposed by `secretspec check --json`. It
+never carries values. A missing required secret appears with
+`status == "missing_required"` rather than throwing, so an incomplete
+deployment can still be inspected.
+
+<Code code={reportExample} lang="swift" meta='title="Report.swift"' />
+
+## Typed access
+
+Generate an idiomatic Swift model from the manifest schema:
+
+```bash
+$ secretspec schema | \
+  quicktype -s schema --top-level AppSecrets --lang swift -o AppSecrets.swift
+```
+
+Then decode the SDK's flat field map:
+
+<Code code={typedAccessExample} lang="swift" meta='title="TypedAccess.swift"' />
+
+The schema models successful resolution: required, defaulted, and generated
+secrets are non-nullable, and profile schemas include inherited
+default-profile fields.
+
+## Files (`as_path`)
+
+<VersionCompatibility version="0.22" kind="changed">
+
+`as_path` uses private temporary files. SDK cleanup releases visible files and
+hidden composition dependencies (0.22+). Files must be explicitly cleaned up;
+they are not removed automatically on process exit. See
+[file delivery and lifetimes](/reference/configuration/#as_path-option).
+
+</VersionCompatibility>
+
+
+Files use mode 0400 on Unix. Call
+`resolved.close()` after the last consumer finishes with those paths.
+`Resolved` also performs best-effort cleanup when it is deinitialized, but
+explicit cleanup gives deterministic lifetime and reports filesystem errors.

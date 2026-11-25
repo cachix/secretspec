@@ -4,7 +4,8 @@
 //! The file is an encrypted dotenv blob whose plaintext is `KEY=value` lines
 //! encrypted to one or more age recipients. A read decrypts the whole blob with
 //! the configured identity. A write decrypts it, updates one key, and
-//! re-encrypts the whole blob to the current recipients.
+//! re-encrypts the whole blob to the current recipients; a delete removes one
+//! key the same way.
 //!
 //! # URI format
 //!
@@ -26,11 +27,11 @@ use super::{
     Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl, credential_or_env,
     flat_item,
 };
-use crate::config::{NativeAddress, Secret};
-use crate::{Result, SecretSpecError};
+use crate::SecretBytes;
+use crate::config::NativeAddress;
+use crate::{Result, Secret, SecretSpecError};
 use age::armor::{ArmoredReader, ArmoredWriter, Format};
 use age::{Decryptor, Encryptor, Identity, IdentityFile, NoCallbacks, Recipient};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
@@ -167,11 +168,7 @@ pub struct AgeProvider {
 crate::register_provider! {
     struct: AgeProvider,
     config: AgeConfig,
-    name: "age",
-    description: "age-encrypted file",
-    schemes: ["age"],
-    examples: ["age://secrets.age", "age://secrets.age?recipients-file=secrets.age.recipients"],
-    credential_names: ["identity"],
+    metadata: &super::catalog::AGE,
 }
 
 impl AgeProvider {
@@ -185,7 +182,7 @@ impl AgeProvider {
     /// Parses the configured identity from credential, env, or path.
     fn identity(&self) -> Result<ParsedIdentity> {
         if let Some(material) = credential_or_env(&self.credentials, IDENTITY, AGE_IDENTITY_ENV) {
-            return parse_identity(material.as_bytes(), None).map_err(|e| {
+            return parse_identity(material.expose_secret(), None).map_err(|e| {
                 provider_err(format!(
                     "Failed to parse age identity: {}",
                     crate::error::display_error_chain(&e)
@@ -253,7 +250,7 @@ impl AgeProvider {
 
     /// Re-encrypts a full key/value map to the current recipients
     fn store(&self, vars: &HashMap<String, String>) -> Result<()> {
-        let plaintext = super::dotenv::serialize_dotenv(vars);
+        let plaintext = super::dotenv::serialize_dotenv(vars)?;
         let recipients = self.recipients()?;
         let encryptor =
             Encryptor::with_recipients(recipients.iter().map(|r| r.as_ref() as &dyn Recipient))
@@ -295,13 +292,11 @@ impl AgeProvider {
 
 /// Parses decrypted dotenv content into a flat map
 fn parse_dotenv(plaintext: &[u8]) -> Result<HashMap<String, String>> {
-    let mut vars = HashMap::new();
-    for item in dotenvy::from_read_iter(plaintext) {
-        let (key, value) =
-            item.map_err(|e| provider_err(format!("Failed to parse decrypted content: {}", e)))?;
-        vars.insert(key, value);
-    }
-    Ok(vars)
+    dotenv::EnvLoader::with_reader(plaintext)
+        .sequence(dotenv::EnvSequence::InputOnly)
+        .load()
+        .map(|vars| vars.into_iter().collect())
+        .map_err(|e| provider_err(format!("Failed to parse decrypted content: {e}")))
 }
 
 /// Reads a roster file into recipients, skipping comments and blank lines
@@ -373,7 +368,7 @@ impl Provider for AgeProvider {
         })
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -422,29 +417,48 @@ impl Provider for AgeProvider {
         }
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let key = flat_item(self, addr)?;
         Ok(self
             .load()?
             .get(&*key)
-            .map(|v| SecretString::new(v.clone().into())))
+            .map(|v| SecretBytes::from_utf8(v.clone())))
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         let key = flat_item(self, addr)?.into_owned();
         let mut vars = self.load()?;
-        vars.insert(key, value.expose_secret().to_string());
+        vars.insert(key, super::require_utf8("age", value)?.to_string());
         self.store(&vars)
     }
 
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        let key = flat_item(self, addr)?;
+        if !self.config.path.exists() {
+            return Ok(false);
+        }
+        let mut vars = self.load()?;
+        if vars.remove(&*key).is_none() {
+            // Nothing to remove: leave the blob byte-identical instead of
+            // re-encrypting the same plaintext under fresh randomness.
+            return Ok(false);
+        }
+        self.store(&vars)?;
+        Ok(true)
+    }
+
+    fn supports_delete(&self) -> bool {
+        true
+    }
+
     /// Decrypts the blob once and serves every requested key from it
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         let vars = self.load()?;
         let mut out = HashMap::new();
         for (name, addr) in requests {
             let key = flat_item(self, *addr)?;
             if let Some(value) = vars.get(&*key) {
-                out.insert(name.to_string(), SecretString::new(value.clone().into()));
+                out.insert(name.to_string(), SecretBytes::from_utf8(value.clone()));
             }
         }
         Ok(out)
@@ -455,11 +469,7 @@ impl Provider for AgeProvider {
             .load()?
             .into_keys()
             .map(|key| {
-                let secret = Secret {
-                    description: Some(format!("{} secret", key)),
-                    required: Some(true),
-                    ..Default::default()
-                };
+                let secret = Secret::required(format!("{} secret", key));
                 (key, secret)
             })
             .collect())
@@ -618,17 +628,14 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
 
         let addr = |k| Address::convention("proj", "default", k);
         provider
-            .set(
-                addr("API_KEY"),
-                &SecretString::new("sekret".to_string().into()),
-            )
+            .set(addr("API_KEY"), &SecretBytes::from_utf8("sekret"))
             .unwrap();
 
         let bytes = std::fs::read(&provider.config.path).unwrap();
         assert!(bytes.starts_with(b"-----BEGIN AGE ENCRYPTED FILE-----"));
 
         provider
-            .set(addr("OTHER"), &SecretString::new("two".to_string().into()))
+            .set(addr("OTHER"), &SecretBytes::from_utf8("two"))
             .unwrap();
 
         assert_eq!(
@@ -637,7 +644,7 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "sekret"
+            b"sekret"
         );
         assert_eq!(
             provider
@@ -645,9 +652,71 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "two"
+            b"two"
         );
         assert!(provider.get(addr("MISSING")).unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_removes_one_key_and_preserves_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = write_identity(dir.path());
+        let provider = AgeProvider::new(AgeConfig {
+            path: dir.path().join("secrets.age"),
+            identity_path: Some(key),
+            recipients_file: None,
+            armor: true,
+        });
+
+        let addr = |k| Address::convention("proj", "default", k);
+        provider
+            .set(addr("API_KEY"), &SecretBytes::from_utf8("sekret"))
+            .unwrap();
+        provider
+            .set(addr("OTHER"), &SecretBytes::from_utf8("two"))
+            .unwrap();
+
+        assert!(provider.delete(addr("API_KEY")).unwrap());
+        assert!(provider.get(addr("API_KEY")).unwrap().is_none());
+        assert_eq!(
+            provider
+                .get(addr("OTHER"))
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            b"two"
+        );
+
+        // Idempotent: the second delete reports nothing removed.
+        assert!(!provider.delete(addr("API_KEY")).unwrap());
+    }
+
+    #[test]
+    fn delete_of_nothing_neither_creates_nor_rewrites_the_blob() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = write_identity(dir.path());
+        let provider = AgeProvider::new(AgeConfig {
+            path: dir.path().join("secrets.age"),
+            identity_path: Some(key),
+            recipients_file: None,
+            armor: true,
+        });
+
+        let addr = |k| Address::convention("proj", "default", k);
+
+        // No blob yet: nothing removed, and none brought into existence.
+        assert!(!provider.delete(addr("API_KEY")).unwrap());
+        assert!(!provider.config.path.exists());
+
+        provider
+            .set(addr("API_KEY"), &SecretBytes::from_utf8("sekret"))
+            .unwrap();
+        let before = std::fs::read(&provider.config.path).unwrap();
+
+        // Absent key: age encryption is randomized, so byte-identical output
+        // proves the blob was not re-encrypted.
+        assert!(!provider.delete(addr("MISSING")).unwrap());
+        assert_eq!(std::fs::read(&provider.config.path).unwrap(), before);
     }
 
     #[test]
@@ -661,13 +730,11 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
             armor: false,
         });
         let addr = Address::convention("proj", "default", "API_KEY");
-        provider
-            .set(addr, &SecretString::new("bin".to_string().into()))
-            .unwrap();
+        provider.set(addr, &SecretBytes::from_utf8("bin")).unwrap();
 
         let bytes = std::fs::read(&provider.config.path).unwrap();
         assert!(!bytes.starts_with(b"-----BEGIN"));
-        assert_eq!(provider.get(addr).unwrap().unwrap().expose_secret(), "bin");
+        assert_eq!(provider.get(addr).unwrap().unwrap().expose_secret(), b"bin");
     }
 
     #[test]
@@ -685,11 +752,11 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
         });
         let addr = Address::convention("proj", "default", "API_KEY");
         provider
-            .set(addr, &SecretString::new("teamsecret".to_string().into()))
+            .set(addr, &SecretBytes::from_utf8("teamsecret"))
             .unwrap();
         assert_eq!(
             provider.get(addr).unwrap().unwrap().expose_secret(),
-            "teamsecret"
+            b"teamsecret"
         );
     }
 
@@ -708,18 +775,18 @@ AAAEADBJvjZT8X6JRJI8xVq/1aU8nMVgOtVnmdwqWwrSlXG3sKLqeplhpW+uObz5dvMgjz
         let mut credentials = ProviderCredentials::new();
         credentials.insert(
             IDENTITY.to_string(),
-            SecretString::new(TEST_SSH_IDENTITY.to_string().into()),
+            SecretBytes::from_utf8(TEST_SSH_IDENTITY.to_string()),
         );
         provider.with_credentials(credentials);
 
         let addr = Address::convention("proj", "default", "API_KEY");
         provider
-            .set(addr, &SecretString::new("ssh-secret".to_string().into()))
+            .set(addr, &SecretBytes::from_utf8("ssh-secret"))
             .unwrap();
 
         assert_eq!(
             provider.get(addr).unwrap().unwrap().expose_secret(),
-            "ssh-secret"
+            b"ssh-secret"
         );
     }
 }

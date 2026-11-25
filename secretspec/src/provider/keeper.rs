@@ -7,6 +7,7 @@
 //! field.
 
 use super::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use keeper_secrets_manager_core::core::{ClientOptions, SecretsManager};
@@ -14,7 +15,6 @@ use keeper_secrets_manager_core::dto::dtos::{Record, RecordCreate};
 use keeper_secrets_manager_core::dto::field_structs::KeeperField;
 use keeper_secrets_manager_core::enums::KvStoreType;
 use keeper_secrets_manager_core::storage::{FileKeyValueStorage, InMemoryKeyValueStorage};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -123,18 +123,14 @@ type KeeperClient = Mutex<Box<dyn KeeperApi>>;
 pub struct KeeperProvider {
     config: KeeperConfig,
     credentials: ProviderCredentials,
-    client: OnceLock<std::result::Result<KeeperClient, String>>,
+    client: OnceLock<KeeperClient>,
+    client_initialization: Mutex<()>,
 }
 
 crate::register_provider! {
     struct: KeeperProvider,
     config: KeeperConfig,
-    name: "keeper",
-    description: "Keeper Secrets Manager (0.18+) via official Rust SDK",
-    schemes: ["keeper"],
-    examples: ["keeper://SHARED_FOLDER_UID"],
-    credential_names: [CONFIG, TOKEN],
-    deletes: true,
+    metadata: &super::catalog::KEEPER,
 }
 
 #[derive(Clone)]
@@ -162,22 +158,26 @@ impl KeeperProvider {
             config,
             credentials: ProviderCredentials::new(),
             client: OnceLock::new(),
+            client_initialization: Mutex::new(()),
         }
     }
 
-    fn config_value(&self) -> Option<String> {
+    fn config_value(&self) -> Option<SecretBytes> {
         credential_or_env(&self.credentials, CONFIG, KSM_CONFIG_ENV)
     }
 
-    fn token(&self) -> Option<String> {
+    fn token(&self) -> Option<SecretBytes> {
         credential_or_env(&self.credentials, TOKEN, KSM_TOKEN_ENV)
     }
 
     fn sanitize(&self, message: &str) -> String {
         let mut sanitized = message.to_string();
         for secret in [self.config_value(), self.token()].into_iter().flatten() {
-            if !secret.is_empty() {
-                sanitized = sanitized.replace(&secret, "[REDACTED]");
+            if !secret.expose_secret().is_empty() {
+                sanitized = sanitized.replace(
+                    String::from_utf8_lossy(secret.expose_secret()).as_ref(),
+                    "[REDACTED]",
+                );
             }
         }
         sanitized
@@ -191,7 +191,12 @@ impl KeeperProvider {
 
     fn build_client(&self) -> std::result::Result<KeeperClient, String> {
         let storage = match self.config_value() {
-            Some(config) => InMemoryKeyValueStorage::new_config_storage(Some(config)),
+            Some(config) => InMemoryKeyValueStorage::new_config_storage(Some(
+                config
+                    .try_as_utf8()
+                    .map_err(|error| error.to_string())?
+                    .to_owned(),
+            )),
             None => {
                 FileKeyValueStorage::new(self.config.config_file.clone()).map(KvStoreType::File)
             }
@@ -199,7 +204,13 @@ impl KeeperProvider {
         .map_err(|error| error.to_string())?;
 
         let options = match self.token() {
-            Some(token) => ClientOptions::new_client_options_with_token(token, storage),
+            Some(token) => ClientOptions::new_client_options_with_token(
+                token
+                    .try_as_utf8()
+                    .map_err(|error| error.to_string())?
+                    .to_owned(),
+                storage,
+            ),
             None => ClientOptions::new_client_options(storage),
         };
         let client = SecretsManager::new(options).map_err(|error| error.to_string())?;
@@ -207,10 +218,22 @@ impl KeeperProvider {
     }
 
     fn client(&self) -> Result<&KeeperClient> {
-        match self.client.get_or_init(|| self.build_client()) {
-            Ok(client) => Ok(client),
-            Err(error) => Err(self.operation_error("initialize the SDK client", error)),
+        if let Some(client) = self.client.get() {
+            return Ok(client);
         }
+        let _initialization = self.client_initialization.lock().map_err(|_| {
+            self.operation_error(
+                "initialize the SDK client",
+                "initialization lock was poisoned",
+            )
+        })?;
+        if let Some(client) = self.client.get() {
+            return Ok(client);
+        }
+        let client = self
+            .build_client()
+            .map_err(|error| self.operation_error("initialize the SDK client", error))?;
+        Ok(self.client.get_or_init(|| client))
     }
 
     fn with_client<T>(
@@ -239,13 +262,13 @@ impl KeeperProvider {
 
     fn target(&self, addr: Address<'_>) -> Result<KeeperTarget> {
         let native = matches!(addr, Address::Native(_));
-        let coords = self.resolve_coords(addr)?;
+        let coords = self.entry_coordinates(addr)?;
         Ok(KeeperTarget {
             item: coords.item.clone(),
             field: coords
                 .field
                 .clone()
-                .unwrap_or_else(|| DEFAULT_FIELD.to_string()),
+                .expect("entry coordinates always contain the Keeper field"),
             native,
         })
     }
@@ -309,7 +332,7 @@ impl KeeperProvider {
         Some(LocatedField { section, value })
     }
 
-    fn secret_value(record: &Record, field: &str) -> Result<SecretString> {
+    fn secret_value(record: &Record, field: &str) -> Result<SecretBytes> {
         let located = Self::locate_field(record, field).ok_or_else(|| {
             SecretSpecError::ProviderOperationFailed(format!(
                 "Keeper record '{}' has no standard or custom field named '{}'",
@@ -325,20 +348,21 @@ impl KeeperProvider {
                 ))
             })?,
         };
-        Ok(SecretString::new(value.into()))
+        Ok(SecretBytes::from_utf8(value))
     }
 
     fn updated_field_value(
         record: &Record,
         field: &str,
         current: &Value,
-        value: &SecretString,
+        value: &SecretBytes,
     ) -> Result<Value> {
+        let value = super::require_utf8("keeper", value)?;
         if current.is_string() {
-            return Ok(Value::String(value.expose_secret().to_string()));
+            return Ok(Value::String(value.to_string()));
         }
 
-        let updated: Value = serde_json::from_str(value.expose_secret()).map_err(|error| {
+        let updated: Value = serde_json::from_str(value).map_err(|error| {
             SecretSpecError::ProviderOperationFailed(format!(
                 "Keeper field '{}' in record '{}' stores a {}; \
                  the new value must be valid JSON with the same type: {error}",
@@ -370,7 +394,7 @@ impl KeeperProvider {
         }
     }
 
-    fn update_record(&self, mut record: Record, field: &str, value: &SecretString) -> Result<()> {
+    fn update_record(&self, mut record: Record, field: &str, value: &SecretBytes) -> Result<()> {
         if !record.is_editable {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "Keeper record '{}' is not editable by this application",
@@ -394,11 +418,12 @@ impl KeeperProvider {
         self.with_client("save a record", |client| client.update_secret(record))
     }
 
-    fn create_record(&self, title: &str, value: &SecretString) -> Result<()> {
+    fn create_record(&self, title: &str, value: &SecretBytes) -> Result<()> {
+        let value = super::require_utf8("keeper", value)?;
         let mut record =
             RecordCreate::new("login", title, Some("Managed by SecretSpec".to_string()));
         let mut password = KeeperField::new(DEFAULT_FIELD, None);
-        password.value = Value::Array(vec![Value::String(value.expose_secret().to_string())]);
+        password.value = Value::Array(vec![Value::String(value.to_string())]);
         password.privacy_screen = true;
         record.append_standard_fields(password);
 
@@ -423,6 +448,17 @@ impl Provider for KeeperProvider {
         &["field"]
     }
 
+    fn configured_entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<std::borrow::Cow<'a, NativeAddress>> {
+        let mut coords = self.resolve_coords(addr)?.into_owned();
+        if coords.field.is_none() {
+            coords.field = Some(DEFAULT_FIELD.to_string());
+        }
+        Ok(std::borrow::Cow::Owned(coords))
+    }
+
     fn with_credentials(&mut self, credentials: ProviderCredentials) {
         self.credentials = credentials;
     }
@@ -437,7 +473,7 @@ impl Provider for KeeperProvider {
         }
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -456,7 +492,7 @@ impl Provider for KeeperProvider {
         format!("keeper://{}", self.config.folder_uid)
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let target = self.target(addr)?;
         let records = self.records()?;
         let Some(index) = self.record_index(&records, &target)? else {
@@ -465,7 +501,7 @@ impl Provider for KeeperProvider {
         Self::secret_value(&records[index], &target.field).map(Some)
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)?;
         let target = self.target(addr)?;
         let mut records = self.records()?;
@@ -481,7 +517,7 @@ impl Provider for KeeperProvider {
     }
 
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
-        self.resolve_coords(addr).map(|_| ())
+        self.entry_coordinates(addr).map(|_| ())
     }
 
     fn delete(&self, addr: Address<'_>) -> Result<bool> {
@@ -509,7 +545,31 @@ impl Provider for KeeperProvider {
         Ok(true)
     }
 
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn supports_delete(&self) -> bool {
+        true
+    }
+
+    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        if matches!(addr, Address::Native(_)) {
+            return Err(SecretSpecError::ProviderOperationFailed(
+                "Keeper secret references cannot be deleted: a reference names a record managed outside SecretSpec, and deleting it would remove the whole record"
+                    .to_string(),
+            ));
+        }
+        let target = self.target(addr)?;
+        let records = self.records()?;
+        if let Some(index) = self.record_index(&records, &target)?
+            && !records[index].is_editable
+        {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "Keeper record '{}' is not editable by this application",
+                records[index].title
+            )));
+        }
+        Ok(())
+    }
+
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         if requests.is_empty() {
             return Ok(HashMap::new());
         }
@@ -535,7 +595,6 @@ impl Provider for KeeperProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use secrecy::ExposeSecret;
     use std::sync::Arc;
     use url::Url;
 
@@ -628,9 +687,9 @@ mod tests {
         });
         provider
             .client
-            .set(Ok(Mutex::new(Box::new(MockApi {
+            .set(Mutex::new(Box::new(MockApi {
                 state: Arc::clone(&state),
-            }))))
+            })))
             .ok()
             .unwrap();
         (provider, state)
@@ -688,6 +747,34 @@ mod tests {
     }
 
     #[test]
+    fn same_entries_treats_an_implicit_field_as_the_password_field() {
+        let provider = KeeperProvider::new(KeeperConfig {
+            folder_uid: "folder".to_string(),
+            config_file: None,
+        });
+        let implicit = NativeAddress {
+            item: "RecordUID".to_string(),
+            ..Default::default()
+        };
+        let explicit = NativeAddress {
+            item: "RecordUID".to_string(),
+            field: Some(DEFAULT_FIELD.to_string()),
+            ..Default::default()
+        };
+
+        assert!(
+            provider
+                .same_entries(
+                    Address::Native(&implicit),
+                    &provider,
+                    Address::Native(&explicit),
+                )
+                .unwrap(),
+            "addresses that operations send to one Keeper field must compare equal"
+        );
+    }
+
+    #[test]
     fn get_reads_convention_and_native_custom_fields() {
         let (provider, _) = provider_with_records(vec![record(
             "RecordUID",
@@ -705,7 +792,7 @@ mod tests {
             .get(Address::convention("demo", "default", "API_KEY"))
             .unwrap()
             .unwrap();
-        assert_eq!(convention.expose_secret(), "convention-value");
+        assert_eq!(convention.expose_secret(), b"convention-value");
 
         let native = NativeAddress {
             item: "RecordUID".to_string(),
@@ -713,7 +800,7 @@ mod tests {
             ..Default::default()
         };
         let native = provider.get(Address::Native(&native)).unwrap().unwrap();
-        assert_eq!(native.expose_secret(), "native-value");
+        assert_eq!(native.expose_secret(), b"native-value");
     }
 
     #[test]
@@ -745,7 +832,7 @@ mod tests {
         };
 
         let value = provider.get(Address::Native(&native)).unwrap().unwrap();
-        assert_eq!(value.expose_secret(), "by-uid");
+        assert_eq!(value.expose_secret(), b"by-uid");
     }
 
     #[test]
@@ -779,8 +866,8 @@ mod tests {
             ])
             .unwrap();
 
-        assert_eq!(values["ONE"].expose_secret(), "first");
-        assert_eq!(values["TWO"].expose_secret(), "second");
+        assert_eq!(values["ONE"].expose_secret(), b"first");
+        assert_eq!(values["TWO"].expose_secret(), b"second");
         assert!(!values.contains_key("MISSING"));
         assert_eq!(state.lock().unwrap().gets, 1);
     }
@@ -807,7 +894,7 @@ mod tests {
         provider
             .set(
                 Address::Native(&native),
-                &SecretString::new("new-token".to_string().into()),
+                &SecretBytes::from_utf8("new-token"),
             )
             .unwrap();
 
@@ -817,7 +904,7 @@ mod tests {
             KeeperProvider::secret_value(&state.updated[0], "API token")
                 .unwrap()
                 .expose_secret(),
-            "new-token"
+            b"new-token"
         );
         assert!(matches!(
             KeeperProvider::locate_field(&state.updated[0], "API token")
@@ -869,7 +956,7 @@ mod tests {
             provider
                 .set(
                     Address::Native(&native),
-                    &SecretString::new(value.to_string().into()),
+                    &SecretBytes::from_utf8(value.to_string()),
                 )
                 .unwrap();
         }
@@ -912,7 +999,7 @@ mod tests {
         let error = provider
             .set(
                 Address::Native(&native),
-                &SecretString::new("\"1700000000001\"".to_string().into()),
+                &SecretBytes::from_utf8("\"1700000000001\""),
             )
             .unwrap_err();
 
@@ -934,12 +1021,11 @@ mod tests {
             });
             provider.credentials.insert(
                 TOKEN.to_string(),
-                SecretString::new(MOCK_TOKEN.to_string().into()),
+                SecretBytes::from_utf8(MOCK_TOKEN.to_string()),
             );
-            provider.credentials.insert(
-                CONFIG.to_string(),
-                SecretString::new("{}".to_string().into()),
-            );
+            provider
+                .credentials
+                .insert(CONFIG.to_string(), SecretBytes::from_utf8("{}"));
 
             provider
                 .with_client("initialize the SDK client", |_| Ok(()))
@@ -970,15 +1056,12 @@ mod tests {
             };
             provider.get(Address::Native(&native)).unwrap();
             provider
-                .set(
-                    Address::Native(&native),
-                    &SecretString::new("new".to_string().into()),
-                )
+                .set(Address::Native(&native), &SecretBytes::from_utf8("new"))
                 .unwrap();
             provider
                 .set(
                     Address::convention("demo", "default", "new"),
-                    &SecretString::new("created".to_string().into()),
+                    &SecretBytes::from_utf8("created"),
                 )
                 .unwrap();
             provider
@@ -1020,7 +1103,7 @@ mod tests {
         provider
             .set(
                 Address::convention("demo", "production", "API_KEY"),
-                &SecretString::new("new-value".to_string().into()),
+                &SecretBytes::from_utf8("new-value"),
             )
             .unwrap();
 
@@ -1051,10 +1134,7 @@ mod tests {
             ..Default::default()
         };
         let error = provider
-            .set(
-                Address::Native(&native),
-                &SecretString::new("value".to_string().into()),
-            )
+            .set(Address::Native(&native), &SecretBytes::from_utf8("value"))
             .unwrap_err();
         assert!(error.to_string().contains("create it in Keeper"), "{error}");
         assert!(state.lock().unwrap().created.is_empty());

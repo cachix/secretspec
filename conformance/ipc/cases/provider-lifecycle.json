@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "id": "provider.lifecycle",
+  "targets": ["provider-endpoint"],
+  "timeout_ms": 10000,
+  "actions": [
+    {"kind": "initialize", "protocol": "secretspec.provider", "version": 1},
+    {"kind": "call", "method": "provider.get", "behavior": "pending"},
+    {"kind": "cancel"},
+    {"kind": "deadline", "after_ms": 50},
+    {"kind": "shutdown"}
+  ],
+  "required_events": [
+    "initialized",
+    "cancelled",
+    "deadline_exceeded",
+    "terminal",
+    "closed"
+  ]
+}

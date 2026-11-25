@@ -8,7 +8,7 @@ namespace Secretspec;
  * Entry point for the SecretSpec PHP SDK, mirroring the Rust derive crate's
  * `SecretSpec::builder()`.
  *
- * The SDK is a thin client over the `secretspec-ffi` C ABI (loaded via PHP's
+ * The SDK is a thin client over the `libsecretspec` C ABI (loaded via PHP's
  * FFI extension): resolution — providers, fallback chains, profiles, generation,
  * `as_path` materialization — happens entirely in the Rust core, so every
  * provider works with no PHP-side logic.
@@ -47,8 +47,9 @@ final class SecretSpec
         ?string $profile = null,
         ?string $reason = null,
         ?string $scope = null,
+        ?CallerContext $caller = null,
     ): Resolved {
-        return self::configured($path, $provider, $profile, $scope, $reason)->load();
+        return self::configured($path, $provider, $profile, $scope, $reason, $caller)->load();
     }
 
     /**
@@ -63,8 +64,9 @@ final class SecretSpec
         ?string $profile = null,
         ?string $reason = null,
         ?string $scope = null,
+        ?CallerContext $caller = null,
     ): Report {
-        return self::configured($path, $provider, $profile, $scope, $reason)->report();
+        return self::configured($path, $provider, $profile, $scope, $reason, $caller)->report();
     }
 
     /** Build a {@see Builder} from the shared one-shot options. */
@@ -74,13 +76,15 @@ final class SecretSpec
         ?string $profile,
         ?string $scope,
         ?string $reason,
+        ?CallerContext $caller,
     ): Builder {
         return self::builder()
             ->withPath($path)
             ->withProvider($provider)
             ->withProfile($profile)
             ->withScope($scope)
-            ->withReason($reason);
+            ->withReason($reason)
+            ->withCaller($caller);
     }
 
     /** The ABI version reported by the loaded native library. */

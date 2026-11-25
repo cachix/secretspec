@@ -1,7 +1,7 @@
 use super::{Address, DiscoveryContext, Provider, ProviderUrl};
+use crate::SecretBytes;
 use crate::config::expand_tilde;
 use crate::{Result, SecretSpecError};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -9,78 +9,55 @@ use std::path::PathBuf;
 
 /// Serializes a map of env vars into `.env` file content.
 ///
-/// Each entry is emitted as `KEY="value"` with the escapes that
-/// [`dotenvy`] understands inside double-quoted values: `\\`, `\"`,
-/// `\$` (suppresses variable substitution), and `\n` (literal
-/// newlines folded onto a single line). Keys are sorted for stable
-/// output.
-pub(crate) fn serialize_dotenv(vars: &HashMap<String, String>) -> String {
+/// Values are rendered with [`dotenv::render`], which leaves them unquoted
+/// when they already round-trip and otherwise double-quotes and escapes them.
+/// Keys are sorted for stable output.
+pub(crate) fn serialize_dotenv(vars: &HashMap<String, String>) -> Result<String> {
     let sorted: BTreeMap<&str, &str> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     serialize_dotenv_pairs(sorted.into_iter())
 }
 
 /// Serializes key/value pairs (already in the desired order) into `.env`
-/// content, applying the same double-quoting and escaping as
+/// content, applying the same rendering as
 /// [`serialize_dotenv`]. Shared with `secretspec export`, which passes its
 /// pre-sorted entries directly instead of rebuilding and re-sorting a map.
 pub(crate) fn serialize_dotenv_pairs<'a>(
     pairs: impl Iterator<Item = (&'a str, &'a str)>,
-) -> String {
-    let mut out = String::new();
-    for (key, value) in pairs {
-        out.push_str(key);
-        out.push_str("=\"");
-        for ch in value.chars() {
-            match ch {
-                '\\' => out.push_str("\\\\"),
-                '"' => out.push_str("\\\""),
-                '$' => out.push_str("\\$"),
-                '\n' => out.push_str("\\n"),
-                c => out.push(c),
-            }
-        }
-        out.push_str("\"\n");
+) -> Result<String> {
+    let mut out = dotenv::render(pairs)?;
+    if !out.is_empty() {
+        out.push('\n');
     }
-    out
+    Ok(out)
 }
 
 /// Rejects names the `.env` format cannot represent.
 ///
-/// The dotenvy parser only accepts variable names matching
-/// `[A-Za-z_][A-Za-z0-9_.]*` (its exact grammar, mirrored here), while the
-/// serializer would happily emit any name it is handed. A single accepted
-/// write of an unparseable name (e.g. one with a dash) poisons the whole
-/// file: every later read or write of any secret in the store fails at that
-/// line. Rejecting the name up front keeps `set` the mirror of `get` (what
-/// one accepts, the other can read back). `ref = { item = ... }` coordinates
-/// reach this most often, since they name store entries freely, but a
-/// convention name can too: manifest validation accepts any Unicode
-/// identifier, so a secret declared as `café` is legal there and unstorable
-/// here.
+/// The renderer is the source of truth for the grammar so writes and reads
+/// accept exactly the same key syntax. Rejecting an invalid name before a
+/// write prevents one bad assignment from making the whole store unparseable.
 ///
 /// `addr` decides which of those the advice names, because telling someone to
 /// rename a `ref` they never wrote sends them looking for something that is
 /// not in their manifest.
 fn validate_env_key(key: &str, addr: Address<'_>) -> Result<()> {
-    let mut chars = key.chars();
-    let valid = match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
-            chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
-        }
-        _ => false,
-    };
-    if valid {
-        Ok(())
-    } else {
+    dotenv::render_var(key, "").map(|_| ()).map_err(|error| {
         let rename = match addr {
             Address::Convention { .. } => "Rename the secret in secretspec.toml",
             Address::Native(_) => "Rename the `ref` item",
         };
-        Err(SecretSpecError::ProviderOperationFailed(format!(
-            "the dotenv provider cannot store `{key}`: .env variable names must \
-             match [A-Za-z_][A-Za-z0-9_.]*. {rename} to a valid name."
-        )))
-    }
+        SecretSpecError::ProviderOperationFailed(format!(
+            "the dotenv provider cannot store `{key}`: {error}. {rename} to a valid name."
+        ))
+    })
+}
+
+fn load_dotenv(path: &std::path::Path) -> Result<HashMap<String, String>> {
+    Ok(dotenv::EnvLoader::with_path(path)
+        .sequence(dotenv::EnvSequence::InputOnly)
+        .load()?
+        .into_iter()
+        .collect())
 }
 
 /// Configuration for the dotenv provider.
@@ -164,9 +141,8 @@ impl TryFrom<&ProviderUrl> for DotEnvConfig {
 /// Provider for managing secrets in .env files.
 ///
 /// The DotEnvProvider implements the Provider trait to enable reading
-/// and writing secrets from/to .env files. It uses the dotenvy crate
-/// for parsing and a small local serializer for writing, with proper
-/// handling of special characters and escaping.
+/// and writing secrets from/to .env files. It uses the dotenv-ng crate
+/// for parsing and rendering, including special-character escaping.
 ///
 /// # Features
 ///
@@ -232,7 +208,7 @@ impl Provider for DotEnvProvider {
         })
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -285,10 +261,9 @@ impl Provider for DotEnvProvider {
     ///
     /// # Implementation Details
     ///
-    /// Uses the dotenvy crate for parsing to ensure compatibility with
-    /// standard .env file formats and proper handling of quoted values,
-    /// multiline strings, and escape sequences.
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    /// Uses dotenv-ng for parsing quoted values, multiline strings, and escape
+    /// sequences without consulting or modifying the process environment.
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let lookup = super::flat_item(self, addr)?;
         // A name the format cannot represent can never be read back; reject it
         // like any other coordinate this store has no equivalent for.
@@ -297,17 +272,11 @@ impl Provider for DotEnvProvider {
             return Ok(None);
         }
 
-        // Use dotenvy for reading to ensure compatibility
-        let mut vars = HashMap::new();
-        let env_vars = dotenvy::from_path_iter(&self.config.path)?;
-        for item in env_vars {
-            let (k, v) = item?;
-            vars.insert(k, v);
-        }
+        let vars = load_dotenv(&self.config.path)?;
 
         Ok(vars
             .get(&*lookup)
-            .map(|v| SecretString::new(v.clone().into())))
+            .map(|v| SecretBytes::from_utf8(v.clone())))
     }
 
     /// Refuses an unrepresentable name before the CLI prompts for a value,
@@ -335,27 +304,24 @@ impl Provider for DotEnvProvider {
     ///
     /// # Implementation Details
     ///
-    /// 1. Loads existing variables using dotenvy to preserve them
+    /// 1. Loads existing variables using dotenv-ng to preserve them
     /// 2. Updates or adds the new key-value pair
     /// 3. Serializes back with `serialize_dotenv` for proper escaping
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        let value = super::require_utf8("dotenv", value)?;
         let target = super::flat_item(self, addr)?;
         // Refuse before touching the file: writing this name would produce a
         // store no later read can parse.
         validate_env_key(&target, addr)?;
-        // Load existing vars using dotenvy
-        let mut vars = HashMap::new();
-        if self.config.path.exists() {
-            let env_vars = dotenvy::from_path_iter(&self.config.path)?;
-            for item in env_vars {
-                let (k, v) = item?;
-                vars.insert(k, v);
-            }
-        }
+        let mut vars = if self.config.path.exists() {
+            load_dotenv(&self.config.path)?
+        } else {
+            HashMap::new()
+        };
 
-        vars.insert(target.into_owned(), value.expose_secret().to_string());
+        vars.insert(target.into_owned(), value.to_string());
 
-        let content = serialize_dotenv(&vars);
+        let content = serialize_dotenv(&vars)?;
         fs::write(&self.config.path, content)?;
         Ok(())
     }
@@ -366,26 +332,25 @@ impl Provider for DotEnvProvider {
         if !self.config.path.exists() {
             return Ok(false);
         }
-        let mut vars = HashMap::new();
-        for item in dotenvy::from_path_iter(&self.config.path)? {
-            let (key, value) = item?;
-            vars.insert(key, value);
-        }
+        let mut vars = load_dotenv(&self.config.path)?;
         if vars.remove(target.as_ref()).is_none() {
             // Nothing to remove, so leave the file — and its comments and
             // formatting — exactly as it is.
             return Ok(false);
         }
-        fs::write(&self.config.path, serialize_dotenv(&vars))?;
+        fs::write(&self.config.path, serialize_dotenv(&vars)?)?;
         Ok(true)
     }
 
-    fn reflect(
-        &self,
-        _context: DiscoveryContext<'_>,
-    ) -> Result<HashMap<String, crate::config::Secret>> {
-        use crate::config::Secret;
+    fn supports_delete(&self) -> bool {
+        true
+    }
 
+    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        self.check_writable(addr)
+    }
+
+    fn reflect(&self, _context: DiscoveryContext<'_>) -> Result<HashMap<String, crate::Secret>> {
         if !self.config.path.exists() {
             return Ok(HashMap::new());
         }
@@ -402,16 +367,10 @@ impl Provider for DotEnvProvider {
         }
 
         let mut secrets = HashMap::new();
-        let env_vars = dotenvy::from_path_iter(&self.config.path)?;
-        for item in env_vars {
-            let (key, _value) = item?;
+        for (key, _value) in load_dotenv(&self.config.path)? {
             secrets.insert(
                 key.clone(),
-                Secret {
-                    description: Some(format!("{} secret", key)),
-                    required: Some(true),
-                    ..Default::default()
-                },
+                crate::Secret::required(format!("{} secret", key)),
             );
         }
 
@@ -533,7 +492,7 @@ mod tests {
         let value = provider
             .get(Address::convention("hello-world", "default", "USER"))
             .unwrap();
-        assert_eq!(value.unwrap().expose_secret(), "hello");
+        assert_eq!(value.unwrap().expose_secret(), b"hello");
     }
 
     #[test]
@@ -558,12 +517,8 @@ mod tests {
         assert!(secrets.contains_key("DATABASE_URL"));
 
         let api_key_config = &secrets["API_KEY"];
-        assert_eq!(
-            api_key_config.description,
-            Some("API_KEY secret".to_string())
-        );
-        assert_eq!(api_key_config.required, Some(true));
-        assert!(api_key_config.default.is_none());
+        assert_eq!(api_key_config.description(), "API_KEY secret");
+        assert_eq!(api_key_config.required_setting(), Some(true));
     }
 
     #[test]
@@ -579,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_dotenv_escapes() {
+    fn test_serialize_dotenv_uses_minimal_round_trip_quoting() {
         let mut vars = HashMap::new();
         vars.insert("PLAIN".to_string(), "hello".to_string());
         vars.insert("QUOTES".to_string(), r#"{"a":"b"}"#.to_string());
@@ -587,16 +542,16 @@ mod tests {
         vars.insert("DOLLAR".to_string(), "$VAR".to_string());
         vars.insert("NEWLINE".to_string(), "line1\nline2".to_string());
 
-        let out = serialize_dotenv(&vars);
-        // Sorted by key, double-quoted, with escapes applied.
+        let out = serialize_dotenv(&vars).unwrap();
+        // Sorted by key; only the newline requires quoting and escaping.
         assert_eq!(
             out,
             concat!(
-                "BACKSLASH=\"C:\\\\path\\\\to\"\n",
-                "DOLLAR=\"\\$VAR\"\n",
+                "BACKSLASH=C:\\path\\to\n",
+                "DOLLAR=$VAR\n",
                 "NEWLINE=\"line1\\nline2\"\n",
-                "PLAIN=\"hello\"\n",
-                "QUOTES=\"{\\\"a\\\":\\\"b\\\"}\"\n",
+                "PLAIN=hello\n",
+                "QUOTES={\"a\":\"b\"}\n",
             )
         );
     }
@@ -609,8 +564,7 @@ mod tests {
             path: env_file.clone(),
         });
 
-        // Each entry exercises a different class of input the previous
-        // serde-envfile bug or dotenvy's parser cared about.
+        // Each entry exercises a different class of syntax-significant input.
         let cases = [
             ("PLAIN", "hello world"),
             ("QUOTES", r#"{"a":"b"}"#),
@@ -636,7 +590,7 @@ mod tests {
             provider
                 .set(
                     Address::convention("proj", "default", k),
-                    &SecretString::new(v.into()),
+                    &SecretBytes::from_utf8(v),
                 )
                 .unwrap();
         }
@@ -646,7 +600,7 @@ mod tests {
                 .get(Address::convention("proj", "default", k))
                 .unwrap();
             assert_eq!(
-                got.map(|s| s.expose_secret().to_string()),
+                got.map(|s| s.try_as_utf8().unwrap().to_string()),
                 Some(v.to_string()),
                 "round-trip failed for {k}",
             );
@@ -669,7 +623,7 @@ mod tests {
         provider
             .set(
                 Address::convention("proj", "default", "BAR"),
-                &SecretString::new("foobar".into()),
+                &SecretBytes::from_utf8("foobar"),
             )
             .unwrap();
 
@@ -677,16 +631,35 @@ mod tests {
             .get(Address::convention("proj", "default", "FOO"))
             .unwrap();
         assert_eq!(
-            foo.map(|s| s.expose_secret().to_string()),
+            foo.map(|s| s.try_as_utf8().unwrap().to_string()),
             Some(r#"{"bar":"baz"}"#.to_string()),
         );
         let bar = provider
             .get(Address::convention("proj", "default", "BAR"))
             .unwrap();
         assert_eq!(
-            bar.map(|s| s.expose_secret().to_string()),
+            bar.map(|s| s.try_as_utf8().unwrap().to_string()),
             Some("foobar".to_string()),
         );
+    }
+
+    /// Regression test for https://github.com/cachix/secretspec/issues/73:
+    /// The previous parser treated `$2`, `$10`, and the following bcrypt text as variable
+    /// substitutions, corrupting an existing quoted secret while reading it.
+    #[test]
+    fn test_get_preserves_quoted_bcrypt_fragments() {
+        const VALUE: &str = "foo:$2a$10$TWoviNHS27HJMw1PKe4tBeIMlms6tWdYS9hKoHANKCQhluDlEt/gu,bar:$2a$10$labXlt9fBRMjJu.gOUabjebLVBKGB/xZOFpEn/esCln56USXHMHQW";
+
+        let dir = tempfile::tempdir().unwrap();
+        let env_file = dir.path().join(".env");
+        fs::write(&env_file, format!("TEST=\"{VALUE}\"\n")).unwrap();
+        let provider = DotEnvProvider::new(DotEnvConfig { path: env_file });
+
+        let value = provider
+            .get(Address::convention("test", "default", "TEST"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(value.expose_secret(), VALUE.as_bytes());
     }
 
     /// A native address reads and writes the key its `item` names, regardless
@@ -702,11 +675,11 @@ mod tests {
         };
 
         provider
-            .set(Address::Native(&addr), &SecretString::new("v1".into()))
+            .set(Address::Native(&addr), &SecretBytes::from_utf8("v1"))
             .unwrap();
         let got = provider.get(Address::Native(&addr)).unwrap();
         assert_eq!(
-            got.map(|s| s.expose_secret().to_string()),
+            got.map(|s| s.try_as_utf8().unwrap().to_string()),
             Some("v1".into())
         );
 
@@ -715,8 +688,8 @@ mod tests {
     }
 
     /// Regression test for the write/read asymmetry hit by cachix: `set` used
-    /// to write any ref item verbatim, including names dotenvy cannot parse
-    /// back (e.g. containing a dash), after which every read or write of any
+    /// to write any ref item verbatim, including names the parser cannot parse
+    /// back, after which every read or write of any
     /// secret in the file failed at the poisoned line. Unrepresentable names
     /// are now rejected up front by `set`, `get`, and `check_writable`, and a
     /// rejected write leaves the store intact.
@@ -732,28 +705,22 @@ mod tests {
         provider
             .set(
                 Address::convention("proj", "default", "KEEP"),
-                &SecretString::new("kept".into()),
+                &SecretBytes::from_utf8("kept"),
             )
             .unwrap();
 
-        for bad in [
-            "CACHIX_SIGNING_KEY_cache-a",
-            "with space",
-            "1LEADING_DIGIT",
-            ".leading.dot",
-            "",
-        ] {
+        for bad in ["with space", "HAS=EQUALS", "HAS#HASH", "HAS\nNEWLINE", ""] {
             let addr = crate::config::NativeAddress {
                 item: bad.into(),
                 ..Default::default()
             };
             for result in [
-                provider.set(Address::Native(&addr), &SecretString::new("v".into())),
+                provider.set(Address::Native(&addr), &SecretBytes::from_utf8("v")),
                 provider.get(Address::Native(&addr)).map(|_| ()),
                 provider.check_writable(Address::Native(&addr)),
             ] {
                 let err = result.unwrap_err();
-                assert!(err.to_string().contains("variable names"), "`{bad}`: {err}");
+                assert!(err.to_string().contains("variable name"), "`{bad}`: {err}");
             }
         }
 
@@ -762,24 +729,28 @@ mod tests {
             .get(Address::convention("proj", "default", "KEEP"))
             .unwrap();
         assert_eq!(
-            kept.map(|s| s.expose_secret().to_string()),
+            kept.map(|s| s.try_as_utf8().unwrap().to_string()),
             Some("kept".to_string())
         );
 
-        // Names dotenvy's grammar does accept keep round-tripping: the
-        // sanitized shape cachix writes, and interior dots, which dotenvy
-        // parses even though POSIX shells cannot export them.
-        for good in ["CACHIX_SIGNING_KEY_CACHE_A", "dotted.name"] {
+        // Dotenv-ng's grammar also supports names the previous parser rejected.
+        for good in [
+            "CACHIX_SIGNING_KEY_cache-a",
+            "1LEADING_DIGIT",
+            ".leading.dot",
+            "dotted.name",
+            "café",
+        ] {
             let addr = crate::config::NativeAddress {
                 item: good.into(),
                 ..Default::default()
             };
             provider
-                .set(Address::Native(&addr), &SecretString::new("key".into()))
+                .set(Address::Native(&addr), &SecretBytes::from_utf8("key"))
                 .unwrap();
             let got = provider.get(Address::Native(&addr)).unwrap();
             assert_eq!(
-                got.map(|s| s.expose_secret().to_string()),
+                got.map(|s| s.try_as_utf8().unwrap().to_string()),
                 Some("key".to_string()),
                 "`{good}` should round-trip"
             );
@@ -800,13 +771,12 @@ mod tests {
     }
 
     /// A convention secret has no `ref`, so the advice names the manifest
-    /// entry the user actually wrote. Manifest validation accepts any Unicode
-    /// identifier, which is how a name this store cannot spell gets here.
+    /// entry rather than referring to a coordinate the user did not write.
     #[test]
     fn a_rejected_convention_name_points_at_the_manifest() {
         let provider = DotEnvProvider::new(DotEnvConfig::default());
         let err = provider
-            .get(Address::convention("proj", "default", "café"))
+            .get(Address::convention("proj", "default", "invalid name"))
             .unwrap_err()
             .to_string();
         assert!(
@@ -821,7 +791,7 @@ mod tests {
     fn a_rejected_ref_item_points_at_the_ref() {
         let provider = DotEnvProvider::new(DotEnvConfig::default());
         let addr = crate::config::NativeAddress {
-            item: "not-a-legal-env-name".into(),
+            item: "not=a-legal-env-name".into(),
             ..Default::default()
         };
         let err = provider
@@ -838,12 +808,12 @@ mod tests {
         let provider = DotEnvProvider::new(DotEnvConfig::default());
         let err = provider
             .set(
-                Address::convention("proj", "default", "café"),
-                &SecretString::from("s3cr3t-plaintext"),
+                Address::convention("proj", "default", "invalid name"),
+                &SecretBytes::from("s3cr3t-plaintext"),
             )
             .unwrap_err()
             .to_string();
-        assert!(err.contains("café"), "{err}");
+        assert!(err.contains("invalid name"), "{err}");
         assert!(!err.contains("s3cr3t-plaintext"), "{err}");
     }
 }

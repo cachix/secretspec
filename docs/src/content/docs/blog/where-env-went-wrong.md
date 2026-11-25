@@ -270,7 +270,7 @@ secret values. [Providers](/concepts/providers/) choose where values live, and
 Existing programs can adopt SecretSpec without code changes:
 
 ```bash
-secretspec run -- ./server
+$ secretspec run -- ./server
 ```
 
 This command injects resolved secrets into the child process environment. It is
@@ -289,15 +289,16 @@ Migration can be gradual. SecretSpec initializes a declaration from an existing
 file:
 
 ```bash
-secretspec init --from dotenv:.env
+$ secretspec init --from dotenv:.env
 ```
 
 This copies names without copying values. The current file can remain a
 provider during the transition:
 
 ```bash
-secretspec check --provider dotenv:.env
-secretspec run --provider dotenv:.env -- ./server
+$ secretspec check --provider dotenv:.env
+
+$ secretspec run --provider dotenv:.env -- ./server
 ```
 
 Values can then move to a system keyring, password manager, Vault, or another

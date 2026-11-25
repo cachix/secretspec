@@ -19,6 +19,11 @@ name: "PHP extension"
 on:
   workflow_call:
     inputs:
+      pre_release:
+        description: Run as part of the canonical pre-release suite
+        required: false
+        type: boolean
+        default: false
       release_tag:
         description: Existing GitHub Release tag to upload artifacts to
         required: false
@@ -42,6 +47,10 @@ on:
 jobs:
   build:
     name: php-${{ matrix.php }}-${{ matrix.target }}
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write # attach binaries to the release (tag runs only)
@@ -70,9 +79,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up PHP ${{ matrix.php }}
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
         with:
           php-version: ${{ matrix.php }}
           # php-config + headers, needed by ext-php-rs's build.
@@ -83,7 +94,18 @@ jobs:
 
       - name: Install Linux build dependencies (clang for bindgen)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y llvm-dev libclang-dev clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-dev libclang-dev clang
+          # Bindgen must load libclang and discover headers from the same LLVM.
+          llvm_bindir="$(llvm-config --bindir)"
+          llvm_libdir="$(llvm-config --libdir)"
+          {
+            echo "CLANG_PATH=$llvm_bindir/clang"
+            echo "LIBCLANG_PATH=$llvm_libdir"
+            echo "LLVM_CONFIG_PATH=$llvm_bindir/llvm-config"
+          } >> "$GITHUB_ENV"
+          "$llvm_bindir/clang" --version
 
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install
@@ -99,7 +121,7 @@ jobs:
       # per-PHP-version bindings into the build dir. (The Windows rows build
       # on nightly, whose daily version bump naturally expires their cache.)
       - name: Cache Rust builds
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           key: ${{ matrix.target }}-php${{ matrix.php }}
 
@@ -138,7 +160,7 @@ jobs:
             echo secretspec_native_abi_version(), PHP_EOL;
           '
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: php-ext-${{ matrix.php }}-${{ matrix.target }}
           path: ${{ steps.stage.outputs.asset }}

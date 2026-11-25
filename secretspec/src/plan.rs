@@ -15,11 +15,11 @@
 //! canonical provider URIs so equivalent spellings cannot disguise a cache as
 //! its own authoritative store. A plan never reads or writes a secret.
 
+use crate::compiled_spec::CompiledSecret;
 use crate::composition::Template;
-use crate::config::{NativeAddress, Secret, SecretEncoding};
+use crate::config::{NativeAddress, Secret, SecretEncoding, SecretExtract};
 use crate::error::{Result, SecretSpecError};
-use crate::manifest::CompiledSecret;
-use crate::provider::Address;
+use crate::provider::OwnedAddress;
 use crate::secrets::Secrets;
 use std::collections::HashMap;
 
@@ -43,6 +43,9 @@ pub(crate) struct ResolvedPrimary {
 /// The leaf store and freshness policy for a cached provider route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedCache {
+    /// The cached alias this route expands, so a refusal can name the entry
+    /// the user has to edit.
+    pub alias: String,
     /// Raw provider spec, retained so alias credentials remain available.
     pub spec: String,
     /// Credential-free resolved URI, used for diagnostics and provenance.
@@ -105,6 +108,11 @@ impl Route {
     /// the raw fallback — or `None` for the default provider. Each entry is
     /// resolved (and credential-backed) only when the read reaches it, so the chain
     /// is genuinely tried in order.
+    ///
+    /// Test-only: resolution walks the chain inside the plan executor, which
+    /// owns the ordering. This exposes the same order for tests that assert how
+    /// a route was resolved.
+    #[cfg(test)]
     pub(crate) fn specs(&self) -> Option<Vec<String>> {
         self.primary.as_ref().map(|primary| {
             let mut specs = Vec::with_capacity(1 + self.fallback.len());
@@ -141,17 +149,6 @@ impl PlannedSecret {
         &self.secret.config
     }
 
-    /// The provider [`Address`] this secret's operations resolve: its native
-    /// `ref` coordinates when it has them, otherwise SecretSpec's own
-    /// `{project}/{profile}/{key}` naming convention. Naming is orthogonal to
-    /// routing: the same address is asked of whichever store [`Route`] selects.
-    pub(crate) fn as_address<'a>(&'a self, project: &'a str, profile: &'a str) -> Address<'a> {
-        match &self.secret.config.reference {
-            Some(native) => Address::Native(native),
-            None => Address::convention(project, profile, &self.name),
-        }
-    }
-
     /// The native `ref` coordinates this secret addresses, if any.
     pub(crate) fn reference(&self) -> Option<&NativeAddress> {
         self.secret.config.reference.as_ref()
@@ -169,10 +166,20 @@ impl PlannedSecret {
         project: &str,
         profile: &str,
     ) -> String {
-        let address = self
-            .reference()
-            .map(NativeAddress::render)
-            .unwrap_or_else(|| "convention".to_string());
+        let address = if let Some(reference) = self.reference() {
+            coordinate_fingerprint("legacy-ref", reference.coordinates())
+        } else if let Some(references) = &self.config().refs {
+            let mut entries = references.iter().collect::<Vec<_>>();
+            entries.sort_by_key(|(alias, _)| alias.as_str());
+            let mut fingerprints = vec!["scoped-refs".to_string()];
+            fingerprints.extend(entries.into_iter().map(|(alias, reference)| {
+                let coordinates = coordinate_fingerprint("native-ref", reference.coordinates());
+                stable_fingerprint(["scoped-ref", alias.as_str(), coordinates.as_str()])
+            }));
+            stable_fingerprint(fingerprints.iter().map(String::as_str))
+        } else {
+            "convention".to_string()
+        };
         stable_fingerprint([
             project,
             profile,
@@ -194,13 +201,59 @@ impl PlannedSecret {
         self.secret.config.as_path.unwrap_or(false)
     }
 
-    /// Optional encoding applied at the storage boundary.
+    /// The codec used wherever this value must be text: the declared
+    /// `encoding`, or the type registry's default for a binary value. For a
+    /// provider-backed secret that is the storage and cache boundary; for a
+    /// binary value it is also the inline exposure when `as_path` is off.
     pub(crate) fn encoding(&self) -> Option<SecretEncoding> {
-        self.secret.config.encoding
+        self.secret.config.effective_encoding()
+    }
+
+    /// Optional structured extraction applied at the storage boundary or to
+    /// the `from` source's text.
+    pub(crate) fn extract(&self) -> Option<&SecretExtract> {
+        self.secret.config.extract.as_ref()
     }
 
     pub(crate) fn is_composed(&self) -> bool {
         self.secret.composition.is_some()
+    }
+
+    /// The declared secret this value is converted or selected from.
+    pub(crate) fn from(&self) -> Option<&str> {
+        self.secret.config.from.as_deref()
+    }
+
+    /// Whether the value is produced by the executor from other declared
+    /// secrets rather than read from a store.
+    pub(crate) fn is_derived(&self) -> bool {
+        self.is_composed() || self.from().is_some()
+    }
+
+    /// Whether this is a provider-backed registry type whose stored value is
+    /// decoded and validated by the type contract, possibly with credentials,
+    /// once every dependency has resolved.
+    pub(crate) fn is_typed_stored(&self) -> bool {
+        self.from().is_none()
+            && self
+                .secret
+                .config
+                .typed_contract()
+                .is_some_and(|contract| contract.is_stored())
+    }
+
+    /// Every declared secret that must resolve before this one.
+    pub(crate) fn dependencies(&self) -> Vec<&str> {
+        self.secret.dependencies()
+    }
+
+    /// The declared secret bound to a credential role, if any.
+    pub(crate) fn credential(&self, role: &str) -> Option<&str> {
+        self.secret
+            .config
+            .credential_secrets()
+            .find(|(bound_role, _)| *bound_role == role)
+            .map(|(_, credential)| credential)
     }
 
     /// The parsed derived-value template, for composed secrets.
@@ -250,6 +303,76 @@ impl ResolutionPlan {
 }
 
 impl Secrets {
+    /// Resolve one secret's address for one concrete provider endpoint.
+    ///
+    /// Legacy `ref` remains route-wide. The 0.19+ scoped model is deliberately
+    /// different: a concrete `refs.<alias>` wins for that alias, then the
+    /// alias's ref template, then the provider's ordinary convention address.
+    /// Literal provider specs have no alias identity and therefore use
+    /// convention naming. `ref` and `refs` are rejected together by config
+    /// validation, so these two modes never merge implicitly.
+    pub(crate) fn address_for_spec(
+        &self,
+        planned: &PlannedSecret,
+        provider_spec: Option<&str>,
+        project: &str,
+        profile: &str,
+    ) -> Result<OwnedAddress> {
+        if let Some(reference) = planned.reference() {
+            return Ok(OwnedAddress::Native(reference.clone()));
+        }
+
+        let effective_spec = provider_spec
+            .map(str::to_string)
+            .or_else(|| self.configured_default_provider_spec());
+        if let Some(spec) = effective_spec.as_deref()
+            && let Some(alias) = self.lookup_provider_alias_entry(spec)
+            && !alias.is_cached()
+        {
+            if let Some(reference) = planned
+                .config()
+                .refs
+                .as_ref()
+                .and_then(|refs| refs.get(spec))
+            {
+                return Ok(OwnedAddress::Native(reference.clone()));
+            }
+            if let Some(template) = alias.reference_template() {
+                let reference = template.expand(project, profile, &planned.name).map_err(|error| {
+                    SecretSpecError::ProviderOperationFailed(format!(
+                        "provider alias '{spec}' could not expand its ref template for '{}': {error}",
+                        planned.name
+                    ))
+                })?;
+                return Ok(OwnedAddress::Native(reference));
+            }
+        }
+
+        Ok(OwnedAddress::convention(project, profile, &planned.name))
+    }
+
+    /// Validate all provider-scoped refs on a secret, including source-only
+    /// aliases used later by `import`. Validation belongs in planning because
+    /// user-global aliases are unavailable to the standalone `Config` parser.
+    fn validate_scoped_refs(&self, name: &str, secret: &Secret) -> Result<()> {
+        let Some(references) = &secret.refs else {
+            return Ok(());
+        };
+        for alias_name in references.keys() {
+            let Some(alias) = self.lookup_provider_alias_entry(alias_name) else {
+                return Err(SecretSpecError::ProviderNotFound(format!(
+                    "Secret '{name}' defines `refs.{alias_name}`, but provider alias '{alias_name}' is not defined"
+                )));
+            };
+            if alias.is_cached() {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "Secret '{name}' defines `refs.{alias_name}`, but '{alias_name}' is a cached route; scoped refs must name leaf provider aliases"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Resolve a whole profile into an immutable [`ResolutionPlan`] without any
     /// I/O: merge the profile, compute each secret's effective config, and
     /// derive its resolved route.
@@ -293,7 +416,7 @@ impl Secrets {
                 .secrets
                 .get(&name)
                 .expect("planned names come from the compiled profile");
-            secrets.push(self.plan_one_secret(name, secret, &override_spec)?);
+            secrets.push(self.plan_one_secret(name, &profile_name, secret, &override_spec)?);
         }
 
         let override_uri = override_spec
@@ -360,6 +483,7 @@ impl Secrets {
         };
         Ok(Some(self.plan_one_secret(
             name.to_string(),
+            profile_name,
             secret,
             override_spec,
         )?))
@@ -373,21 +497,117 @@ impl Secrets {
     fn plan_one_secret(
         &self,
         name: String,
+        profile: &str,
         secret: &CompiledSecret,
         override_spec: &Option<String>,
     ) -> Result<PlannedSecret> {
-        // A composed secret's value is derived by the executor, so it routes
+        self.validate_scoped_refs(&name, &secret.config)?;
+        // A derived secret's value is produced by the executor, so it routes
         // to no store, including an explicit `--provider` override.
-        let route = if secret.composition.is_some() {
+        let route = if secret.composition.is_some() || secret.config.from.is_some() {
             None
         } else {
             Some(self.route_for(&secret.config, override_spec)?)
         };
-        Ok(PlannedSecret {
+        let planned = PlannedSecret {
             name,
             secret: secret.clone(),
             route,
-        })
+        };
+        self.refuse_cache_overlapping_source(&planned, profile)?;
+        Ok(planned)
+    }
+
+    /// Refuses a cached route whose cache entry and authoritative entry are one
+    /// physical secret under `profile`.
+    ///
+    /// [`cached_route`](Self::cached_route) compares storage identities, which
+    /// is all a URI alone can say. Some providers let the profile fill in part
+    /// of the address -- an unpinned `doppler://myapp` reads config `prd` under
+    /// profile `prd`, the very secret `doppler://myapp/prd` names -- so two
+    /// identities that differ can still resolve to one entry. The ownership
+    /// check before a cache write or clear cannot close that gap: it refuses
+    /// only on positive evidence, and a secret the token may not read gives
+    /// none, so a refresh would overwrite the authoritative value with the
+    /// envelope and `cache clear` would null it. This is the one place the
+    /// profile and the address are both known before any store is touched, so
+    /// the comparison uses configuration-only entry coordinates, over the
+    /// addresses the cache and the source will actually use.
+    ///
+    /// Like the identity guard, this refuses only on a positive match. A
+    /// provider that cannot be built without credentials, or cannot compare,
+    /// is no evidence and lets planning continue.
+    fn refuse_cache_overlapping_source(
+        &self,
+        planned: &PlannedSecret,
+        profile: &str,
+    ) -> Result<()> {
+        let Some(cache) = planned.route.as_ref().and_then(Route::cache) else {
+            return Ok(());
+        };
+        let Some(cache_provider) = self.probe_provider(&cache.uri, profile) else {
+            return Ok(());
+        };
+        let route = planned.route.as_ref().expect("a cache implies a route");
+        let project = self.project_name();
+        // The address `cache_address` writes and clears.
+        let cache_addr = OwnedAddress::convention(project, profile, &planned.name);
+        // The primary is already resolved; only the lazily carried fallback
+        // specs still need resolving. The primary's spec is not re-resolved,
+        // because for the inline `uri = ..., cache = {...}` form it is the
+        // cached alias's own name, which no leaf resolution accepts -- the
+        // spec is kept only so `address_for_spec` can honor the alias's refs.
+        let primary = route
+            .primary
+            .iter()
+            .map(|primary| (primary.spec.as_str(), primary.uri.clone()));
+        let fallback = route
+            .fallback
+            .iter()
+            .filter_map(|spec| Some((spec.as_str(), self.resolve_one_provider(spec).ok()?)));
+        for (spec, uri) in primary.chain(fallback) {
+            let Some(source) = self.probe_provider(&uri, profile) else {
+                continue;
+            };
+            let source_addr = self.address_for_spec(planned, Some(spec), project, profile)?;
+            // `same_entries` may list vault items to resolve titles to IDs.
+            // Planning must not make those unaudited reads before a cache hit.
+            let overlaps = crate::provider::same_configured_entries(
+                source.as_ref(),
+                source_addr.as_address(),
+                cache_provider.as_ref(),
+                cache_addr.as_address(),
+            )
+            .unwrap_or(false);
+            if overlaps {
+                return Err(SecretSpecError::ProviderOperationFailed(format!(
+                    "cached provider alias '{alias}' caches '{name}' at the same entry its \
+                     authoritative source '{source}' resolves to under profile '{profile}', so \
+                     refreshing or clearing the cache would overwrite or delete the secret. Give \
+                     the cache a store, or a config, of its own.",
+                    alias = cache.alias,
+                    name = planned.name,
+                    source = crate::audit::redact_uri_strict(&uri),
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// A credential-free provider for `uri`, positioned under `profile`, for
+    /// comparing entries without touching the store. `None` when one cannot be
+    /// built from the URI alone.
+    fn probe_provider(
+        &self,
+        uri: &str,
+        profile: &str,
+    ) -> Option<Box<dyn crate::provider::Provider>> {
+        let mut provider =
+            crate::provider::provider_from_spec(uri, crate::provider::ProviderCredentials::new())
+                .ok()?;
+        provider.with_base_dir(&self.config_dir);
+        provider.set_profile(profile);
+        Some(provider)
     }
 
     /// Resolve a secret's [`Route`] from its config and the active override.
@@ -491,12 +711,16 @@ impl Secrets {
                 "provider alias '{name}' does not declare a cache policy"
             ))
         })?;
-        let (first, fallback) = alias.fallback().split_first().ok_or_else(|| {
-            SecretSpecError::ProviderOperationFailed(format!(
-                "cached provider alias '{name}' requires at least one authoritative source"
-            ))
-        })?;
 
+        if alias.authoritative_uri().is_some() && !alias.fallback().is_empty() {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "cached provider alias '{name}' cannot declare both uri and fallback"
+            )));
+        }
+
+        // A cache provider is always a leaf. Explicit fallback entries are too;
+        // the inline form names its own leaf URI and is handled below without
+        // treating the alias as nested inside itself.
         for spec in alias
             .fallback()
             .iter()
@@ -511,12 +735,32 @@ impl Secrets {
             }
         }
 
-        let mut source_uris = Vec::with_capacity(alias.fallback().len());
-        for spec in alias.fallback() {
-            source_uris.push(self.resolve_one_provider(spec)?);
-            self.validate_credential_sources(spec)?;
-        }
+        // The inline form builds under the alias name itself, so the alias's
+        // credentials apply; its label in errors is the authoritative URI.
+        let (source_specs, source_uris) = if let Some(uri) = alias.authoritative_uri() {
+            self.validate_credential_sources(name)?;
+            (
+                vec![name.to_string()],
+                vec![self.resolve_one_provider(uri)?],
+            )
+        } else {
+            let mut source_uris = Vec::with_capacity(alias.fallback().len());
+            for spec in alias.fallback() {
+                source_uris.push(self.resolve_one_provider(spec)?);
+                self.validate_credential_sources(spec)?;
+            }
+            (alias.fallback().to_vec(), source_uris)
+        };
         let cache_uri = self.resolve_one_provider(cache.provider())?;
+        // SOPS deletion can reveal an older layout's copy. Supporting direct
+        // deletion does not yet make those fallback reads safe for caching.
+        if crate::provider::provider_display_name_for_spec(&cache_uri) == "sops" {
+            return Err(SecretSpecError::ProviderOperationFailed(format!(
+                "cached provider alias '{name}' uses SOPS for its cache; SOPS caches are not \
+                 supported because deleting a key can expose an older copy. Use a different \
+                 cache provider."
+            )));
+        }
         self.validate_credential_sources(cache.provider())?;
 
         let source_identities = source_uris
@@ -527,6 +771,19 @@ impl Secrets {
             .iter()
             .map(|uri| self.canonical_provider_uri(uri))
             .collect::<Result<Vec<_>>>()?;
+        let source_route_fingerprints = alias
+            .fallback()
+            .iter()
+            .zip(&source_route_uris)
+            .map(|(spec, uri)| {
+                let template = self
+                    .lookup_provider_alias_entry(spec)
+                    .and_then(|alias| alias.reference_template())
+                    .map(|template| coordinate_fingerprint("ref-template", template.coordinates()))
+                    .unwrap_or_else(|| "convention".to_string());
+                stable_fingerprint(["source-route", spec, uri, template.as_str()])
+            })
+            .collect::<Vec<_>>();
         let cache_identity = self.canonical_storage_identity(&cache_uri)?;
 
         // The cache entry lives at the same logical address the authoritative
@@ -548,7 +805,11 @@ impl Secrets {
                  authoritative source '{source}'. A cache must be a distinct store, otherwise \
                  refreshing it overwrites the secret it caches.",
                 uri = crate::audit::redact_uri_strict(&cache_uri),
-                source = alias.fallback()[shared],
+                source = crate::audit::redact_uri_strict(
+                    alias
+                        .authoritative_uri()
+                        .unwrap_or_else(|| alias.fallback()[shared].as_str()),
+                ),
             )));
         }
 
@@ -557,26 +818,40 @@ impl Secrets {
         // route. A store that cannot delete gives an uninvalidatable cache, so
         // require the capability here rather than discovering it the first time
         // a stale value needs dropping.
-        if !crate::provider::spec_provider_deletes(&cache_uri) {
+        if !self.provider_supports_delete(cache.provider())? {
             return Err(SecretSpecError::ProviderOperationFailed(format!(
                 "cached provider alias '{name}' caches into '{uri}', which cannot delete secrets, \
-                 so its entries could never be invalidated. Cache into one of: {supported}.",
+                 so its entries could never be invalidated. Cache into an external provider \
+                 advertising `provider.delete`, or one of: {supported}.",
                 uri = crate::audit::redact_uri_strict(&cache_uri),
-                supported = crate::provider::deleting_provider_names().join(", "),
+                supported = crate::provider::deleting_provider_names()
+                    .into_iter()
+                    .filter(|provider| *provider != "sops")
+                    .collect::<Vec<_>>()
+                    .join(", "),
             )));
         }
 
+        let mut specs = source_specs.into_iter();
+        let first = specs.next().ok_or_else(|| {
+            SecretSpecError::ProviderOperationFailed(format!(
+                "cached provider alias '{name}' requires at least one authoritative source"
+            ))
+        })?;
         Ok(Route {
             primary: Some(ResolvedPrimary {
-                spec: first.clone(),
+                spec: first,
                 uri: source_uris[0].clone(),
             }),
-            fallback: fallback.to_vec(),
+            fallback: specs.collect(),
             cache: Some(ResolvedCache {
+                alias: name.to_string(),
                 spec: cache.provider().to_string(),
                 uri: cache_uri,
                 max_age_secs: cache.max_age_secs(),
-                route_fingerprint: stable_fingerprint(source_route_uris.iter().map(String::as_str)),
+                route_fingerprint: stable_fingerprint(
+                    source_route_fingerprints.iter().map(String::as_str),
+                ),
             }),
         })
     }
@@ -612,6 +887,9 @@ impl Secrets {
     pub(crate) fn override_display_uri(&self, spec: &str) -> Result<String> {
         match self.cached_alias(spec) {
             Some(alias) => {
+                if let Some(uri) = alias.authoritative_uri() {
+                    return self.resolve_one_provider(uri);
+                }
                 let first = alias.fallback().first().ok_or_else(|| {
                     SecretSpecError::ProviderOperationFailed(format!(
                         "cached provider alias '{spec}' requires at least one authoritative source"
@@ -636,10 +914,32 @@ fn stable_fingerprint<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {
     format!("v1-{hash:016x}")
 }
 
+/// Fingerprint native coordinates without routing them through their
+/// human-readable rendering. Each coordinate name, presence marker, and value
+/// is a separately length-delimited hash part, so delimiter-like text inside an
+/// item cannot collide with a real adjacent coordinate.
+fn coordinate_fingerprint<'a>(
+    kind: &'static str,
+    coordinates: impl IntoIterator<Item = (&'static str, Option<&'a str>)>,
+) -> String {
+    let mut parts = vec![kind];
+    for (name, value) in coordinates {
+        parts.push(name);
+        match value {
+            Some(value) => {
+                parts.push("present");
+                parts.push(value);
+            }
+            None => parts.push("absent"),
+        }
+    }
+    stable_fingerprint(parts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ProviderAlias, ProviderCache};
+    use crate::config::{NativeAddressTemplate, ProjectDefaults, ProviderAlias, ProviderCache};
     use crate::error::SecretSpecError;
     use crate::tests::{global_config_with_aliases, scrub_resolution_env};
     use std::collections::HashMap;
@@ -840,19 +1140,131 @@ mod tests {
             ("REFERENCED".to_string(), referenced),
             ("PLAIN".to_string(), secret(None)),
         ]);
-        let plan = plan(&spec(secrets, None, &[]));
-
-        match find(&plan, "REFERENCED").as_address("proj", "default") {
-            Address::Native(native) => {
+        let spec = spec(secrets, None, &[]);
+        let plan = plan(&spec);
+        let referenced = find(&plan, "REFERENCED");
+        let referenced_address = spec
+            .address_for_spec(
+                referenced,
+                referenced.route.as_ref().and_then(Route::group_key),
+                "proj",
+                "default",
+            )
+            .unwrap();
+        match referenced_address {
+            OwnedAddress::Native(native) => {
                 assert_eq!(native.item, "db");
                 assert_eq!(native.field.as_deref(), Some("password"));
             }
-            Address::Convention { .. } => panic!("a ref should address native coordinates"),
+            OwnedAddress::Convention { .. } => {
+                panic!("a ref should address native coordinates")
+            }
         }
-        match find(&plan, "PLAIN").as_address("proj", "default") {
-            Address::Convention { key, .. } => assert_eq!(key, "PLAIN"),
-            Address::Native(_) => panic!("no ref should address the naming convention"),
+        let plain = find(&plan, "PLAIN");
+        let plain_address = spec
+            .address_for_spec(
+                plain,
+                plain.route.as_ref().and_then(Route::group_key),
+                "proj",
+                "default",
+            )
+            .unwrap();
+        match plain_address {
+            OwnedAddress::Convention { key, .. } => assert_eq!(key, "PLAIN"),
+            OwnedAddress::Native(_) => panic!("no ref should address the naming convention"),
         }
+    }
+
+    #[test]
+    fn endpoint_address_prefers_scoped_ref_then_alias_template_then_convention() {
+        let _env = scrub_resolution_env();
+        let mut configured = secret(Some(vec!["local"]));
+        configured.refs = Some(HashMap::from([(
+            "remote".to_string(),
+            NativeAddress {
+                item: "legacy-source".to_string(),
+                field: Some("token".to_string()),
+                ..Default::default()
+            },
+        )]));
+        let mut config =
+            crate::tests::resolve_test_config(HashMap::from([("API_KEY".to_string(), configured)]));
+        config.providers = Some(HashMap::from([
+            (
+                "remote".to_string(),
+                ProviderAlias::from("onepassword://Production"),
+            ),
+            (
+                "local".to_string(),
+                ProviderAlias::from("dotenv://.env")
+                    .with_reference_template(NativeAddressTemplate {
+                        item: "{project}_{profile}_{key}".to_string(),
+                        ..Default::default()
+                    })
+                    .unwrap(),
+            ),
+        ]));
+        let spec = Secrets::new(config, None, None, None);
+
+        let plan = spec.build_plan(None).unwrap();
+        let planned = find(&plan, "API_KEY");
+        assert_eq!(
+            spec.address_for_spec(planned, Some("remote"), "app", "prod")
+                .unwrap(),
+            OwnedAddress::Native(NativeAddress {
+                item: "legacy-source".to_string(),
+                field: Some("token".to_string()),
+                ..Default::default()
+            })
+        );
+        assert_eq!(
+            spec.address_for_spec(planned, Some("local"), "app", "prod")
+                .unwrap(),
+            OwnedAddress::Native(NativeAddress {
+                item: "app_prod_API_KEY".to_string(),
+                ..Default::default()
+            })
+        );
+        assert_eq!(
+            spec.address_for_spec(planned, Some("dotenv://other.env"), "app", "prod")
+                .unwrap(),
+            OwnedAddress::convention("app", "prod", "API_KEY")
+        );
+    }
+
+    #[test]
+    fn project_default_uses_a_global_alias_template_with_logical_placeholders() {
+        let _env = scrub_resolution_env();
+        let mut config = crate::tests::resolve_test_config(HashMap::from([(
+            "API_KEY".to_string(),
+            secret(None),
+        )]));
+        config.project.name = "payments".to_string();
+        config.defaults = Some(ProjectDefaults {
+            providers: vec!["developer".to_string()],
+        });
+
+        let developer = ProviderAlias::from("env://")
+            .with_reference_template(NativeAddressTemplate {
+                item: "/{project}/{profile}/developers/alice/{key}".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut global = global_config_with_aliases(&[]);
+        global.defaults.providers = Some(HashMap::from([("developer".to_string(), developer)]));
+        let spec = Secrets::new(config, Some(global), None, None);
+
+        let plan = spec.build_plan(None).unwrap();
+        let planned = find(&plan, "API_KEY");
+        assert_eq!(route(planned).group_key(), Some("developer"));
+        assert_eq!(
+            spec.address_for_spec(planned, route(planned).group_key(), "payments", "default")
+                .unwrap(),
+            OwnedAddress::Native(NativeAddress {
+                item: "/payments/default/developers/alice/API_KEY".to_string(),
+                ..Default::default()
+            })
+        );
     }
 
     #[test]
@@ -973,6 +1385,90 @@ mod tests {
         cached_spec_with(secret_providers, &[])
     }
 
+    // A source sharing the cache's container but using a different namespace.
+    // Its destructive comparison models a provider that reads storage.
+    struct CacheProbeProvider;
+    static CACHE_PROBE_READS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    impl CacheProbeProvider {
+        fn new(_: crate::provider::tests::MemTestConfig) -> Self {
+            Self
+        }
+    }
+
+    crate::register_provider! {
+        struct: CacheProbeProvider,
+        config: crate::provider::tests::MemTestConfig,
+        name: "cacheprobe",
+        description: "Cache planning regression source",
+        schemes: ["cacheprobe"],
+        examples: ["cacheprobe://"],
+    }
+
+    impl crate::provider::Provider for CacheProbeProvider {
+        fn name(&self) -> &'static str {
+            Self::PROVIDER_NAME
+        }
+        fn uri(&self) -> String {
+            "cacheprobe://".to_string()
+        }
+        fn entry_container_identity(&self) -> String {
+            "memtest://".to_string()
+        }
+        fn convention_address(
+            &self,
+            project: &str,
+            profile: &str,
+            key: &str,
+        ) -> Result<NativeAddress> {
+            Ok(NativeAddress {
+                item: format!("source/{project}/{profile}/{key}"),
+                ..Default::default()
+            })
+        }
+        fn entry_coordinates<'a>(
+            &self,
+            _: crate::provider::Address<'a>,
+        ) -> Result<std::borrow::Cow<'a, NativeAddress>> {
+            panic!("planning must not invoke a storage-reading entry comparison")
+        }
+        fn get(&self, _: crate::provider::Address<'_>) -> Result<Option<crate::SecretBytes>> {
+            CACHE_PROBE_READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Some(crate::SecretBytes::from_utf8("source-value")))
+        }
+        fn set(&self, _: crate::provider::Address<'_>, _: &crate::SecretBytes) -> Result<()> {
+            panic!("source must not be written")
+        }
+    }
+
+    #[test]
+    fn fresh_cache_resolution_skips_storage_reading_entry_comparisons() {
+        let _env = scrub_resolution_env();
+        CACHE_PROBE_READS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let config = toml::from_str(r#"
+            [project]
+            name = "cache-probe-regression"
+            revision = "1.0"
+            [providers]
+            cached = { fallback = ["cacheprobe://"], cache = { provider = "memtest://", max_age = "8h" } }
+            [profiles.default]
+            A = { providers = ["cached"] }
+            B = { providers = ["cached"] }
+        "#).unwrap();
+        let spec = Secrets::new(config, None, None, None);
+        for _ in 0..2 {
+            let resolved = spec.resolve().unwrap();
+            for key in ["A", "B"] {
+                assert_eq!(resolved.secrets[key].value.as_deref(), Some("source-value"));
+            }
+            assert_eq!(
+                CACHE_PROBE_READS.load(std::sync::atomic::Ordering::SeqCst),
+                2
+            );
+        }
+    }
+
     #[test]
     fn cached_alias_expands_into_authoritative_route_and_cache() {
         let _env = scrub_resolution_env();
@@ -986,6 +1482,25 @@ mod tests {
         assert_eq!(cache.spec, "local");
         assert_eq!(cache.uri, "keyring://");
         assert_eq!(cache.max_age_secs, 8 * 60 * 60);
+    }
+
+    #[test]
+    fn inline_cached_uri_keeps_alias_as_the_authoritative_build_key() {
+        let _env = scrub_resolution_env();
+        let inline = ProviderAlias::from("akv://team-vault")
+            .with_cache(ProviderCache::new("local", "5m").expect("valid cache policy"));
+        let spec = cached_spec_with(vec!["inline"], &[("inline", inline)]);
+        let plan = plan(&spec);
+        let route = route(find(&plan, "API_KEY"));
+
+        // The alias remains the build key so inline provider credentials are
+        // available when the authoritative provider is constructed.
+        assert_eq!(route.group_key(), Some("inline"));
+        assert_eq!(route.primary(), Some("akv://team-vault"));
+        assert!(route.fallback.is_empty());
+        let cache = route.cache().expect("cached route");
+        assert_eq!(cache.spec, "local");
+        assert_eq!(cache.max_age_secs, 5 * 60);
     }
 
     #[test]
@@ -1031,6 +1546,50 @@ mod tests {
         assert!(message.contains("mirror"), "{message}");
     }
 
+    /// A password-bearing URI is refused outright now, so what a diagnostic can
+    /// still echo is the userinfo the URI legitimately carries (here a Vault
+    /// namespace). Strict redaction drops it anyway: the same-store message
+    /// names the store, not who authenticates to it.
+    #[test]
+    fn same_store_error_redacts_inline_authoritative_userinfo() {
+        let _env = scrub_resolution_env();
+        let source = "vault://team-user@127.0.0.1:8200/secret?tls=false";
+        let inline = ProviderAlias::from(source)
+            .with_cache(ProviderCache::new(source, "8h").expect("valid cache policy"));
+        let spec = cached_spec_with(vec!["route"], &[("route", inline)]);
+
+        let message = spec.build_plan(None).unwrap_err().to_string();
+        assert!(message.contains("distinct store"), "{message}");
+        assert!(
+            message.contains("vault://127.0.0.1:8200/secret"),
+            "{message}"
+        );
+        assert!(!message.contains("team-user"), "{message}");
+        assert!(!message.contains("tls=false"), "{message}");
+    }
+
+    /// Planning a cached route reconstructs its canonical provider URI, so a
+    /// password-bearing alias is refused here, before any store is contacted.
+    /// The refusal has to quote the URI to be actionable, which is why strict
+    /// redaction outlives the credential-bearing URIs it was written for: the
+    /// message that tells you not to embed a credential must not repeat it.
+    #[test]
+    fn planning_refuses_an_inline_credential_without_echoing_it() {
+        let _env = scrub_resolution_env();
+        let source = "vault://team-user:super-sensitive-password@127.0.0.1:8200/secret?tls=false";
+        let inline = ProviderAlias::from(source)
+            .with_cache(ProviderCache::new(source, "8h").expect("valid cache policy"));
+        let spec = cached_spec_with(vec!["route"], &[("route", inline)]);
+
+        let message = spec.build_plan(None).unwrap_err().to_string();
+        assert!(message.contains("carries a password"), "{message}");
+        assert!(
+            message.contains("secretspec config provider login"),
+            "{message}"
+        );
+        assert!(!message.contains("super-sensitive-password"), "{message}");
+    }
+
     #[test]
     fn equivalent_provider_spellings_cannot_bypass_cache_separation() {
         let _env = scrub_resolution_env();
@@ -1048,6 +1607,113 @@ mod tests {
         let message = spec.build_plan(None).unwrap_err().to_string();
         assert!(message.contains("distinct store"), "{message}");
         assert!(message.contains("dotenv:.env"), "{message}");
+    }
+
+    /// A cached-alias spec declaring `API_KEY` in profiles `prd` and `dev` as
+    /// well as `default`: a Doppler overlap only shows under a profile, since
+    /// an unpinned URI takes its config from the active one.
+    #[cfg(feature = "doppler")]
+    fn doppler_cached_spec(sources: &[&str], cache: &str) -> Secrets {
+        doppler_cached_spec_with(cached_alias(sources, cache, "8h"))
+    }
+
+    /// [`doppler_cached_spec`] over an arbitrary cached alias, for the inline
+    /// `uri = ..., cache = {...}` spelling.
+    #[cfg(feature = "doppler")]
+    fn doppler_cached_spec_with(myprovider: ProviderAlias) -> Secrets {
+        let declare = || HashMap::from([("API_KEY".to_string(), secret(Some(vec!["myprovider"])))]);
+        let mut config = crate::tests::resolve_test_config(declare());
+        for profile in ["prd", "dev"] {
+            config.profiles.insert(
+                profile.to_string(),
+                crate::config::Profile {
+                    defaults: None,
+                    secrets: declare(),
+                },
+            );
+        }
+        let mut providers = cached_aliases();
+        providers.insert("myprovider".to_string(), myprovider);
+        config.providers = Some(providers);
+        Secrets::new(config, None, None, None)
+    }
+
+    /// Under profile `prd`, `doppler://myapp/prd` and `doppler://myapp` resolve
+    /// `API_KEY` to one Doppler secret, `prd/API_KEY`, while rendering distinct
+    /// storage identities. A cache at that pairing would overwrite the
+    /// authoritative secret with its envelope on refresh and null it on
+    /// `cache clear` -- the ownership check cannot see the overlap when the
+    /// secret is `restricted` and the token cannot read it. Planning has to
+    /// refuse the pairing, in either direction, under the profile where the
+    /// two locations coincide.
+    #[cfg(feature = "doppler")]
+    #[test]
+    fn a_doppler_cache_may_not_resolve_to_its_sources_entry_under_the_active_profile() {
+        let _env = scrub_resolution_env();
+        for (source, cache) in [
+            ("doppler://myapp/prd", "doppler://myapp"),
+            ("doppler://myapp", "doppler://myapp/prd"),
+        ] {
+            let spec = doppler_cached_spec(&[source], cache);
+            let error = spec
+                .build_plan(Some("prd"))
+                .expect_err(&format!("{source} cached into {cache} under prd"))
+                .to_string();
+            assert!(error.contains("same entry"), "{source} -> {cache}: {error}");
+            assert!(error.contains("'prd'"), "{source} -> {cache}: {error}");
+            assert!(error.contains("myprovider"), "{source} -> {cache}: {error}");
+        }
+    }
+
+    /// The inline spelling, `uri = "doppler://myapp/prd"` with a `cache`
+    /// table, names the same pairing as the `fallback` list and must be
+    /// refused the same way. Its route carries the alias's own name as the
+    /// primary spec, so a guard that re-resolves specs instead of reading the
+    /// resolved URI beside it never compares anything.
+    #[cfg(feature = "doppler")]
+    #[test]
+    fn a_doppler_inline_cached_alias_is_judged_like_the_fallback_form() {
+        let _env = scrub_resolution_env();
+        for (source, cache) in [
+            ("doppler://myapp/prd", "doppler://myapp"),
+            ("doppler://myapp", "doppler://myapp/prd"),
+        ] {
+            let inline = ProviderAlias::from(source)
+                .with_cache(ProviderCache::new(cache, "8h").expect("valid cache policy"));
+            let spec = doppler_cached_spec_with(inline);
+            let error = spec
+                .build_plan(Some("prd"))
+                .expect_err(&format!("inline {source} cached into {cache} under prd"))
+                .to_string();
+            assert!(error.contains("same entry"), "{source} -> {cache}: {error}");
+        }
+    }
+
+    /// The same pairing under profile `dev` addresses `dev/API_KEY` and
+    /// `prd/API_KEY`, two secrets, so it is a legitimate cache. The refusal is
+    /// per profile, not a stricter identity comparison.
+    #[cfg(feature = "doppler")]
+    #[test]
+    fn a_doppler_cache_pairing_is_judged_under_the_profile_that_resolves_it() {
+        let _env = scrub_resolution_env();
+        let spec = doppler_cached_spec(&["doppler://myapp/prd"], "doppler://myapp");
+        let plan = spec
+            .build_plan(Some("dev"))
+            .expect("prd source and dev-resolved cache are distinct entries");
+        assert!(route(find(&plan, "API_KEY")).cache().is_some());
+    }
+
+    /// Two pinned configs in one project stay distinct stores, so one Doppler
+    /// config can cache another.
+    #[cfg(feature = "doppler")]
+    #[test]
+    fn a_doppler_config_can_cache_a_sibling_config() {
+        let _env = scrub_resolution_env();
+        let spec = doppler_cached_spec(&["doppler://myapp/prd"], "doppler://myapp/cache");
+        let plan = spec
+            .build_plan(Some("prd"))
+            .expect("pinned siblings are distinct entries");
+        assert!(route(find(&plan, "API_KEY")).cache().is_some());
     }
 
     #[test]
@@ -1081,7 +1747,10 @@ mod tests {
                 message.contains("distinct store"),
                 "{source} / {cache}: {message}"
             );
-            assert!(message.contains(source), "{source} / {cache}: {message}");
+            assert!(
+                message.contains(&crate::audit::redact_uri_strict(source)),
+                "{source} / {cache}: {message}"
+            );
         }
     }
 
@@ -1165,6 +1834,112 @@ mod tests {
             fingerprint("lastpass://Work/TeamB/{project}/{profile}/{key}"),
             "changing the item template must invalidate the cache"
         );
+    }
+
+    fn template_fingerprint(template: NativeAddressTemplate) -> String {
+        let source = ProviderAlias::from("env://")
+            .with_reference_template(template)
+            .unwrap();
+        let spec = cached_spec_with(
+            vec!["route"],
+            &[
+                ("source", source),
+                ("route", cached_alias(&["source"], "keyring://", "8h")),
+            ],
+        );
+        let plan = plan(&spec);
+        route(find(&plan, "API_KEY"))
+            .cache()
+            .expect("cached route")
+            .route_fingerprint
+            .clone()
+    }
+
+    #[test]
+    fn coordinate_boundaries_distinguish_alias_template_fingerprints() {
+        let _env = scrub_resolution_env();
+        let embedded_field = NativeAddressTemplate {
+            item: "foo field={key}".to_string(),
+            ..Default::default()
+        };
+        let separate_field = NativeAddressTemplate {
+            item: "foo".to_string(),
+            field: Some("{key}".to_string()),
+            ..Default::default()
+        };
+
+        assert_ne!(
+            template_fingerprint(embedded_field),
+            template_fingerprint(separate_field),
+            "different template coordinates must not collide through display rendering"
+        );
+    }
+
+    fn scoped_ref_cache_fingerprint(reference: NativeAddress) -> String {
+        let mut configured = secret(Some(vec!["route"]));
+        configured.refs = Some(HashMap::from([("source".to_string(), reference)]));
+        let mut config =
+            crate::tests::resolve_test_config(HashMap::from([("API_KEY".to_string(), configured)]));
+        config.providers = Some(HashMap::from([
+            ("source".to_string(), ProviderAlias::from("env://")),
+            ("local".to_string(), ProviderAlias::from("keyring://")),
+            (
+                "route".to_string(),
+                cached_alias(&["source"], "local", "8h"),
+            ),
+        ]));
+        let spec = Secrets::new(config, None, None, None);
+        let plan = plan(&spec);
+        let planned = find(&plan, "API_KEY");
+        planned.cache_fingerprint(
+            route(planned).cache().expect("cached route"),
+            &spec.config().project.name,
+            "default",
+        )
+    }
+
+    #[test]
+    fn coordinate_boundaries_distinguish_scoped_ref_fingerprints() {
+        let _env = scrub_resolution_env();
+        let embedded_field = NativeAddress {
+            item: "foo field=API_KEY".to_string(),
+            ..Default::default()
+        };
+        let separate_field = NativeAddress {
+            item: "foo".to_string(),
+            field: Some("API_KEY".to_string()),
+            ..Default::default()
+        };
+
+        assert_ne!(
+            scoped_ref_cache_fingerprint(embedded_field),
+            scoped_ref_cache_fingerprint(separate_field),
+            "different scoped-ref coordinates must not collide through display rendering"
+        );
+    }
+
+    #[test]
+    fn sops_caches_are_rejected_during_planning() {
+        let _env = scrub_resolution_env();
+        for cache in [
+            "sops",
+            "sops://cache.enc.yaml",
+            "sops://{project}/{profile}.enc.yaml",
+            "local",
+        ] {
+            let spec = cached_spec_with(
+                vec!["myprovider"],
+                &[
+                    ("local", ProviderAlias::from("sops://cache.enc.yaml")),
+                    ("myprovider", cached_alias(&["env://"], cache, "8h")),
+                ],
+            );
+            let message = spec.build_plan(None).unwrap_err().to_string();
+            assert!(
+                message.contains("SOPS caches are not supported"),
+                "{cache}: {message}"
+            );
+        }
     }
 
     #[test]

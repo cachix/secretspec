@@ -1,0 +1,150 @@
+---
+title: Gopass Provider
+description: GPG-encrypted, git-synced password store integration
+---
+
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.15" />
+
+The [Gopass](https://www.gopass.pw/) provider integrates with gopass, a
+multi-user, multi-store abstraction layer on top of `pass` that keeps secrets
+GPG-encrypted and syncs them via git.
+
+
+## At a glance
+
+| | |
+| --- | --- |
+| Provider | `gopass` |
+| URI | `gopass://[folder_prefix]` |
+| Access | Read and write |
+| Best for | GPG-encrypted, git-synced, multi-user password stores |
+| Authentication | The GPG key configured for the password store |
+| Availability | SecretSpec 0.15+ |
+| Default storage | `secretspec/{project}/{profile}/{key}` |
+
+## Quick start
+
+```bash
+# Set a secret
+$ secretspec set DATABASE_URL --provider gopass
+Enter value for DATABASE_URL: postgresql://localhost/mydb
+✓ Secret DATABASE_URL saved to gopass
+
+# Get a secret
+$ secretspec get DATABASE_URL --provider gopass
+postgresql://localhost/mydb
+
+# Run with secrets
+$ secretspec run --provider gopass -- npm start
+```
+
+## Setup
+
+### Prerequisites
+
+Install the `gopass` CLI and initialize a password store:
+```bash
+# macOS
+$ brew install gopass
+
+# Debian/Ubuntu
+$ sudo apt install gopass
+
+# NixOS
+$ nix-env -iA nixpkgs.gopass
+```
+
+### Authentication
+
+SecretSpec uses the GPG identities configured by `gopass`. Confirm that the
+target store is initialized and can be unlocked before using the provider.
+
+## Configuration
+
+### URI format
+
+```
+gopass://[folder_prefix]
+```
+
+- `folder_prefix`: Optional path prefix supporting `{project}`, `{profile}`, and `{key}` placeholders. Defaults to `secretspec/{project}/{profile}/{key}`.
+
+### URI examples
+
+```text
+gopass
+gopass://secretspec/shared/{profile}/{key}
+```
+
+### Project configuration
+
+```toml title="secretspec.toml"
+[providers]
+team = "gopass://"
+
+[profiles.default]
+DATABASE_URL = { description = "Database URL", providers = ["team"] }
+```
+
+## Storage model
+
+<VersionCompatibility version="0.21" kind="changed">
+
+A single-line value without surrounding whitespace is stored as a plain text
+entry, exactly as `gopass insert` writes it, so `gopass show`, other gopass
+tooling, and earlier SecretSpec releases keep reading it. A value with line
+breaks, leading or trailing whitespace, NUL bytes, or non-UTF-8 content would
+not survive that path, so SecretSpec stores it with `gopass cat` in gopass's
+binary-entry format instead. Read those entries with `gopass cat`; `gopass
+show -o` reports that they have no password line.
+
+</VersionCompatibility>
+
+Each secret is stored under `secretspec/{project}/{profile}/{key}`. Gopass
+encrypts the entry with GPG and can synchronize the password store through git.
+
+## Use existing secrets
+
+A secret's [`ref`](/reference/configuration/#secret-references) field names an
+existing entry instead: `item` is the full entry path, including any mount-point
+prefix for multi-store setups (`field` is not supported). Reads and writes
+target that entry in place.
+
+```toml
+[profiles.production]
+DATABASE_URL = { description = "Production DB", ref = { item = "work-store/infra/postgres" }, providers = ["gopass"] }
+```
+
+## Advanced configuration
+
+### Shared secrets
+
+By default, secrets are stored under `secretspec/{project}/{profile}/{key}`, which isolates them per project. To share secrets across projects, use a custom folder prefix via the URI:
+
+```toml
+# ~/.config/secretspec/config.toml
+[defaults.providers]
+shared = "gopass://secretspec/shared/{profile}/{key}"
+```
+
+The URI supports `{project}`, `{profile}`, and `{key}` placeholders. By omitting `{project}`, multiple projects can read and write the same store entry:
+
+```toml
+# secretspec.toml (in project-A and project-B)
+[profiles.default]
+ARTIFACTORY_USER = { description = "Artifactory user", providers = ["shared"] }
+```
+
+Both projects will resolve `ARTIFACTORY_USER` from `secretspec/shared/default/ARTIFACTORY_USER`.
+
+## Troubleshooting and limitations
+
+Text entries, whether written by SecretSpec or created with `gopass insert`,
+are read from their password line only: SecretSpec returns the first line with
+surrounding whitespace removed, so a multiline value stored that way comes back
+truncated with no error. Writing the secret again with `secretspec set` stores
+a multiline value in the binary-entry format, which preserves every byte.
+Reading a binary entry costs two decryptions, because SecretSpec asks for the
+password line first and falls back to the entry body.

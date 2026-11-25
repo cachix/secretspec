@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "wire.lifecycle",
+  "targets": ["provider-endpoint", "rust-server"],
+  "timeout_ms": 10000,
+  "actions": [
+    {"kind": "initialize"},
+    {"kind": "unknown_method"},
+    {"kind": "shutdown"},
+    {"kind": "disconnect"},
+    {"kind": "reconnect"}
+  ],
+  "required_events": [
+    "initialized",
+    "capability_gated",
+    "shutdown",
+    "disconnect_cleaned_up",
+    "reconnected",
+    "closed"
+  ]
+}

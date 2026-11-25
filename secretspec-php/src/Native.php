@@ -15,8 +15,9 @@ namespace Secretspec;
  *     embeds the resolver and exposes `secretspec_native_resolve()`. This is the
  *     production path: it needs no `ffi.enable` and works under FPM/web like any
  *     other PHP extension. Preferred whenever it is loaded.
- *  2. A runtime `ext-ffi` fallback that dlopens the `secretspec-ffi` cdylib and
- *     calls the three C entry points from `secretspec-ffi/include/secretspec.h`.
+ *  2. A runtime `ext-ffi` fallback that dlopens the `libsecretspec` cdylib and
+ *     calls the stable C entry points from `libsecretspec/include/secretspec.h`
+ *     and binds the optional versioned-call entry point only when needed.
  *     Zero-config for CLI and local dev; requires the FFI extension.
  *
  * Both call `secretspec::resolve_json` and return the identical envelope.
@@ -25,17 +26,21 @@ namespace Secretspec;
  */
 final class Native
 {
-    /**
-     * C declarations for the three-function ABI. Kept in lock-step with
-     * `secretspec-ffi/include/secretspec.h`.
-     */
+    /** The legacy ABI, which remains usable with pre-0.20 native libraries. */
     private const CDEF = <<<'C'
         char *secretspec_resolve(const char *request_json);
         void secretspec_free(char *ptr);
         const char *secretspec_abi_version(void);
         C;
 
+    /** The optional 0.20+ entry point, bound only when an inline call needs it. */
+    private const CALL_CDEF = <<<'C'
+        char *secretspec_call(const char *request_json);
+        void secretspec_free(char *ptr);
+        C;
+
     private static ?\FFI $ffi = null;
+    private static ?\FFI $callFfi = null;
 
     private function __construct()
     {
@@ -54,6 +59,54 @@ final class Native
         }
 
         return self::resolveViaFfi($requestJson);
+    }
+
+    /** Execute a versioned native operation, including inline specs. */
+    public static function call(string $requestJson): string
+    {
+        if (\function_exists('secretspec_native_call')) {
+            return \secretspec_native_call($requestJson);
+        }
+
+        return self::callViaFfi($requestJson);
+    }
+
+    /** Open a lease file through the native reader (0.22+). @return resource */
+    public static function openFile(string $path, ?string $leaseId)
+    {
+        if ($leaseId === null) {
+            // Compatibility with older runtimes that return ordinary files.
+            $stream = @\fopen($path, 'rb');
+            if ($stream === false) {
+                throw new SecretSpecException('io', 'could not open secret file');
+            }
+            return $stream;
+        }
+        $payload = \json_encode(['request_version' => 1, 'operation' => 'read_file',
+            'source' => ['lease_id' => $leaseId, 'path' => $path]], \JSON_THROW_ON_ERROR);
+        $envelope = \json_decode(self::call($payload), true, 512, \JSON_THROW_ON_ERROR);
+        if (empty($envelope['ok'])) {
+            $error = $envelope['error'] ?? [];
+            throw new SecretSpecException($error['kind'] ?? 'unknown', $error['message'] ?? '');
+        }
+        $response = $envelope['response'] ?? [];
+        if (($response['schema_version'] ?? null) !== 1 || !\is_string($response['base64'] ?? null)) {
+            throw new SecretSpecException('schema', 'invalid native file-read response');
+        }
+        $bytes = \base64_decode($response['base64'], true);
+        if ($bytes === false) {
+            throw new SecretSpecException('schema', 'invalid native file-read encoding');
+        }
+        // php://memory never spills to disk, unlike php://temp.
+        $stream = \fopen('php://memory', 'w+b');
+        if ($stream === false) {
+            throw new SecretSpecException('io', 'could not allocate secret stream');
+        }
+        if (\fwrite($stream, $bytes) !== \strlen($bytes) || !\rewind($stream)) {
+            \fclose($stream);
+            throw new SecretSpecException('io', 'could not populate secret stream');
+        }
+        return $stream;
     }
 
     /** The ABI version reported by the active backend. */
@@ -78,11 +131,48 @@ final class Native
      */
     private static function resolveViaFfi(string $requestJson): string
     {
-        $ffi = self::ffi();
-        $ptr = $ffi->secretspec_resolve($requestJson);
+        return self::ffiCall('secretspec_resolve', $requestJson);
+    }
+
+    private static function callViaFfi(string $requestJson): string
+    {
+        try {
+            return self::ffiCallWith(self::callFfi(), 'secretspec_call', $requestJson);
+        } catch (SecretSpecException $error) {
+            // Keep backend-load and native-call failures distinguishable from an
+            // older library that merely lacks the versioned entry point.
+            throw $error;
+        } catch (\FFI\Exception $error) {
+            if (!self::isMissingCallSymbol($error)) {
+                throw new SecretSpecException('ffi', $error->getMessage());
+            }
+            throw new SecretSpecException(
+                'capability',
+                'the loaded libsecretspec library does not support inline specs (missing secretspec_call): '
+                . $error->getMessage(),
+            );
+        }
+    }
+
+    private static function isMissingCallSymbol(\FFI\Exception $error): bool
+    {
+        return \preg_match(
+            "/(?:undefined|unknown|resolv(?:e|ing)|function).*secretspec_call/i",
+            $error->getMessage(),
+        ) === 1;
+    }
+
+    private static function ffiCall(string $symbol, string $requestJson): string
+    {
+        return self::ffiCallWith(self::ffi(), $symbol, $requestJson);
+    }
+
+    private static function ffiCallWith(\FFI $ffi, string $symbol, string $requestJson): string
+    {
+        $ptr = $ffi->$symbol($requestJson);
         // secretspec_resolve returns null only on catastrophic allocation failure.
         if ($ptr === null || \FFI::isNull($ptr)) {
-            throw new SecretSpecException('ffi', 'secretspec_resolve returned null');
+            throw new SecretSpecException('ffi', $symbol . ' returned null');
         }
 
         try {
@@ -105,14 +195,35 @@ final class Native
                     . 'to use the SecretSpec SDK',
                 );
             }
-            self::$ffi = \FFI::cdef(self::CDEF, self::locateLibrary());
+            try {
+                self::$ffi = \FFI::cdef(self::CDEF, self::locateLibrary());
+            } catch (\FFI\Exception $error) {
+                throw new SecretSpecException('load', $error->getMessage());
+            }
         }
 
         return self::$ffi;
     }
 
+    /** Lazily bind the optional versioned-call ABI without affecting legacy calls. */
+    private static function callFfi(): \FFI
+    {
+        if (self::$callFfi === null) {
+            if (!\extension_loaded('ffi')) {
+                throw new SecretSpecException(
+                    'load',
+                    'the PHP FFI extension is required; enable ext-ffi (and set ffi.enable) '
+                    . 'to use the SecretSpec SDK',
+                );
+            }
+            self::$callFfi = \FFI::cdef(self::CALL_CDEF, self::locateLibrary());
+        }
+
+        return self::$callFfi;
+    }
+
     /**
-     * Find `libsecretspec_ffi`: the `SECRETSPEC_FFI_LIB` override first, then a
+     * Find `libsecretspec`: the `SECRETSPEC_FFI_LIB` override first, then a
      * copy bundled in the package's `lib/` directory (the installed layout), then
      * the nearest Cargo `target/` directory (a source checkout).
      *
@@ -125,12 +236,15 @@ final class Native
             return $env;
         }
 
-        $name = self::libraryFileName();
+        $names = self::libraryFileNames();
 
         // A copy bundled alongside the package (distribution layout).
-        $bundled = \dirname(__DIR__) . \DIRECTORY_SEPARATOR . 'lib' . \DIRECTORY_SEPARATOR . $name;
-        if (\is_file($bundled)) {
-            return $bundled;
+        foreach ($names as $name) {
+            $bundled = \dirname(__DIR__) . \DIRECTORY_SEPARATOR . 'lib'
+                . \DIRECTORY_SEPARATOR . $name;
+            if (\is_file($bundled)) {
+                return $bundled;
+            }
         }
 
         // Walk up from the package looking for a Cargo target dir; pick the most
@@ -141,13 +255,15 @@ final class Native
             $best = null;
             $bestMtime = -1;
             foreach (['release', 'debug'] as $profile) {
-                $candidate = $dir . \DIRECTORY_SEPARATOR . 'target'
-                    . \DIRECTORY_SEPARATOR . $profile . \DIRECTORY_SEPARATOR . $name;
-                if (\is_file($candidate)) {
-                    $mtime = \filemtime($candidate);
-                    if ($mtime !== false && $mtime > $bestMtime) {
-                        $best = $candidate;
-                        $bestMtime = $mtime;
+                foreach ($names as $name) {
+                    $candidate = $dir . \DIRECTORY_SEPARATOR . 'target'
+                        . \DIRECTORY_SEPARATOR . $profile . \DIRECTORY_SEPARATOR . $name;
+                    if (\is_file($candidate)) {
+                        $mtime = \filemtime($candidate);
+                        if ($mtime !== false && $mtime > $bestMtime) {
+                            $best = $candidate;
+                            $bestMtime = $mtime;
+                        }
                     }
                 }
             }
@@ -163,21 +279,27 @@ final class Native
 
         throw new SecretSpecException(
             'load',
-            'could not locate the secretspec-ffi library; set SECRETSPEC_FFI_LIB to its path',
+            'could not locate the libsecretspec library; set SECRETSPEC_FFI_LIB to its path',
         );
     }
 
     /**
-     * The platform-specific `libsecretspec_ffi` file name the loader looks for.
+     * The platform-specific `libsecretspec` file name the loader looks for.
      * Shared with the `secretspec-install-lib` script so the downloaded copy and
      * the loader agree on one name.
      */
     public static function libraryFileName(): string
     {
+        return self::libraryFileNames()[0];
+    }
+
+    /** @return list<string> New public name followed by the pre-0.20 name. */
+    private static function libraryFileNames(): array
+    {
         return match (\PHP_OS_FAMILY) {
-            'Darwin' => 'libsecretspec_ffi.dylib',
-            'Windows' => 'secretspec_ffi.dll',
-            default => 'libsecretspec_ffi.so',
+            'Darwin' => ['libsecretspec.dylib', 'libsecretspec_ffi.dylib'],
+            'Windows' => ['libsecretspec.dll', 'secretspec.dll', 'secretspec_ffi.dll'],
+            default => ['libsecretspec.so', 'libsecretspec_ffi.so'],
         };
     }
 }

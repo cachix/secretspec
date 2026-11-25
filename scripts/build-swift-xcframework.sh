@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Package one or more macOS secretspec-ffi cdylibs as the CSecretSpec
+# Package one or more macOS libsecretspec cdylibs as the CSecretSpec
 # XCFramework imported by the Swift SDK. Pass one native library per
 # architecture; multiple inputs are merged into one universal Mach-O because
 # xcodebuild rejects separate library definitions for the same platform.
@@ -64,7 +64,7 @@ if [[ "$#" -eq 1 ]]; then
 else
   xcrun lipo -create "$@" -output "$staged_library"
 fi
-cp "$repo_root/secretspec-ffi/include/secretspec.h" "$headers/"
+cp "$repo_root/libsecretspec/include/secretspec.h" "$headers/"
 cp "$repo_root/secretspec-swift/ffi/module.modulemap" "$headers/"
 
 # A SwiftPM binary target embeds this dylib beside the consumer and supplies

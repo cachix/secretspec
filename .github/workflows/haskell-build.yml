@@ -1,7 +1,7 @@
 name: "Haskell SDK"
 
 # Builds and tests the Haskell SDK (secretspec-hs) against a freshly built
-# secretspec-ffi staticlib. The SDK statically links the C ABI archive at build
+# libsecretspec staticlib. The SDK statically links the C ABI archive at build
 # time, so the Rust resolver is embedded in the binary and there is no runtime
 # loader path (no LD_LIBRARY_PATH).
 #
@@ -17,6 +17,12 @@ name: "Haskell SDK"
 
 on:
   workflow_call:
+    inputs:
+      pre_release:
+        description: Run as part of the canonical pre-release suite
+        required: false
+        type: boolean
+        default: false
     secrets:
       HACKAGE_TOKEN:
         description: Hackage API token used only by the tag-push publish job
@@ -25,7 +31,7 @@ on:
   pull_request:
     paths:
       - "secretspec-hs/**"
-      - "secretspec-ffi/**"
+      - "libsecretspec/**"
       - "secretspec/**"
       - ".github/workflows/haskell-build.yml"
       - "scripts/sync-sdk-versions.sh"
@@ -35,11 +41,20 @@ on:
     tags:
       - v**
 
+permissions:
+  contents: read
+
 jobs:
   build:
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Sync SDK package versions
         run: bash scripts/sync-sdk-versions.sh
       # The cdylib + CLI debug build (AWS/GCP/Bitwarden providers) plus the
@@ -51,8 +66,8 @@ jobs:
             /usr/local/share/boost /usr/local/share/powershell
           sudo docker image prune --all --force
           df -h /
-      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
-      - uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         with:
           name: devenv
       - name: Install devenv.sh
@@ -61,17 +76,17 @@ jobs:
         run: |
           devenv shell -- bash -c '
             set -euo pipefail
-            cargo build -p secretspec-ffi -p secretspec
+            cargo build -p libsecretspec -p secretspec
             target_dir="$(cargo metadata --no-deps --format-version 1 \
               | grep -o "\"target_directory\":\"[^\"]*\"" | head -1 | sed "s/.*:\"\(.*\)\"/\1/")"
             export SECRETSPEC_BIN="$target_dir/debug/secretspec"
             # Capture the staticlib archive plus its transitive native deps. Stage
-            # the .a alone so -lsecretspec_ffi resolves to the archive (target/debug
+            # the .a alone so -lsecretspec resolves to the archive (target/debug
             # also holds the .so) and the resolver is embedded with no loader path.
-            native_libs="$(cargo rustc -q -p secretspec-ffi --crate-type staticlib -- \
+            native_libs="$(cargo rustc -q -p libsecretspec --crate-type staticlib -- \
               --print native-static-libs 2>&1 | sed -n "s/^note: native-static-libs: //p" | tail -1)"
             hs_lib_dir="$(mktemp -d)"
-            cp "$target_dir/debug/libsecretspec_ffi.a" "$hs_lib_dir/"
+            cp "$target_dir/debug/libsecretspec.a" "$hs_lib_dir/"
             cd secretspec-hs
             cabal update
             # --write-ghc-environment-files lets the codegen test compile the
@@ -83,36 +98,45 @@ jobs:
               --ghc-options="-optl${native_libs// / -optl}" \
               --write-ghc-environment-files=always --test-show-details=streaming
             ffi_prefix="$(mktemp -d)"
-            bash ../secretspec-ffi/scripts/cinstall.sh "$ffi_prefix"
+            bash ../libsecretspec/scripts/cinstall.sh "$ffi_prefix" static
             PKG_CONFIG_PATH="$ffi_prefix/lib/pkgconfig" \
-              pkg-config --print-errors --exists secretspec_ffi
+              pkg-config --print-errors --exists libsecretspec
             PKG_CONFIG_PATH="$ffi_prefix/lib/pkgconfig" cabal test -f use-pkg-config \
               --write-ghc-environment-files=always --test-show-details=streaming
           '
 
   build-windows:
     name: build (windows)
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Sync SDK package versions
         run: bash scripts/sync-sdk-versions.sh
       - name: Install Rust (pinned by rust-toolchain.toml)
         run: rustup toolchain install
       - name: Cache Rust builds
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
       - name: Install NASM (aws-lc-sys assembly)
         uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
+      # Build the MSVC CLI before entering the MSYS2 build environment.
+      - name: Build CLI for the test-suite
+        run: cargo build -p secretspec
       # MINGW64 (msvcrt-based) matches the CRT the x86_64-pc-windows-gnu Rust
       # target links, so every object in the archive agrees on one C runtime.
       - name: Install MSYS2 MinGW toolchain (compiles the staticlib's C deps)
-        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
           msystem: MINGW64
           path-type: inherit
           install: mingw-w64-x86_64-gcc mingw-w64-x86_64-binutils
       - name: Install GHC and cabal
-        uses: haskell-actions/setup@6037f33647c3f17758a2356c80fc4a53d7e0685d # v2.12.0
+        uses: haskell-actions/setup@0f8e8c99d88aeb3fbfd523f1ef2c6f762d10d64d # v2.12.1
         with:
           ghc-version: "9.6"
       - name: Build staticlib + CLI and run the Haskell SDK test-suite
@@ -123,20 +147,19 @@ jobs:
           # crate's list so the unused cdylib is never linked. Release like
           # the shipped artifacts: a debug archive carries sectionless .dwo
           # members that objcopy below refuses to process.
-          cargo rustc -p secretspec-ffi --release --target x86_64-pc-windows-gnu \
+          cargo rustc -p libsecretspec --release --target x86_64-pc-windows-gnu \
             --crate-type staticlib
-          # The CLI (for the test-suite's end-to-end codegen test) builds for
-          # the default MSVC host target, same as the released binaries.
-          cargo build -p secretspec
+          # The CLI for the test-suite's end-to-end codegen test was built for
+          # the default MSVC host before entering MSYS2.
           export SECRETSPEC_BIN="$(cygpath -w "$PWD/target/debug/secretspec.exe")"
-          native_libs="$(cargo rustc -q -p secretspec-ffi --release \
+          native_libs="$(cargo rustc -q -p libsecretspec --release \
             --target x86_64-pc-windows-gnu --crate-type staticlib -- \
             --print native-static-libs 2>&1 \
             | sed -n 's/^note: native-static-libs: //p' | tail -1)"
           # Stage the .a alone (target/ also holds rlibs) plus the import
           # libraries that ship inside cargo registry crates (see header).
           hs_lib_dir="$(mktemp -d)"
-          cp target/x86_64-pc-windows-gnu/release/libsecretspec_ffi.a "$hs_lib_dir/"
+          cp target/x86_64-pc-windows-gnu/release/libsecretspec.a "$hs_lib_dir/"
           # Two archive fixups for GHC's older bundled toolchain, which links
           # the final test binary:
           #  * rustc's windows-gnu objects carry `-exclude-symbols` .drectve
@@ -153,11 +176,11 @@ jobs:
           # objcopy refuses archives holding sectionless split-debuginfo
           # members (the prebuilt std ships .dwo members a linker never
           # selects), so drop those first.
-          ar t "$hs_lib_dir/libsecretspec_ffi.a" | grep '\.dwo$' | while read -r m; do
-            ar d "$hs_lib_dir/libsecretspec_ffi.a" "$m"
+          ar t "$hs_lib_dir/libsecretspec.a" | grep '\.dwo$' | while read -r m; do
+            ar d "$hs_lib_dir/libsecretspec.a" "$m"
           done
           objcopy --remove-section=.drectve --redefine-sym nanosleep64=nanosleep \
-            "$hs_lib_dir/libsecretspec_ffi.a"
+            "$hs_lib_dir/libsecretspec.a"
           printf '%s\n' "$native_libs" > "$hs_lib_dir/native-static-libs.txt"
           bash scripts/copy-mingw-import-libs.sh \
             "$hs_lib_dir/native-static-libs.txt" "$hs_lib_dir"
@@ -196,15 +219,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Sync SDK package versions
         run: bash scripts/sync-sdk-versions.sh
-      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
-      - uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         with:
           name: devenv
       - name: Install devenv.sh
         run: nix profile install nixpkgs#devenv
       - name: sdist and upload to Hackage
         # Requires the HACKAGE_TOKEN secret. The package statically links
-        # secretspec-ffi at build time, so Hackage's build bots cannot compile it
+        # libsecretspec at build time, so Hackage's build bots cannot compile it
         # (no staticlib, no Rust toolchain); the upload still succeeds and the
         # README documents the link requirement.
         env:

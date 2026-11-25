@@ -43,7 +43,7 @@ func extractEmbedded() (string, error) {
 		return "", err
 	}
 	// Content-addressed by the full digest: a different library never collides.
-	dir := filepath.Join(base, "secretspec-ffi", hex.EncodeToString(sum[:]))
+	dir := filepath.Join(base, "libsecretspec", hex.EncodeToString(sum[:]))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
@@ -53,7 +53,7 @@ func extractEmbedded() (string, error) {
 	// The leaf alone is not enough in the world-writable temp fallback: an
 	// attacker can pre-create the euid-scoped base as their own 0777 dir, and
 	// MkdirAll then nests our 0700 leaf inside it — the leaf check passes, yet the
-	// attacker owns an ancestor and can rename `secretspec-ffi/` between extraction
+	// attacker owns an ancestor and can rename `libsecretspec/` between extraction
 	// and dlopen to swap the library. Verify the first directory this code is
 	// responsible for; once it is confirmed ours and 0700, no other user can reach
 	// the tree below it. The primary cache base ($HOME/.cache) is created by the OS

@@ -3,7 +3,7 @@
 
 -- | Haskell SDK for SecretSpec, a declarative secrets manager.
 --
--- A thin client over the @secretspec-ffi@ C ABI, linked at build time.
+-- A thin client over the @libsecretspec@ C ABI, linked at build time.
 -- Resolution (providers, fallback chains, profiles, generation, @as_path@)
 -- happens entirely in the Rust core; this module marshals a JSON request to
 -- @secretspec_resolve@, parses the response envelope, and exposes it with the
@@ -19,12 +19,15 @@
 module SecretSpec
   ( -- * Builder
     Builder
+  , CallerContext(..)
   , builder
   , withPath
+  , withInlineSpec
   , withProvider
   , withProfile
   , withScope
   , withReason
+  , withCaller
   , withNoValues
     -- * Resolve (value-carrying)
   , Resolved(..)
@@ -63,12 +66,15 @@ import           Foreign.Ptr (nullPtr)
 import           System.Directory (doesFileExist, removeFile)
 import qualified System.Environment.Blank as Env
 
--- The three C ABI functions, statically linked at build time (the archive
--- libsecretspec_ffi.a is embedded; -lsecretspec_ffi resolves to it). They are
--- declared @safe@ because @secretspec_resolve@ may block on provider I/O
+-- The four C ABI functions, linked at build time. The default build embeds the
+-- static archive; pkg-config builds may use a static or shared install. They
+-- are declared @safe@ because @secretspec_resolve@ may block on provider I/O
 -- (1Password, LastPass), and a @safe@ call lets other Haskell threads run.
 foreign import ccall safe "secretspec_resolve"
   c_secretspec_resolve :: CString -> IO CString
+
+foreign import ccall safe "secretspec_call"
+  c_secretspec_call :: CString -> IO CString
 
 foreign import ccall safe "secretspec_free"
   c_secretspec_free :: CString -> IO ()
@@ -130,6 +136,7 @@ data Resolved = Resolved
   , resolvedScope           :: Maybe Text
   , resolvedSecrets         :: Map Text ResolvedSecret
   , resolvedMissingOptional :: [Text]
+  , resolvedFileLeaseId :: Maybe Text
   } deriving (Show, Eq)
 
 -- | The value-free resolution outcome for one declared secret: how it would
@@ -173,17 +180,34 @@ data Builder = Builder
   , bProfile  :: Maybe Text
   , bScope    :: Maybe Text
   , bReason   :: Maybe Text
+  , bCaller   :: Maybe CallerContext
   , bNoValues :: Bool
+  , bInline   :: Maybe (Value, Text)
   }
+
+-- | Caller-asserted software-integration context (SecretSpec 0.20+). It is
+-- audit metadata and never supplies the user access reason.
+data CallerContext = CallerContext
+  { callerName      :: Text
+  , callerVersion   :: Maybe Text
+  , callerOperation :: Maybe Text
+  , callerResource  :: Maybe Text
+  } deriving (Show, Eq)
 
 -- | A builder with no options set.
 builder :: Builder
-builder = Builder Nothing Nothing Nothing Nothing Nothing False
+builder = Builder Nothing Nothing Nothing Nothing Nothing Nothing False Nothing
 
 -- | Resolve from a manifest at this path instead of walking up from the working
 -- directory.
 withPath :: Text -> Builder -> Builder
-withPath v b = b { bPath = Just v }
+withPath v b = b { bPath = Just v, bInline = Nothing }
+
+-- | Resolve strict inline-spec v2 at its logical base directory (SecretSpec 0.21+).
+-- The static linker requires @secretspec_call@, so an older native archive
+-- fails at link time instead of falling back to a filesystem manifest.
+withInlineSpec :: Value -> Text -> Builder -> Builder
+withInlineSpec spec baseDir b = b { bPath = Nothing, bInline = Just (spec, baseDir) }
 
 -- | Override the provider (a @keyring:\/\/@-style URI or a configured alias).
 withProvider :: Text -> Builder -> Builder
@@ -200,6 +224,10 @@ withScope v b = b { bScope = Just v }
 -- | Set a human-readable reason for this access (for audited providers).
 withReason :: Text -> Builder -> Builder
 withReason v b = b { bReason = Just v }
+
+-- | Identify the invoking software integration (SecretSpec 0.20+).
+withCaller :: CallerContext -> Builder -> Builder
+withCaller v b = b { bCaller = Just v }
 
 -- | Omit secret values, returning only structure and provenance.
 withNoValues :: Bool -> Builder -> Builder
@@ -232,11 +260,14 @@ setAsEnv r =
       Just v  -> Env.setEnv (T.unpack name) (T.unpack v) True
       Nothing -> pure ()
 
--- | Remove the temp files backing any @as_path@ secrets in this result. The
--- resolver persists those files (mode 0400) so their paths stay valid after
--- resolve returns; the caller owns their lifetime. Call 'close' when done so the
--- secret files do not accumulate in the temp dir. A file already gone is ignored.
+-- | Revoke this result's secret files, including hidden dependencies (0.22+).
+-- Older runtimes use filesystem cleanup. Repeated calls are harmless.
 close :: Resolved -> IO ()
+close r | Just leaseId <- resolvedFileLeaseId r = do
+  response <- callNative True (encode (object ["request_version" .= (1 :: Int),
+    "operation" .= ("release_files" :: Text), "source" .= object ["lease_id" .= leaseId]]))
+  _ <- responseValue response 1 "release_files"
+  pure ()
 close r =
   forM_ (Map.elems (resolvedSecrets r)) $ \secret ->
     case (secretAsPath secret, secretPath secret) of
@@ -257,21 +288,22 @@ abiVersion = do
 -- missing, and 'SecretSpecError' for any other failure.
 load :: Builder -> IO Resolved
 load b = do
-  resp <- callNative (requestBytes b Nothing)
+  resp <- callNative (isInline b) (requestBytes b Nothing)
   value <- responseValue resp resolveSchemaVersion "resolve"
-  (prov, prof, scope, secs, mreq, mopt) <- fromResult (parseEither pResolve value)
+  (prov, prof, scope, secs, mreq, mopt, leaseId) <- fromResult (parseEither pResolve value)
   case mreq of
-    [] -> pure (Resolved prov prof scope secs mopt)
+    [] -> pure (Resolved prov prof scope secs mopt leaseId)
     xs -> throwIO (MissingRequiredError xs)
   where
     pResolve = withObject "response" $ \o ->
-      (,,,,,)
+      (,,,,,,)
         <$> o .: "provider"
         <*> o .: "profile"
         <*> o .:? "scope"
         <*> o .:? "secrets" .!= Map.empty
         <*> o .:? "missing_required" .!= []
         <*> o .:? "missing_optional" .!= []
+        <*> o .:? "file_lease_id"
 
 -- | Resolve a value-free 'Report' (the inventory\/preflight view, the same one
 -- the CLI exposes as @check --json@). Unlike 'load', it does not throw when a
@@ -279,7 +311,7 @@ load b = do
 -- status @"missing_required"@.
 report :: Builder -> IO Report
 report b = do
-  resp <- callNative (requestBytes b (Just "report"))
+  resp <- callNative (isInline b) (requestBytes b (Just "report"))
   value <- responseValue resp reportSchemaVersion "report"
   (prov, prof, scope, secs) <- fromResult (parseEither pReport value)
   pure (Report prov prof scope secs)
@@ -295,16 +327,37 @@ report b = do
 -- (@mode = Just "report"@), omitting unset options.
 requestBytes :: Builder -> Maybe Text -> BL.ByteString
 requestBytes b mode =
-  encode . object $
-    catMaybes
-      [ ("path" .=) <$> bPath b
-      , ("provider" .=) <$> bProvider b
-      , ("profile" .=) <$> bProfile b
-      , ("scope" .=) <$> bScope b
-      , ("reason" .=) <$> bReason b
+  case bInline b of
+    Nothing -> encode options
+    Just (spec, baseDir) -> encode $ object
+      [ "request_version" .= (1 :: Int)
+      , "operation" .= ("resolve" :: Text)
+      , "source" .= object
+          [ "kind" .= ("inline" :: Text)
+          , "spec_version" .= (2 :: Int)
+          , "base_dir" .= baseDir
+          , "spec" .= spec
+          ]
+      , "options" .= options
       ]
-      ++ ["no_values" .= True | bNoValues b]
-      ++ ["mode" .= m | Just m <- [mode]]
+  where
+    options = object $
+      catMaybes
+        [ ("path" .=) <$> bPath b
+        , ("provider" .=) <$> bProvider b
+        , ("profile" .=) <$> bProfile b
+        , ("scope" .=) <$> bScope b
+        , ("reason" .=) <$> bReason b
+        , ("caller" .=) . callerValue <$> bCaller b
+        ]
+        ++ ["no_values" .= True | bNoValues b]
+        ++ ["mode" .= m | Just m <- [mode]]
+    callerValue caller = object . catMaybes $
+      [ Just ("name" .= callerName caller)
+      , ("version" .=) <$> callerVersion caller
+      , ("operation" .=) <$> callerOperation caller
+      , ("resource" .=) <$> callerResource caller
+      ]
 
 -- Marshal a request to secretspec_resolve and copy the response out before
 -- freeing the native allocation.
@@ -314,13 +367,16 @@ requestBytes b mode =
 -- around 'load') from landing between the call returning and the free being
 -- installed, and @finally@ guarantees the free runs whether @packCString@
 -- succeeds, throws, or is interrupted — so the secret-bearing buffer never leaks.
-callNative :: BL.ByteString -> IO BS.ByteString
-callNative reqLazy =
+isInline :: Builder -> Bool
+isInline = maybe False (const True) . bInline
+
+callNative :: Bool -> BL.ByteString -> IO BS.ByteString
+callNative versioned reqLazy =
   BS.useAsCString (BL.toStrict reqLazy) $ \creq ->
     mask $ \restore -> do
-      cresp <- c_secretspec_resolve creq
+      cresp <- (if versioned then c_secretspec_call else c_secretspec_resolve) creq
       if cresp == nullPtr
-        then throwIO (SecretSpecError "ffi" "secretspec_resolve returned null")
+        then throwIO (SecretSpecError "ffi" (if versioned then "secretspec_call returned null" else "secretspec_resolve returned null"))
         else restore (BS.packCString cresp) `finally` c_secretspec_free cresp
 
 -- Decode the envelope, unwrap @ok@/@error@, and check the schema version,
@@ -347,7 +403,7 @@ versionError got expected kind =
     T.concat
       [ "unsupported ", kind, " schema version ", T.pack (show got)
       , " (expected ", T.pack (show expected)
-      , "); the secretspec-ffi library and this SDK are out of sync"
+      , "); the libsecretspec library and this SDK are out of sync"
       ]
 
 fromResult :: Either String a -> IO a

@@ -14,6 +14,7 @@ internal static class JsonContracts
 [JsonSerializable(
     typeof(ResolveRequest),
     TypeInfoPropertyName = "ResolveRequest")]
+[JsonSerializable(typeof(CallerContext))]
 [JsonSerializable(
     typeof(Envelope<ResolveResponseContract>),
     TypeInfoPropertyName = "ResolveEnvelope")]
@@ -41,6 +42,9 @@ internal sealed record ResolveRequest
 
     [JsonPropertyName("reason")]
     public string? Reason { get; set; }
+
+    [JsonPropertyName("caller")]
+    public CallerContext? Caller { get; set; }
 
     [JsonPropertyName("no_values")]
     public bool? NoValues { get; set; }
@@ -72,6 +76,9 @@ internal sealed class ErrorContract
 
 internal sealed class ResolveResponseContract
 {
+    [JsonPropertyName("file_lease_id")]
+    public string? FileLeaseId { get; set; }
+
     [JsonPropertyName("schema_version")]
     public int SchemaVersion { get; set; }
 

@@ -47,12 +47,18 @@
 //! secretspec check --provider awssm://production@us-east-1
 //! ```
 
-use super::{Address, Provider, ProviderUrl};
+use super::ProviderBase as _;
+use super::{Address, ProviderUrl, join_slash_path};
+#[cfg(test)]
+use super::{Provider, SyncProviderAdapter};
+use crate::ProviderValue;
+use crate::SecretBytes;
 use crate::{Result, SecretSpecError};
 use aws_sdk_secretsmanager::Client;
 use aws_sdk_secretsmanager::error::{ProvideErrorMetadata, SdkError};
+use aws_sdk_secretsmanager::primitives::Blob;
 use aws_sdk_secretsmanager::types::Tag;
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
@@ -100,6 +106,15 @@ pub struct AwssmConfig {
     pub tags: BTreeMap<String, String>,
 }
 
+/// Removes redundant trailing separators without changing the effective AWS
+/// secret namespace. A slash-only prefix still represents the root namespace.
+fn canonicalize_prefix(prefix: &str) -> String {
+    match prefix.trim_end_matches('/') {
+        "" => "/".to_string(),
+        prefix => prefix.to_string(),
+    }
+}
+
 impl TryFrom<&ProviderUrl> for AwssmConfig {
     type Error = SecretSpecError;
 
@@ -123,7 +138,9 @@ impl TryFrom<&ProviderUrl> for AwssmConfig {
 
         let region = url.host().filter(|s| !s.is_empty());
 
-        let prefix = url.query_value("prefix");
+        let prefix = url
+            .query_value("prefix")
+            .map(|prefix| canonicalize_prefix(&prefix));
 
         let kms_key_id = url.query_value("kms_key_id");
 
@@ -167,22 +184,30 @@ impl TryFrom<&ProviderUrl> for AwssmConfig {
 /// This provider stores and retrieves secrets from AWS Secrets Manager using
 /// the standard AWS SDK credential chain for authentication.
 pub struct AwssmProvider {
+    retry_policy: super::RetryPolicy,
     config: AwssmConfig,
 }
 
 crate::register_provider! {
     struct: AwssmProvider,
     config: AwssmConfig,
-    name: "awssm",
-    description: "AWS Secrets Manager",
-    schemes: ["awssm"],
-    examples: ["awssm://us-east-1", "awssm://production@us-east-1", "awssm://us-east-1?prefix=myteam", "awssm://prod@us-east-1?kms_key_id=alias/my-key&tag.team=platform"],
+    metadata: &super::catalog::AWSSM,
+    native_async: true,
 }
 
 impl AwssmProvider {
+    fn secret_value(binary: Option<&[u8]>, text: Option<&str>) -> Option<SecretBytes> {
+        binary
+            .map(SecretBytes::from_slice)
+            .or_else(|| text.map(SecretBytes::from_utf8))
+    }
+
     /// Creates a new AwssmProvider with the given configuration.
     pub fn new(config: AwssmConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            retry_policy: super::RetryPolicy::default(),
+        }
     }
 
     /// Formats the secret name for AWS Secrets Manager.
@@ -210,9 +235,10 @@ impl AwssmProvider {
             ));
         }
 
+        let convention_name = format!("secretspec/{project}/{profile}/{key}");
         let secret_name = match prefix {
-            Some(p) => format!("{}/secretspec/{}/{}/{}", p, project, profile, key),
-            None => format!("secretspec/{}/{}/{}", project, profile, key),
+            Some(prefix) => join_slash_path(prefix, &convention_name),
+            None => convention_name,
         };
 
         // AWS secret names can be up to 512 characters
@@ -228,7 +254,13 @@ impl AwssmProvider {
 
     /// Creates an AWS Secrets Manager client.
     async fn create_client(&self) -> Result<Client> {
-        let mut config_loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
+        let mut config_loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .retry_config(
+                aws_config::retry::RetryConfig::standard()
+                    .with_max_attempts(self.retry_policy.max_attempts())
+                    .with_initial_backoff(std::time::Duration::from_millis(250))
+                    .with_max_backoff(std::time::Duration::from_secs(10)),
+            );
 
         if let Some(region) = &self.config.region {
             config_loader = config_loader.region(aws_config::Region::new(region.clone()));
@@ -243,19 +275,55 @@ impl AwssmProvider {
     }
 
     /// Extracts one key from a JSON secret value.
-    fn extract_json_key(name: &str, value: &str, json_key: &str) -> Result<Option<SecretString>> {
+    fn extract_json_key(name: &str, value: &str, json_key: &str) -> Result<Option<SecretBytes>> {
         let json: serde_json::Value = serde_json::from_str(value).map_err(|e| {
             SecretSpecError::ProviderOperationFailed(format!(
                 "secret '{}' is not JSON, cannot extract key '{}': {}",
                 name, json_key, e
             ))
         })?;
-        match json.get(json_key) {
-            Some(serde_json::Value::String(s)) => Ok(Some(SecretString::new(s.clone().into()))),
-            // Non-string JSON values (numbers, bools) are rendered as-is.
-            Some(other) => Ok(Some(SecretString::new(other.to_string().into()))),
-            None => Ok(None),
-        }
+        // Selection is a flat key here; rendering the selected value is shared
+        // with the scaleway provider and Secrets::extract_stored_value.
+        Ok(json
+            .get(json_key)
+            .and_then(crate::json_field::render_field)
+            .map(|value| SecretBytes::from_utf8(value.expose_secret())))
+    }
+
+    /// Metadata is read from the same AWS response as the bytes. The full ARN
+    /// distinguishes accounts, regions, and deletion/recreation of a name.
+    fn versioned_value(
+        value: SecretBytes,
+        arn: Option<&str>,
+        version: Option<&str>,
+    ) -> ProviderValue {
+        let revision = arn
+            .filter(|v| !v.is_empty())
+            .zip(version.filter(|v| !v.is_empty()))
+            .map(|(arn, version)| crate::revision::digest("secretspec.awssm.v1", &[arn, version]));
+        ProviderValue::new(value, None).with_revision(revision)
+    }
+
+    fn select_value(
+        name: &str,
+        value: ProviderValue,
+        field: Option<&str>,
+    ) -> Result<Option<ProviderValue>> {
+        let selected = match field {
+            None => Some(value.value),
+            Some(field) => Self::extract_json_key(name, value.value.try_as_utf8_for(name)?, field)?,
+        };
+        let revision = value.revision.map(|revision| {
+            crate::revision::digest(
+                "secretspec.awssm.selection.v1",
+                &[
+                    revision.as_str(),
+                    if field.is_some() { "field" } else { "whole" },
+                    field.unwrap_or(""),
+                ],
+            )
+        });
+        Ok(selected.map(|value| ProviderValue::new(value, None).with_revision(revision)))
     }
 
     /// Retrieves a secret by its full name/ARN, optionally extracting one key
@@ -264,7 +332,7 @@ impl AwssmProvider {
         &self,
         name: &str,
         json_key: Option<&str>,
-    ) -> Result<Option<SecretString>> {
+    ) -> Result<Option<ProviderValue>> {
         let client = self.create_client().await?;
         let output = match client.get_secret_value().secret_id(name).send().await {
             Ok(output) => output,
@@ -284,14 +352,25 @@ impl AwssmProvider {
             }
         };
 
-        let Some(value) = output.secret_string() else {
-            return Ok(None);
-        };
+        Self::single_result(name, json_key, &output)
+    }
 
-        match json_key {
-            None => Ok(Some(SecretString::new(value.to_string().into()))),
-            Some(json_key) => Self::extract_json_key(name, value, json_key),
-        }
+    fn single_result(
+        name: &str,
+        json_key: Option<&str>,
+        output: &aws_sdk_secretsmanager::operation::get_secret_value::GetSecretValueOutput,
+    ) -> Result<Option<ProviderValue>> {
+        let value = Self::secret_value(
+            output.secret_binary().map(AsRef::as_ref),
+            output.secret_string(),
+        );
+        let Some(value) = value else { return Ok(None) };
+
+        Self::select_value(
+            name,
+            Self::versioned_value(value, output.arn(), output.version_id()),
+            json_key,
+        )
     }
 
     /// Fetches every request in batches of 20 via the BatchGetSecretValue API:
@@ -300,7 +379,7 @@ impl AwssmProvider {
     async fn get_many_async(
         &self,
         resolved: &[(&str, crate::config::NativeAddress)],
-    ) -> Result<HashMap<String, SecretString>> {
+    ) -> Result<HashMap<String, ProviderValue>> {
         let client = self.create_client().await?;
 
         let mut unique: Vec<&str> = Vec::new();
@@ -313,7 +392,7 @@ impl AwssmProvider {
 
         // Fetched values keyed by both name and ARN, so requests addressing
         // the secret either way find their value.
-        let mut fetched: HashMap<String, String> = HashMap::new();
+        let mut fetched: HashMap<String, ProviderValue> = HashMap::new();
         for chunk in unique.chunks(AWS_BATCH_GET_MAX_SECRETS) {
             let mut request = client.batch_get_secret_value();
             for name in chunk {
@@ -327,16 +406,7 @@ impl AwssmProvider {
                 ))
             })?;
 
-            for secret in response.secret_values() {
-                if let Some(value) = secret.secret_string() {
-                    if let Some(name) = secret.name() {
-                        fetched.insert(name.to_string(), value.to_string());
-                    }
-                    if let Some(arn) = secret.arn() {
-                        fetched.insert(arn.to_string(), value.to_string());
-                    }
-                }
-            }
+            Self::index_batch_values(&mut fetched, response.secret_values());
 
             // Handle per-secret errors
             for error in response.errors() {
@@ -358,10 +428,7 @@ impl AwssmProvider {
             let Some(value) = fetched.get(coords.item.as_str()) else {
                 continue;
             };
-            let secret = match coords.field.as_deref() {
-                None => Some(SecretString::new(value.clone().into())),
-                Some(json_key) => Self::extract_json_key(&coords.item, value, json_key)?,
-            };
+            let secret = Self::select_value(&coords.item, value.clone(), coords.field.as_deref())?;
             if let Some(secret) = secret {
                 results.insert((*name).to_string(), secret);
             }
@@ -369,21 +436,42 @@ impl AwssmProvider {
         Ok(results)
     }
 
+    fn index_batch_values(
+        fetched: &mut HashMap<String, ProviderValue>,
+        secrets: &[aws_sdk_secretsmanager::types::SecretValueEntry],
+    ) {
+        for secret in secrets {
+            if let Some(value) = Self::secret_value(
+                secret.secret_binary().map(AsRef::as_ref),
+                secret.secret_string(),
+            ) {
+                let value = Self::versioned_value(value, secret.arn(), secret.version_id());
+                if let Some(name) = secret.name() {
+                    fetched.insert(name.to_string(), value.clone());
+                }
+                if let Some(arn) = secret.arn() {
+                    fetched.insert(arn.to_string(), value);
+                }
+            }
+        }
+    }
+
     /// Creates or updates a secret at its full name in AWS Secrets Manager.
     ///
     /// The configured `kms_key_id` and `tags` are applied only on create;
     /// `PutSecretValue` accepts neither, so an existing secret keeps the key
     /// and tags it was created with.
-    async fn set_secret_async(&self, secret_name: &str, value: &SecretString) -> Result<()> {
+    async fn set_secret_async(&self, secret_name: &str, value: &SecretBytes) -> Result<()> {
         let client = self.create_client().await?;
 
         // Try to create the secret first, applying the KMS key and tags. These
         // must ride the CreateSecret call itself to satisfy "tag-on-create"
         // guardrails (`aws:RequestTag`); a later TagResource would not.
-        let mut create = client
-            .create_secret()
-            .name(secret_name)
-            .secret_string(value.expose_secret());
+        let mut create = client.create_secret().name(secret_name);
+        create = match value.try_as_utf8() {
+            Ok(text) => create.secret_string(text),
+            Err(_) => create.secret_binary(Blob::new(value.to_vec())),
+        };
         if let Some(kms_key_id) = &self.config.kms_key_id {
             create = create.kms_key_id(kms_key_id);
         }
@@ -400,19 +488,18 @@ impl AwssmProvider {
                 {
                     // Secret already exists, update its value (KMS key and tags
                     // are create-only and left untouched here).
-                    client
-                        .put_secret_value()
-                        .secret_id(secret_name)
-                        .secret_string(value.expose_secret())
-                        .send()
-                        .await
-                        .map_err(|e| {
-                            SecretSpecError::ProviderOperationFailed(format!(
-                                "Failed to update secret '{}': {}",
-                                secret_name,
-                                format_aws_error(&e)
-                            ))
-                        })?;
+                    let update = client.put_secret_value().secret_id(secret_name);
+                    let update = match value.try_as_utf8() {
+                        Ok(text) => update.secret_string(text),
+                        Err(_) => update.secret_binary(Blob::new(value.to_vec())),
+                    };
+                    update.send().await.map_err(|e| {
+                        SecretSpecError::ProviderOperationFailed(format!(
+                            "Failed to update secret '{}': {}",
+                            secret_name,
+                            format_aws_error(&e)
+                        ))
+                    })?;
                     Ok(())
                 } else {
                     Err(SecretSpecError::ProviderOperationFailed(format!(
@@ -426,8 +513,15 @@ impl AwssmProvider {
     }
 }
 
-impl Provider for AwssmProvider {
-    /// Convention secrets are named `[{prefix}/]secretspec/{project}/{profile}/{key}`.
+impl super::ProviderBase for AwssmProvider {
+    fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
+        self.retry_policy = policy;
+    }
+
+    fn retry_ownership(&self) -> super::RetryOwnership {
+        super::RetryOwnership::Managed
+    }
+
     fn convention_address(
         &self,
         project: &str,
@@ -440,7 +534,7 @@ impl Provider for AwssmProvider {
         })
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 
@@ -455,7 +549,10 @@ impl Provider for AwssmProvider {
         // iterates in sorted key order and `uri()` is deterministic.
         let mut params: Vec<String> = Vec::new();
         if let Some(prefix) = &self.config.prefix {
-            params.push(format!("prefix={}", ProviderUrl::encode_query(prefix)));
+            params.push(format!(
+                "prefix={}",
+                ProviderUrl::encode_query(&canonicalize_prefix(prefix))
+            ));
         }
         if let Some(kms_key_id) = &self.config.kms_key_id {
             params.push(format!(
@@ -484,38 +581,50 @@ impl Provider for AwssmProvider {
         }
     }
 
-    /// An optional `field` extracts one key from a JSON secret value.
     fn supported_coords(&self) -> &'static [&'static str] {
         &["field"]
     }
+}
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+#[async_trait::async_trait]
+impl super::AsyncProvider for AwssmProvider {
+    async fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
+        super::AsyncProvider::get_with_metadata(self, addr)
+            .await
+            .map(|value| value.map(|value| value.value))
+    }
+
+    async fn get_with_metadata(&self, addr: Address<'_>) -> Result<Option<ProviderValue>> {
         // `item` is the secret name or ARN.
         let coords = self.resolve_coords(addr)?;
-        super::block_on(self.get_coords_async(&coords.item, coords.field.as_deref()))
+        self.get_coords_async(&coords.item, coords.field.as_deref())
+            .await
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
-        self.check_writable(addr)?;
+    async fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
+        super::AsyncProvider::check_writable(self, addr).await?;
         let coords = self.resolve_coords(addr)?;
-        super::block_on(self.set_secret_async(&coords.item, value))
+        self.set_secret_async(&coords.item, value).await
     }
 
-    /// Native addresses are read-only: they name a secret managed outside
-    /// SecretSpec (and a JSON-key write could not happen without clobbering
-    /// the other keys).
-    fn check_writable(&self, addr: Address<'_>) -> Result<()> {
-        match addr {
-            Address::Convention { .. } => Ok(()),
-            Address::Native(_) => Err(SecretSpecError::ProviderOperationFailed(
-                "awssm secret references are read-only and cannot be written".to_string(),
-            )),
-        }
+    async fn get_many(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, SecretBytes>> {
+        super::AsyncProvider::get_many_with_metadata(self, requests)
+            .await
+            .map(|values| {
+                values
+                    .into_iter()
+                    .map(|(name, value)| (name, value.value))
+                    .collect()
+            })
     }
 
-    /// Batches every request, convention or `ref`, through
-    /// BatchGetSecretValue.
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    async fn get_many_with_metadata(
+        &self,
+        requests: &[(&str, Address<'_>)],
+    ) -> Result<HashMap<String, ProviderValue>> {
         if requests.is_empty() {
             return Ok(HashMap::new());
         }
@@ -523,7 +632,16 @@ impl Provider for AwssmProvider {
         for (name, addr) in requests {
             resolved.push((*name, self.resolve_coords(*addr)?.into_owned()));
         }
-        super::block_on(self.get_many_async(&resolved))
+        self.get_many_async(&resolved).await
+    }
+
+    async fn check_writable(&self, addr: Address<'_>) -> Result<()> {
+        match addr {
+            Address::Convention { .. } => Ok(()),
+            Address::Native(_) => Err(SecretSpecError::ProviderOperationFailed(
+                "awssm secret references are read-only and cannot be written".to_string(),
+            )),
+        }
     }
 }
 
@@ -531,6 +649,112 @@ impl Provider for AwssmProvider {
 mod tests {
     use super::*;
     use aws_sdk_secretsmanager::operation::batch_get_secret_value::BatchGetSecretValueError;
+
+    #[test]
+    fn revision_single_and_batch_responses_agree_for_names_arns_and_fields() {
+        use aws_sdk_secretsmanager::operation::get_secret_value::GetSecretValueOutput;
+        use aws_sdk_secretsmanager::types::SecretValueEntry;
+        let arn = "arn:aws:secretsmanager:us-east-1:123:secret:db-abcdef";
+        let single = GetSecretValueOutput::builder()
+            .arn(arn)
+            .name("db")
+            .version_id("version-1")
+            .secret_string(r#"{"password":"one","user":"alice"}"#)
+            .build();
+        let batch = SecretValueEntry::builder()
+            .arn(arn)
+            .name("db")
+            .version_id("version-1")
+            .secret_string(r#"{"password":"one","user":"alice"}"#)
+            .build();
+        let mut indexed = HashMap::new();
+        AwssmProvider::index_batch_values(&mut indexed, &[batch]);
+        for name in ["db", arn] {
+            for field in [None, Some("password"), Some("user")] {
+                let single = AwssmProvider::single_result(name, field, &single)
+                    .unwrap()
+                    .unwrap();
+                let batch = AwssmProvider::select_value(name, indexed[name].clone(), field)
+                    .unwrap()
+                    .unwrap();
+                assert!(single.revision.is_some());
+                assert_eq!(single.revision, batch.revision);
+                assert_eq!(single.value.expose_secret(), batch.value.expose_secret());
+            }
+        }
+    }
+
+    #[test]
+    fn revision_identity_generation_and_field_selection() {
+        let select = |arn, version, field, bytes: &str| {
+            AwssmProvider::select_value(
+                "alias",
+                AwssmProvider::versioned_value(SecretBytes::from_utf8(bytes), arn, version),
+                field,
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let arn = Some("arn:aws:secretsmanager:us-east-1:123:secret:db-abcdef");
+        let first = select(
+            arn,
+            Some("generation-1"),
+            Some("password"),
+            r#"{"password":"one","user":"alice"}"#,
+        );
+        let repeated = select(
+            arn,
+            Some("generation-1"),
+            Some("password"),
+            r#"{"password":"one","user":"alice"}"#,
+        );
+        assert_eq!(first.revision, repeated.revision);
+        assert_eq!(first.value.expose_secret(), b"one");
+        // A new generation may contain the same bytes; still invalidate.
+        let rotated = select(
+            arn,
+            Some("generation-2"),
+            Some("password"),
+            r#"{"password":"one"}"#,
+        );
+        assert_ne!(first.revision, rotated.revision);
+        let recreated = select(
+            Some("arn:aws:secretsmanager:us-east-1:123:secret:db-ghijkl"),
+            Some("generation-1"),
+            Some("password"),
+            r#"{"password":"two"}"#,
+        );
+        assert_ne!(first.revision, recreated.revision);
+        let other_field = select(
+            arn,
+            Some("generation-1"),
+            Some("user"),
+            r#"{"password":"one","user":"alice"}"#,
+        );
+        assert_ne!(first.revision, other_field.revision);
+        let whole = select(arn, Some("generation-1"), None, r#"{"":"empty-key"}"#);
+        let empty_key = select(arn, Some("generation-1"), Some(""), r#"{"":"empty-key"}"#);
+        assert_ne!(whole.revision, empty_key.revision);
+        assert!(
+            select(None, Some("generation-1"), None, "one")
+                .revision
+                .is_none()
+        );
+        assert!(select(arn, None, None, "one").revision.is_none());
+        let binary = AwssmProvider::select_value(
+            "binary",
+            AwssmProvider::versioned_value(
+                SecretBytes::from_vec(vec![0, 255]),
+                arn,
+                Some("binary-version"),
+            ),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(binary.value.expose_secret(), &[0, 255]);
+        assert!(binary.revision.is_some());
+    }
 
     #[test]
     fn test_format_secret_name() {
@@ -553,6 +777,21 @@ mod tests {
     }
 
     #[test]
+    fn test_format_secret_name_normalizes_prefix_boundary() {
+        for (prefix, expected) in [
+            ("myteam", "myteam/secretspec/myapp/prod/DB_URL"),
+            ("myteam/", "myteam/secretspec/myapp/prod/DB_URL"),
+            ("myteam///", "myteam/secretspec/myapp/prod/DB_URL"),
+            ("/myteam/", "/myteam/secretspec/myapp/prod/DB_URL"),
+            ("/", "/secretspec/myapp/prod/DB_URL"),
+        ] {
+            let name =
+                AwssmProvider::format_secret_name(Some(prefix), "myapp", "prod", "DB_URL").unwrap();
+            assert_eq!(name, expected, "prefix {prefix:?}");
+        }
+    }
+
+    #[test]
     fn test_format_secret_name_too_long() {
         let long_key = "A".repeat(500);
         let result = AwssmProvider::format_secret_name(None, "myapp", "prod", &long_key);
@@ -568,7 +807,7 @@ mod tests {
 
     #[test]
     fn test_convention_address() {
-        let p = AwssmProvider::new(config("awssm://us-east-1"));
+        let p = SyncProviderAdapter::from_async(AwssmProvider::new(config("awssm://us-east-1")));
         let coords = p.convention_address("proj", "default", "A").unwrap();
         assert_eq!(coords.item, "secretspec/proj/default/A");
         assert_eq!(coords.field, None);
@@ -576,9 +815,37 @@ mod tests {
 
     #[test]
     fn test_convention_address_with_prefix() {
-        let p = AwssmProvider::new(config("awssm://us-east-1?prefix=myteam"));
+        let p = SyncProviderAdapter::from_async(AwssmProvider::new(config(
+            "awssm://us-east-1?prefix=myteam",
+        )));
         let coords = p.convention_address("proj", "default", "A").unwrap();
         assert_eq!(coords.item, "myteam/secretspec/proj/default/A");
+    }
+
+    #[test]
+    fn test_convention_address_with_trailing_slash_prefix() {
+        let p = SyncProviderAdapter::from_async(AwssmProvider::new(config(
+            "awssm://us-east-1?prefix=myteam/",
+        )));
+        let coords = p.convention_address("proj", "default", "A").unwrap();
+        assert_eq!(coords.item, "myteam/secretspec/proj/default/A");
+    }
+
+    #[test]
+    fn trailing_slash_prefix_has_canonical_storage_identity() {
+        let canonical = SyncProviderAdapter::from_async(AwssmProvider::new(config(
+            "awssm://us-east-1?prefix=myteam",
+        )));
+        let trailing_slash = SyncProviderAdapter::from_async(AwssmProvider::new(config(
+            "awssm://us-east-1?prefix=myteam/",
+        )));
+
+        assert_eq!(trailing_slash.config.prefix.as_deref(), Some("myteam"));
+        assert_eq!(trailing_slash.uri(), canonical.uri());
+        assert!(crate::provider::same_storage_container(
+            &trailing_slash,
+            &canonical
+        ));
     }
 
     #[test]
@@ -611,7 +878,7 @@ mod tests {
     #[test]
     fn uri_round_trips_kms_and_sorted_tags() {
         let c = config("awssm://prod@us-east-1?tag.team=platform&kms_key_id=alias/k&tag.env=prod");
-        let p = AwssmProvider::new(c);
+        let p = SyncProviderAdapter::from_async(AwssmProvider::new(c));
         assert_eq!(
             p.uri(),
             "awssm://prod@us-east-1?kms_key_id=alias/k&tag.env=prod&tag.team=platform"
@@ -628,9 +895,9 @@ mod tests {
 
     #[test]
     fn uri_round_trips_prefix_with_kms_and_tags() {
-        let p = AwssmProvider::new(config(
+        let p = SyncProviderAdapter::from_async(AwssmProvider::new(config(
             "awssm://us-east-1?prefix=myteam&kms_key_id=alias/k&tag.env=prod",
-        ));
+        )));
         assert_eq!(
             p.uri(),
             "awssm://us-east-1?prefix=myteam&kms_key_id=alias/k&tag.env=prod"
@@ -683,7 +950,7 @@ mod tests {
     /// SecretSpec.
     #[test]
     fn native_address_is_read_only() {
-        let p = AwssmProvider::new(config("awssm://us-east-1"));
+        let p = SyncProviderAdapter::from_async(AwssmProvider::new(config("awssm://us-east-1")));
         let addr = crate::config::NativeAddress {
             item: "prod/db-credentials".into(),
             field: Some("password".into()),
@@ -693,10 +960,7 @@ mod tests {
         assert!(refusal.to_string().contains("read-only"), "{refusal}");
         // `set` refuses with the same reason, so the pre-check cannot drift.
         let err = p
-            .set(
-                Address::Native(&addr),
-                &secrecy::SecretString::new("v".into()),
-            )
+            .set(Address::Native(&addr), &crate::SecretBytes::from_utf8("v"))
             .unwrap_err();
         assert_eq!(err.to_string(), refusal.to_string());
     }
@@ -705,7 +969,7 @@ mod tests {
     /// network I/O.
     #[test]
     fn native_address_rejects_section() {
-        let p = AwssmProvider::new(config("awssm://us-east-1"));
+        let p = SyncProviderAdapter::from_async(AwssmProvider::new(config("awssm://us-east-1")));
         let addr = crate::config::NativeAddress {
             item: "prod/db-credentials".into(),
             section: Some("x".into()),
@@ -724,7 +988,14 @@ mod tests {
     fn extract_json_key_returns_string_value() {
         let value = r#"{"username": "admin", "password": "s3cret"}"#;
         let got = AwssmProvider::extract_json_key("db", value, "password").unwrap();
-        assert_eq!(got.unwrap().expose_secret(), "s3cret");
+        assert_eq!(got.unwrap().expose_secret(), b"s3cret");
+    }
+
+    #[test]
+    fn secret_binary_is_preserved_and_takes_precedence_over_secret_string() {
+        let expected = [0x00, 0xff, 0x80, 0x0a];
+        let value = AwssmProvider::secret_value(Some(&expected), Some("ignored")).unwrap();
+        assert_eq!(value.expose_secret(), expected);
     }
 
     #[test]
@@ -736,14 +1007,40 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "5432"
+            b"5432"
         );
         assert_eq!(
             AwssmProvider::extract_json_key("db", value, "tls")
                 .unwrap()
                 .unwrap()
                 .expose_secret(),
-            "true"
+            b"true"
+        );
+    }
+
+    #[test]
+    fn extract_json_key_null_is_none_not_the_string_null() {
+        // A null value is no value. Rendering it as "null" would satisfy a
+        // required secret and hand the program a password spelled n-u-l-l.
+        let value = r#"{"password": null}"#;
+        assert!(
+            AwssmProvider::extract_json_key("db", value, "password")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn extract_json_key_null_matches_a_missing_key() {
+        let with_null = r#"{"password": null}"#;
+        let without = r#"{"username": "admin"}"#;
+        assert_eq!(
+            AwssmProvider::extract_json_key("db", with_null, "password")
+                .unwrap()
+                .is_none(),
+            AwssmProvider::extract_json_key("db", without, "password")
+                .unwrap()
+                .is_none()
         );
     }
 

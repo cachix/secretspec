@@ -16,4 +16,16 @@ target
 /.build/
 /secretspec-swift/Artifacts/
 
+# Java local artifacts and build output
+/secretspec-jvm/build/
+/secretspec-jvm/examples/bin/
+/secretspec-jvm/examples/build/
+/secretspec-jvm/library/bin/
+/secretspec-jvm/library/build/
+/secretspec-jvm/consumer/bin/
+/secretspec-jvm/consumer/build/
+/secretspec-jvm/.gradle/
+
 .idea/
+
+.vscode/

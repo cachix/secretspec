@@ -4,7 +4,7 @@ package secretspec
 
 import _ "embed"
 
-//go:embed lib/secretspec_ffi_linux_amd64.so
+//go:embed lib/secretspec_linux_amd64.so
 var embeddedLib []byte
 
-const embeddedLibName = "libsecretspec_ffi.so"
+const embeddedLibName = "libsecretspec.so"

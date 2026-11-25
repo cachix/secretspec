@@ -1,0 +1,51 @@
+[package]
+name = "libsecretspec"
+version.workspace = true
+edition.workspace = true
+repository = "https://github.com/cachix/secretspec"
+description = "C ABI for SecretSpec: resolve secrets from any language"
+license = "Apache-2.0"
+readme = "README.md"
+
+[lib]
+# The public C artifact is `libsecretspec`. The dependency on the Rust
+# `secretspec` crate is renamed below so this target can own that artifact name.
+name = "secretspec"
+doc = false
+# cdylib for dynamic loading (the SDK distribution target) and staticlib for
+# embedding. This package intentionally emits no Rust rlib: the workspace's
+# Rust SDK already owns that artifact and crate name.
+crate-type = ["cdylib", "staticlib"]
+
+# cargo-c enables this feature when building the C ABI; the ABI here is
+# unconditional, so it gates nothing.
+[features]
+capi = []
+
+# Read by cargo-c when the static or shared library is installed with the C
+# header and a generated libsecretspec.pc.
+[package.metadata.capi.library]
+name = "secretspec"
+
+# The header in include/ is hand-maintained; consumers expect it at the
+# include root as #include "secretspec.h".
+[package.metadata.capi.header]
+generation = false
+subdirectory = ""
+
+[package.metadata.capi.install.include]
+asset = [{ from = "include/secretspec.h", to = "" }]
+
+[package.metadata.capi.pkg_config]
+name = "libsecretspec"
+filename = "libsecretspec"
+description = "C ABI for SecretSpec: resolve secrets from any language"
+
+[dependencies]
+# The envelope/resolve logic lives in the secretspec crate (resolve_json); this
+# crate is only the C ABI wrapper.
+secretspec-core.workspace = true
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }

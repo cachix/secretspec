@@ -1,24 +1,21 @@
 # frozen_string_literal: true
 
-# Builds the secretspec native extension, statically linking the secretspec-ffi
-# archive (libsecretspec_ffi.a) into the extension object. A Rust staticlib does
-# not carry its own native dependency closure, so the archive's transitive system
-# libs (captured from `rustc --print native-static-libs`, never hardcoded) are
-# appended to the link line after it.
+# Builds the secretspec native extension. By default it statically links the
+# libsecretspec archive (libsecretspec.a) and appends the archive's native
+# dependency closure captured from `rustc --print native-static-libs`.
 #
-# With --enable-pkg-config every link input comes from secretspec_ffi.pc
-# instead (installed by `cargo cinstall -p secretspec-ffi --library-type
-# staticlib`), and the discovery tiers below are skipped entirely.
+# With --enable-pkg-config every link input instead comes from an installed
+# libsecretspec.pc, which may select a static or shared library, and the
+# discovery tiers below are skipped entirely.
 
 require "mkmf"
 
 if enable_config("pkg-config", false)
-  # The .pc's Libs line orders the archive before its native deps; mkmf routes
-  # its -l flags to $libs and the rest (-L, macOS -framework) to $LDFLAGS.
-  unless pkg_config("secretspec_ffi")
-    abort("secretspec: pkg-config could not find secretspec_ffi; point " \
-          "PKG_CONFIG_PATH at the prefix installed by " \
-          "`cargo cinstall -p secretspec-ffi --library-type staticlib`")
+  # mkmf routes the .pc's -l flags to $libs and the rest (-L, macOS -framework)
+  # to $LDFLAGS.
+  unless pkg_config("libsecretspec")
+    abort("secretspec: pkg-config could not find libsecretspec; point " \
+          "PKG_CONFIG_PATH at a prefix containing libsecretspec.pc")
   end
 
   create_makefile("secretspec/secretspec_ext")
@@ -36,11 +33,11 @@ def find_staticlib(vendor, repo_root)
   env = ENV["SECRETSPEC_FFI_STATICLIB"]
   return env if env && !env.empty? && File.exist?(env)
 
-  bundled = File.join(vendor, "libsecretspec_ffi.a")
+  bundled = File.join(vendor, "libsecretspec.a")
   return bundled if File.exist?(bundled)
 
   %w[release debug]
-    .map { |p| File.join(repo_root, "target", p, "libsecretspec_ffi.a") }
+    .map { |profile| File.join(repo_root, "target", profile, "libsecretspec.a") }
     .select { |c| File.exist?(c) }
     .max_by { |c| File.mtime(c) }
 end
@@ -54,12 +51,12 @@ def find_native_libs(vendor, repo_root)
   manifest = File.join(vendor, "native-static-libs.txt")
   return File.read(manifest).strip if File.exist?(manifest)
 
-  note = `cd #{repo_root} && cargo rustc -q -p secretspec-ffi --crate-type staticlib -- --print native-static-libs 2>&1`
+  note = `cd #{repo_root} && cargo rustc -q -p libsecretspec --crate-type staticlib -- --print native-static-libs 2>&1`
   note[/native-static-libs:\s*(.*)/, 1].to_s.strip
 end
 
 staticlib = find_staticlib(vendor, repo_root)
-abort("secretspec: could not locate libsecretspec_ffi.a; set SECRETSPEC_FFI_STATICLIB") unless staticlib
+abort("secretspec: could not locate libsecretspec.a; set SECRETSPEC_FFI_STATICLIB") unless staticlib
 
 # Header: explicit contract, the bundled vendor copy (platform gem), or the
 # ffi crate's include dir.
@@ -69,7 +66,7 @@ include_dir =
   elsif File.exist?(File.join(vendor, "secretspec.h"))
     vendor
   else
-    File.join(repo_root, "secretspec-ffi", "include")
+    File.join(repo_root, "libsecretspec", "include")
   end
 
 $INCFLAGS << " -I#{include_dir}"

@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Secretspec\Tests;
 
 use PHPUnit\Framework\TestCase;
+use Secretspec\CallerContext;
 use Secretspec\MissingRequiredException;
+use Secretspec\Native;
 use Secretspec\SecretReport;
 use Secretspec\SecretSpec;
 use Secretspec\SecretSpecException;
@@ -61,6 +63,38 @@ final class ResolveTest extends TestCase
         self::assertNotEmpty(SecretSpec::abiVersion());
     }
 
+    public function testLegacyFfiBindingDoesNotRequireInlineCallSymbol(): void
+    {
+        $reflection = new \ReflectionClass(Native::class);
+
+        self::assertStringNotContainsString(
+            'secretspec_call',
+            $reflection->getConstant('CDEF'),
+        );
+        self::assertStringContainsString(
+            'secretspec_call',
+            $reflection->getConstant('CALL_CDEF'),
+        );
+    }
+
+    public function testCallerContextCanAccompanyASeparateReason(): void
+    {
+        [$manifest, $provider] = $this->project("DATABASE_URL=postgres://db\n");
+        $resolved = SecretSpec::builder()
+            ->withPath($manifest)
+            ->withProvider($provider)
+            ->withCaller(new CallerContext(
+                name: 'git',
+                version: '2.51.0',
+                operation: 'credential_get',
+                resource: 'github.com',
+            ))
+            ->withReason('push the release tag')
+            ->load();
+
+        self::assertSame('postgres://db', $resolved->secrets['DATABASE_URL']->get());
+    }
+
     public function testLoadValuesAndProvenance(): void
     {
         [$manifest, $provider] = $this->project("DATABASE_URL=postgres://db\n");
@@ -84,6 +118,26 @@ final class ResolveTest extends TestCase
 
         self::assertSame(['SENTRY_DSN'], $resolved->missingOptional);
         self::assertArrayNotHasKey('SENTRY_DSN', $resolved->secrets);
+    }
+
+    public function testInlineSpecResolvesAtItsLogicalBaseDir(): void
+    {
+        [$manifest] = $this->project('');
+        $dir = \dirname($manifest);
+        \file_put_contents($dir . \DIRECTORY_SEPARATOR . 'inline.env', "TOKEN=inline-php\n");
+        $spec = [
+            'project' => ['name' => 'php-inline'],
+            'providers' => ['env' => 'dotenv://inline.env'],
+            'profiles' => ['default' => ['secrets' => [
+                'TOKEN' => ['description' => 'token', 'providers' => ['env']],
+            ]]],
+        ];
+        $resolved = SecretSpec::builder()
+            ->withInlineSpec($spec, $dir)
+            ->withReason('php inline test')
+            ->load();
+
+        self::assertSame('inline-php', $resolved->secrets['TOKEN']->get());
     }
 
     public function testSetAsEnv(): void
@@ -167,9 +221,24 @@ final class ResolveTest extends TestCase
             $cert = $resolved->secrets['TLS_CERT'];
             self::assertTrue($cert->asPath);
             self::assertNull($cert->value);
-            self::assertSame('----cert----', \file_get_contents($cert->get()));
+            $stream = $cert->open();
+            try {
+                self::assertSame('----cert----', \stream_get_contents($stream));
+                self::assertSame(0, \fseek($stream, 4));
+                self::assertSame('cert', \fread($stream, 4));
+                $resolved->close();
+                \rewind($stream);
+                self::assertSame('----cert----', \stream_get_contents($stream));
+            } finally {
+                \fclose($stream);
+            }
+            try {
+                $cert->open();
+                self::fail('a closed result must not permit new reads');
+            } catch (SecretSpecException $e) {
+                self::assertSame('io', $e->kind);
+            }
         } finally {
-            // Remove the 0400 as_path temp file so no secret-bearing file lingers.
             $resolved->close();
         }
     }
@@ -186,6 +255,45 @@ final class ResolveTest extends TestCase
             self::fail('expected a transport error, not MissingRequiredException');
         } catch (SecretSpecException $e) {
             self::assertNotEmpty($e->kind);
+        }
+    }
+
+    public function testFileStreamPreservesBinaryAndEmptyContents(): void
+    {
+        $manifest = <<<'TOML'
+            [project]
+            name = "php-stream"
+            revision = "1.0"
+            require_reason = false
+            [profiles.default]
+            FILE = { description = "Binary stream fixture", as_path = true, encoding = "base64" }
+            TOML;
+        foreach (['', \str_repeat("\x00\xff\x80\r\n", 4096)] as $bytes) {
+            [$path, $provider] = $this->project('FILE=' . \base64_encode($bytes) . "\n", $manifest);
+            $result = SecretSpec::builder()->withPath($path)->withProvider($provider)->load();
+            try {
+                $stream = $result->secrets['FILE']->open();
+                try {
+                    self::assertSame('php://memory', \stream_get_meta_data($stream)['uri']);
+                    self::assertSame($bytes, \stream_get_contents($stream));
+                } finally {
+                    \fclose($stream);
+                }
+            } finally {
+                $result->close();
+            }
+        }
+    }
+
+    public function testInlineSecretCannotBeOpenedAsFile(): void
+    {
+        [$path, $provider] = $this->project("DATABASE_URL=postgres://db\n");
+        $result = SecretSpec::builder()->withPath($path)->withProvider($provider)->withReason('test')->load();
+        try {
+            $this->expectException(SecretSpecException::class);
+            $result->secrets['DATABASE_URL']->open();
+        } finally {
+            $result->close();
         }
     }
 

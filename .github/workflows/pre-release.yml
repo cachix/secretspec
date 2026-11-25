@@ -19,7 +19,10 @@ on:
       - "secretspec-py/pyproject.toml"
       - "secretspec-rb/secretspec.gemspec"
       - "secretspec-dotnet/src/SecretSpec/SecretSpec.csproj"
+      - "secretspec-jvm/gradle.properties"
       - "Package.swift"
+      - "secretspec-ex/**"
+      - ".github/workflows/elixir-package.yml"
 
 permissions:
   contents: read
@@ -44,15 +47,23 @@ jobs:
     steps:
       - run: echo "Running the full pre-release suite for $GITHUB_SHA"
 
+  # These inputs make this run canonical for release PRs. Each called workflow
+  # still triggers directly for ordinary PRs, tags, and manual dispatches, but
+  # suppresses its direct matrix when a "Release ..." PR invokes this suite.
+
   test:
     name: Rust tests
     needs: authorize
     uses: ./.github/workflows/test.yml
+    with:
+      pre_release: true
 
   sdks:
     name: SDK test suites
     needs: authorize
     uses: ./.github/workflows/sdks.yml
+    with:
+      pre_release: true
 
   ffi:
     name: FFI libraries
@@ -60,6 +71,8 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/ffi-build.yml
+    with:
+      pre_release: true
 
   node:
     name: Node packages
@@ -69,7 +82,17 @@ jobs:
       id-token: write
     uses: ./.github/workflows/node-addon.yml
     with:
+      pre_release: true
       publish: false
+
+  elixir:
+    name: Elixir SDK
+    needs: authorize
+    permissions:
+      contents: read
+    uses: ./.github/workflows/elixir-package.yml
+    with:
+      pre_release: true
 
   python:
     name: Python wheels
@@ -78,6 +101,8 @@ jobs:
       contents: read
       id-token: write
     uses: ./.github/workflows/python-wheels.yml
+    with:
+      pre_release: true
 
   ruby:
     name: Ruby gems
@@ -86,6 +111,8 @@ jobs:
       contents: read
       id-token: write
     uses: ./.github/workflows/ruby-gems.yml
+    with:
+      pre_release: true
 
   php:
     name: PHP extensions
@@ -93,6 +120,8 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/php-ext.yml
+    with:
+      pre_release: true
 
   go-static:
     name: Go static library
@@ -100,18 +129,25 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/go-static.yml
+    with:
+      pre_release: true
 
   go-embed:
     name: Go embedded libraries
-    needs: authorize
+    needs: [authorize, ffi]
     permissions:
       contents: write
     uses: ./.github/workflows/go-embed.yml
+    with:
+      pre_release: true
+      ffi_artifacts: true
 
   haskell:
     name: Haskell static-link build
     needs: authorize
     uses: ./.github/workflows/haskell-build.yml
+    with:
+      pre_release: true
 
   dotnet:
     name: .NET package
@@ -120,6 +156,8 @@ jobs:
       contents: read
       id-token: write
     uses: ./.github/workflows/dotnet-package.yml
+    with:
+      pre_release: true
 
   swift:
     name: Swift package
@@ -127,8 +165,26 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/swift-package.yml
+    with:
+      pre_release: true
+
+  jvm:
+    name: JVM package
+    needs: authorize
+    permissions:
+      contents: read
+    uses: ./.github/workflows/jvm-package.yml
+    with:
+      pre_release: true
 
   release-artifacts:
     name: CLI release artifacts
     needs: authorize
     uses: ./.github/workflows/cli-artifacts.yml
+
+  cli-windows-arm64:
+    name: CLI Windows ARM64
+    needs: authorize
+    permissions:
+      contents: write
+    uses: ./.github/workflows/cli-windows-arm64.yml

@@ -4,11 +4,13 @@
 //! configuration conventions. This module contains only the compatible KV,
 //! authentication-exchange, and HTTP mechanics used by both providers.
 
+#[cfg(test)]
+use super::block_on;
 use super::{Address, ProviderCredentials, ProviderUrl, credential_or_envs, preferred_env};
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::{Result, SecretSpecError};
 use reqwest::header::{HeaderMap, HeaderValue};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -20,43 +22,6 @@ use url::Url;
 pub(crate) const ROLE_ID: &str = "role_id";
 pub(crate) const SECRET_ID: &str = "secret_id";
 pub(crate) const TOKEN: &str = "token";
-
-/// Stable runtime for the shared Vault-compatible HTTP connection pools.
-///
-/// `get_many` invokes its synchronous fetch closure from several OS threads.
-/// Giving each closure a temporary runtime can strand a pooled reqwest
-/// connection when the runtime that owns its dispatch task is dropped. One
-/// process-wide runtime keeps those tasks alive across requests and providers.
-fn runtime() -> &'static tokio::runtime::Runtime {
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create Vault-compatible HTTP runtime")
-    })
-}
-
-fn block_on<F>(future: F) -> F::Output
-where
-    F: std::future::Future + Send,
-    F::Output: Send,
-{
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-            tokio::task::block_in_place(|| runtime().block_on(future))
-        }
-        Ok(_) => std::thread::scope(|scope| {
-            let worker = scope.spawn(move || runtime().block_on(future));
-            match worker.join() {
-                Ok(output) => output,
-                Err(panic) => std::panic::resume_unwind(panic),
-            }
-        }),
-        Err(_) => runtime().block_on(future),
-    }
-}
 
 /// KV secrets engine version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -434,6 +399,7 @@ impl KvConfig {
 
 /// Compatible KV client used behind the product-specific provider wrappers.
 pub(crate) struct KvProvider {
+    retry_policy: super::RetryPolicy,
     config: KvConfig,
     credentials: ProviderCredentials,
     product: Product,
@@ -457,13 +423,13 @@ enum TokenUses {
 
 /// A client token together with the use limit reported by a login response.
 struct IssuedToken {
-    value: SecretString,
+    value: SecretBytes,
     uses: TokenUses,
     usable_until: Option<Instant>,
 }
 
 impl IssuedToken {
-    fn static_token(value: SecretString) -> Self {
+    fn static_token(value: SecretBytes) -> Self {
         Self {
             value,
             uses: TokenUses::Unlimited,
@@ -472,7 +438,7 @@ impl IssuedToken {
     }
 
     fn login_token(
-        value: SecretString,
+        value: SecretBytes,
         num_uses: Option<u64>,
         usable_until: Option<Instant>,
         lease_known: bool,
@@ -498,7 +464,7 @@ impl IssuedToken {
         }
     }
 
-    fn claim(&mut self) -> Option<SecretString> {
+    fn claim(&mut self) -> Option<SecretBytes> {
         if self.available_uses() == 0 {
             return None;
         }
@@ -570,21 +536,26 @@ impl KvProvider {
             config,
             credentials: ProviderCredentials::new(),
             product,
+            retry_policy: super::RetryPolicy::default(),
             http: OnceLock::new(),
         }
     }
 
+    pub(crate) fn set_retry_policy(&mut self, policy: super::RetryPolicy) {
+        self.retry_policy = policy;
+    }
+
     /// The shared HTTP client.
     fn http(&self) -> &reqwest::Client {
-        self.http.get_or_init(reqwest::Client::new)
+        self.http.get_or_init(super::http::default_client)
     }
 
     /// Authenticates for the logical operation that owns the returned session.
     /// Additional logins are performed only when the issued token's reported
     /// use budget is exhausted. Dropping the session drops all authentication
     /// state, so a later operation cannot unknowingly reuse an expired token.
-    fn session(&self) -> Result<KvSession<'_>> {
-        let token = block_on(self.resolve_token())?;
+    async fn session(&self) -> Result<KvSession<'_>> {
+        let token = self.resolve_token().await?;
         Ok(KvSession {
             provider: self,
             tokens: Mutex::new(TokenPool::new(token)),
@@ -724,9 +695,9 @@ impl KvProvider {
 
     /// Reads the requested field from a resolved native KV address.
     /// Convention addresses also arrive here after resolving to field `value`.
-    pub(crate) fn get(&self, coords: &NativeAddress) -> Result<Option<SecretString>> {
+    pub(crate) async fn get(&self, coords: &NativeAddress) -> Result<Option<SecretBytes>> {
         let field = self.require_field(coords)?;
-        self.session()?.get_field(&coords.item, field)
+        self.session().await?.get_field(&coords.item, field).await
     }
 
     /// Validates and resolves the parts of a read address that can fail without
@@ -742,7 +713,7 @@ impl KvProvider {
                 Ok(())
             }
             Address::Native(coords) => {
-                super::reject_unsupported_coords(
+                super::address::reject_unsupported_coords(
                     self.product.scheme(),
                     coords,
                     self.supported_coords(),
@@ -755,10 +726,10 @@ impl KvProvider {
 
     /// Reads a batch through one operation-scoped authentication session while
     /// retaining the provider-wide address deduplication and concurrency cap.
-    pub(crate) fn get_many(
+    pub(crate) async fn get_many(
         &self,
         requests: &[(&str, Address<'_>)],
-    ) -> Result<HashMap<String, SecretString>> {
+    ) -> Result<HashMap<String, SecretBytes>> {
         if requests.is_empty() {
             return Ok(HashMap::new());
         }
@@ -767,32 +738,38 @@ impl KvProvider {
         for (_, addr) in requests {
             self.validate_read_address(*addr)?;
         }
-        let session = self.session()?;
-        super::get_each_with(requests, |addr| match addr {
-            Address::Convention {
-                project,
-                profile,
-                key,
-            } => {
-                let coords = self.convention_address(project, profile, key)?;
-                session.get(&coords)
-            }
-            Address::Native(coords) => {
-                super::reject_unsupported_coords(
-                    self.product.scheme(),
-                    coords,
-                    self.supported_coords(),
-                )?;
-                session.get(coords)
+        let session = self.session().await?;
+        super::async_provider::get_each_with(requests, |addr| {
+            let session = &session;
+            async move {
+                match addr {
+                    Address::Convention {
+                        project,
+                        profile,
+                        key,
+                    } => {
+                        let coords = self.convention_address(project, profile, key)?;
+                        session.get(&coords).await
+                    }
+                    Address::Native(coords) => {
+                        super::address::reject_unsupported_coords(
+                            self.product.scheme(),
+                            coords,
+                            self.supported_coords(),
+                        )?;
+                        session.get(coords).await
+                    }
+                }
             }
         })
+        .await
     }
 
     /// Writes a complete convention-owned KV entry.
     ///
     /// Callers must run [`Self::check_writable`] before reaching this method.
-    pub(crate) fn set(&self, coords: &NativeAddress, value: &SecretString) -> Result<()> {
-        self.session()?.set(&coords.item, value)
+    pub(crate) async fn set(&self, coords: &NativeAddress, value: &SecretBytes) -> Result<()> {
+        self.session().await?.set(&coords.item, value).await
     }
 
     /// Writes a convention-owned KV entry the store itself will drop once
@@ -805,10 +782,10 @@ impl KvProvider {
     ///
     /// KV v1 has no expiry at all, so it refuses: the alternative is an
     /// unexpiring copy of another store's secret.
-    pub(crate) fn set_expiring(
+    pub(crate) async fn set_expiring(
         &self,
         coords: &NativeAddress,
-        value: &SecretString,
+        value: &SecretBytes,
         max_age: std::time::Duration,
     ) -> Result<()> {
         if self.config.kv_version == KvVersion::V1 {
@@ -818,7 +795,10 @@ impl KvProvider {
                 self.product.scheme()
             )));
         }
-        self.session()?.set_expiring(&coords.item, value, max_age)
+        self.session()
+            .await?
+            .set_expiring(&coords.item, value, max_age)
+            .await
     }
 
     /// Destroys a convention-owned KV path, reporting whether it held anything.
@@ -830,9 +810,9 @@ impl KvProvider {
     /// one extra round trip on a path only cache maintenance takes.
     ///
     /// Callers must run [`Self::check_deletable`] before reaching this method.
-    pub(crate) fn delete(&self, coords: &NativeAddress) -> Result<bool> {
+    pub(crate) async fn delete(&self, coords: &NativeAddress) -> Result<bool> {
         let field = self.require_field(coords)?;
-        self.session()?.delete(&coords.item, field)
+        self.session().await?.delete(&coords.item, field).await
     }
 
     /// Native references are read-only because the current write API replaces
@@ -877,10 +857,10 @@ impl KvProvider {
     /// Resolves static token authentication in decreasing precedence:
     /// provider credential, product environment, configured token path, and
     /// finally the CLI-compatible `~/.vault-token` default.
-    fn resolve_token_auth(&self) -> Result<SecretString> {
+    fn resolve_token_auth(&self) -> Result<SecretBytes> {
         if let Some(token) = credential_or_envs(&self.credentials, TOKEN, self.product.token_envs())
         {
-            return Ok(SecretString::new(token.into()));
+            return Ok(token);
         }
 
         let token_path = preferred_env(self.product.token_path_envs())
@@ -896,7 +876,7 @@ impl KvProvider {
         {
             let token = token.trim();
             if !token.is_empty() {
-                return Ok(SecretString::new(token.to_string().into()));
+                return Ok(SecretBytes::from_utf8(token.to_string()));
             }
         }
 
@@ -934,9 +914,9 @@ impl KvProvider {
             credential_or_envs(&self.credentials, SECRET_ID, self.product.secret_id_envs());
 
         let url = self.auth_login_url();
-        let mut body = serde_json::json!({ "role_id": role_id });
+        let mut body = serde_json::json!({ "role_id": role_id.try_as_utf8()? });
         if let Some(secret_id) = secret_id {
-            body["secret_id"] = serde_json::Value::String(secret_id);
+            body["secret_id"] = serde_json::Value::String(secret_id.try_as_utf8()?.to_owned());
         }
 
         // The server-side lease begins while the request is in flight. Anchor
@@ -979,7 +959,8 @@ impl KvProvider {
         let jwt = self.resolve_jwt().await?;
 
         let url = self.auth_login_url();
-        let mut body = serde_json::json!({ "jwt": jwt.expose_secret() });
+        let jwt = super::require_utf8(self.product.display_name(), &jwt)?;
+        let mut body = serde_json::json!({ "jwt": jwt });
         if let Some(role) = &self.config.role {
             body["role"] = serde_json::Value::String(role.clone());
         }
@@ -1081,7 +1062,7 @@ impl KvProvider {
         };
 
         Ok(IssuedToken::login_token(
-            SecretString::new(token.to_string().into()),
+            SecretBytes::from_utf8(token.to_string()),
             num_uses,
             usable_until,
             lease_duration.is_some(),
@@ -1090,9 +1071,9 @@ impl KvProvider {
 
     /// Sources a JWT directly from the product environment or mints one from
     /// the GitHub Actions / Forgejo Actions OIDC endpoint available to the job.
-    async fn resolve_jwt(&self) -> Result<SecretString> {
+    async fn resolve_jwt(&self) -> Result<SecretBytes> {
         if let Some(jwt) = preferred_env(self.product.jwt_envs()) {
-            return Ok(SecretString::new(jwt.into()));
+            return Ok(SecretBytes::from_utf8(jwt));
         }
 
         let request_url = std::env::var("ACTIONS_ID_TOKEN_REQUEST_URL")
@@ -1141,7 +1122,7 @@ impl KvProvider {
                 "CI OIDC token response missing `value`".to_string(),
             )
         })?;
-        Ok(SecretString::new(jwt.to_string().into()))
+        Ok(SecretBytes::from_utf8(jwt.to_string()))
     }
 
     /// Builds an authentication request in the provider's configured namespace.
@@ -1189,11 +1170,11 @@ impl KvProvider {
     ///
     /// OpenBao intentionally retains the `X-Vault-*` wire names for protocol
     /// compatibility; using them does not collapse its provider identity.
-    fn build_headers(&self, token: &SecretString) -> Result<HeaderMap> {
+    fn build_headers(&self, token: &SecretBytes) -> Result<HeaderMap> {
         let mut headers = self.build_namespace_headers()?;
         headers.insert(
             "X-Vault-Token",
-            HeaderValue::from_str(token.expose_secret()).map_err(|error| {
+            HeaderValue::from_bytes(token.expose_secret()).map_err(|error| {
                 SecretSpecError::ProviderOperationFailed(format!("Invalid token value: {error}"))
             })?,
         );
@@ -1216,52 +1197,57 @@ impl KvProvider {
         Ok(headers)
     }
 
-    /// Sends one authenticated request, retrying connect and timeout failures.
-    ///
-    /// A connect failure cannot have reached the server, so the same token
-    /// claim remains valid. A later timeout is ambiguous: the server may have
-    /// consumed the request before the response was lost, so a retry claims
-    /// another use. HTTP status failures are not retried.
+    /// Retries within one authenticated session, never by repeating AppRole login.
+    /// Mutations are replayed only after a failed connection establishment.
     async fn send_with_connect_retry(
         &self,
         session: &KvSession<'_>,
-        mut token: SecretString,
-        mut build: impl FnMut(&SecretString) -> Result<reqwest::RequestBuilder>,
+        mut token: SecretBytes,
+        mut build: impl FnMut(&SecretBytes) -> Result<reqwest::RequestBuilder>,
     ) -> Result<reqwest::Response> {
-        const ATTEMPTS: usize = 3;
-        let mut last_error = None;
-        for attempt in 1..=ATTEMPTS {
-            let response = build(&token)?.send().await;
-            match response {
-                Ok(response) => return Ok(response),
-                Err(error) if attempt < ATTEMPTS && (error.is_connect() || error.is_timeout()) => {
-                    if error.is_timeout() && !error.is_connect() {
-                        token = session.claim_token().await?;
+        let policy = self.retry_policy;
+        for attempt in 1..=policy.max_attempts() {
+            let request = build(&token)?
+                .build()
+                .map_err(|e| super::http::transport_error(self.product.display_name(), e))?;
+            let is_read = matches!(
+                *request.method(),
+                reqwest::Method::GET | reqwest::Method::HEAD
+            );
+            let response = self.http().execute(request).await;
+            let (failure, consumed, safe) = match response {
+                Ok(response) => {
+                    match super::http::checked_response(self.product.display_name(), response).await
+                    {
+                        Ok(response) => return Ok(response),
+                        Err(error) => (error, true, is_read),
                     }
-                    last_error = Some(error);
-                    // get_each already runs each get on its own thread, so a
-                    // brief blocking backoff is fine and avoids a tokio/time
-                    // feature dependency on the vault build.
-                    std::thread::sleep(std::time::Duration::from_millis(25 * attempt as u64));
                 }
                 Err(error) => {
-                    return Err(SecretSpecError::ProviderOperationFailed(format!(
-                        "Failed to connect to {} at {}: {}",
-                        self.product.display_name(),
-                        self.config.endpoint,
-                        crate::error::display_error_chain(&error)
-                    )));
+                    let connected = !error.is_connect();
+                    (
+                        super::http::transport_error(self.product.display_name(), error),
+                        connected,
+                        is_read || !connected,
+                    )
                 }
+            };
+            let hint = super::retry::retry_hint(&failure);
+            let Some(wait) = hint.and_then(|hint| policy.delay(attempt, hint)) else {
+                return Err(failure);
+            };
+            if !safe {
+                return Err(failure);
             }
+            if consumed {
+                let Some(next) = session.claim_retry_token().await else {
+                    return Err(failure);
+                };
+                token = next;
+            }
+            tokio::time::sleep(wait).await;
         }
-        Err(SecretSpecError::ProviderOperationFailed(format!(
-            "Failed to connect to {} at {}: {}",
-            self.product.display_name(),
-            self.config.endpoint,
-            crate::error::display_error_chain(
-                &last_error.expect("connect retry exhausted with an error")
-            )
-        )))
+        unreachable!("validated retry attempt count")
     }
 
     /// Builds the raw API path, inserting KV v2's required `/data/` segment.
@@ -1307,7 +1293,7 @@ impl KvProvider {
         &self,
         secret_path: &str,
         session: &KvSession<'_>,
-        token: SecretString,
+        token: SecretBytes,
     ) -> Result<bool> {
         let url = self.metadata_url(secret_path);
         let response = self
@@ -1342,7 +1328,7 @@ impl KvProvider {
         secret_path: &str,
         max_age: std::time::Duration,
         session: &KvSession<'_>,
-        token: SecretString,
+        token: SecretBytes,
     ) -> Result<()> {
         let url = self.metadata_url(secret_path);
         // Seconds keep the request independent of how the duration was written
@@ -1381,7 +1367,7 @@ impl KvProvider {
         &self,
         secret_path: &str,
         session: &KvSession<'_>,
-        token: SecretString,
+        token: SecretBytes,
     ) -> Result<()> {
         let url = match self.config.kv_version {
             KvVersion::V2 => self.metadata_url(secret_path),
@@ -1422,8 +1408,8 @@ impl KvProvider {
         secret_path: &str,
         field: &str,
         session: &KvSession<'_>,
-        token: SecretString,
-    ) -> Result<Option<SecretString>> {
+        token: SecretBytes,
+    ) -> Result<Option<SecretBytes>> {
         let url = self.build_url(secret_path);
         let response = self
             .send_with_connect_retry(session, token, |token| {
@@ -1451,7 +1437,7 @@ impl KvProvider {
                         .and_then(|data| data.get(field))
                         .and_then(|value| value.as_str()),
                 };
-                Ok(value.map(|value| SecretString::new(value.to_string().into())))
+                Ok(value.map(|value| SecretBytes::from_utf8(value.to_string())))
             }
             404 => Ok(None),
             403 => Err(SecretSpecError::ProviderOperationFailed(format!(
@@ -1476,14 +1462,15 @@ impl KvProvider {
     async fn set_secret_async(
         &self,
         secret_path: &str,
-        value: &SecretString,
+        value: &SecretBytes,
         session: &KvSession<'_>,
-        token: SecretString,
+        token: SecretBytes,
     ) -> Result<()> {
+        let value = super::require_utf8(self.product.scheme(), value)?;
         let url = self.build_url(secret_path);
         let body = match self.config.kv_version {
-            KvVersion::V2 => serde_json::json!({ "data": { "value": value.expose_secret() } }),
-            KvVersion::V1 => serde_json::json!({ "value": value.expose_secret() }),
+            KvVersion::V2 => serde_json::json!({ "data": { "value": value } }),
+            KvVersion::V1 => serde_json::json!({ "value": value }),
         };
         let response = self
             .send_with_connect_retry(session, token, |token| {
@@ -1515,7 +1502,19 @@ impl KvProvider {
 }
 
 impl KvSession<'_> {
-    async fn claim_token(&self) -> Result<SecretString> {
+    /// Retry only with authentication already acquired for this operation.
+    async fn claim_retry_token(&self) -> Option<SecretBytes> {
+        let mut pool = self.tokens.lock().await;
+        while let Some(token) = pool.tokens.front_mut() {
+            if let Some(token) = token.claim() {
+                return Some(token);
+            }
+            pool.tokens.pop_front();
+        }
+        None
+    }
+
+    async fn claim_token(&self) -> Result<SecretBytes> {
         let mut pool = self.tokens.lock().await;
         loop {
             while let Some(token) = pool.tokens.front_mut() {
@@ -1555,89 +1554,81 @@ impl KvSession<'_> {
     }
 
     /// Reads one address with authentication scoped to this operation.
-    fn get(&self, coords: &NativeAddress) -> Result<Option<SecretString>> {
+    async fn get(&self, coords: &NativeAddress) -> Result<Option<SecretBytes>> {
         let field = self.provider.require_field(coords)?;
-        self.get_field(&coords.item, field)
+        self.get_field(&coords.item, field).await
     }
 
-    fn get_field(&self, secret_path: &str, field: &str) -> Result<Option<SecretString>> {
-        block_on(async {
-            let token = self.claim_token().await?;
-            self.provider
-                .get_field_async(secret_path, field, self, token)
-                .await
-        })
+    async fn get_field(&self, secret_path: &str, field: &str) -> Result<Option<SecretBytes>> {
+        let token = self.claim_token().await?;
+        self.provider
+            .get_field_async(secret_path, field, self, token)
+            .await
     }
 
-    fn set(&self, secret_path: &str, value: &SecretString) -> Result<()> {
-        block_on(async {
-            let token = self.claim_token().await?;
-            self.provider
-                .set_secret_async(secret_path, value, self, token)
-                .await
-        })
+    async fn set(&self, secret_path: &str, value: &SecretBytes) -> Result<()> {
+        let token = self.claim_token().await?;
+        self.provider
+            .set_secret_async(secret_path, value, self, token)
+            .await
     }
 
-    fn set_expiring(
+    async fn set_expiring(
         &self,
         secret_path: &str,
-        value: &SecretString,
+        value: &SecretBytes,
         max_age: std::time::Duration,
     ) -> Result<()> {
-        block_on(async {
-            // Ensure both request claims before changing metadata. If a
-            // limited-use role can no longer log in, no partial expiry policy
-            // is left behind. Claim immediately before each request so an
-            // already preflighted short-lease token can still be refreshed.
-            self.ensure_claims(2).await?;
-            let metadata_token = self.claim_token().await?;
-            self.provider
-                .set_version_ttl_async(secret_path, max_age, self, metadata_token)
-                .await?;
-            let data_token = self.claim_token().await?;
-            self.provider
-                .set_secret_async(secret_path, value, self, data_token)
-                .await
-        })
+        // Ensure both request claims before changing metadata. If a
+        // limited-use role can no longer log in, no partial expiry policy
+        // is left behind. Claim immediately before each request so an
+        // already preflighted short-lease token can still be refreshed.
+        self.ensure_claims(2).await?;
+        let metadata_token = self.claim_token().await?;
+        self.provider
+            .set_version_ttl_async(secret_path, max_age, self, metadata_token)
+            .await?;
+        let data_token = self.claim_token().await?;
+        self.provider
+            .set_secret_async(secret_path, value, self, data_token)
+            .await
     }
 
-    fn delete(&self, secret_path: &str, field: &str) -> Result<bool> {
-        block_on(async {
-            let existence_token = self.claim_token().await?;
-            match self.provider.config.kv_version {
-                // An expired KV v2 version is no longer readable from the data
-                // endpoint, but its metadata and recoverable version history
-                // still exist. Check the metadata path so cache clearing
-                // permanently destroys that history.
-                KvVersion::V2 => {
-                    if !self
-                        .provider
-                        .metadata_exists_async(secret_path, self, existence_token)
-                        .await?
-                    {
-                        return Ok(false);
-                    }
-                }
-                KvVersion::V1 => {
-                    if self
-                        .provider
-                        .get_field_async(secret_path, field, self, existence_token)
-                        .await?
-                        .is_none()
-                    {
-                        return Ok(false);
-                    }
+    async fn delete(&self, secret_path: &str, field: &str) -> Result<bool> {
+        let existence_token = self.claim_token().await?;
+        match self.provider.config.kv_version {
+            // An expired KV v2 version is no longer readable from the data
+            // endpoint, but its metadata and recoverable version history
+            // still exist. Check the metadata path so cache clearing
+            // permanently destroys that history.
+            KvVersion::V2 => {
+                if !self
+                    .provider
+                    .metadata_exists_async(secret_path, self, existence_token)
+                    .await?
+                {
+                    return Ok(false);
                 }
             }
-            // The existence check is read-only. Resolve the destructive
-            // request's claim before issuing the delete so an exhausted role
-            // cannot turn into a post-mutation authentication failure.
-            let delete_token = self.claim_token().await?;
-            self.provider
-                .delete_path_async(secret_path, self, delete_token)
-                .await?;
-            Ok(true)
-        })
+            KvVersion::V1 => {
+                if self
+                    .provider
+                    .get_field_async(secret_path, field, self, existence_token)
+                    .await?
+                    .is_none()
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        // The existence check is read-only. Resolve the destructive
+        // request's claim before issuing the delete so an exhausted role
+        // cannot turn into a post-mutation authentication failure.
+        let delete_token = self.claim_token().await?;
+        self.provider
+            .delete_path_async(secret_path, self, delete_token)
+            .await?;
+        Ok(true)
     }
 }
 
@@ -1674,14 +1665,8 @@ mod tests {
 
     fn approle_credentials() -> ProviderCredentials {
         ProviderCredentials::from([
-            (
-                ROLE_ID.to_string(),
-                SecretString::new("test-role".to_string().into()),
-            ),
-            (
-                SECRET_ID.to_string(),
-                SecretString::new("test-secret".to_string().into()),
-            ),
+            (ROLE_ID.to_string(), SecretBytes::from_utf8("test-role")),
+            (SECRET_ID.to_string(), SecretBytes::from_utf8("test-secret")),
         ])
     }
 
@@ -1694,23 +1679,23 @@ mod tests {
     }
 
     #[cfg(feature = "vault")]
-    fn vault_approle_provider(endpoint: SocketAddr) -> VaultProvider {
+    fn vault_approle_provider(endpoint: SocketAddr) -> crate::SyncProviderAdapter<VaultProvider> {
         let config = VaultConfig::try_from(&provider_url(&format!(
             "vault://{endpoint}/secret?tls=false&auth=approle"
         )))
         .unwrap();
-        let mut provider = VaultProvider::new(config);
+        let mut provider = crate::SyncProviderAdapter::from_async(VaultProvider::new(config));
         provider.with_credentials(approle_credentials());
         provider
     }
 
     #[cfg(feature = "openbao")]
-    fn openbao_jwt_provider(endpoint: SocketAddr) -> OpenBaoProvider {
+    fn openbao_jwt_provider(endpoint: SocketAddr) -> crate::SyncProviderAdapter<OpenBaoProvider> {
         let config = OpenBaoConfig::try_from(&provider_url(&format!(
             "openbao://{endpoint}/secret?tls=false&auth=jwt&role=ci"
         )))
         .unwrap();
-        OpenBaoProvider::new(config)
+        crate::SyncProviderAdapter::from_async(OpenBaoProvider::new(config))
     }
 
     fn read_request(stream: &mut TcpStream) -> String {
@@ -1842,8 +1827,8 @@ mod tests {
         for _ in 0..2 {
             let values = provider.get_many(&requests).unwrap();
             assert_eq!(values.len(), 2);
-            assert_eq!(values["FIRST"].expose_secret(), "resolved");
-            assert_eq!(values["SECOND"].expose_secret(), "resolved");
+            assert_eq!(values["FIRST"].expose_secret(), b"resolved");
+            assert_eq!(values["SECOND"].expose_secret(), b"resolved");
         }
 
         let observed = server.join().unwrap();
@@ -1938,7 +1923,7 @@ mod tests {
         provider
             .set_expiring(
                 api_key_address(),
-                &SecretString::new("value".to_string().into()),
+                &SecretBytes::from_utf8("value"),
                 std::time::Duration::from_secs(3600),
             )
             .unwrap();
@@ -2017,7 +2002,7 @@ mod tests {
         let mut provider = KvProvider::new(config, Product::OpenBao);
         provider.with_credentials(ProviderCredentials::from([(
             ROLE_ID.to_string(),
-            SecretString::new("test-role".to_string().into()),
+            SecretBytes::from_utf8("test-role"),
         )]));
 
         block_on(provider.resolve_approle_auth()).unwrap();
@@ -2071,7 +2056,7 @@ mod tests {
         let error = provider
             .set_expiring(
                 api_key_address(),
-                &SecretString::new("value".to_string().into()),
+                &SecretBytes::from_utf8("value"),
                 std::time::Duration::from_secs(3600),
             )
             .unwrap_err();
@@ -2105,10 +2090,31 @@ mod tests {
     }
 
     #[test]
+    fn retry_token_claims_never_reauthenticate_when_capacity_is_exhausted() {
+        let provider = KvProvider::new(KvConfig::default(), Product::Vault);
+        let token = parse_test_login(serde_json::json!({
+            "client_token": "limited", "num_uses": 1, "lease_duration": 3600
+        }))
+        .unwrap();
+        let session = KvSession {
+            provider: &provider,
+            tokens: Mutex::new(TokenPool::new(token)),
+        };
+        block_on(async {
+            assert_eq!(
+                session.claim_retry_token().await.unwrap().expose_secret(),
+                b"limited"
+            );
+            // This would attempt a real login if retry token claims replenished the pool.
+            assert!(session.claim_retry_token().await.is_none());
+        });
+    }
+
+    #[test]
     fn missing_login_use_count_is_treated_as_single_use() {
         let mut token = parse_test_login(serde_json::json!({ "client_token": "limited" })).unwrap();
 
-        assert_eq!(token.claim().unwrap().expose_secret(), "limited");
+        assert_eq!(token.claim().unwrap().expose_secret(), b"limited");
         assert!(token.claim().is_none());
     }
 
@@ -2156,8 +2162,8 @@ mod tests {
         assert_eq!(server.join().unwrap().len(), 1);
     }
 
-    #[test]
-    fn get_many_validates_every_address_before_authenticating() {
+    #[tokio::test]
+    async fn get_many_validates_every_address_before_authenticating() {
         let _lock = crate::tests::scrub_resolution_env();
         let config = KvConfig::parse(
             &provider_url("vault://127.0.0.1:1/secret?tls=false&auth=approle"),
@@ -2175,33 +2181,11 @@ mod tests {
                 ("VALID", Address::convention("project", "default", "VALID")),
                 ("INVALID", Address::Native(&invalid)),
             ])
+            .await
             .unwrap_err();
 
         assert!(error.to_string().contains("references need a `field`"));
         assert!(!error.to_string().contains("role_id credential is required"));
-    }
-
-    #[test]
-    fn block_on_is_safe_inside_a_current_thread_runtime() {
-        let outer = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        let answer = outer.block_on(async { block_on(async { 42 }) });
-
-        assert_eq!(answer, 42);
-    }
-
-    #[test]
-    fn vault_compatible_http_work_uses_one_runtime_across_batch_threads() {
-        let first = block_on(async { tokio::runtime::Handle::current().id() });
-        let second =
-            std::thread::spawn(|| block_on(async { tokio::runtime::Handle::current().id() }))
-                .join()
-                .unwrap();
-
-        assert_eq!(first, second);
     }
 
     #[test]
@@ -2285,8 +2269,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn kv_v2_delete_destroys_metadata_when_the_current_version_is_unreadable() {
+    #[tokio::test]
+    async fn kv_v2_delete_destroys_metadata_when_the_current_version_is_unreadable() {
         use std::io::{Read, Write};
         use std::net::TcpListener;
 
@@ -2323,7 +2307,7 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(provider.delete(&coords).unwrap());
+        assert!(provider.delete(&coords).await.unwrap());
         assert_eq!(
             server.join().unwrap(),
             [
@@ -2333,8 +2317,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn kv_v1_refuses_to_hold_an_expiring_value() {
+    #[tokio::test]
+    async fn kv_v1_refuses_to_hold_an_expiring_value() {
         let _lock = crate::tests::scrub_resolution_env();
         let _vault_addr = EnvVarGuard::remove("VAULT_ADDR");
         let config = KvConfig::parse(
@@ -2354,9 +2338,10 @@ mod tests {
         let error = provider
             .set_expiring(
                 &coords,
-                &SecretString::new("value".to_string().into()),
+                &SecretBytes::from_utf8("value"),
                 std::time::Duration::from_secs(3600),
             )
+            .await
             .unwrap_err();
         assert!(error.to_string().contains("KV v1 cannot expire"), "{error}");
     }

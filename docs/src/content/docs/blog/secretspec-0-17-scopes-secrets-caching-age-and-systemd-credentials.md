@@ -48,8 +48,9 @@ secrets = ["DATABASE_URL", "QUEUE_TOKEN"]
 ```
 
 ```bash
-secretspec run --scope api -- ./api
-secretspec run --scope worker -- ./worker
+$ secretspec run --scope api -- ./api
+
+$ secretspec run --scope worker -- ./worker
 ```
 
 Composed secrets may still read hidden dependencies to build a visible value,
@@ -60,7 +61,8 @@ authorization boundary when the child itself holds provider credentials.
 
 Carrying the selected scope through resolver requests and results required a
 breaking change to
-[`secretspec-ffi`](https://github.com/cachix/secretspec/tree/main/secretspec-ffi).
+[`secretspec-ffi`](https://github.com/cachix/secretspec/tree/main/libsecretspec),
+which is named `libsecretspec` in SecretSpec 0.20+.
 All [SecretSpec SDKs](/sdk/overview/) have been updated for 0.17 to support
 scopes, so applications should upgrade their SDK package and bundled native
 resolver together.
@@ -220,7 +222,7 @@ also brings:
   behavior for Vault and OpenBao.
 
 ```bash
-cargo install secretspec
+$ cargo install secretspec
 ```
 
 See the [full changelog](https://github.com/cachix/secretspec/blob/main/CHANGELOG.md)
@@ -234,7 +236,7 @@ The next work brings more control to local secret access:
   dialogs](https://github.com/cachix/secretspec/pull/122)** — approve or deny a
   secret request in a native prompt instead of requiring a terminal
   interaction.
-- **A [Passbolt provider](https://github.com/cachix/secretspec/pull/127)** —
+- **A [Passbolt provider](https://github.com/cachix/secretspec/pull/127) (0.19+)** —
   bring Passbolt's open-source, collaboration-focused credential manager
   behind the same SecretSpec interface for cloud and self-hosted teams.
 - **A [Bitwarden Password Manager

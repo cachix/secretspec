@@ -2,7 +2,7 @@
 
 # Ruby SDK for SecretSpec, a declarative secrets manager.
 #
-# A thin client over the secretspec-ffi C ABI. The Rust resolver is statically
+# A thin client over the libsecretspec C ABI. The Rust resolver is statically
 # linked into a native extension (secretspec_ext), so the SDK inherits every
 # provider with no Ruby-side logic and there is nothing to locate at runtime.
 # Mirrors the Rust derive crate's vocabulary.
@@ -17,7 +17,7 @@ $LOAD_PATH.unshift(__dir__) unless $LOAD_PATH.include?(__dir__)
 require "secretspec/secretspec_ext"
 
 module Secretspec
-  # Response wire-format version this SDK understands. Tracks secretspec-ffi's
+  # Response wire-format version this SDK understands. Tracks libsecretspec's
   # RESOLVE_SCHEMA_VERSION; a mismatch means the loaded library is incompatible.
   RESOLVE_SCHEMA_VERSION = 2
 
@@ -45,6 +45,14 @@ module Secretspec
     end
   end
 
+  # Caller-asserted software-integration context (SecretSpec 0.20+).
+  CallerContext = Struct.new(:name, :version, :operation, :resource, keyword_init: true) do
+    def to_h
+      { "name" => name, "version" => version, "operation" => operation,
+        "resource" => resource }.compact
+    end
+  end
+
   # One resolved secret. Exactly one of +value+ / +path+ is set.
   ResolvedSecret = Struct.new(:value, :path, :as_path, :source, :source_provider) do
     # The usable string: the file path for as_path secrets, else the value.
@@ -55,6 +63,7 @@ module Secretspec
 
   # A successful resolution, mirroring the Rust Resolved wrapper.
   Resolved = Struct.new(:provider, :profile, :secrets, :missing_optional, :scope) do
+    attr_accessor :file_lease_id
     # Export each resolved secret into ENV by its declared name. Secrets with no
     # usable value (e.g. under no_values) are skipped rather than deleted from
     # ENV (assigning nil would remove the variable).
@@ -73,18 +82,35 @@ module Secretspec
       secrets.transform_values(&:get)
     end
 
-    # Remove the temp files backing any as_path secrets in this result. The
-    # resolver persists those files (mode 0400) so their paths stay valid after
-    # resolve returns; the caller owns their lifetime. Call #close (or pass a
-    # block to Builder#load, which closes automatically) when done so secret
-    # files do not accumulate in the temp dir. A file already gone is not an
-    # error.
+    # Revoke this result's secret files, including hidden dependencies (0.22+).
+    # Call #close after the final consumer, or pass a block to Builder#load to
+    # close automatically. Repeated calls are harmless. Older runtimes use
+    # filesystem cleanup and attempt every file before raising the first error.
     def close
+      if file_lease_id
+        envelope = JSON.parse(Native.call(JSON.generate(
+          request_version: 1, operation: "release_files", source: { lease_id: file_lease_id }
+        )))
+        unless envelope["ok"]
+          error = envelope["error"] || {}
+          raise Error.new(error["kind"] || "unknown", error["message"] || "")
+        end
+        return nil
+      end
+      first_error = nil
       secrets.each_value do |secret|
         next unless secret.as_path && secret.path
 
-        File.delete(secret.path) if File.exist?(secret.path)
+        begin
+          File.delete(secret.path)
+        rescue Errno::ENOENT
+          # already gone
+        rescue SystemCallError => e
+          first_error ||= e
+        end
       end
+      raise first_error if first_error
+
       nil
     end
   end
@@ -111,6 +137,17 @@ module Secretspec
         result
       end
 
+      def call(request_json)
+        unless respond_to?(:c_call, true)
+          raise Error.new("capability", "the loaded native extension predates inline specifications; rebuild the secretspec gem")
+        end
+
+        result = c_call(request_json)
+        raise Error.new("ffi", "secretspec_call returned null") if result.nil?
+
+        result
+      end
+
       def abi_version
         c_abi_version
       end
@@ -128,10 +165,19 @@ module Secretspec
   class Builder
     def initialize
       @request = {}
+      @inline = nil
     end
 
     def with_path(path)
+      @inline = nil
       @request["path"] = path if path
+      self
+    end
+
+    # Resolve strict inline-spec v2 at its logical base directory (SecretSpec 0.21+).
+    def with_inline_spec(spec, base_dir)
+      @request.delete("path")
+      @inline = { "spec" => spec, "base_dir" => base_dir }
       self
     end
 
@@ -156,6 +202,12 @@ module Secretspec
       self
     end
 
+    # Identify the invoking software integration (SecretSpec 0.20+).
+    def with_caller(caller)
+      @request["caller"] = caller.to_h if caller
+      self
+    end
+
     # Omit secret values, returning only structure and provenance.
     def with_no_values(no_values = true)
       @request["no_values"] = no_values
@@ -169,7 +221,7 @@ module Secretspec
     # done to clean up any as_path temp files). With a block, yields the Resolved
     # and closes it afterwards, returning the block's value.
     def load
-      response = parse_response(JSON.generate(@request), "resolve", RESOLVE_SCHEMA_VERSION)
+      response = parse_response(*native_request, "resolve", RESOLVE_SCHEMA_VERSION)
 
       missing = response["missing_required"] || []
       raise MissingRequiredError.new(missing) unless missing.empty?
@@ -186,6 +238,7 @@ module Secretspec
         response["provider"], response["profile"], secrets,
         response["missing_optional"] || [], response["scope"]
       )
+      resolved.file_lease_id = response["file_lease_id"]
       return resolved unless block_given?
 
       begin
@@ -200,8 +253,7 @@ module Secretspec
     # MissingRequiredError: a missing required secret appears as a SecretReport
     # with status "missing_required".
     def report
-      request = @request.merge("mode" => "report")
-      response = parse_response(JSON.generate(request), "report", REPORT_SCHEMA_VERSION)
+      response = parse_response(*native_request("report"), "report", REPORT_SCHEMA_VERSION)
 
       secrets = (response["secrets"] || []).map do |s|
         SecretReport.new(s["name"], s["status"], s["required"],
@@ -216,8 +268,9 @@ module Secretspec
     # Resolve a JSON request payload and return the validated "response" hash, or
     # raise. +kind+ is "resolve" or "report"; it selects the schema version to
     # enforce and labels the version-mismatch message.
-    def parse_response(payload, kind, expected_version)
-      envelope = JSON.parse(Native.resolve(payload))
+    def parse_response(request, versioned, kind, expected_version)
+      payload = JSON.generate(request)
+      envelope = JSON.parse(versioned ? Native.call(payload) : Native.resolve(payload))
 
       unless envelope["ok"]
         err = envelope["error"] || {}
@@ -231,11 +284,22 @@ module Secretspec
       unless version == expected_version
         raise Error.new("version",
                         "unsupported #{kind} schema version #{version} " \
-                        "(expected #{expected_version}); the secretspec-ffi " \
+                        "(expected #{expected_version}); the libsecretspec " \
                         "library and this SDK are out of sync")
       end
 
       response
+    end
+
+    def native_request(mode = nil)
+      options = @request.dup
+      options["mode"] = mode if mode
+      return [options, false] unless @inline
+
+      [{ "request_version" => 1, "operation" => "resolve",
+         "source" => { "kind" => "inline", "spec_version" => 2,
+                       "base_dir" => @inline["base_dir"], "spec" => @inline["spec"] },
+         "options" => options }, true]
     end
   end
 

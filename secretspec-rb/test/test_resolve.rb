@@ -4,7 +4,7 @@ require "json"
 require "tmpdir"
 require "minitest/autorun"
 
-# Compile the native extension (statically linking libsecretspec_ffi.a) unless it
+# Compile the native extension (statically linking libsecretspec.a) unless it
 # is already built. ci-sdks.sh builds it explicitly; this covers standalone runs.
 def ensure_ext
   pkg = File.expand_path("..", __dir__)
@@ -43,6 +43,21 @@ class ResolveTest < Minitest::Test
     refute_empty Secretspec.abi_version
   end
 
+  def test_caller_context_is_structured_and_separate_from_reason
+    builder = Secretspec::SecretSpec.builder.with_caller(
+      Secretspec::CallerContext.new(
+        name: "git",
+        version: "2.51.0",
+        operation: "credential_get",
+        resource: "github.com"
+      )
+    )
+    request = builder.instance_variable_get(:@request)
+    assert_equal "git", request.dig("caller", "name")
+    assert_equal "credential_get", request.dig("caller", "operation")
+    refute request.key?("reason")
+  end
+
   def test_load_values_and_provenance
     Dir.mktmpdir do |dir|
       manifest, provider = project(dir, "DATABASE_URL=postgres://db\n")
@@ -65,6 +80,24 @@ class ResolveTest < Minitest::Test
 
       assert_equal ["SENTRY_DSN"], resolved.missing_optional
       refute resolved.secrets.key?("SENTRY_DSN")
+    end
+  end
+
+  def test_inline_spec_resolves_at_its_logical_base_dir
+    Dir.mktmpdir do |dir|
+      File.write(File.join(dir, "inline.env"), "TOKEN=inline-ruby\n")
+      spec = {
+        "project" => { "name" => "ruby-inline" },
+        "providers" => { "env" => "dotenv://inline.env" },
+        "profiles" => { "default" => { "secrets" => {
+          "TOKEN" => { "description" => "token", "providers" => ["env"] }
+        } } }
+      }
+      resolved = Secretspec::SecretSpec.builder
+                                        .with_inline_spec(spec, dir)
+                                        .with_reason("ruby inline test")
+                                        .load
+      assert_equal "inline-ruby", resolved.secrets.fetch("TOKEN").get
     end
   end
 

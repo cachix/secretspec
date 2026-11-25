@@ -12,6 +12,831 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - BeyondTrust Password Safe provider support for managed account password
   retrieval, including API-key, MFA, personal access token, and OAuth client
   credential authentication.
+- Rust embedders can use `RedactionStream::end_region()` (0.22+) to reuse a
+  redaction stream across text regions identified by their own parser.
+
+- File delivery (0.22+) uses private temporary files by default, without a
+  helper, on Windows, Linux, and macOS. Opt into process-owned memory-backed
+  files through Rust's `Secrets::set_file_storage` API. Leased storage uses the
+  published
+  [`file-lease`](https://crates.io/crates/file-lease) crate: locked, sealed memfds
+  on Linux and shared RAM volumes with crash recovery on macOS. Leased files
+  keep typed extensions such as `.pem` on both platforms. Lease failures
+  never fall back to disk. Owned Rust results retain files across clones, and
+  leases can be handed to a consuming process. Language SDKs and Rust one-shot
+  results can explicitly release files, including hidden dependencies, with
+  their cleanup methods. `ResolveResponse` gains a public `file_lease_id` field
+  and a `close()` method, so code constructing it with a struct literal must
+  set the new field.
+
+- Rust embedders can supply an `as_path` materializer (0.22+) to deliver logical
+  secret bytes directly into caller-owned resources. Composed values use the
+  custom paths, and resolved values retain their owners. PHP's new
+  `ResolvedSecret::open()` reads file secrets into memory-only streams,
+  including Linux memfd paths that PHP's ordinary file functions cannot open.
+
+- The SOPS provider supports deleting secrets (0.22+). `secretspec delete` and
+  `secretspec import --delete-source` remove the value
+  a read would return and leave the other keys in the file. A missing key or
+  file is left unchanged. Mapping branches are refused to protect unrelated
+  secrets. Imports refuse source and destination addresses that resolve to
+  the same file and key, including equivalent SOPS URIs and legacy layouts.
+
+- Minimal container images (0.22+) at `ghcr.io/cachix/secretspec`, containing
+  the static Linux binary at `/secretspec` for amd64 and arm64. Copy the binary
+  into your own image using a versioned image tag.
+
+- `secretspec add` accepts `--optional` and `--required` (0.22+) to override
+  profile defaults when declaring a secret. Omitting both keeps the defaults.
+
+- `secretspec config show` displays computed project and global configuration,
+  including CLI and environment overrides, each setting's source, and merged
+  provider aliases. Use `--json` for structured output. No secrets are fetched;
+  `config global show` continues to display saved user-global configuration.
+
+- `secretspec run --config-env=clear` removes the manifest, profile, provider,
+  scope, and reason environment overrides from the spawned child. The default,
+  `--config-env=inherit`, preserves existing inheritance behavior.
+
+- Terminal output redaction preserves ANSI control syntax so numeric secrets
+  do not break colors or shell modes. Window titles and hyperlink payloads remain
+  masked; Rust embedders can select this behavior with `Redactor::terminal_stream`.
+  Color modes, canceled sequences, and ignored control bytes retain their
+  terminal behavior while ordinary text remains masked.
+
+- `secretspec run` now masks exact secret values in command stdout and stderr
+  automatically, including file contents for `as_path` secrets. Filtering uses
+  pipes, which can change terminal detection and buffering in interactive programs.
+  Rust embedders can use `Redactor` and independent `RedactionStream`s to filter
+  their own output. `ValidatedSecrets::redactor` builds a filter from the same
+  validation snapshot, including original file contents and hidden inputs.
+
+- Rust integrations can implement the awaitable `AsyncProvider` trait or use
+  `AsyncProviderAdapter` to call existing providers without blocking async tasks.
+  `SyncProviderAdapter` exposes native async backends to the existing sync API;
+  `ProviderBase` carries their shared configuration and identity.
+  Async SDK, HTTP, and external IPC providers implement the trait directly,
+  retaining batch reads, metadata, authentication, and retry behavior. The
+  async URI factory selects native implementations automatically, and its boxed
+  providers can be passed to `SyncProviderAdapter`. External IPC sessions remain
+  usable across async and sync calls and after the caller's runtime is dropped.
+
+- Bitwarden Password Manager can load its `session` credential from another
+  provider, such as keyring, instead of requiring `BW_SESSION` in the shell.
+
+- Proton Pass refs accept `field` to read any field of an existing item, such
+  as `ref = { item = "test-item", field = "password" }` for a login's
+  password, a custom field, or `Section.field`. Refs with a `field` are
+  read-only, because `pass-cli` can only update a field by taking its value as
+  a command-line argument, visible to other local users in the process list.
+
+- Select the profile for `secretspec import` with `--profile` or `-P`,
+  including when moving secrets with `--delete-source`.
+
+- Pin static binary installations using a version in the installer URL, such
+  as `https://install.secretspec.dev/v0.21.1`. The URL without a version still
+  installs the latest release.
+
+- Generate passphrases, BIP-39 mnemonics, WireGuard private keys, signing JWKs,
+  age identities, and self-signed P-256 X.509 identities. Derive keys,
+  certificates, chains, and password-protected PKCS#12 archives from a declared
+  identity with `from`, `format`, and `credentials`, or select JSON/INI fields
+  from another declared secret with `from` and `extract`. Dependencies resolve
+  in order and scopes include hidden inputs without exposing their values.
+
+- Provider reads now retry recognized transient failures with bounded exponential
+  backoff, including CLI providers such as BWS. Set `[defaults.retry].max_attempts`
+  in user configuration or use `Secrets::with_retry_policy` in Rust to control
+  the attempt budget; one attempt disables retries. Safe Doppler value writes
+  also retry, while other mutations are not replayed by the shared wrapper.
+
+- `secretspec init` now adds the project schema directive to the top of new
+  manifests, enabling editor autocomplete and structural validation.
+
+- **Elixir SDK (0.22+)** (`secretspec-ex`) adds a pure Elixir client for
+  `secretspec.resolver/1`. It launches `secretspec serve` directly and requires
+  a compatible SecretSpec executable.
+
+### Fixed
+
+- Commands now finish and forward termination signals in restricted Unix
+  sandboxes that block socket wake-ups.
+
+- Interactive prompts now return an error when stderr is piped or redirected
+  instead of hanging and consuming a CPU core.
+
+- 1Password: `ref` coordinates whose vault, item, section, or field contain
+  characters that `op://` references cannot express (for example `:` in a vault
+  name or `/` in an item title) are now read through `op item get` instead of
+  failing. Other references keep using `op read` and `op inject`.
+
+- Undeclared secrets in `set`, `delete`, and `cache clear NAME` now report the
+  profile and available secrets without a duplicated "Secret ... not found"
+  wrapper. Rust callers receive `SecretSpecError::SecretNotDefined` for these
+  errors; their `kind()` remains `secret_not_found`.
+
+- Scaleway: `secretspec set` on a secret that already exists adds a new version
+  instead of failing with HTTP 400 "cannot have same secret name in same path".
+
+- KDBX saves use the correct `DeletionTime` XML element, keeping databases
+  compatible with KeePass clients that strictly validate deletion metadata.
+
+- IPC writes of X.509 identities decode their declared text encoding before
+  storage, so protected and unprotected archives round-trip without corruption.
+
+- Imported X.509 identities accept self-issued certificates signed by a distinct
+  issuer with the same name and preserve supplementary Unicode in certificate
+  subjects for both leaf and issuer certificates when exporting PKCS#12,
+  including in builds using published dependencies.
+  Scoped explanations redact hidden derivation
+  source names.
+
+- X.509 identity generation, validation, and PKCS#12 conversion no longer
+  build or require OpenSSL. PKCS#12 passwords currently support the Unicode Basic
+  Multilingual Plane; unsupported characters produce a clear credential error.
+
+- Stored X.509 identities and their derived secrets retain credential expiry
+  and refresh deadlines so SDK consumers refresh them when their inputs change.
+
+- Secret declarations now warn about ignored unknown fields, with a suggestion
+  to use `composed` when `compose` is misspelled and a note that the field may
+  be supported in a newer version. Unknown fields remain accepted for
+  compatibility with manifests from newer versions.
+
+- IPC v1 now keeps timestamps, durations, retry delays, expiry values, and
+  counts within the JSON integer range that JavaScript clients can represent
+  exactly. Values outside that range are rejected instead of being rounded.
+  Far-future client deadlines are clamped before initialization, calls, and
+  shutdown so their requests remain interoperable. Very long cache `max_age`
+  values are clamped the same way, so expiring writes to external providers
+  and cached results from `secretspec serve` keep working.
+
+- Rust IPC clients now accept additional response, result, and error-data
+  members from later compatible v1 peers, while requests remain strict.
+
+- The C resolver client now accepts additional members in a later compatible
+  v1 server's initialization result, including its `server`, `limits`, and
+  `application` objects, instead of failing to open the session. The client's
+  own initialization offer is still validated strictly.
+
+- `ResolvedSecret` now redacts its value in `Debug` output, so logging a
+  `ResolveResponse` or `NamedResolution` with `{:?}` no longer prints secret
+  values. File paths and provenance remain visible.
+
+- The Rust library no longer panics when AWS, Google Cloud, Azure, Doppler,
+  Infisical, Cloudflare, Scaleway, Setec, or external providers are used from
+  inside a current-thread Tokio runtime, such as
+  `#[tokio::main(flavor = "current_thread")]` or `#[tokio::test]`.
+
+- `secretspec check` no longer leaves decrypted `as_path` secret files in the
+  temporary directory. It never printed their paths, so nothing could use
+  them.
+
+## [0.21.1] - 2026-09-27
+
+### Added
+
+- Rust callers can use `secretspec::providers()` to list built-in provider
+  names, descriptions, and example URIs, including providers whose Cargo
+  features are disabled.
+
+### Fixed
+
+- The published `secretspec` crate includes every fixture its tests need, so
+  its test suite runs from the crates.io source without the repository.
+- The C resolver client reports why opening a session failed when the endpoint
+  writes non-protocol text before its first response, instead of sometimes
+  returning `UNAVAILABLE` without an error message.
+
+## [0.21.0] - 2026-09-22
+
+SecretSpec 0.21 lets other programs request only the secrets they need, lets
+providers run outside SecretSpec, and preserves binary values from storage to
+the consuming application. It also adds Doppler and Tailscale Setec providers,
+project-wide provider defaults, and a Claude Code credential integration.
+
+### Changed
+
+- **Cached values use a new format to preserve binary secrets.** Existing cache
+  entries remain readable by 0.21. SecretSpec 0.20 and earlier cannot read new
+  entries; they fall back to the original provider and leave those entries
+  untouched. Avoid sharing a cache store between 0.20 and 0.21 clients.
+
+- **Command-generated values now include all stdout bytes**, including spaces
+  and a final newline. For example, `openssl rand -hex 32` produces a value
+  ending in `\n`; trim it in the command if that is unwanted. Existing stored
+  values do not change. Empty or whitespace-only output is still rejected.
+
+- **Piped `secretspec set` input remains trimmed text.** Use `--from-file -`
+  when whitespace or non-UTF-8 bytes must be preserved from stdin.
+
+- **`secretspec get` no longer adds a newline when writing to a pipe or file.**
+  This makes redirects preserve the exact value. Terminal output still ends in
+  a newline; shell command substitution behaves as before.
+
+- **Rust secrets are byte values.** `Secrets::set` now takes `SecretBytes`.
+  Replace `set(name, Some(value))` with `set_text(name, &value)` for text and
+  `set(name, None)` with `prompt_and_set(name)`. Custom providers must update
+  their `get`, `set`, and `get_many` implementations to use `SecretBytes`;
+  `Provider::name` now returns `&str`, and `generator::generate` returns bytes.
+
+- **Building the new C resolver client requires system yyjson.** Meson finds it
+  through pkg-config and CMake through `find_package(yyjson CONFIG)`. Static
+  consumers must link `-lyyjson`; `secretspec-resolver.pc` records the dependency.
+
+### Added
+
+- **Resolve secrets from another process.** `secretspec serve` exposes a
+  private, versioned stdio protocol so an application can request one declared
+  secret without loading the whole manifest into its own process. It can return
+  a value or a temporary file that is cleaned up when the session ends. Clients
+  can also answer prompts, store or delete declared secrets on the same provider
+  route, and receive expiry and revision information for their own caches.
+  `secretspec serve --read-only` refuses operations that would write, including
+  generation and prompting when they would store a value. Applications can use
+  the Rust `secretspec-ipc` crate (async or blocking), the C
+  `libsecretspec-resolver` library, or the protocol directly. Rust clients can
+  also connect over SSH or an existing authenticated stream.
+
+- **Install providers outside the SecretSpec release cycle.** Trusted external
+  executables can register as providers and serve a versioned provider protocol.
+  They can describe their capabilities, request credentials for their own URI,
+  and return an interaction reference that appears in the audit log for an
+  approval flow. `secretspec config provider login` and `secretspec set` can
+  collect missing credentials. SecretSpec passes each endpoint only the
+  base environment plus the variables it declared, keeping other providers'
+  tokens separate.
+
+- **Keep binary secrets intact.** Providers, fallback chains, imports, and the
+  cache now preserve arbitrary bytes. Use `secretspec set NAME --from-file FILE`
+  (or `--from-file -` for stdin) to store exact bytes, and `as_path = true` to
+  pass them to an application through a temporary file. The file, systemd
+  credential, environment, keyring, Google Secret Manager, Kubernetes, and
+  Scaleway providers support binary values; AWS Secrets Manager also supports
+  `SecretBinary`. Rust callers can use `resolve_bytes()` and
+  `resolve_named_bytes()`. Text-only outputs report a UTF-8 error naming the
+  secret. On Unix, `run` passes non-UTF-8 values to child processes; it rejects
+  NUL bytes before launching them.
+
+- **Doppler provider** (`doppler://PROJECT[/CONFIG]`): read, write, delete, and
+  discover secrets in an existing Doppler project. It keeps names unchanged so
+  secrets remain usable in the Doppler dashboard and `doppler run`. The active
+  SecretSpec profile selects the Doppler config unless the URI pins one.
+  Authenticate with `DOPPLER_TOKEN` or a `token` provider credential. Doppler
+  restrictions and values it cannot store unchanged are reported as errors.
+
+- **Tailscale Setec provider** (`setec://`): read, write, delete, and discover
+  secrets through a tailnet-authenticated Setec server. It supports binary
+  values and reads pinned to a Setec version.
+
+- **Set a project-wide provider chain** with `[defaults].providers`. Secrets
+  without their own or a profile-level chain use this default, so a checked-in
+  manifest can refer to an alias that each developer maps to their preferred
+  store. User-global alias `ref` templates can expand `{project}`, `{profile}`,
+  and `{key}`. Native SDK inline declarations support this through schema v2;
+  v1 declarations still work.
+
+- **Use SecretSpec credentials with Claude Code.** `secretspec claude configure`
+  installs an `apiKeyHelper` that retrieves Anthropic API or gateway credentials
+  from any provider. `login` and `logout` manage them by settings scope and API
+  resource; `unconfigure` removes the managed helper without replacing unrelated
+  settings. Repository, user, worktree, and `CLAUDE_CONFIG_DIR` settings are
+  supported.
+
+- **Get editor help for configuration.** Export JSON Schemas for
+  `secretspec.toml` and user `config.toml` with `secretspec schema --config
+  project` or `secretspec schema --config global` for autocomplete, field
+  descriptions, and validation.
+
+- **Generate OpenPGP and OpenSSH private keys.** Use
+  `type = "openpgp_private_key"` with `generate.user_id`, or
+  `type = "ssh_private_key"`. Both generate modern keys by default and offer
+  RSA for compatibility; OpenPGP keys can be limited to signing or encryption.
+
+- **Target a specific Bitwarden item** by UUID when several items share a name.
+  Reads and writes accept the UUID, and imports reject duplicate item fields
+  before making changes.
+
+- **Declare JVM SDK secrets inline** with `withInlineSpec` instead of requiring
+  a manifest file.
+
+### Fixed
+
+- **Stalled HTTP providers fail in bounded time.** Vault, OpenBao, Infisical,
+  Cloudflare, Scaleway, Azure App Configuration, Doppler, and Setec use a
+  10-second connection timeout and a 60-second request timeout. Vault and
+  OpenBao now retry timed-out requests as configured.
+
+- **macOS keyring access no longer asks for the login keychain password on
+  every run after an upgrade.** A new build may ask once per existing item;
+  choose "Always Allow" to keep later runs of that build quiet. Reads preserve
+  the item and its access settings, even if access is denied.
+
+- **KeePassXC KDBX 4.0 files can be written.** SecretSpec upgrades them to
+  KDBX 4.1 on write while preserving their encryption and key-derivation
+  settings.
+
+- **Bitwarden reads are faster and more consistent.** A batch uses one vault
+  listing, and a single read falls back to the full listing if Bitwarden's
+  search returns only similarly named items.
+
+- **pass, gopass, and LastPass handle whitespace and multiline values more
+  reliably.** The pass provider removes one final newline added by the `pass`
+  CLI on read. Existing gopass text entries still return their trimmed first
+  line until rewritten; new values requiring exact bytes use its binary-entry
+  format. Ordinary single-line gopass values remain readable by older tools.
+  LastPass rejects NUL bytes before writing rather than silently truncating
+  them.
+
+- **Cache planning avoids unnecessary provider reads** and refuses a cache
+  that would point to the same physical secret as its source under the active
+  profile, preventing an overwrite or deletion of the source value.
+
+## [0.20.0] - 2026-08-31
+
+### Changed
+
+- Provider names remain registered when their Cargo feature is disabled, so
+  selecting one now identifies the feature required by the build instead of
+  incorrectly reporting that the provider does not exist. Provider discovery
+  and enabled or disabled builds now share the same metadata catalog.
+
+- Interactive prompts now use the Console terminal backend, reducing CLI
+  dependencies and allowing Unix signal handling to use Signal Hook 0.4.
+
+- SecretSpec now builds against Rand 0.10 and the TOML 1.1 ecosystem, improving
+  compatibility with current Linux distribution Rust packages.
+
+- Secret resolution now applies provider fallbacks, generated and default
+  values, compositions, scopes, and presence constraints through one ordered
+  pipeline, keeping CLI and SDK resolution behavior aligned.
+
+- The embedded C ABI is named `libsecretspec` in 0.20+, replacing the
+  `secretspec-ffi` crate, `secretspec_ffi` library filenames, and
+  `secretspec_ffi.pc`. Its exported `secretspec_*` symbols and
+  `SECRETSPEC_FFI_LIB` override are unchanged. Runtime-loading SDKs retain
+  pre-0.20 shared-library filename fallbacks where supported.
+
+- The Infisical provider now uses a separate HTTP connection for Universal Auth
+  login, keeping the connection pool used for subsequent secret reads reliable.
+
+- The 1Password provider keeps batched reference resolution efficient when
+  some items are missing: it lists missing items once per vault and retries the
+  batch without them, instead of falling back to one `op read` process per
+  secret. Authentication and unavailable-CLI errors fail immediately, while
+  missing optional items whose names resemble authentication diagnostics remain
+  missing rather than aborting the batch.
+
+- The value-free resolution surfaces — `secretspec check --json`,
+  `check --explain`, and the SDKs' report and no-values resolutions — no longer
+  report a **required** `generate` secret as resolved while no provider holds
+  its value. Because these surfaces deliberately mint nothing, such a secret is
+  now reported as `missing_required` and the command exits non-zero, instead of
+  passing a CI gate against an empty store. Run `secretspec check` or
+  `secretspec run` once to generate and store the value; the preflight then
+  reports it as resolved from its provider. An optional `generate` secret, or
+  one routed to a provider that never retains generated values such as `null`,
+  is unaffected and still resolves. `check --explain` also phrases such an
+  entry as `will generate` rather than `generated`, since nothing was minted.
+
+- Git credential configuration now works on Windows, keeps repository-local
+  includes valid when repositories move, distinguishes percent-encoded reserved
+  path bytes, avoids persisting an ambient profile, and exits quietly when its
+  output pipe closes on Unix.
+
+- Dotenv parsing and rendering now use dotenv-ng throughout the dotenv
+  provider, age-encrypted dotenv blobs, and `secretspec export --format
+  dotenv`. Values containing `$` remain literal, output uses only the quoting
+  needed to round-trip, and bcrypt-style strings containing `$2a$10$...` are
+  no longer corrupted while reading ([#73]). Dotenv keys may include hyphens,
+  leading digits, leading dots, and Unicode. Whitespace, `=`, `#`, and control
+  characters remain invalid in keys.
+
+  [#73]: https://github.com/cachix/secretspec/issues/73
+
+- The Rust `secretspec-derive` macro now uses the support crates re-exported by
+  `secretspec`, so applications no longer need explicit `serde` or `secrecy`
+  dependencies just to compile generated types.
+
+- `secretspec check` writes its human-readable report to stdout, consistently
+  with `check --json` and `check --explain`, so it can be piped and redirected
+  without mixing the report with diagnostics. Scripts that captured the report
+  from stderr must capture stdout instead; `2>&1` continues to work. Rust SDK
+  callers can select a report sink with `Secrets::check_with_writer`, while
+  the existing `Secrets::check` API and its stderr behavior remain unchanged.
+
+### Added
+
+- The age provider supports deleting secrets in 0.20+: `secretspec delete`,
+  `secretspec import --delete-source`, and cache invalidation now work with it,
+  so an age-encrypted file can serve as the local store of a cached provider
+  alias.
+
+- Native SDKs (0.20+) can resolve a strict, versioned inline secret declaration
+  through the new `secretspec_call` C ABI entry point. Inline declarations use
+  an explicit logical base directory for relative providers, reject unknown
+  fields, and require the new symbol so an older library cannot silently fall
+  back to a filesystem manifest. The Go, Python, Node.js, Ruby, Haskell, PHP,
+  C#, and Swift SDKs expose this as their `WithInlineSpec` /
+  `with_inline_spec` builder method.
+
+- Static musl CLI release binaries for x64 and arm64 Linux are available in
+  0.20+, so the standalone installer and `secretspec-update` work on Alpine
+  without a glibc compatibility layer.
+
+- Rust SDK (0.20+): `Spec::schema_json` exposes the value-free JSON Schema
+  generated by `secretspec schema` to Rust SDK callers without enabling the CLI
+  feature.
+
+- Rust SDK (0.20+): `SpecBuilder` preserves comments, key order, quoting, and
+  unrelated syntax when adding, replacing, or removing declarations from a
+  `Spec` loaded from TOML. `preserved_text` exposes the exact edited root
+  document, while `to_toml` renders freshly formatted TOML when no preserved
+  document is available. Inherited declarations remain in their parent files
+  and are revalidated after every edit.
+
+- The Node.js SDK publishes musl builds of the native addon in 0.20+, so
+  `require("secretspec")` works on Alpine images such as `node:alpine`
+  ([#383]). npm picks the build that matches the host libc, on both x64 and
+  arm64.
+
+  [#383]: https://github.com/cachix/secretspec/issues/383
+
+- `extract` supports INI documents in SecretSpec 0.20+, selecting an
+  unsectioned key with `/key` or a named-section key with `/section/key`.
+
+- Rust SDK (0.20+): **`SecretSpecBuilder::prompt_missing`** lets the typed loader
+  generated by `declare_secrets!` prompt for and store missing required secrets
+  interactively, matching `Secrets::ensure_secrets` on the untyped SDK. It is
+  disabled by default (`RequiredSecretMissing` still fails fast, exactly as
+  before) and only prompts when stdin is a real terminal.
+
+- In 0.20+, a read-only `git-credential-secretspec` helper lets Git retrieve
+  HTTPS usernames and tokens through SecretSpec providers without duplicating
+  them in Git's credential store. Its built-in manifest keeps the default
+  independent of the current directory and isolates values by protocol, host,
+  and configured path; equivalent unreserved URL encodings select one canonical
+  credential, including for flat-key providers. `secretspec git login` and
+  `logout` manage those values explicitly, and manually registered embedded
+  helpers can use the stable `PASSWORD` and `USERNAME` aliases.
+  SMTP credential contexts support `git send-email` without writing
+  `sendemail.smtpPass`, with passwords isolated by case-insensitive server,
+  port, and username. Path-scoped HTTP(S) credentials take precedence over
+  host-wide fallbacks, and username-bearing Git requests select only the
+  matching credential.
+  `configure` and `unconfigure` safely manage repository or global Git
+  configuration without replacing existing helpers. The owner-only managed
+  file is durably written, custom-manifest symlinks are preserved, and failed
+  or repeated include removal leaves recoverable state. Only explicitly passed
+  provider and reason options are persisted, while `--file` retains the
+  custom-manifest workflow (0.20+).
+
+- **Kubernetes provider** (`k8s+<configmap|secret>://`, 0.20+): store, read,
+  delete, and discover values in a Kubernetes ConfigMap or Secret using the
+  current cluster.
+
+- **EJSON provider** (`ejson:`, 0.20+): read string values from an encrypted
+  EJSON file with RFC 6901 JSON Pointer references. The private key comes from
+  an explicit `private_key` provider credential, so an existing provider such
+  as Google Cloud Secret Manager can supply an exact key without putting it in
+  the URI, environment, process arguments, or a local key file. Batch
+  resolution decrypts each file once, and the initial provider is intentionally
+  read-only.
+
+- **Azure App Configuration provider** (`aac://`, 0.20+): select direct
+  values and Azure Key Vault references by label, prefix, and tags, with Entra
+  ID or connection-string authentication and guarded writes, deletion, and
+  declaration discovery. Azure Key Vault references can pin an exact secret
+  version, cached-route validation compares canonical vault endpoints
+  independently of authentication choice, and discovery rejects ambiguous or
+  invalid convention keys. HTTP redirects are rejected so reads and
+  secret-bearing writes remain confined to the configured store endpoint.
+
+- Rust SDK (0.20+): describe secrets without TOML through the public `Spec`,
+  `SpecBuilder`, `Profile`, and `Secret` API. TOML parsing and code generation
+  use the same validated model, so Rust-first and file-backed projects share
+  inheritance, generation, and provider behavior, including profile-level
+  requiredness defaults and explicit opt-outs from inherited path, prompt, and
+  generation settings. Existing specs can be copied or consumed back into a
+  builder to add, replace, or remove declarations before rebuilding a validated
+  spec. This validated declaration API replaces the previously exposed raw
+  configuration and code-generation implementation types. Custom provider
+  implementations should now return declarations such as
+  `Secret::required(...)` from `Provider::reflect` instead of constructing raw
+  configuration secrets.
+
+- Structured caller context (0.20+) lets CLI and SDK integrations identify the
+  invoking software, version, operation, and non-secret resource independently
+  of the user-supplied access reason. Audit records and providers receive the
+  context, but it never satisfies the `require_reason` policy.
+
+- Code generation (0.20+) carries each secret's declared `description` into the
+  generated JSON Schema as a `description` key on its property.
+  [quicktype](https://quicktype.io)
+  turns that into a native docstring in every target language, so SDKs
+  generated from a manifest carry the same descriptions the manifest already
+  declares, instead of losing them at the schema boundary.
+
+- The Fly.io `fly` provider (0.20+) publishes and deletes application secrets
+  with `secretspec set` and `secretspec delete`, and discovers their names with
+  `init --from`. Fly.io never exposes plaintext secret values, so the provider
+  clearly rejects read operations and CLI guidance recommends only supported
+  workflows. Writes keep values off process arguments by streaming them to
+  `flyctl secrets set` over stdin, refuse boundary whitespace that `flyctl`
+  would silently trim, and scrub ambient Fly token variables before injecting
+  the token selected through the provider credential mechanism.
+
+- The Cloudflare `cloudflare` provider (0.20+) publishes, replaces, deletes,
+  and discovers account-level Secrets Store entries through Cloudflare's API.
+  Cloudflare never returns plaintext values through its management API, so the
+  provider clearly reports its write-only behavior. Authentication can use a
+  SecretSpec `api_token` credential, `CLOUDFLARE_API_TOKEN`, or the current
+  Wrangler OAuth, API-token, or legacy API-key session; secret values are sent
+  only in HTTPS request bodies ([#84]).
+
+  [#84]: https://github.com/cachix/secretspec/issues/84
+
+- `secretspec completions <shell>` (0.20+) generates completion scripts for
+  Bash, Elvish, Fish, Nushell, PowerShell, and Zsh directly from the CLI
+  definition, including descriptions and contextual suggestions for profiles,
+  scopes, secret names, providers, aliases, paths, and commands. Completion
+  reads configuration metadata only; it never queries providers or reads
+  secret values.
+
+- In 0.20+, a read-only `docker-credential-secretspec` helper lets Docker
+  retrieve registry usernames and tokens through any SecretSpec provider.
+  `secretspec docker configure` and `unconfigure` safely manage per-registry
+  Docker credential-helper settings without replacing existing helpers, while
+  `secretspec docker login` and `logout` manage isolated embedded credentials;
+  custom manifests remain available through `--file` (0.20+).
+
+- **JVM SDK** (0.20+): use SecretSpec from languages such as Java or Kotlin.
+
+### Fixed
+
+- 1Password convention-secret batches now retrieve all matching items through
+  one `op item get` process instead of starting one process per secret, avoiding
+  desktop-app connection timeouts when resolving larger manifests. Batch input
+  uses the CLI's structured JSON interface so reads work consistently across
+  1Password CLI releases ([#398]).
+
+  [#398]: https://github.com/cachix/secretspec/issues/398
+
+- Bitwarden Password Manager convention secrets now use
+  `secretspec/{project}/{profile}/{key}` item titles, preventing a same-named
+  secret in another project or profile from being read or overwritten. The
+  existing `?folder=` option customizes that title prefix. Bare items created
+  by releases through 0.19 can be renamed to the namespaced title or retained
+  with an explicit `ref`; declaration discovery emits those legacy bare items
+  as refs automatically. Names remain isolated when a project or profile
+  contains `/`, and `secretspec init --from bw://` recognizes convention names
+  case-insensitively while preserving legacy items' native references. ([#369])
+
+  [#369]: https://github.com/cachix/secretspec/issues/369
+
+- On Unix, `secretspec run` now forwards `SIGTERM`, `SIGINT`, and `SIGHUP` to
+  the command it started, allowing graceful container shutdown even when
+  SecretSpec is PID 1. Commands terminated by a signal now produce the
+  conventional `128 + signal` exit status instead of always exiting 1
+  ([#382]).
+
+  [#382]: https://github.com/cachix/secretspec/issues/382
+
+- Format-preserving `Spec` edits now keep inherited declarations separate after
+  semantic builder changes, resolve parent specs independently of later working
+  directory changes, remove synthesized profile tables when additions are
+  undone, and apply description validation consistently across builder origins.
+
+- The Kubernetes provider now checks the correct Kubernetes Secret resource
+  permission and refuses `import --delete-source` before copying values when
+  the source object cannot be patched.
+
+- Closing the output pipe now ends the CLI quietly on Unix, so
+  `secretspec export | head` and `secretspec check --json | head` behave like
+  any other Unix tool. Previously `export` reported `IO error: Broken pipe`
+  and exited 1, and `check --json` panicked with `failed printing to stdout`,
+  because Rust ignores `SIGPIPE` by default and surfaced `EPIPE` instead. The
+  entry point now restores the default `SIGPIPE` disposition, which covers
+  every command that writes to stdout.
+
+- `cargo run` continues to launch the main SecretSpec CLI after installing the
+  Docker credential-helper binary in the same package (0.20+).
+
+- Embedded Docker credentials now remain isolated by registry and Docker
+  configuration when used with flat providers such as Dotenv. Provider keys
+  carry the same stable identity as the embedded project, preventing one
+  registry's login or logout from affecting another (0.20+).
+
+- Docker now reports when `configure` replaces a registry's existing
+  SecretSpec metadata and clarifies that the stored credential was not removed
+  (0.20+).
+
+- Docker can now manage the same registry independently in multiple
+  `DOCKER_CONFIG` directories. Helper lookup and embedded credential storage
+  are isolated by both registry and Docker configuration (0.20+).
+
+- Equivalent `DOCKER_CONFIG` paths that resolve through symlinked directories
+  now share one Docker credential identity, so helper lookup and cleanup work
+  regardless of which path spelling invokes them (0.20+).
+
+- Default Docker audit caller context no longer reports the SecretSpec release
+  as Docker's version. Docker remains identified as the caller while its
+  unknown version is omitted (0.20+).
+
+- Docker's managed credential state is now restricted to owner-only permissions
+  without changing the existing mode of Docker's own `config.json`. Atomic
+  updates and final-entry removal preserve a symlinked state file, and
+  interrupted removal can be resumed when Docker's helper entry was already
+  deleted (0.20+).
+
+- Docker credentials configured through a symlinked custom manifest now retain
+  that logical manifest path, so relative `extends` entries continue to resolve
+  from the directory where the symlink was selected (0.20+).
+
+- `secretspec docker` no longer treats exported `SECRETSPEC_FILE`,
+  `SECRETSPEC_PROFILE`, `SECRETSPEC_PROVIDER`, or `SECRETSPEC_REASON` as typed
+  configuration flags. Only an explicit `--provider` or `--reason` is saved for
+  later helper calls, and ambient manifest/profile settings no longer switch or
+  block the embedded credential workflow (0.20+).
+
+- Custom-manifest Docker credentials now pin a profile only when `--profile` is
+  explicitly supplied, preventing a shell's ambient profile from becoming a
+  permanent helper setting (0.20+).
+
+- Google Cloud Secret Manager convention names now use the readable,
+  versioned `secretspec2--{project}--{profile}--{key}` layout. Distinct logical
+  addresses such as `my-app/prod/K` and `my/app-prod/K` can no longer collide
+  on one stored secret. When the new id holds no value, reads fall back to the
+  matching 0.19 `secretspec-{project}-{profile}-{key}` secret and warn once per
+  run, so an upgraded project keeps working with no migration step and no new
+  permissions: the fallback only reads, and credentials that cannot create
+  secrets are unaffected. Writes always use the new id, so `secretspec set`
+  moves a secret, after which reads stop consulting the legacy id. The 0.19
+  secret is left in place for rollback and should only be deleted once its
+  value has been written under the new id. Names that releases through 0.19
+  accepted but the new layout cannot represent, such as a project containing
+  `--`, keep reading their 0.19 secret with a warning; writing them requires
+  renaming the component or addressing the secret with a `ref`.
+  Secret-level IAM bindings on 0.19 ids also keep working when an unbound new
+  id returns permission denied, while other access failures remain errors
+  instead of being mistaken for missing values. Explicit `ref` addresses
+  remain unchanged. ([#219])
+
+  [#219]: https://github.com/cachix/secretspec/issues/219
+
+- Bare `bws://<project-uuid>` provider URIs now target the Bitwarden US cloud
+  vault instead of the public marketing site, restoring reads and writes while
+  keeping the server pinned independently of ambient `bws` configuration.
+  ([#359](https://github.com/cachix/secretspec/issues/359))
+
+- Node SDK processes using `loadAsync()` or `reportAsync()` with AWS Secrets
+  Manager or Parameter Store now exit normally after resolution. Provider
+  runtime and TLS state is torn down on a short-lived resolver thread instead
+  of remaining attached to a persistent libuv worker during macOS process
+  shutdown. ([#343])
+
+  [#343]: https://github.com/cachix/secretspec/issues/343
+
+- The `awssm` and `scaleway` providers now treat a JSON `null` in a `ref` field
+  as no value, the same as an absent key, so the provider chain continues.
+  Previously it was rendered as the four-character string `null`, which
+  satisfied a required secret and reached the program as a password or token
+  spelled `n-u-l-l`. The `bw` and `dashlane` providers already behaved this way.
+  An `extract` pointer is unchanged: it names one location and still reports a
+  `null` there, and the two policies now sit next to each other in one place.
+
+- The Python and Ruby SDKs' `Resolved.close()`/`Resolved#close` now remove every
+  `as_path` temp file even when one of them cannot be removed, raising the first
+  such error only after the rest are cleaned up. Previously the first failure
+  aborted the loop and left the remaining secret files on disk, which is the
+  outcome `close` exists to prevent. This matches the Go SDK's `firstErr` and the
+  .NET SDK's `firstError`. The Ruby SDK also no longer skips a dangling symlink,
+  which `File.exist?` reports as absent.
+
+- The `awssm` provider now accepts a trailing slash in `?prefix=` without
+  inserting a second slash into the AWS secret name. For example,
+  `?prefix=myteam/` resolves to `myteam/secretspec/...`, matching
+  `?prefix=myteam`, and both spellings share one provider identity so import
+  diagnostics still recognize alias-specific references. This avoids silently
+  treating the secret as missing or writing to a distinct double-slash name
+  ([#344](https://github.com/cachix/secretspec/issues/344)).
+
+- `import --delete-source` now rejects providers that cannot delete during
+  preflight, before writing any destinations. Previously the import could copy
+  a value successfully and fail only when source cleanup began.
+
+- Infisical secret references no longer require `?env=` in the provider URI: a
+  `ref` names a folder and key but never an environment, so it now falls back to
+  the profile the run resolves under. One alias can therefore serve every profile
+  while naming secrets flat — `ref = { item = "/{key}" }` — instead of needing
+  one alias per environment. An explicit `?env=` still pins the environment.
+  When every requested secret gets Infisical's ambiguous 404, SecretSpec now
+  checks the environment root once without requesting secret values and reports
+  a missing environment or project, naming whether the profile or `?env=`
+  selected it. A genuinely absent secret or folder in an existing environment
+  remains unset so provider fallback still works. A credential declared with a
+  `ref` still needs `?env=`, so it resolves the same way whichever profile is
+  running. ([#338])
+
+  [#338]: https://github.com/cachix/secretspec/issues/338
+
+- `secretspec set` against an Infisical secret names the environment in its
+  pre-write preview, which the previous description left out.
+
+- Infisical import collision checks now recognize when aliases target the same
+  secret through a profile-derived versus explicit environment, or through an
+  absolute ref that overrides different configured path defaults, preventing
+  aliased destinations from overwriting one another.
+
+## [0.19.1] - 2026-08-12
+
+Republishes 0.19.0's command-line artifacts. The library and CLI behave exactly
+as in 0.19.0.
+
+### Added
+
+- Windows ARM64 CLI release artifacts (`aarch64-pc-windows-msvc`), attached to
+  the GitHub Release as `secretspec-aarch64-pc-windows-msvc.zip` with a
+  checksum. The static installer keeps selecting the x86_64 build on Windows
+  ARM64, which runs under emulation, so download the archive directly for a
+  native binary.
+
+### Fixed
+
+- The 0.19.0 GitHub Release shipped without its CLI archives, its installer,
+  and the Swift XCFramework, so `curl https://install.secretspec.dev | sh` and
+  `swift package` resolution of 0.19.0 both failed. Every language registry
+  (crates.io, PyPI, npm, RubyGems, Hackage, NuGet) published 0.19.0 normally and
+  is unaffected. Install 0.19.1 instead; SwiftPM version ranges resolve to it
+  automatically.
+
+## [0.19.0] - 2026-08-10
+
+### Changed
+
+- A provider URI may no longer carry a credential. A URI with a password
+  (`scheme://user:PASSWORD@host`) is rejected, and `onepassword+token://` no
+  longer accepts the service account token in its userinfo
+  (`onepassword+token://token@vault`). A URI is committed to `secretspec.toml`,
+  echoed into shell history, and printed by CI, so a credential written there is
+  already disclosed and redacting it at the terminal cannot retract it. Keep the
+  scheme and supply the credential through a provider credential
+  (`secretspec config provider login <alias>`, or `credentials = { ... }` on the
+  alias) or the provider's environment variable; the errors name both. An
+  unparseable provider specification is now also redacted before it is reported.
+- `secretspec get` resolves through the same path as the SDK's `resolve_named`,
+  so a single-secret read makes exactly the decisions batch resolution makes. It
+  continues to read the whole profile regardless of an active scope, and audits
+  the coordinates it actually reached.
+- 1Password field references now resolve in one batched CLI call, reducing
+  repeated unlocks and process startup when loading multiple secrets. If a
+  missing reference requires individual reads, those reads remain bounded and
+  concurrent.
+- The Rust SDK's `ProviderAlias` now provides `leaf`, `credentials`, and
+  `credentials_mut` helpers so callers can construct and inspect leaf or
+  inline-cached aliases without depending on their storage representation.
+
+### Added
+
+- The Rust SDK can resolve a single secret with `Secrets::resolve_named`, which
+  reads only that secret and the inputs it composes from. An unrelated missing
+  required secret no longer fails the call, and the result distinguishes an
+  undeclared name (including one the active scope hides) from a declared secret
+  with no value, reporting whether that value was required.
+- `Secrets::with_default_reason` sets a session reason only when none is already
+  in effect, so an embedding application can describe itself without discarding
+  the reason its own caller supplied through `with_reason` or
+  `SECRETSPEC_REASON`.
+- Secrets can set `prompt = true` to request a hidden value from the controlling
+  terminal when `secretspec run` finds no stored value. Writable providers save
+  the answer for later runs; the `null` provider keeps it invocation-only.
+- Profiles can opt out of inheriting `[profiles.default]` by setting
+  `inherit = false` in their profile defaults (0.19+), allowing standalone
+  secret sets alongside profiles that still share the default declarations.
+- **Passbolt provider** (`passbolt://`): store and read secrets in a
+  self-hosted Passbolt server through the community-maintained
+  `go-passbolt-cli`, with convention-based names, references to existing
+  resources, and credentials supplied by the CLI configuration or SecretSpec
+  provider environment variables.
+- Provider aliases can define native `ref` templates and secrets can override
+  coordinates per leaf alias with `refs`, so fallback providers and import
+  sources/destinations resolve independently. `import --delete-source` now
+  preflights the whole migration, verifies all writes before cleanup, and can
+  safely move between distinct entries in the same physical store.
+- A `null` provider lets non-sensitive, version-controlled environment values
+  use their manifest defaults and lets generated secrets stay ephemeral, with a
+  fresh value returned for each resolution and nothing written to provider
+  storage.
+- `secretspec set` and interactive `secretspec check` now preview the resolved
+  write destination before reading the value, including the exact file and
+  selector for SOPS.
+- A `file` provider stores each secret as one plaintext UTF-8 file beneath an
+  explicitly configured relative or absolute directory, with project/profile
+  isolation and support for existing file-mounted secrets through `ref.item`.
+- Secrets can select values from stored JSON documents with RFC 6901 pointers
+  using `extract`. Extraction composes with provider-native references and
+  storage decoding; selected values are read-only so sibling document data is
+  never overwritten or deleted.
 - Secrets can store values as standard Base64, URL-safe Base64, or hexadecimal
   using `encoding`; writes encode logical text and reads decode stored values,
   while `as_path = true` materializes arbitrary decoded bytes.
@@ -19,21 +844,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a `secretspec_ffi.pc`, so consumers can link it — statically or
   dynamically — without hand-written linker flags.
 - The Haskell SDK's new `use-pkg-config` cabal flag
-  (`cabal build -f use-pkg-config`) resolves the archive through pkg-config.
+  (`cabal build -f use-pkg-config`) resolves an installed static or shared
+  library through pkg-config.
 - The Ruby SDK's native extension accepts a new `--enable-pkg-config` build
-  flag (`gem install secretspec -- --enable-pkg-config`) that resolves the
-  archive through pkg-config.
-- The Go SDK's `-tags static` build accepts a new `pkgconfig` build tag
-  (`go build -tags static,pkgconfig`) that resolves the archive through
-  pkg-config, so it also works for a `go get` dependency.
+  flag (`gem install secretspec -- --enable-pkg-config`) that resolves an
+  installed static or shared library through pkg-config.
+- The Go SDK has a new `pkgconfig` build tag (`go build -tags pkgconfig`) that
+  links an installed static or shared library, so it also works for a `go get`
+  dependency.
 - The Haskell SDK declares the archive's macOS system frameworks
   (`SystemConfiguration`, `Security`, `CoreFoundation`) in its cabal file, so
   GHC passes them to every link on macOS.
+- A single provider can now attach its cache directly to the same alias with
+  `uri` and `cache`, avoiding a second wrapper alias while retaining provider
+  credentials. Cached `fallback` routes remain available for multiple
+  authoritative providers.
 
 ### Fixed
 
 - BeyondTrust Password Safe now always signs out after a credential retrieval
   attempt and reports a sign-out failure instead of silently ignoring it.
+- Ruby gems for Apple silicon now use the generic `arm64-darwin` platform
+  instead of including the build runner's Darwin version.
+- Windows shared `secretspec-ffi` installs now place the runtime DLL in the
+  documented `PREFIX/lib` runtime library directory.
+- `import` warns when a literal source uses convention naming but a provider
+  alias for the same storage container addresses active secrets differently
+  through a `ref` template or scoped `refs`. Import output also retains the
+  selected source alias, making alias-specific addressing visible without
+  changing literal-provider semantics.
+  ([#312](https://github.com/cachix/secretspec/issues/312))
+- The error for a coordinate a provider does not support now points at
+  `refs.<alias>` and alias `ref` templates as well as at removing the
+  coordinate, so a `field` written for one store no longer has to be dropped to
+  reach another store that organizes the secret differently.
+  ([#266](https://github.com/cachix/secretspec/issues/266))
+- The Proton Pass provider works with `pass-cli` 2.2.4 and later, which removed
+  the `pass-cli test` subcommand the provider ran to check the session before
+  every read and write. The check now tries `pass-cli info` and falls back to
+  `pass-cli test`, so a single build works across `pass-cli` releases that
+  disagree about which check exists. A `pass-cli` with neither is reported as
+  incompatible with the SecretSpec release, instead of passing the CLI's usage
+  text through as the error.
+  ([#279](https://github.com/cachix/secretspec/issues/279))
+- SOPS write-target previews consistently use canonical physical paths on macOS
+  and Windows, matching the files used for writes.
+- Passbolt now updates UUID-addressed resources outside a configured folder,
+  treats URI- and environment-selected forms of the same server as one import
+  destination, rejects malformed provider query parameters, and avoids
+  redundant resource listings during writes.
+- Cache entries now store their absolute expiration time, allowing SecretSpec
+  to remove an expired entry whenever it encounters one, including at an
+  address previously used by another project or profile. Changing `max_age`
+  invalidates entries written under the previous policy. Fresh v2 entries remain
+  usable during migration, while foreign v2 entries remain untouched.
+  ([#275](https://github.com/cachix/secretspec/issues/275))
+- `run` preserves non-UTF-8 environment values byte-for-byte when launching
+  child processes on Unix.
+- Provider-scoped references now compare provider-defaulted coordinates before
+  destructive imports, apply scoped address overrides before comparing stores,
+  and recognize missing file destinations reached through symlinked parents.
+  They also invalidate caches for every coordinate change without display-format
+  collisions and retain the attempted native location in audit events when a
+  provider read fails. Same-store import validation handles Windows provider
+  paths without treating separators as TOML escapes.
+- Profile overrides can switch between legacy `ref` and provider-scoped `refs`
+  without retaining both inherited address models and failing validation.
+- JSON extraction from file-backed documents now handles Windows store paths
+  without treating path separators as TOML escapes.
 - SDK pkg-config setup now pins cargo-c's library and metadata install
   directories, so Go, Ruby, and Haskell reliably discover
   `secretspec_ffi.pc` across environments.

@@ -18,6 +18,312 @@ mod basic_generation {
     }
 }
 
+/// Exercises `.prompt_missing(...)` end to end. Follows the same
+/// isolated-child-process shape as `as_path_lifetime` above (rather than
+/// mutating this process's current directory), since these tests would
+/// otherwise race with every other test in this binary over `cwd`.
+mod prompt_missing {
+    use super::*;
+    use std::fs;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    declare_secrets!("tests/fixtures/basic.toml");
+
+    const CHILD_CASE_VAR: &str = "SECRETSPEC_DERIVE_PROMPT_MISSING_CHILD";
+
+    fn run_in_isolated_project(case: &str, env_file: Option<&str>) -> bool {
+        let project = TempDir::new().expect("create isolated project");
+        fs::write(
+            project.path().join("secretspec.toml"),
+            include_str!("fixtures/basic.toml"),
+        )
+        .expect("write project manifest");
+        if let Some(contents) = env_file {
+            fs::write(project.path().join(".env"), contents).expect("write dotenv provider");
+        }
+
+        Command::new(std::env::current_exe().expect("locate integration test binary"))
+            .args([&format!("prompt_missing::{case}"), "--exact", "--nocapture"])
+            .current_dir(project.path())
+            .env(CHILD_CASE_VAR, "1")
+            .env("HOME", project.path())
+            .env("XDG_CONFIG_HOME", project.path())
+            .env("XDG_STATE_HOME", project.path().join("state"))
+            .env("APPDATA", project.path())
+            .env("LOCALAPPDATA", project.path().join("state"))
+            .env("SECRETSPEC_REASON", "integration test")
+            .env_remove("SECRETSPEC_PROFILE")
+            .env_remove("SECRETSPEC_PROVIDER")
+            .status()
+            .expect("run isolated child test")
+            .success()
+    }
+
+    #[test]
+    fn typed_string_rejects_binary_after_byte_resolution_succeeds() {
+        if std::env::var_os(CHILD_CASE_VAR).is_none() {
+            assert!(run_in_isolated_project(
+                "typed_string_rejects_binary_after_byte_resolution_succeeds",
+                None,
+            ));
+            return;
+        }
+
+        fs::create_dir_all("store/test-project/default").unwrap();
+        fs::write("store/test-project/default/API_KEY", b"do-not-leak\xff").unwrap();
+        fs::write("store/test-project/default/DATABASE_URL", b"postgres://db").unwrap();
+        let mut spec = secretspec::Secrets::load()
+            .unwrap()
+            .with_reason("integration test");
+        spec.set_provider("file:store");
+        let resolved = spec.resolve_bytes().unwrap();
+        assert_eq!(
+            resolved.secrets["API_KEY"]
+                .value
+                .as_ref()
+                .unwrap()
+                .expose_secret(),
+            b"do-not-leak\xff"
+        );
+
+        for result in [
+            SecretSpec::load(Some("file:store"), None).map(|_| ()),
+            SecretSpec::builder()
+                .with_provider("file:store")
+                .load()
+                .map(|_| ()),
+            SecretSpec::builder()
+                .with_provider("file:store")
+                .load_profile()
+                .map(|_| ()),
+        ] {
+            let error = result.expect_err("typed String fields must reject binary values");
+            let message = error.to_string();
+            assert_eq!(error.kind(), "secret_not_text", "{message}");
+            assert!(message.contains("'API_KEY'"), "{message}");
+            assert!(message.contains("UTF-8"), "{message}");
+            assert!(!message.contains("do-not-leak"), "{message}");
+        }
+        #[cfg(unix)]
+        {
+            let events = audit_events();
+            assert_eq!(events.len(), 4);
+            assert_eq!(events[0]["outcome"], "found");
+            for event in &events[1..] {
+                assert_eq!(event["action"], "check");
+                assert_eq!(event["outcome"], "error");
+                assert_eq!(event["error_kind"], "secret_not_text");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn audit_events() -> Vec<serde_json::Value> {
+        let log = fs::read_to_string("state/secretspec/audit.log").unwrap();
+        assert!(!log.contains("do-not-leak"));
+        log.lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn prompt_missing_load_succeeds_when_nothing_is_missing() {
+        if std::env::var_os(CHILD_CASE_VAR).is_none() {
+            assert!(run_in_isolated_project(
+                "prompt_missing_load_succeeds_when_nothing_is_missing",
+                Some("API_KEY=key-value\nDATABASE_URL=postgres://localhost/db\n"),
+            ));
+            return;
+        }
+
+        // `.prompt_missing(true)` only changes behavior when a required
+        // secret is missing; when every secret already resolves, it must
+        // load exactly like the default (`prompt_missing` unset).
+        let resolved = SecretSpec::builder()
+            .with_provider("dotenv://.env")
+            .with_reason("integration test")
+            .prompt_missing(true)
+            .load()
+            .expect("load with prompt_missing(true) and no missing secrets");
+        assert_eq!(resolved.secrets.api_key, "key-value");
+        assert_eq!(resolved.secrets.database_url, "postgres://localhost/db");
+    }
+
+    #[test]
+    fn default_fails_fast_on_missing_secret() {
+        if std::env::var_os(CHILD_CASE_VAR).is_none() {
+            assert!(run_in_isolated_project(
+                "default_fails_fast_on_missing_secret",
+                None
+            ));
+            return;
+        }
+
+        // Left unset, `prompt_missing` defaults to `false`: a missing
+        // required secret still fails fast with `RequiredSecretMissing`,
+        // exactly like before `prompt_missing` existed.
+        let result = SecretSpec::builder()
+            .with_provider("dotenv://.env")
+            .with_reason("integration test")
+            .load();
+        assert!(matches!(
+            result,
+            Err(secretspec::SecretSpecError::RequiredSecretMissing(_))
+        ));
+    }
+
+    #[test]
+    fn prompt_missing_without_a_terminal_fails_with_required_secret_missing() {
+        if std::env::var_os(CHILD_CASE_VAR).is_none() {
+            assert!(run_in_isolated_project(
+                "prompt_missing_without_a_terminal_fails_with_required_secret_missing",
+                None,
+            ));
+            return;
+        }
+
+        // `Secrets::ensure_secrets` only prompts when stdin is a real
+        // terminal; the child process's stdin here isn't one (inherited
+        // from `cargo test`, itself piped), so `prompt_missing(true)`
+        // must degrade to the identical `RequiredSecretMissing` a
+        // non-interactive load gives, never hang waiting for input.
+        let result = SecretSpec::builder()
+            .with_provider("dotenv://.env")
+            .with_reason("integration test")
+            .prompt_missing(true)
+            .load();
+        assert!(matches!(
+            result,
+            Err(secretspec::SecretSpecError::RequiredSecretMissing(_))
+        ));
+        #[cfg(unix)]
+        {
+            let events = audit_events();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0]["action"], "check");
+            assert_eq!(events[0]["outcome"], "error");
+            assert_eq!(events[0]["error_kind"], "required_secret_missing");
+        }
+    }
+}
+
+/// A constraint violation (an `at_least_one`/`exactly_one` group with no/too
+/// many members present) is a validation error with an empty
+/// `missing_required` list, so it must keep failing as `ValidationFailed`
+/// even with `prompt_missing(true)` — the interactive branch only triggers
+/// when `missing_required` is non-empty. Runs in its own isolated project,
+/// same as `prompt_missing` above, since `Secrets::load()` finds
+/// `secretspec.toml` by walking up from `cwd`.
+mod prompt_missing_constraint_violation {
+    use super::*;
+    use std::fs;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    declare_secrets!("tests/fixtures/constraint_violation.toml");
+
+    const CHILD_CASE_VAR: &str = "SECRETSPEC_DERIVE_PROMPT_MISSING_CONSTRAINT_CHILD";
+
+    #[test]
+    fn prompt_missing_does_not_intercept_constraint_violations() {
+        if std::env::var_os(CHILD_CASE_VAR).is_none() {
+            let project = TempDir::new().expect("create isolated project");
+            fs::write(
+                project.path().join("secretspec.toml"),
+                include_str!("fixtures/constraint_violation.toml"),
+            )
+            .expect("write project manifest");
+
+            let status = Command::new(std::env::current_exe().expect("locate integration test binary"))
+                .args([
+                    "prompt_missing_constraint_violation::prompt_missing_does_not_intercept_constraint_violations",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .current_dir(project.path())
+                .env(CHILD_CASE_VAR, "1")
+                .env("HOME", project.path())
+                .env("XDG_CONFIG_HOME", project.path())
+                .env_remove("SECRETSPEC_PROFILE")
+                .env_remove("SECRETSPEC_PROVIDER")
+                .status()
+                .expect("run isolated child test");
+            assert!(status.success());
+            return;
+        }
+
+        let result = SecretSpec::builder()
+            .with_provider("dotenv://.env")
+            .with_reason("integration test")
+            .prompt_missing(true)
+            .load();
+        assert!(matches!(
+            result,
+            Err(secretspec::SecretSpecError::ValidationFailed(_))
+        ));
+    }
+}
+
+/// `load_profile()` threads `prompt_missing` through its own call to
+/// `load_internal`, separate from `load()`'s — the "development" profile's
+/// defaults satisfy every field, so this only needs to prove that wiring
+/// doesn't break a successful `load_profile()`, mirroring
+/// `prompt_missing_load_succeeds_when_nothing_is_missing` above for `load()`.
+mod prompt_missing_load_profile {
+    use super::*;
+    use std::fs;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    declare_secrets!("tests/fixtures/profiles.toml");
+
+    const CHILD_CASE_VAR: &str = "SECRETSPEC_DERIVE_PROMPT_MISSING_LOAD_PROFILE_CHILD";
+
+    #[test]
+    fn prompt_missing_load_profile_succeeds_when_nothing_is_missing() {
+        if std::env::var_os(CHILD_CASE_VAR).is_none() {
+            let project = TempDir::new().expect("create isolated project");
+            fs::write(
+                project.path().join("secretspec.toml"),
+                include_str!("fixtures/profiles.toml"),
+            )
+            .expect("write project manifest");
+
+            let status = Command::new(std::env::current_exe().expect("locate integration test binary"))
+                .args([
+                    "prompt_missing_load_profile::prompt_missing_load_profile_succeeds_when_nothing_is_missing",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .current_dir(project.path())
+                .env(CHILD_CASE_VAR, "1")
+                .env("HOME", project.path())
+                .env("XDG_CONFIG_HOME", project.path())
+                .env_remove("SECRETSPEC_PROFILE")
+                .env_remove("SECRETSPEC_PROVIDER")
+                .status()
+                .expect("run isolated child test");
+            assert!(status.success());
+            return;
+        }
+
+        let resolved = SecretSpec::builder()
+            .with_provider("dotenv://.env")
+            .with_profile("development")
+            .with_reason("integration test")
+            .prompt_missing(true)
+            .load_profile()
+            .expect("load_profile with prompt_missing(true) and no missing secrets");
+        match resolved.secrets {
+            SecretSpecProfile::Development { api_key, .. } => {
+                assert_eq!(api_key, "dev-api-key");
+            }
+            _ => panic!("Expected Development variant"),
+        }
+    }
+}
+
 mod profile_generation {
     use super::*;
 
@@ -99,23 +405,6 @@ mod complex_generation {
         let _staging = Profile::Staging;
         let _prod = Profile::Production;
         let _test = Profile::Test;
-    }
-}
-
-mod empty_generation {
-    use super::*;
-
-    declare_secrets!("tests/fixtures/empty.toml");
-
-    #[test]
-    fn test_empty_struct() {
-        // Verify the struct is generated even with no secrets
-        let _size = std::mem::size_of::<SecretSpec>();
-
-        // The struct should have no fields
-        fn _test_no_fields(_s: SecretSpec) {
-            // Empty struct
-        }
     }
 }
 
@@ -351,6 +640,23 @@ mod profile_inheritance {
         // SECRETSPEC_REASON env var. (Not loading; just verifying the API exists.)
         let _ = SecretSpec::builder()
             .with_reason("running database migrations")
+            .with_provider("dotenv://.env");
+
+        // Caller context identifies an integration without standing in for a
+        // user-supplied reason (0.20+).
+        let _ = SecretSpec::builder()
+            .with_caller(
+                secretspec::CallerContext::new("git")
+                    .with_operation("credential_get")
+                    .with_resource("github.com"),
+            )
+            .with_provider("dotenv://.env");
+
+        // `prompt_missing` opts the typed loader into the same
+        // prompt-and-store behavior `Secrets::ensure_secrets` gives the
+        // untyped `Secrets` API. (Not loading; just verifying the API exists.)
+        let _ = SecretSpec::builder()
+            .prompt_missing(true)
             .with_provider("dotenv://.env");
     }
 }

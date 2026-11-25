@@ -1,0 +1,117 @@
+---
+title: Ruby SDK
+description: Resolve SecretSpec secrets from Ruby
+---
+
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+import { Code } from 'astro:components';
+import quickStartExample from '../../../../../secretspec-rb/examples/quick_start.rb?raw';
+import scopesExample from '../../../../../secretspec-rb/examples/scopes.rb?raw';
+import typedAccessExample from '../../../../../secretspec-rb/examples/typed_access.rb?raw';
+
+<VersionCompatibility version="0.20" kind="changed">
+
+`libsecretspec` was named `secretspec-ffi` through SecretSpec 0.19. Upgrade the
+extension source and `libsecretspec.a` together because 0.20 adds the
+`secretspec_call` symbol.
+
+</VersionCompatibility>
+
+The Ruby SDK (`secretspec`) is a thin client over the `libsecretspec` C ABI,
+linked into a native C extension at build time. Resolution happens in the Rust
+core, so the SDK inherits every provider with no Ruby-side logic.
+
+
+## Quick start
+
+<Code code={quickStartExample} lang="ruby" meta='title="quick_start.rb"' />
+
+A missing required secret raises `Secretspec::MissingRequiredError`; any other
+failure raises `Secretspec::Error` (with a stable `#kind`).
+
+## Caller context {/* #caller-context-020 */}
+
+<VersionCompatibility version="0.20" />
+
+```ruby
+builder = Secretspec::SecretSpec.builder.with_caller(
+  Secretspec::CallerContext.new(
+    name: "git",
+    version: "2.51.0",
+    operation: "credential_get",
+    resource: "github.com"
+  )
+)
+```
+
+Caller context identifies the invoking integration in audit records but never
+satisfies `require_reason`. Do not put credentials or secret values in it.
+
+## Inline specifications {/* #inline-specifications-020 */}
+
+<VersionCompatibility version="0.20" />
+
+Use `.with_inline_spec(spec, base_dir)` to resolve a strict inline-spec v2 hash
+(SecretSpec 0.21+) at its logical provider-path base directory. The extension
+links the separate native call symbol, so an older archive cannot fall back to
+a manifest search.
+
+## Scopes {/* #scopes-017 */}
+
+<VersionCompatibility version="0.17" />
+
+Use `.with_scope("api")` to resolve only a named `[scopes.api]` subset. The
+selected name is available as `resolved.scope` and `report.scope`:
+
+<Code code={scopesExample} lang="ruby" meta='title="scopes.rb"' />
+
+## Typed access (codegen)
+
+Generate typed classes with `secretspec schema` plus
+[quicktype](https://quicktype.io), then build them from `resolved.fields`:
+
+```bash
+$ secretspec schema | quicktype -s schema --top-level SecretSpec --lang ruby -o secrets_gen.rb
+```
+
+<Code code={typedAccessExample} lang="ruby" meta='title="typed_access.rb"' />
+
+## Files (`as_path`)
+
+<VersionCompatibility version="0.22" kind="changed">
+
+`as_path` uses private temporary files. SDK cleanup releases visible files and
+hidden composition dependencies (0.22+). Files must be explicitly cleaned up;
+they are not removed automatically on process exit. See
+[file delivery and lifetimes](/reference/configuration/#as_path-option).
+
+</VersionCompatibility>
+
+Keep the result alive while consuming its paths, and call the SDK's cleanup
+method afterward. Temporary files remain until explicit cleanup.
+
+## Native library
+
+The published platform gems bundle the `libsecretspec` archive and statically
+link it into the mkmf extension at install time.
+
+### Linking with pkg-config {/* #linking-with-pkg-config-019 */}
+
+<VersionCompatibility version="0.19" />
+
+Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
+
+```bash
+# Use "static" (the default) or "shared"; use separate prefixes for both.
+$ bash libsecretspec/scripts/cinstall.sh "$PREFIX" static
+```
+
+Then use the same extension flag for either type:
+
+```bash
+$ PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" gem install secretspec -- --enable-pkg-config
+```
+
+A shared install in a non-system prefix also requires `PREFIX/lib` in the
+platform's runtime library search path.

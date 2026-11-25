@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "provider.reconnect",
+  "targets": ["external-adapter"],
+  "timeout_ms": 10000,
+  "actions": [
+    {"kind": "initialize", "protocol": "secretspec.provider", "version": 1},
+    {"kind": "crash", "during": "provider.get"},
+    {"kind": "reconnect", "replay_failed_request": false},
+    {"kind": "shutdown"}
+  ],
+  "required_events": ["initialized", "crashed", "reconnected", "closed"]
+}

@@ -146,7 +146,7 @@ instead of once per provider instance.
 ## Upgrading
 
 ```bash
-cargo install secretspec
+$ cargo install secretspec
 ```
 
 Three changes to be aware of:

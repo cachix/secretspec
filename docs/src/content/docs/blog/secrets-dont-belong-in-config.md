@@ -132,7 +132,7 @@ declaration.
 An existing application can receive the resolved values at startup:
 
 ```bash
-secretspec run -- ./myapp
+$ secretspec run -- ./myapp
 ```
 
 Applications can also resolve them directly through the

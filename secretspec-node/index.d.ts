@@ -63,13 +63,25 @@ export class Report {
   secrets: SecretReport[];
 }
 
+/** Caller-asserted software-integration context (SecretSpec 0.20+). */
+export interface CallerContext {
+  name: string;
+  version?: string;
+  operation?: string;
+  resource?: string;
+}
+
 export class Builder {
   withPath(path: string): this;
+  /** Resolve strict inline-spec v2 at `baseDir` (SecretSpec 0.21+). */
+  withInlineSpec(spec: Record<string, unknown>, baseDir: string): this;
   withProvider(provider: string): this;
   withProfile(profile: string): this;
   /** Limit resolution to a named manifest scope (SecretSpec 0.17+). */
   withScope(scope: string): this;
   withReason(reason: string): this;
+  /** Identify the invoking software integration without supplying a reason. */
+  withCaller(caller: CallerContext): this;
   /** Omit secret values, returning only structure and provenance. */
   withNoValues(noValues?: boolean): this;
   /**

@@ -1,7 +1,7 @@
 name: "Ruby gems"
 
 # Builds platform-specific gems for the Ruby SDK. Each gem bundles the
-# secretspec-ffi staticlib (into vendor/); at `gem install` mkmf compiles a tiny
+# libsecretspec staticlib (into vendor/); at `gem install` mkmf compiles a tiny
 # C glue and statically links that archive, so the resolver is embedded in the
 # extension and one platform gem serves every Ruby ABI.
 #
@@ -22,6 +22,12 @@ name: "Ruby gems"
 
 on:
   workflow_call:
+    inputs:
+      pre_release:
+        description: Run as part of the canonical pre-release suite
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
   push:
     tags:
@@ -37,9 +43,16 @@ on:
       - "scripts/sync-sdk-versions.sh"
       - "scripts/copy-mingw-import-libs.sh"
 
+permissions:
+  contents: read
+
 jobs:
   gems:
     name: ${{ matrix.target }}
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -47,11 +60,13 @@ jobs:
         include:
           - { target: x86_64-linux, runner: ubuntu-latest }
           - { target: aarch64-linux, runner: ubuntu-24.04-arm }
-          - { target: arm64-darwin, runner: macos-latest }
+          - { target: arm64-darwin, runner: macos-latest, deployment_target: "12.0" }
           - { target: x64-mingw-ucrt, runner: windows-latest }
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Sync SDK package versions
         run: bash scripts/sync-sdk-versions.sh
 
@@ -74,33 +89,43 @@ jobs:
       # reflects them; keyed per matrix target (the automatic key covers only
       # the job id, toolchain, and lockfile).
       - name: Cache Rust builds
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           key: ${{ matrix.target }}
 
-      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+      - uses: ruby/setup-ruby@4e97ecde5048e1e0816923020652678063ffbf65 # v1.339.0
         with:
           ruby-version: "3.3"
 
       - name: Stage the staticlib and build the platform gem
         shell: bash
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
+          EXPECTED_GEM_PLATFORM: ${{ matrix.target }}
         run: |
           bash secretspec-rb/scripts/stage-staticlib.sh
-          ( cd secretspec-rb && gem build secretspec.gemspec )
+          cd secretspec-rb
+          gem build secretspec.gemspec
+          ruby -rrubygems/package -e '
+            gem = Dir["secretspec-*.gem"].fetch(0)
+            platform = Gem::Package.new(gem).spec.platform.to_s
+            expected = ENV.fetch("EXPECTED_GEM_PLATFORM")
+            abort "expected gem platform #{expected}, got #{platform}" unless platform == expected
+          '
 
       - name: Smoke test the gem
         shell: bash
         run: |
           cd secretspec-rb
           # Installing compiles the extension (spec.extensions) against the
-          # bundled vendor/libsecretspec_ffi.a -- no Rust toolchain needed here.
+          # bundled vendor/libsecretspec.a -- no Rust toolchain needed here.
           gem install --no-document --install-dir "$RUNNER_TEMP/gemhome" secretspec-*.gem
           # Run outside the repo so only the installed extension satisfies require.
           cd "$RUNNER_TEMP"
           GEM_HOME="$RUNNER_TEMP/gemhome" GEM_PATH="$RUNNER_TEMP/gemhome" \
             ruby -e 'require "secretspec"; puts "abi " + Secretspec.abi_version'
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gem-${{ matrix.target }}
           path: secretspec-rb/*.gem
@@ -119,10 +144,10 @@ jobs:
       id-token: write # RubyGems Trusted Publishing (OIDC), no token needed
       contents: read
     steps:
-      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+      - uses: ruby/setup-ruby@4e97ecde5048e1e0816923020652678063ffbf65 # v1.339.0
         with:
           ruby-version: "3.3"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: gems
           merge-multiple: true

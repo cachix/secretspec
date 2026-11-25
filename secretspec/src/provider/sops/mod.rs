@@ -1,17 +1,16 @@
 use super::{Address, Provider, ProviderCredentials, ProviderUrl};
+use crate::SecretBytes;
 use crate::config::NativeAddress;
 use crate::provider::sops::config::SopsConfig;
-use crate::provider::sops::fields::{
-    AGE_KEY, AWS_SECRET_ACCESS_KEY, AZURE_CLIENT_SECRET, CREDENTIAL_FIELDS,
-    GOOGLE_OAUTH_ACCESS_TOKEN, HC_VAULT_TOKEN, HUAWEI_SDK_AK, HUAWEI_SDK_SK, PATHBUF_FIELDS,
-    STRING_FIELDS,
-};
+#[cfg(test)]
+use crate::provider::sops::fields::AGE_KEY;
+use crate::provider::sops::fields::{CREDENTIAL_FIELDS, PATHBUF_FIELDS, STRING_FIELDS};
 use crate::provider::sops::format::SopsFormat;
 use crate::provider::sops::pattern::SopsPathPattern;
 use crate::{Result, SecretSpecError};
 use etcetera::{BaseStrategy, choose_base_strategy};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
@@ -46,23 +45,7 @@ pub struct SopsProvider {
 crate::register_provider! {
     struct: SopsProvider,
     config: SopsConfig,
-    name: "sops",
-    description: "SOPS encrypted files (0.17+)",
-    schemes: ["sops"],
-    examples: [
-        "sops://secrets.enc.yaml",
-        "sops://secrets-dir/{project}/{profile}.enc.json",
-        "sops://secrets-dir/{project}/.env.{profile}.enc?format=dotenv",
-    ],
-    credential_names: [
-        AGE_KEY,
-        AWS_SECRET_ACCESS_KEY,
-        AZURE_CLIENT_SECRET,
-        HC_VAULT_TOKEN,
-        HUAWEI_SDK_AK,
-        HUAWEI_SDK_SK,
-        GOOGLE_OAUTH_ACCESS_TOKEN,
-    ],
+    metadata: &super::catalog::SOPS,
 }
 
 struct AddressParts<'a> {
@@ -149,6 +132,19 @@ impl SopsProvider {
         self.execute_sops_command_with_stdin(args, None)
     }
 
+    fn apply_command_env(&self, command: &mut Command) -> Result<()> {
+        self.config.apply_env(command);
+        // Provider credentials override inherited environment variables for
+        // this SOPS child process without exposing the values in the provider
+        // URI, audit log, or launched application environment.
+        for spec in CREDENTIAL_FIELDS {
+            if let Some(value) = self.credentials.get(spec.name) {
+                command.env(spec.env_key, super::credential_env_value(value)?);
+            }
+        }
+        Ok(())
+    }
+
     fn execute_sops_command_with_stdin<I, S>(
         &self,
         args: I,
@@ -160,16 +156,7 @@ impl SopsProvider {
     {
         let mut command = Command::new("sops");
         command.args(args);
-        self.config.apply_env(&mut command);
-
-        // Provider credentials override inherited environment variables for
-        // this SOPS child process without exposing the values in the provider
-        // URI, audit log, or launched application environment.
-        for spec in CREDENTIAL_FIELDS {
-            if let Some(value) = self.credentials.get(spec.name) {
-                command.env(spec.env_key, value.expose_secret());
-            }
-        }
+        self.apply_command_env(&mut command)?;
 
         let output = if let Some(stdin) = stdin {
             command
@@ -304,36 +291,33 @@ impl SopsProvider {
         }
     }
 
+    fn parse_json_document(content: &[u8]) -> Result<serde_json::Value> {
+        serde_json::from_slice(content).map_err(|error| {
+            Self::provider_error(format!(
+                "Failed to parse JSON emitted by the SOPS CLI: {error}"
+            ))
+        })
+    }
+
+    fn value_at<'a>(data: &'a serde_json::Value, path: &[String]) -> Option<&'a serde_json::Value> {
+        let mut current = data;
+        for segment in path {
+            match current {
+                serde_json::Value::Object(map) => current = map.get(segment)?,
+                _ => return None,
+            }
+        }
+        Some(current)
+    }
+
     fn parse_decrypted_json(
         &self,
         content: &[u8],
         parts: &AddressParts<'_>,
     ) -> Result<Option<String>> {
-        let data: serde_json::Value = serde_json::from_slice(content).map_err(|error| {
-            Self::provider_error(format!(
-                "Failed to parse JSON emitted by the SOPS CLI: {error}"
-            ))
-        })?;
-
+        let data = Self::parse_json_document(content)?;
         for path in self.lookup_paths(parts)? {
-            let mut current = &data;
-            let mut found = true;
-            for segment in path {
-                match current {
-                    serde_json::Value::Object(map) => match map.get(&segment) {
-                        Some(value) => current = value,
-                        None => {
-                            found = false;
-                            break;
-                        }
-                    },
-                    _ => {
-                        found = false;
-                        break;
-                    }
-                }
-            }
-            if found {
+            if let Some(current) = Self::value_at(&data, &path) {
                 return Ok(Some(match current {
                     serde_json::Value::String(value) => value.clone(),
                     other => other.to_string(),
@@ -344,12 +328,8 @@ impl SopsProvider {
         Ok(None)
     }
 
-    fn set_path(&self, parts: &AddressParts<'_>) -> Result<String> {
-        let paths = self.lookup_paths(parts)?;
-        let chosen = paths
-            .first()
-            .ok_or_else(|| Self::provider_error("No SOPS lookup path is available"))?;
-        Ok(chosen
+    fn encode_selector(path: &[String]) -> Result<String> {
+        Ok(path
             .iter()
             .map(|segment| {
                 serde_json::to_string(segment)
@@ -362,19 +342,49 @@ impl SopsProvider {
             .join(""))
     }
 
-    fn writable_target_path(&self, project: &str, profile: &str) -> Result<PathBuf> {
-        let configured = self.new_file_path(project, profile)?;
-        let parent = configured
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        std::fs::create_dir_all(parent).map_err(|error| {
-            Self::provider_error(format!(
-                "Failed to create SOPS directory {}: {error}",
-                parent.display()
-            ))
-        })?;
+    fn set_path(&self, parts: &AddressParts<'_>) -> Result<String> {
+        let paths = self.lookup_paths(parts)?;
+        let chosen = paths
+            .first()
+            .ok_or_else(|| Self::provider_error("No SOPS lookup path is available"))?;
+        Self::encode_selector(chosen)
+    }
 
+    /// Selector for the value `get` would return.
+    ///
+    /// Reads walk the write path and then older layouts. Only that first hit is
+    /// deleted. Unsetting every hit would also remove a project or profile
+    /// object when the secret name is that object's key, taking the other
+    /// secrets stored under it with it. A shadowed older copy is left in place
+    /// and is what the next read, and the next delete, see.
+    fn occupied_selector(
+        &self,
+        content: &[u8],
+        parts: &AddressParts<'_>,
+    ) -> Result<Option<String>> {
+        let data = Self::parse_json_document(content)?;
+        for path in self.lookup_paths(parts)? {
+            if let Some(value) = Self::value_at(&data, &path) {
+                // A legacy root or profile lookup can resolve to a namespace
+                // rather than a secret. Never hand a mapping to `sops unset`,
+                // which would recursively remove the secrets below it.
+                if value.is_object() {
+                    return Err(Self::provider_error(format!(
+                        "Refusing to delete SOPS mapping at {}; deleting a branch could remove other secrets. Use the SOPS CLI to manage branches explicitly.",
+                        Self::encode_selector(&path)?
+                    )));
+                }
+                return Ok(Some(Self::encode_selector(&path)?));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Resolves the filesystem entry a write will replace without creating it
+    /// or any of its parents. Existing symlinks are resolved so the preview and
+    /// the atomic replacement name the same physical target.
+    fn resolved_write_target_path(&self, project: &str, profile: &str) -> Result<PathBuf> {
+        let configured = self.new_file_path(project, profile)?;
         if configured.is_file() {
             return configured.canonicalize().map_err(Into::into);
         }
@@ -391,7 +401,71 @@ impl SopsProvider {
                 configured.display()
             ))
         })?;
-        Ok(parent.canonicalize()?.join(filename))
+        let parent = configured
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+
+        // The full parent may not exist yet. Canonicalize the deepest existing
+        // ancestor, then append and lexically normalize the missing suffix.
+        // This still resolves a symlinked project directory without mutating
+        // the backing store merely to produce a preview.
+        for ancestor in parent
+            .ancestors()
+            .filter(|ancestor| !ancestor.as_os_str().is_empty())
+        {
+            if !ancestor.try_exists()? {
+                continue;
+            }
+            if !ancestor.is_dir() {
+                return Err(Self::provider_error(format!(
+                    "SOPS target parent {} is not a directory",
+                    ancestor.display()
+                )));
+            }
+            let canonical = ancestor.canonicalize()?;
+            let suffix = parent.strip_prefix(ancestor).map_err(|error| {
+                Self::provider_error(format!(
+                    "Failed to resolve SOPS target parent {}: {error}",
+                    parent.display()
+                ))
+            })?;
+            return Ok(Self::normalize_path(canonical.join(suffix)).join(filename));
+        }
+
+        // Relative paths with no existing component are resolved from the
+        // current directory; absolute paths always find their root above.
+        let current = std::env::current_dir()?.canonicalize()?;
+        Ok(Self::normalize_path(current.join(parent)).join(filename))
+    }
+
+    fn normalize_path(path: PathBuf) -> PathBuf {
+        let mut normalized = PathBuf::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                _ => normalized.push(component.as_os_str()),
+            }
+        }
+        normalized
+    }
+
+    fn writable_target_path(&self, project: &str, profile: &str) -> Result<PathBuf> {
+        let target = self.resolved_write_target_path(project, profile)?;
+        let parent = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent).map_err(|error| {
+            Self::provider_error(format!(
+                "Failed to create SOPS directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+        Ok(target)
     }
 
     fn acquire_write_lock(path: &Path) -> Result<File> {
@@ -489,12 +563,25 @@ impl SopsProvider {
         Ok(args)
     }
 
+    fn unset_command_args(&self, path: &Path, selector: &str) -> Vec<String> {
+        let mut args = self.command_preserving_file_type("unset");
+        args.extend([path.to_string_lossy().into_owned(), selector.to_string()]);
+        args
+    }
+
     fn set_atomically(
         &self,
         path: &Path,
         parts: &AddressParts<'_>,
-        value: &SecretString,
+        value: &SecretBytes,
     ) -> Result<()> {
+        // Refuse before any sops subprocess runs: decrypting or encrypting
+        // contacts the key service and may prompt, and none of that is owed to
+        // a value this provider can never store.
+        let value = super::require_utf8("sops", value)?;
+        let encoded_value = serde_json::to_string(value).map_err(|error| {
+            Self::provider_error(format!("Failed to encode the secret value: {error}"))
+        })?;
         let mut temporary = Self::temporary_file_for(path)?;
 
         if path.is_file() {
@@ -521,9 +608,6 @@ impl SopsProvider {
             self.encrypt_plaintext_file(temporary.path(), path)?;
         }
 
-        let encoded_value = serde_json::to_string(value.expose_secret()).map_err(|error| {
-            Self::provider_error(format!("Failed to encode the secret value: {error}"))
-        })?;
         let args = self.set_command_args(temporary.path(), parts)?;
         self.execute_sops_command_with_stdin(args, Some(encoded_value.as_bytes()))?;
         temporary.as_file().sync_all().map_err(|error| {
@@ -541,9 +625,97 @@ impl SopsProvider {
         })?;
         Ok(())
     }
+
+    fn delete_atomically(&self, path: &Path, parts: &AddressParts<'_>) -> Result<bool> {
+        // Decrypt only to see whether a value is there. A missing key is not
+        // an error and must leave the ciphertext untouched, so `sops unset`
+        // runs only when this read would return something.
+        let decrypted = self.decrypt(path)?;
+        let Some(selector) = self.occupied_selector(&decrypted, parts)? else {
+            return Ok(false);
+        };
+
+        let temporary = Self::temporary_file_for(path)?;
+        std::fs::copy(path, temporary.path()).map_err(|error| {
+            Self::provider_error(format!(
+                "Failed to copy SOPS file {} for an atomic update: {error}",
+                path.display()
+            ))
+        })?;
+        let args = self.unset_command_args(temporary.path(), &selector);
+        self.execute_sops_command(args)?;
+        temporary.as_file().sync_all().map_err(|error| {
+            Self::provider_error(format!(
+                "Failed to flush updated SOPS file {}: {error}",
+                path.display()
+            ))
+        })?;
+        temporary.persist(path).map_err(|error| {
+            Self::provider_error(format!(
+                "Failed to atomically replace SOPS file {}: {}",
+                path.display(),
+                error.error
+            ))
+        })?;
+        Ok(true)
+    }
 }
 
 impl Provider for SopsProvider {
+    fn entry_container_identity(&self) -> String {
+        // A template and a single-file URI can select the same file. Compare
+        // all SOPS entries using the resolved file AND selector below instead
+        // of excluding potentially overlapping providers by their URI.
+        "sops".to_string()
+    }
+
+    fn configured_entry_coordinates<'a>(
+        &self,
+        addr: Address<'a>,
+    ) -> Result<Cow<'a, NativeAddress>> {
+        let parts = self.address_parts(addr)?;
+        Ok(Cow::Owned(NativeAddress {
+            item: self
+                .resolved_write_target_path(parts.project, parts.profile)?
+                .to_string_lossy()
+                .into_owned(),
+            field: Some(self.set_path(&parts)?),
+            ..Default::default()
+        }))
+    }
+
+    fn entry_coordinates_many(&self, addrs: &[Address<'_>]) -> Result<Vec<NativeAddress>> {
+        let mut documents = HashMap::new();
+        addrs
+            .iter()
+            .map(|addr| {
+                let parts = self.address_parts(*addr)?;
+                let mut coords = self.configured_entry_coordinates(*addr)?.into_owned();
+                let path = PathBuf::from(&coords.item);
+                if path.is_file() {
+                    let data = match documents.entry(path) {
+                        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            let data = Self::parse_json_document(&self.decrypt(entry.key())?)?;
+                            entry.insert(data)
+                        }
+                    };
+                    for selector in self.lookup_paths(&parts)? {
+                        if Self::value_at(data, &selector).is_some() {
+                            coords.field = Some(Self::encode_selector(&selector)?);
+                            break;
+                        }
+                    }
+                }
+                Ok(coords)
+            })
+            .collect()
+    }
+
+    fn entry_coordinates<'a>(&self, addr: Address<'a>) -> Result<Cow<'a, NativeAddress>> {
+        Ok(Cow::Owned(self.entry_coordinates_many(&[addr])?.remove(0)))
+    }
+
     fn convention_address(
         &self,
         _project: &str,
@@ -556,7 +728,7 @@ impl Provider for SopsProvider {
         })
     }
 
-    fn get(&self, addr: Address<'_>) -> Result<Option<SecretString>> {
+    fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
         let parts = self.address_parts(addr)?;
         let Some(path) = self.resolve_file_path(parts.project, parts.profile)? else {
             return Ok(None);
@@ -564,14 +736,20 @@ impl Provider for SopsProvider {
         let decrypted = self.decrypt(&path)?;
         Ok(self
             .parse_decrypted_json(&decrypted, &parts)?
-            .map(|value| SecretString::new(value.into())))
+            .map(SecretBytes::from_utf8))
     }
 
     fn check_writable(&self, addr: Address<'_>) -> Result<()> {
         self.address_parts(addr).map(|_| ())
     }
 
-    fn set(&self, addr: Address<'_>, value: &SecretString) -> Result<()> {
+    fn describe_write_target(&self, addr: Address<'_>) -> Result<String> {
+        let parts = self.address_parts(addr)?;
+        let path = self.resolved_write_target_path(parts.project, parts.profile)?;
+        Ok(format!("{} {}", path.display(), self.set_path(&parts)?))
+    }
+
+    fn set(&self, addr: Address<'_>, value: &SecretBytes) -> Result<()> {
         self.check_writable(addr)?;
         let parts = self.address_parts(addr)?;
         let path = self.writable_target_path(parts.project, parts.profile)?;
@@ -579,7 +757,53 @@ impl Provider for SopsProvider {
         self.set_atomically(&path, &parts, value)
     }
 
-    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretString>> {
+    fn delete(&self, addr: Address<'_>) -> Result<bool> {
+        // `delete_atomically` checks the selected value under the write lock;
+        // preflight's separate read cannot replace that check.
+        self.check_writable(addr)?;
+        let parts = self.address_parts(addr)?;
+        // A missing file is already absent. Do not create it, or its parents,
+        // the way `set` does.
+        let Some(path) = self.resolve_file_path(parts.project, parts.profile)? else {
+            return Ok(false);
+        };
+        let path = match path.canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.into()),
+        };
+        // Same lock identity as `set`, which canonicalizes an existing file
+        // before locking it.
+        let _lock = Self::acquire_write_lock(&path)?;
+        if !path.is_file() {
+            if path.try_exists()? {
+                return Err(Self::provider_error(format!(
+                    "SOPS target {} is not a regular file",
+                    path.display()
+                )));
+            }
+            return Ok(false);
+        }
+        self.delete_atomically(&path, &parts)
+    }
+
+    fn supports_delete(&self) -> bool {
+        true
+    }
+
+    fn check_deletable(&self, addr: Address<'_>) -> Result<()> {
+        // Same address rules as a write: a templated URI still cannot name a
+        // native ref, and that has to fail in preflight rather than halfway
+        // through a deletion.
+        self.check_writable(addr)?;
+        let parts = self.address_parts(addr)?;
+        if let Some(path) = self.resolve_file_path(parts.project, parts.profile)? {
+            self.occupied_selector(&self.decrypt(&path)?, &parts)?;
+        }
+        Ok(())
+    }
+
+    fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
         let mut decrypted_files = HashMap::<PathBuf, Vec<u8>>::new();
         let mut values = HashMap::new();
 
@@ -596,14 +820,14 @@ impl Provider for SopsProvider {
                 }
             };
             if let Some(value) = self.parse_decrypted_json(decrypted, &parts)? {
-                values.insert(name.to_string(), SecretString::new(value.into()));
+                values.insert(name.to_string(), SecretBytes::from_utf8(value));
             }
         }
 
         Ok(values)
     }
 
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         Self::PROVIDER_NAME
     }
 

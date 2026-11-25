@@ -1,11 +1,16 @@
 # secretspec (Go SDK)
 
 Go bindings for [SecretSpec](https://secretspec.dev/), a declarative secrets
-manager. A thin client over the `secretspec-ffi` C ABI. Resolution happens in the
+manager. A thin client over the `libsecretspec` C ABI. Resolution happens in the
 Rust core, so the SDK inherits every provider with no Go-side logic. By default
 the resolver is loaded at runtime via
 [purego](https://github.com/ebitengine/purego) (dlopen, no cgo), keeping `go get`
-toolchain-free; `-tags static` instead links it in statically (see below).
+toolchain-free. Use `-tags static` to stage and embed the archive, or
+`-tags pkgconfig` (0.19+) to link an installed library (see below).
+
+> The embedded ABI is named `libsecretspec` in SecretSpec 0.20+. It was named
+> `secretspec-ffi` through 0.19; the 0.20+ loader accepts both shared-library
+> filename families.
 
 ```go
 package main
@@ -37,6 +42,27 @@ func main() {
 A missing required secret returns `*MissingRequiredError`; any other failure
 returns `*Error` (with a stable `.Kind`).
 
+## Inline specifications (0.20+)
+
+Use `WithInlineSpec(spec, baseDir)` to resolve a strict JSON declaration held
+in application code. `baseDir` resolves relative provider paths, and an older
+native library fails with a capability error rather than searching for a
+filesystem manifest. The inline v2 document uses `project`, `profiles`, and a
+`secrets` object in each profile. `project.extends` resolves parent manifests
+relative to the supplied logical base directory.
+
+```go
+spec := map[string]any{
+	"project": map[string]any{"name": "my-app"},
+	"profiles": map[string]any{"default": map[string]any{
+		"secrets": map[string]any{
+			"API_TOKEN": map[string]any{"description": "API token"},
+		},
+	}},
+}
+resolved, err := secretspec.New().WithInlineSpec(spec, "/logical/project").Load()
+```
+
 ## Scopes (0.17+)
 
 Use `WithScope("api")` to resolve only a named `[scopes.api]` subset. Both
@@ -48,7 +74,13 @@ resolved, err := secretspec.New().WithScope("api").Load()
 
 ## Cleanup
 
-`as_path` secrets are materialized to temp files that outlive the call. Call
+`as_path` uses private temporary files. SDK cleanup releases visible files and
+hidden composition dependencies (0.22+). Files must be explicitly cleaned up;
+they are not removed automatically on process exit. See
+[file delivery and lifetimes](https://secretspec.dev/reference/configuration/#as_path-option).
+
+
+`as_path` paths remain valid after resolution until explicit cleanup. Call
 `resolved.Close()` (e.g. `defer resolved.Close()`) when done so the secret files
 do not accumulate in the temp dir.
 
@@ -70,7 +102,7 @@ for _, s := range report.Secrets {
 
 ### Default: purego (dlopen, no cgo)
 
-The `secretspec-ffi` cdylib is resolved at runtime, in order:
+The `libsecretspec` cdylib is resolved at runtime, in order:
 
 1. The `SECRETSPEC_FFI_LIB` environment variable (an explicit path).
 2. A library embedded at build time with `-tags embed_lib`.
@@ -88,7 +120,7 @@ does not carry binary assets); they are attached to GitHub releases.
 
 For a self-contained binary with no runtime library to locate, link the resolver
 statically. This uses **cgo** (a C toolchain is required) and links
-`libsecretspec_ffi.a` directly into the Go binary:
+`libsecretspec.a` directly into the Go binary:
 
 ```bash
 # Stage the archive + header + generated cgo LDFLAGS, then build with cgo.
@@ -110,19 +142,21 @@ macOS links the archive in but stays self-contained-except-system-frameworks (no
 static libSystem). Windows stays on the default purego path. The prebuilt
 archives are attached to GitHub releases (`go-static.yml`).
 
-### pkg-config (0.19+)
+## Linking with pkg-config (0.19+)
 
-Install the library with [cargo-c](https://github.com/lu-zero/cargo-c) and add
-the `pkgconfig` tag instead of staging:
+Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 
 ```bash
-bash secretspec-ffi/scripts/cinstall.sh "$PREFIX"
-PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" CGO_ENABLED=1 go build -tags static,pkgconfig ./...
+# Use "static" (the default) or "shared"; use separate prefixes for both.
+bash libsecretspec/scripts/cinstall.sh "$PREFIX" static
 ```
 
-Unlike staging, this also works for a `go get` dependency.
+Then use the same build command for either type:
 
-### Dynamic linking (0.19+)
+```bash
+PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" CGO_ENABLED=1 go build -tags pkgconfig ./...
+```
 
-Drop `--library-type staticlib` from the install and the binary links the
-shared library instead.
+Unlike staging, this also works for a `go get` dependency. A shared install in
+a non-system prefix also requires `PREFIX/lib` in the platform's runtime
+library search path.

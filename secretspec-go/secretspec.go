@@ -1,18 +1,20 @@
 // Package secretspec is a Go SDK for SecretSpec, a declarative secrets manager.
 //
-// It is a thin client over the secretspec-ffi C ABI. Resolution (providers,
+// It is a thin client over the libsecretspec C ABI. Resolution (providers,
 // chains, profiles, generation, as_path) happens entirely in the Rust core; this
 // package marshals a JSON request to secretspec_resolve, parses the response
 // envelope, and exposes it with the same vocabulary as the Rust derive crate.
 //
-// Two bindings select the native resolver at build time:
+// Three build modes select the native resolver:
 //   - default (no build tag): purego (dlopen, no cgo). The library is located via
 //     the SECRETSPEC_FFI_LIB environment variable, an embedded copy, or a Cargo
 //     target directory. This keeps `go get` toolchain-free.
-//   - `-tags static`: cgo statically links libsecretspec_ffi.a, so the resolver
-//     is embedded in the Go binary (fully static on Linux/musl). See README.
+//   - `-tags static`: cgo statically links libsecretspec.a, so the resolver
+//     is embedded in the Go binary (fully static on Linux/musl).
+//   - `-tags pkgconfig` (0.19+): cgo links the installed static or shared library
+//     described by libsecretspec.pc. See README.
 //
-// Both bindings implement the same hooks (ensureLoaded, nativeResolve,
+// All bindings implement the same hooks (ensureLoaded, nativeResolve,
 // nativeABIVersion); the code below is binding-agnostic.
 package secretspec
 
@@ -24,7 +26,7 @@ import (
 )
 
 // resolveSchemaVersion is the response wire-format version this SDK understands.
-// It tracks secretspec-ffi's RESOLVE_SCHEMA_VERSION; a mismatch means the loaded
+// It tracks libsecretspec's RESOLVE_SCHEMA_VERSION; a mismatch means the loaded
 // library is incompatible with this SDK, so Load reports it rather than silently
 // misparsing.
 const resolveSchemaVersion = 2
@@ -42,6 +44,16 @@ func (e *Error) Error() string {
 // MissingRequiredError reports required secrets that were not found anywhere.
 type MissingRequiredError struct {
 	Missing []string
+}
+
+// CallerContext identifies the software integration invoking SecretSpec.
+// It is caller-asserted audit metadata and never supplies an access reason.
+// Available since SecretSpec 0.20.
+type CallerContext struct {
+	Name      string `json:"name"`
+	Version   string `json:"version,omitempty"`
+	Operation string `json:"operation,omitempty"`
+	Resource  string `json:"resource,omitempty"`
 }
 
 func (e *MissingRequiredError) Error() string {
@@ -85,8 +97,9 @@ func (s ResolvedSecret) Get() string {
 
 // Resolved is a successful resolution, mirroring the Rust Resolved wrapper.
 type Resolved struct {
-	Provider string
-	Profile  string
+	fileLeaseID *string
+	Provider    string
+	Profile     string
 	// Scope is the selected manifest scope, or nil for a full-profile resolve (0.17+).
 	Scope           *string
 	Secrets         map[string]ResolvedSecret
@@ -131,13 +144,26 @@ func (r *Resolved) FieldsJSON() ([]byte, error) {
 	return json.Marshal(r.Fields())
 }
 
-// Close removes the temp files backing any as_path secrets in this result. The
-// resolver persists those files (mode 0400) so their paths stay valid after
-// resolve returns; the caller owns their lifetime. Call it (e.g.
-// `defer resolved.Close()`) when done so secret files do not accumulate in the
-// temp dir. Non-as_path secrets and a no_values result hold no path and are
-// skipped, and a file already gone is not an error.
+// Close revokes the result's secret files, including hidden dependencies (0.22+).
+// Call it after the last consumer finishes. Older runtimes use filesystem cleanup.
+// Repeated calls are harmless.
 func (r *Resolved) Close() error {
+	if r.fileLeaseID != nil {
+		if err := ensureCallLoaded(); err != nil {
+			return err
+		}
+		payload, err := json.Marshal(map[string]any{"request_version": 1, "operation": "release_files",
+			"source": map[string]any{"lease_id": *r.fileLeaseID}})
+		if err != nil {
+			return err
+		}
+		raw, err := nativeCall(string(payload))
+		if err != nil {
+			return err
+		}
+		_, err = parseEnvelope(raw, "release_files", 1, func(r *responseJSON) int { return r.SchemaVersion })
+		return err
+	}
 	var firstErr error
 	for _, secret := range r.Secrets {
 		if secret.AsPath && secret.Path != nil {
@@ -159,7 +185,13 @@ func ABIVersion() (string, error) {
 
 // Builder configures a resolution, mirroring the derive crate's SecretSpec::builder().
 type Builder struct {
-	req map[string]any
+	req    map[string]any
+	inline *inlineSource
+}
+
+type inlineSource struct {
+	baseDir string
+	spec    any
 }
 
 // New starts a resolution builder.
@@ -178,14 +210,38 @@ func (b *Builder) set(key string, value any) *Builder {
 	return b
 }
 
-func (b *Builder) WithPath(path string) *Builder  { return b.set("path", path) }
+func (b *Builder) WithPath(path string) *Builder {
+	// Sources are a tagged union in the native request. Choosing a path after
+	// an inline source deliberately selects the legacy path source instead of
+	// serializing an ambiguous request.
+	b.inline = nil
+	return b.set("path", path)
+}
 func (b *Builder) WithProvider(p string) *Builder { return b.set("provider", p) }
 func (b *Builder) WithProfile(p string) *Builder  { return b.set("profile", p) }
 
 // WithScope limits resolution to a named manifest scope (SecretSpec 0.17+).
 func (b *Builder) WithScope(scope string) *Builder   { return b.set("scope", scope) }
 func (b *Builder) WithReason(reason string) *Builder { return b.set("reason", reason) }
-func (b *Builder) WithNoValues(v bool) *Builder      { return b.set("no_values", v) }
+func (b *Builder) WithCaller(caller CallerContext) *Builder {
+	return b.set("caller", caller)
+}
+func (b *Builder) WithNoValues(v bool) *Builder { return b.set("no_values", v) }
+
+// WithInlineSpec resolves a strict, versioned inline declaration instead of a
+// filesystem manifest. `spec` is serialized as the native inline-spec v2 (0.21+)
+// document (project/profiles/secrets); `baseDir` resolves relative provider
+// paths just like the directory of a manifest. The API was added in SecretSpec 0.20.
+//
+// The native library must export `secretspec_call`. If it is older, Load and
+// Report return a capability error rather than falling back to a manifest search.
+func (b *Builder) WithInlineSpec(spec any, baseDir string) *Builder {
+	if b.req != nil {
+		delete(b.req, "path")
+	}
+	b.inline = &inlineSource{baseDir: baseDir, spec: spec}
+	return b
+}
 
 // envelope is the response wrapper shared by the resolve and report paths,
 // generic over its inner response type R.
@@ -209,6 +265,7 @@ type secretJSON struct {
 }
 
 type responseJSON struct {
+	FileLeaseID     *string               `json:"file_lease_id"`
 	SchemaVersion   int                   `json:"schema_version"`
 	Provider        string                `json:"provider"`
 	Profile         string                `json:"profile"`
@@ -239,7 +296,7 @@ func parseEnvelope[R any](raw, kind string, expected int, schemaOf func(*R) int)
 	}
 	if v := schemaOf(env.Response); v != expected {
 		return nil, &Error{Kind: "version", Message: fmt.Sprintf(
-			"unsupported %s schema version %d (expected %d); the secretspec-ffi library and this SDK are out of sync",
+			"unsupported %s schema version %d (expected %d); the libsecretspec library and this SDK are out of sync",
 			kind, v, expected,
 		)}
 	}
@@ -249,21 +306,13 @@ func parseEnvelope[R any](raw, kind string, expected int, schemaOf func(*R) int)
 // Load resolves the secrets. It returns *MissingRequiredError if a required
 // secret is missing, and *Error for any other failure.
 func (b *Builder) Load() (*Resolved, error) {
-	if err := ensureLoaded(); err != nil {
-		return nil, err
-	}
 	// A zero-value Builder (var b Builder; b.Load()) has a nil req, which marshals
 	// to the literal `null` that serde rejects as an invalid JsonRequest. The WithX
 	// setters lazily allocate req, but Load may run before any of them.
 	if b.req == nil {
 		b.req = map[string]any{}
 	}
-	payload, err := json.Marshal(b.req)
-	if err != nil {
-		return nil, err
-	}
-
-	raw, err := nativeResolve(string(payload))
+	raw, err := b.execute("")
 	if err != nil {
 		return nil, err
 	}
@@ -287,6 +336,7 @@ func (b *Builder) Load() (*Resolved, error) {
 		}
 	}
 	return &Resolved{
+		fileLeaseID:     resp.FileLeaseID,
 		Provider:        resp.Provider,
 		Profile:         resp.Profile,
 		Scope:           resp.Scope,
@@ -346,20 +396,7 @@ type reportResponseJSON struct {
 // *MissingRequiredError: a missing required secret appears as a SecretReport
 // with Status "missing_required". It returns *Error for a genuine failure.
 func (b *Builder) Report() (*Report, error) {
-	if err := ensureLoaded(); err != nil {
-		return nil, err
-	}
-	req := make(map[string]any, len(b.req)+1)
-	for k, v := range b.req {
-		req[k] = v
-	}
-	req["mode"] = "report"
-	payload, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-
-	raw, err := nativeResolve(string(payload))
+	raw, err := b.execute("report")
 	if err != nil {
 		return nil, err
 	}
@@ -379,4 +416,46 @@ func (b *Builder) Report() (*Report, error) {
 		Scope:    resp.Scope,
 		Secrets:  secrets,
 	}, nil
+}
+
+// execute keeps the legacy request exactly as it was for path/search callers.
+// Inline callers use the separate C symbol, making an old runtime's missing
+// capability an explicit load error instead of a filesystem fallback.
+func (b *Builder) execute(mode string) (string, error) {
+	if b.req == nil {
+		b.req = map[string]any{}
+	}
+	options := make(map[string]any, len(b.req)+1)
+	for k, v := range b.req {
+		options[k] = v
+	}
+	if mode != "" {
+		options["mode"] = mode
+	}
+	if b.inline == nil {
+		if err := ensureLoaded(); err != nil {
+			return "", err
+		}
+		payload, err := json.Marshal(options)
+		if err != nil {
+			return "", err
+		}
+		return nativeResolve(string(payload))
+	}
+	if err := ensureCallLoaded(); err != nil {
+		return "", err
+	}
+	payload, err := json.Marshal(map[string]any{
+		"request_version": 1,
+		"operation":       "resolve",
+		"source": map[string]any{
+			"kind": "inline", "spec_version": 2,
+			"base_dir": b.inline.baseDir, "spec": b.inline.spec,
+		},
+		"options": options,
+	})
+	if err != nil {
+		return "", err
+	}
+	return nativeCall(string(payload))
 }

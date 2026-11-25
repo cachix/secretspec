@@ -8,6 +8,11 @@ name: "Swift SDK"
 on:
   workflow_call:
     inputs:
+      pre_release:
+        description: Run as part of the canonical pre-release suite
+        required: false
+        type: boolean
+        default: false
       publish:
         description: Attach the XCFramework to the GitHub Release
         required: false
@@ -37,7 +42,7 @@ on:
     paths:
       - "Package.swift"
       - "secretspec-swift/**"
-      - "secretspec-ffi/**"
+      - "libsecretspec/**"
       - "scripts/build-swift-xcframework.sh"
       - "scripts/sync-sdk-versions.sh"
       - ".github/workflows/swift-package.yml"
@@ -48,10 +53,16 @@ permissions:
 jobs:
   native:
     name: macOS native libraries
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: macos-latest
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install Rust
         run: |
           rustup toolchain install
@@ -61,16 +72,16 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: "12.0"
           RUSTFLAGS: "-C strip=symbols"
         run: |
-          cargo build -p secretspec-ffi --release \
+          cargo build -p libsecretspec --release \
             --target aarch64-apple-darwin
-          cargo build -p secretspec-ffi --release \
+          cargo build -p libsecretspec --release \
             --target x86_64-apple-darwin
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: swift-native-macos
           path: |
-            target/aarch64-apple-darwin/release/libsecretspec_ffi.dylib
-            target/x86_64-apple-darwin/release/libsecretspec_ffi.dylib
+            target/aarch64-apple-darwin/release/libsecretspec.dylib
+            target/x86_64-apple-darwin/release/libsecretspec.dylib
 
   package:
     name: XCFramework and Swift tests
@@ -78,12 +89,14 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Verify the committed Swift binary version
         shell: bash
         run: |
           bash scripts/sync-sdk-versions.sh
           git diff --exit-code -- Package.swift
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: swift-native-macos
           path: staged
@@ -93,7 +106,7 @@ jobs:
           libraries=()
           while IFS= read -r library; do
             libraries+=("$library")
-          done < <(find staged -type f -name libsecretspec_ffi.dylib -print | sort)
+          done < <(find staged -type f -name libsecretspec.dylib -print | sort)
           if [[ "${#libraries[@]}" -ne 2 ]]; then
             printf 'expected 2 native libraries, found %s\n' "${#libraries[@]}" >&2
             printf '%s\n' "${libraries[@]}" >&2
@@ -128,11 +141,14 @@ jobs:
           actual="$(swift package compute-checksum CSecretSpec.xcframework.zip)"
           echo "checksum=$actual" >> "$GITHUB_OUTPUT"
           echo "CSecretSpec.xcframework.zip checksum: $actual"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: swift-xcframework
           path: CSecretSpec.xcframework.zip
       - name: Validate the committed SwiftPM checksum
+        # PRs and the pre-release suite build current source, while Package.swift
+        # pins a published release.
+        if: ${{ github.event_name != 'pull_request' && !inputs.pre_release }}
         shell: bash
         env:
           ACTUAL_CHECKSUM: ${{ steps.checksum.outputs.checksum }}
@@ -166,7 +182,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: swift-xcframework
           path: artifacts

@@ -3,7 +3,8 @@ title: LastPass Provider
 description: LastPass password manager integration
 ---
 
-The LastPass provider integrates with LastPass password manager for secure cloud-based secret storage.
+The [LastPass](https://www.lastpass.com/) provider integrates with LastPass
+password manager for secure cloud-based secret storage.
 
 ## At a glance
 
@@ -37,13 +38,13 @@ $ secretspec run --provider lastpass -- npm start
 Install LastPass CLI:
 ```bash
 # macOS
-brew install lastpass-cli
+$ brew install lastpass-cli
 
 # Linux (apt)
-sudo apt install lastpass-cli
+$ sudo apt install lastpass-cli
 
 # NixOS
-nix-env -iA nixpkgs.lastpass-cli
+$ nix-env -iA nixpkgs.lastpass-cli
 ```
 
 ### Authentication
@@ -71,7 +72,7 @@ key should resolve to the same LastPass item.
 
 ### URI examples
 
-```bash
+```text
 # Default SecretSpec layout
 lastpass
 
@@ -90,6 +91,10 @@ DATABASE_URL = { description = "Database URL", providers = ["team"] }
 ```
 
 ## Storage model
+
+> **Changed in version 0.21:** Values containing NUL bytes are rejected before
+> writing because the LastPass CLI would silently truncate them. Declare
+> `encoding = "base64"` to store these values without data loss.
 
 By default, each secret maps to an item named
 `secretspec/{project}/{profile}/{key}`. A custom `item_template` replaces that
@@ -111,6 +116,7 @@ DATABASE_URL = { description = "DB", ref = { item = "Shared-Infra/Production DB"
 ```bash
 # Disable interactive pinentry and authenticate with a CI-managed password
 $ export LPASS_DISABLE_PINENTRY=1
+
 $ echo "$LASTPASS_PASSWORD" | lpass login --trust your-email@example.com
 
 $ secretspec run --provider lastpass -- deploy

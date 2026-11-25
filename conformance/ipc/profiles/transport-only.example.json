@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "kind": "transport_only",
+  "scheme": "fixture",
+  "uri": "fixture://conformance",
+  "provider_name": "fixture",
+  "expected_methods": [
+    "provider.resolve_address",
+    "provider.get",
+    "provider.get_many",
+    "provider.exists",
+    "provider.set",
+    "provider.set_expiring",
+    "provider.delete",
+    "provider.clear",
+    "provider.check_writable",
+    "provider.check_deletable",
+    "provider.describe_write_target",
+    "provider.reflect"
+  ],
+  "arguments": [],
+  "environment": {}
+}

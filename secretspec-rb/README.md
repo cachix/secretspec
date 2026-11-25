@@ -1,9 +1,13 @@
 # secretspec (Ruby SDK)
 
 Ruby bindings for [SecretSpec](https://secretspec.dev/), a declarative secrets
-manager. A thin client over the `secretspec-ffi` C ABI, linked into a native C
+manager. A thin client over the `libsecretspec` C ABI, linked into a native C
 extension at build time. Resolution happens in the Rust core, so the SDK
 inherits every provider with no Ruby-side logic.
+
+> The embedded ABI is named `libsecretspec` in SecretSpec 0.20+. It was named
+> `secretspec-ffi` through 0.19. Static-link SDK source and the archive must be
+> upgraded together because 0.20 adds the `secretspec_call` symbol.
 
 ```ruby
 require "secretspec"
@@ -34,7 +38,13 @@ resolved = Secretspec::SecretSpec.builder.with_scope("api").load
 
 ## Cleanup
 
-`as_path` secrets are materialized to temp files that outlive the call. Pass a
+`as_path` uses private temporary files. SDK cleanup releases visible files and
+hidden composition dependencies (0.22+). Files must be explicitly cleaned up;
+they are not removed automatically on process exit. See
+[file delivery and lifetimes](https://secretspec.dev/reference/configuration/#as_path-option).
+
+
+`as_path` paths remain valid after resolution until explicit cleanup. Pass a
 block to `load` (which closes automatically) or call `resolved.close` when done
 so the secret files do not accumulate in the temp dir.
 
@@ -51,26 +61,28 @@ report.secrets.each { |s| puts [s.name, s.status, s.required].join(" ") }
 
 ## Building
 
-The extension links the `secretspec-ffi` archive statically. In a development
+The extension links the `libsecretspec` archive statically. In a development
 checkout:
 
 ```bash
 bash scripts/build-ext.sh
 ```
 
-### pkg-config (0.19+)
+### Linking with pkg-config (0.19+)
 
-Install the library with [cargo-c](https://github.com/lu-zero/cargo-c) and pass
-`--enable-pkg-config` to the build:
+Install one library type with [cargo-c](https://github.com/lu-zero/cargo-c):
 
 ```bash
-bash secretspec-ffi/scripts/cinstall.sh "$PREFIX"
+# Use "static" (the default) or "shared"; use separate prefixes for both.
+bash libsecretspec/scripts/cinstall.sh "$PREFIX" static
+```
+
+Then use the same extension flag for either type:
+
+```bash
 PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" gem install secretspec -- --enable-pkg-config
 ```
 
 The same flag works in a checkout: `bash scripts/build-ext.sh --enable-pkg-config`.
-
-### Dynamic linking (0.19+)
-
-Drop `--library-type staticlib` from the install and the extension links the
-shared library instead.
+A shared install in a non-system prefix also requires `PREFIX/lib` in the
+platform's runtime library search path.

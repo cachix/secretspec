@@ -1,0 +1,23 @@
+[package]
+name = "secretspec-ipc-conformance"
+version.workspace = true
+edition.workspace = true
+publish = false
+default-run = "secretspec-ipc-conformance"
+
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+secrecy.workspace = true
+secretspec = { path = "../../../secretspec", default-features = false }
+secretspec-ipc = { workspace = true, features = ["blocking"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[build-dependencies]
+cc = "1"
+pkg-config = "0.3"

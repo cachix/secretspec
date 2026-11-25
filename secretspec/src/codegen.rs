@@ -19,8 +19,8 @@
 //! optional secret is nullable, while required, defaulted, and generated secrets
 //! are guaranteed to have a value when resolution succeeds.
 
-use crate::config::Config;
-use crate::manifest::{CompiledManifest, CompiledSecret};
+use crate::compiled_spec::{CompiledSecret, CompiledSpec};
+use crate::spec::Spec;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -71,7 +71,7 @@ pub struct CodegenIr {
 /// - a path if *any* profile declares it `as_path`;
 /// - described by the first profile, in sorted name order, that declares a
 ///   description.
-fn build_union(manifest: &CompiledManifest) -> Vec<IrField> {
+fn build_union(manifest: &CompiledSpec) -> Vec<IrField> {
     let total_profiles = manifest.profiles.len();
     struct Acc {
         /// Profiles where successful resolution guarantees the secret.
@@ -136,9 +136,12 @@ fn build_profile_fields(secrets: &BTreeMap<String, CompiledSecret>) -> Vec<IrFie
 
 /// Reduce a manifest to the language-neutral [`CodegenIr`] every emitter
 /// consumes. This is the only place manifest typing decisions are made.
-pub fn build_ir(config: &Config) -> CodegenIr {
-    let manifest = CompiledManifest::compile(config);
-    let union = build_union(&manifest);
+pub fn build_ir(spec: &Spec) -> CodegenIr {
+    build_ir_from_manifest(&spec.compiled)
+}
+
+pub(crate) fn build_ir_from_manifest(manifest: &CompiledSpec) -> CodegenIr {
+    let union = build_union(manifest);
 
     let profile_fields = if manifest.profiles.is_empty() {
         // No declared profiles: a single `default` profile carrying every field,
@@ -161,7 +164,7 @@ pub fn build_ir(config: &Config) -> CodegenIr {
     let profiles = profile_fields.iter().map(|p| p.name.clone()).collect();
 
     CodegenIr {
-        project: manifest.project,
+        project: manifest.project.clone(),
         profiles,
         union,
         profile_fields,
@@ -181,18 +184,28 @@ pub fn build_ir(config: &Config) -> CodegenIr {
 /// drop the converter or rename the type). By default it describes the union
 /// `SecretSpec` (safe for any profile); with a profile it describes that
 /// profile's exact fields. Pair it with `quicktype --top-level <Name>`.
-pub mod schema {
+pub(crate) mod schema {
     use super::{CodegenIr, IrField, capitalize};
     use serde_json::{Map, Value, json};
 
     fn property_type(field: &IrField) -> Value {
         // Every secret is a string; optional secrets are nullable. `as_path`
         // secrets are also strings (the file path), so they need no special type.
-        if field.optional {
+        let mut property = if field.optional {
             json!({ "type": ["string", "null"] })
         } else {
             json!({ "type": "string" })
+        };
+        if let Some(description) = &field.description {
+            property
+                .as_object_mut()
+                .expect("property_type always builds a JSON object")
+                .insert(
+                    "description".to_string(),
+                    Value::String(description.clone()),
+                );
         }
+        property
     }
 
     fn object_schema(title: &str, fields: &[IrField], additional_properties: bool) -> Value {
@@ -251,7 +264,7 @@ pub mod schema {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Profile, Project, Secret};
+    use crate::config::{Config, Profile, ProfileDefaults, Project, Secret};
     use std::collections::HashMap;
 
     fn secret(required: Option<bool>, as_path: Option<bool>, desc: Option<&str>) -> Secret {
@@ -279,6 +292,7 @@ mod tests {
             );
         }
         Config {
+            defaults: None,
             project: Project {
                 name: "ir-test".to_string(),
                 ..Default::default()
@@ -289,13 +303,17 @@ mod tests {
         }
     }
 
+    fn build_ir_from_config(config: &Config) -> CodegenIr {
+        build_ir_from_manifest(&CompiledSpec::compile(config))
+    }
+
     fn union_field<'a>(ir: &'a CodegenIr, name: &str) -> &'a IrField {
         ir.union.iter().find(|f| f.name == name).unwrap()
     }
 
     #[test]
     fn union_optional_if_optional_or_missing_in_any_profile() {
-        let ir = build_ir(&config_with(vec![
+        let ir = build_ir_from_config(&config_with(vec![
             (
                 "development",
                 vec![
@@ -327,7 +345,7 @@ mod tests {
 
     #[test]
     fn union_as_path_if_any_profile_marks_it() {
-        let ir = build_ir(&config_with(vec![
+        let ir = build_ir_from_config(&config_with(vec![
             (
                 "development",
                 vec![("CERT", secret(Some(true), None, None))],
@@ -342,7 +360,7 @@ mod tests {
 
     #[test]
     fn per_profile_fields_are_sorted_and_exact() {
-        let ir = build_ir(&config_with(vec![
+        let ir = build_ir_from_config(&config_with(vec![
             (
                 "development",
                 vec![
@@ -381,7 +399,7 @@ mod tests {
 
     #[test]
     fn unspecified_required_is_non_optional_matching_runtime() {
-        let ir = build_ir(&config_with(vec![(
+        let ir = build_ir_from_config(&config_with(vec![(
             "default",
             vec![("TOKEN", secret(None, None, None))],
         )]));
@@ -411,7 +429,7 @@ mod tests {
             ],
         )]);
 
-        let ir = build_ir(&config);
+        let ir = build_ir_from_config(&config);
         assert!(union_field(&ir, "PASSWORD").optional);
         assert!(union_field(&ir, "TOKEN").optional);
     }
@@ -421,14 +439,14 @@ mod tests {
         let mut token = secret(None, None, None);
         token.default = Some("fallback".to_string());
 
-        let ir = build_ir(&config_with(vec![("default", vec![("TOKEN", token)])]));
+        let ir = build_ir_from_config(&config_with(vec![("default", vec![("TOKEN", token)])]));
 
         assert!(!union_field(&ir, "TOKEN").optional);
     }
 
     #[test]
     fn profile_fields_include_secrets_inherited_from_default() {
-        let ir = build_ir(&config_with(vec![
+        let ir = build_ir_from_config(&config_with(vec![
             (
                 "default",
                 vec![("SHARED_TOKEN", secret(Some(true), None, None))],
@@ -458,8 +476,46 @@ mod tests {
     }
 
     #[test]
+    fn standalone_profile_fields_exclude_default_secrets() {
+        let mut config = config_with(vec![
+            (
+                "default",
+                vec![("SHARED_TOKEN", secret(Some(true), None, None))],
+            ),
+            (
+                "deployment",
+                vec![("DEPLOY_TOKEN", secret(Some(true), None, None))],
+            ),
+        ]);
+        config.profiles.get_mut("deployment").unwrap().defaults = Some(ProfileDefaults {
+            inherit: Some(false),
+            required: None,
+            default: None,
+            providers: None,
+        });
+
+        let ir = build_ir_from_config(&config);
+        let deployment = ir
+            .profile_fields
+            .iter()
+            .find(|profile| profile.name == "deployment")
+            .unwrap();
+        let names: Vec<&str> = deployment
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["DEPLOY_TOKEN"]);
+
+        let schema: serde_json::Value =
+            serde_json::from_str(&schema::emit(&ir, Some("deployment")).unwrap()).unwrap();
+        assert!(schema["properties"]["DEPLOY_TOKEN"].is_object());
+        assert!(schema["properties"].get("SHARED_TOKEN").is_none());
+    }
+
+    #[test]
     fn schema_emits_types_and_nullability_for_quicktype() {
-        let ir = build_ir(&config_with(vec![
+        let ir = build_ir_from_config(&config_with(vec![
             (
                 "development",
                 vec![
@@ -511,10 +567,37 @@ mod tests {
     }
 
     #[test]
+    fn schema_emits_description_when_declared() {
+        // quicktype turns a JSON Schema "description" into a native docstring
+        // in every target language, so a declared description should reach the
+        // generated schema even though it plays no role in the type itself.
+        let ir = build_ir_from_config(&config_with(vec![(
+            "default",
+            vec![
+                (
+                    "DATABASE_URL",
+                    secret(Some(true), None, Some("Postgres connection string")),
+                ),
+                ("API_KEY", secret(Some(true), None, None)),
+            ],
+        )]));
+
+        let union: serde_json::Value =
+            serde_json::from_str(&schema::emit(&ir, None).unwrap()).unwrap();
+        assert_eq!(
+            union["properties"]["DATABASE_URL"]["description"],
+            "Postgres connection string"
+        );
+        // A field without a declared description carries no key at all, rather
+        // than an empty or null one.
+        assert!(union["properties"]["API_KEY"].get("description").is_none());
+    }
+
+    #[test]
     fn empty_profiles_yield_single_default_with_union_fields() {
         let mut config = config_with(vec![]);
         config.profiles.clear();
-        let ir = build_ir(&config);
+        let ir = build_ir_from_config(&config);
         assert_eq!(ir.profiles, vec!["default"]);
         assert_eq!(ir.profile_fields.len(), 1);
         assert_eq!(ir.profile_fields[0].name, "default");

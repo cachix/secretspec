@@ -1,4 +1,4 @@
-//go:build unix && !static
+//go:build unix && !static && !pkgconfig
 
 package secretspec
 

@@ -20,7 +20,7 @@ end
 # resolver, statically linked). Returns the CLI path; the SDK loads the resolver
 # from the compiled extension, not a runtime library.
 def build_artifacts
-  unless system("cargo", "build", "-p", "secretspec-ffi", "-p", "secretspec", chdir: REPO)
+  unless system("cargo", "build", "-p", "libsecretspec", "-p", "secretspec", chdir: REPO)
     raise "cargo build failed"
   end
   pkg = File.expand_path("..", __dir__)

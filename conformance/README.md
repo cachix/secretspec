@@ -1,7 +1,8 @@
 # Cross-language conformance suite
 
-Every SecretSpec SDK (Python, Go, Ruby, Node.js, Haskell, C#, PHP, and Swift
-(0.18+)) is a thin client over the same resolver contract. This suite proves
+Every SecretSpec SDK (Python, Go, Ruby, Node.js, Haskell, C#, PHP, Swift
+(0.18+), JVM (0.20+), and Elixir (0.22+)) is a thin client over the same
+resolver contract. This suite proves
 they agree: each SDK resolves the same fixtures and must produce the identical
 **canonical** result.
 
@@ -41,7 +42,7 @@ the comparison is deterministic and meaningful across languages.
 ## Running
 
 Run everything with the aggregate runner (inside the project devenv shell). It
-builds the `secretspec-ffi` library once, points the runtime-loading SDKs at the
+builds the `libsecretspec` library once, points the runtime-loading SDKs at the
 cdylib via `SECRETSPEC_FFI_LIB` and stages the staticlib for the SDKs that link
 it (Haskell), runs each language's conformance suite, and prints a combined
 PASS/FAIL/SKIP summary (exiting non-zero if any language fails):
@@ -57,10 +58,13 @@ relative to the repo root:
 - Go: `cd secretspec-go && go test ./...`
 - Ruby: `cd secretspec-rb && ruby test/test_resolve.rb`
 - Node: `cd secretspec-node && node --test`
-- Haskell: `cd secretspec-hs && cabal test` (needs the `secretspec-ffi`
+- Haskell: `cd secretspec-hs && cabal test` (needs the `libsecretspec`
   staticlib staged on `--extra-lib-dirs`; see the Haskell SDK build steps)
 - C#: `cd secretspec-dotnet && dotnet run --project tests/SecretSpec.Tests`
 - PHP: `cd secretspec-php && ./vendor/bin/phpunit tests/ConformanceTest.php`
 - Swift (0.18+, macOS):
   `swift test --filter SecretSpecTests.testCrossLanguageConformance` after
   staging the local XCFramework as described in `secretspec-swift/README.md`
+- JVM (0.20+):
+  `cd secretspec-jvm && ./gradlew test`
+- Elixir (0.22+): `cd secretspec-ex && mix test test/conformance_test.exs`

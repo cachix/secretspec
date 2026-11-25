@@ -53,10 +53,11 @@ self-hosted instances. Point SecretSpec at an Infisical project and authenticate
 with Universal Auth:
 
 ```bash
-export INFISICAL_CLIENT_ID=...
-export INFISICAL_CLIENT_SECRET=...
+$ export INFISICAL_CLIENT_ID=...
 
-secretspec run \
+$ export INFISICAL_CLIENT_SECRET=...
+
+$ secretspec run \
   --provider "infisical://app.infisical.com/7e2f1a4c-...?env=prod" \
   -- npm start
 ```
@@ -90,7 +91,7 @@ The `Cachix.SecretSpec` NuGet package brings the shared SecretSpec resolver to
 .NET 8:
 
 ```bash
-dotnet add package Cachix.SecretSpec
+$ dotnet add package Cachix.SecretSpec
 ```
 
 ```csharp
@@ -117,7 +118,7 @@ integration, preflight reports, error handling, and typed access.
 ## Upgrading
 
 ```bash
-cargo install secretspec
+$ cargo install secretspec
 ```
 
 All three additions are opt-in: existing manifests and provider configurations

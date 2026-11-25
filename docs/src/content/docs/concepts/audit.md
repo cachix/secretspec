@@ -5,8 +5,8 @@ description: A local, append-only record of every secret access for after-the-fa
 
 secretspec records every secret access to a local audit log so you can review,
 after the fact, **what** secret was accessed, **when**, by **whom**, with what
-**reason, if supplied**, and what the **outcome** was. Auditing is **on by
-default**.
+**reason, if supplied**, which software integration called SecretSpec (0.20+),
+and what the **outcome** was. Auditing is **on by default**.
 
 Secret values are never written to the log. Only metadata is recorded, and any
 credentials embedded in a provider URI are redacted.
@@ -46,8 +46,15 @@ and how to turn it off.
   "provider": "keyring://",
   "outcome": "found",
   "reason": "deploy web frontend",
+  "caller": {
+    "name": "git",
+    "version": "2.51.0",
+    "operation": "credential_get",
+    "resource": "github.com"
+  },
+  "purpose": { "consumer": "python-sdk", "operation": "resolve" },
   "actor": { "user": "alice", "agent": "claude-code", "is_agent": true },
-  "version": "0.11.0"
+  "version": "0.20.0"
 }
 ```
 
@@ -68,12 +75,20 @@ and how to turn it off.
 | `outcome` | `found`, `missing`, `default`, `written`, `deleted` (0.17+ cache clear), `started` (a `run` launched its command), or `error` |
 | | A cached route writing its local entry is recorded as `cache_refresh`/`written`, never as `set`: no authoritative store was written. Dropping an entry — `cache clear`, or an entry a write superseded — is `cache_clear`/`deleted`. |
 | `error_kind` | A non-sensitive tag when `outcome` is `error` |
+| `interaction` | Opaque provider interaction kind, ID, and optional expiry for an actionable failure (SecretSpec 0.21+); correlation only, never authorization material |
 | `reason` | The reason supplied via `--reason` / `SECRETSPEC_REASON` / the SDK, if any |
+| `caller` | Caller-asserted software integration context: `name`, and optional `version`, `operation`, and non-secret `resource` (SecretSpec 0.20+) |
+| `purpose` | Structured resolver-client attribution (`consumer`, `operation`, and optional `host`/`path`); present only for resolver resolution in SecretSpec 0.21+. It is audit context, never identity or authorization input. |
 | `actor` | The OS user, the detected coding agent (if any), and whether this is an agent session |
 
 This pairs naturally with the [`require_reason`](/reference/configuration/#requiring-a-reason-for-secret-access)
 policy: when that policy applies, SecretSpec requires the caller to state *why*
 before proceeding and records the supplied reason alongside the access.
+
+Caller context answers *what software* requested access; `reason` answers *why
+the user* requested it. Caller context is informational, is not an authenticated
+identity, and never satisfies `require_reason`. Integrations must not place a
+credential or secret value in any caller field.
 
 ## Reading the log
 
@@ -83,13 +98,13 @@ and a readable summary:
 
 ```bash
 # Last 20 entries, formatted
-secretspec audit -n 20
+$ secretspec audit -n 20
 
 # Only `run` events for one project
-secretspec audit --project my-app --action run
+$ secretspec audit --project my-app --action run
 
 # Raw JSON Lines, piped to jq
-secretspec audit --json | jq 'select(.outcome == "missing")'
+$ secretspec audit --json | jq 'select(.outcome == "missing")'
 ```
 
 ## Size cap

@@ -1,7 +1,7 @@
 name: "Go static lib"
 
 # Builds the fully-static (musl) Go binary for the `-tags static` binding: cgo
-# links libsecretspec_ffi.a directly into the executable, so the Rust resolver is
+# links libsecretspec.a directly into the executable, so the Rust resolver is
 # embedded and the binary has no dynamic dependencies at all. Built via devenv,
 # which provides the musl C cross-toolchain (for the sqlite3/aws-lc-sys build
 # scripts and the cgo link) and static libunwind.
@@ -16,6 +16,11 @@ name: "Go static lib"
 on:
   workflow_call:
     inputs:
+      pre_release:
+        description: Run as part of the canonical pre-release suite
+        required: false
+        type: boolean
+        default: false
       release_tag:
         description: Existing GitHub Release tag to upload artifacts to
         required: false
@@ -34,15 +39,24 @@ on:
   pull_request:
     paths:
       - "secretspec-go/**"
-      - "secretspec-ffi/**"
+      - "libsecretspec/**"
       - ".github/workflows/go-static.yml"
+
+permissions:
+  contents: read
 
 jobs:
   static:
     name: x86_64-linux-musl (fully static)
+    if: >-
+      inputs.pre_release ||
+      github.event_name != 'pull_request' ||
+      !startsWith(github.event.pull_request.title, 'Release ')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # The musl rebuild of the full provider stack plus the Nix store overflows
       # the ~14GB free on a hosted runner.
       - name: Free up disk space
@@ -52,8 +66,8 @@ jobs:
             /usr/local/share/boost /usr/local/share/powershell
           sudo docker image prune --all --force
           df -h /
-      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
-      - uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         with:
           name: devenv
       - name: Install devenv.sh
@@ -107,7 +121,7 @@ jobs:
             ./ssstatic
           '
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: go-static-x86_64-linux-musl
           path: |
@@ -127,7 +141,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: go-static-x86_64-linux-musl
           path: staged

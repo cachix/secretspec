@@ -1,4 +1,11 @@
-{ lib, pkgs, ... }: {
+{ lib, pkgs, ... }:
+let
+  # https://nixos.org/manual/nixpkgs/stable/#beam-structure
+  beamPackages = pkgs.beam29Packages.overrideScope (self: super: { elixir = self.elixir_1_20; });
+  erlang = beamPackages.erlang;
+  elixir = beamPackages.elixir;
+in
+{
   languages.rust = {
     enable = true;
     # The Rust version is pinned in rust-toolchain.toml, which the native CI
@@ -33,14 +40,20 @@
     };
   };
   # Go SDK (secretspec-go): default binding is purego (dlopen, no cgo); the
-  # `-tags static` binding uses cgo to statically link libsecretspec_ffi.a, and on
+  # `-tags static` binding uses cgo to statically link libsecretspec.a, and on
   # Linux is built fully static against musl (see the env block below).
   languages.go.enable = true;
   # Ruby SDK (secretspec-rb) compiles an mkmf C extension that statically links
-  # libsecretspec_ffi.a.
+  # libsecretspec.a.
   languages.ruby.enable = true;
   # Haskell SDK (secretspec-hs) links the C ABI at build time via the FFI.
-  languages.haskell.enable = true;
+  # Supply its only non-boot dependency from Nix's binary cache. Otherwise a
+  # cold Cabal store compiles aeson and roughly forty transitive packages from
+  # source in every hosted SDK job.
+  languages.haskell = {
+    enable = true;
+    package = pkgs.haskellPackages.ghcWithPackages (hpkgs: [ hpkgs.aeson ]);
+  };
   # C# SDK (secretspec-dotnet) loads the C ABI through P/Invoke. The NuGet
   # package carries runtime-specific cdylibs; local tests use
   # SECRETSPEC_FFI_LIB from scripts/ci-sdks.sh.
@@ -48,7 +61,7 @@
   # PHP SDK (secretspec-php) has two native backends over the same resolver:
   #   * secretspec-php-native, an ext-php-rs extension that embeds the resolver
   #     (the production path: no ffi.enable, works in FPM like ext-redis); and
-  #   * a runtime ext-ffi fallback that dlopens the secretspec-ffi cdylib.
+  #   * a runtime ext-ffi fallback that dlopens the libsecretspec cdylib.
   # The pure-PHP client prefers the extension when loaded. ext-ffi (enabled here)
   # covers the fallback + dev; composer (bundled with languages.php) manages the
   # dev-only phpunit dependency.
@@ -59,14 +72,28 @@
       ffi.enable = true;
     '';
   };
+  languages.java = {
+    enable = true;
+    jdk.package = pkgs.jdk21;
+  };
+  languages.elixir = {
+    enable = true;
+    package = elixir;
+  };
 
   packages = [
+    # documentation link validation
+    pkgs.lychee
     # coverage testing
     pkgs.cargo-tarpaulin
+    # coverage-guided fuzzing of IPC wire targets (requires a nightly toolchain)
+    pkgs.cargo-fuzz
     # installers
     pkgs.cargo-dist
     # bitwarden-cli for integration testing
     pkgs.bitwarden-cli
+    # JSON processor used by the Bitwarden integration test scripts
+    pkgs.jq
     # docker CLI for tests/vaultwarden_harness.sh, which runs the disposable
     # Vaultwarden + TLS proxy containers. Client only: the harness talks to
     # whatever runtime the developer already provides (Docker Desktop, colima,
@@ -81,10 +108,23 @@
     # For development of the SOPS provider
     pkgs.sops
     pkgs.pkg-config
-    # Installs the secretspec-ffi archive with its header and pkg-config file
+    # JSON parsing for libsecretspec-resolver, resolved through pkg-config
+    # (Meson, cc-rs) and its CMake package config rather than vendored
+    pkgs.yyjson
+    # Standalone libsecretspec-resolver builds and install metadata.
+    pkgs.cmake
+    pkgs.meson
+    pkgs.ninja
+    # Installs the libsecretspec archive with its header and pkg-config file
     pkgs.cargo-c
+    # expert-lsp needs the erlang binary
+    erlang
   ];
 
+  env = {
+    # Gradle runs on JDK 21 but compiles the JVM SDK against this JDK 11 toolchain.
+    SECRETSPEC_JVM_TARGET_JDK = "${pkgs.jdk11}";
+  } //
   # Fully-static musl build of the Go SDK (-tags static + -extldflags -static).
   # Keep these Linux-only: interpolating the cross-toolchain paths on macOS makes
   # Nix build a Linux-targeting GCC toolchain from source just to enter the shell.
@@ -94,7 +134,7 @@
   # realised into the store without polluting the host build environment. The
   # CC_/linker vars are musl-target-scoped, so host (glibc) cargo builds are
   # unaffected; MUSL_CC / MUSL_STATIC_LDFLAGS feed the cgo link step.
-  env = lib.optionalAttrs pkgs.stdenv.isLinux (
+  lib.optionalAttrs pkgs.stdenv.isLinux (
     let
       muslcc = "${pkgs.pkgsCross.musl64.stdenv.cc}/bin/x86_64-unknown-linux-musl-gcc";
     in
@@ -124,6 +164,28 @@
 
     # Run CLI integration tests
     bash tests/cli-integration.sh
+  '';
+
+  # Keep production builds on the stable toolchain from rust-toolchain.toml;
+  # libFuzzer alone needs nightly's sanitizer coverage flags. Referencing
+  # rustup by its Nix path avoids placing its cargo shim ahead of the pinned
+  # compiler in ordinary development shells.
+  scripts.install-fuzz-nightly.exec = ''
+    ${pkgs.rustup}/bin/rustup toolchain install nightly
+  '';
+
+  scripts.fuzz-resolver.exec = ''
+    nightly_cargo="$(${pkgs.rustup}/bin/rustup which --toolchain nightly cargo)"
+    export PATH="$(dirname "$nightly_cargo"):$PATH"
+    export RUSTC="$(${pkgs.rustup}/bin/rustup which --toolchain nightly rustc)"
+    cargo fuzz run resolver_wire -- "$@"
+  '';
+
+  scripts.fuzz-resolve-apis.exec = ''
+    nightly_cargo="$(${pkgs.rustup}/bin/rustup which --toolchain nightly cargo)"
+    export PATH="$(dirname "$nightly_cargo"):$PATH"
+    export RUSTC="$(${pkgs.rustup}/bin/rustup which --toolchain nightly rustc)"
+    cargo fuzz run resolve_apis -- "$@"
   '';
 
   processes.docs.exec = ''

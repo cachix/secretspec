@@ -5,17 +5,29 @@
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
-    "build": "npm run check:provider-credentials && astro check && astro build",
+    "build": "npm run check:provider-credentials && npm run check:version-compatibility && astro check && astro build",
+    "check:links": "cachix-site-check-links dist https://secretspec.dev",
     "check:provider-credentials": "node --test scripts/provider-credentials.test.mjs && node scripts/check-provider-credentials.mjs",
+    "check:version-compatibility": "node --test scripts/version-compatibility.test.mjs",
+    "validate": "npm run build && npm run check:links",
     "preview": "astro preview",
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.34.4",
-    "astro": "^5.6.1",
+    "@astrojs/mdx": "^8.1.2",
+    "@astrojs/starlight": "^0.42.8",
+    "@cachix/site-kit": "https://codeload.github.com/cachix/site-kit/tar.gz/f61f46c72b4e78d0a7d1e5858a4b973c896beb88",
+    "astro": "^7.4.12",
+    "hast-util-select": "^6.0.4",
+    "rehype-parse": "^9.0.1",
+    "rehype-remark": "^10.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-stringify": "^11.0.0",
     "sharp": "^0.34.2",
-    "starlight-blog": "^0.25.3",
-    "starlight-llms-txt": "^0.7.0"
+    "starlight-blog": "^0.30.2",
+    "starlight-llm-actions": "^0.13.0",
+    "unified": "^11.0.5",
+    "unist-util-remove": "^4.0.0"
   },
   "devDependencies": {
     "@astrojs/check": "0.9.9",

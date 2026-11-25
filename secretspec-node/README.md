@@ -36,7 +36,13 @@ const resolved = SecretSpec.builder().withScope('api').load();
 
 ## Cleanup
 
-`as_path` secrets are materialized to temp files that outlive the call. Call
+`as_path` uses private temporary files. SDK cleanup releases visible files and
+hidden composition dependencies (0.22+). Files must be explicitly cleaned up;
+they are not removed automatically on process exit. See
+[file delivery and lifetimes](https://secretspec.dev/reference/configuration/#as_path-option).
+
+
+`as_path` paths remain valid after resolution until explicit cleanup. Call
 `resolved.dispose()` (or `using resolved = builder.load()`) when done so the
 secret files do not accumulate in the temp dir.
 

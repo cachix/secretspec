@@ -3,7 +3,9 @@
     "allow": [
       "Bash(mkdir:*)",
       "Bash(jq:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ],
     "deny": []
   }

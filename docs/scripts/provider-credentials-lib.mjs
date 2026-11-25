@@ -169,35 +169,41 @@ export function extractRegisteredCredentials(sources) {
 	for (const [filename, source] of sources) {
 		if (filename.endsWith('/macros.rs') || filename.endsWith('/tests.rs')) continue;
 		const localConstants = extractConstantsFromSource(source);
-		let searchFrom = 0;
-		const marker = 'crate::register_provider!';
-		while (true) {
-			const markerIndex = source.indexOf(marker, searchFrom);
-			if (markerIndex === -1) break;
-			const opening = source.indexOf('{', markerIndex + marker.length);
-			if (opening === -1) throw new Error(`${filename}: register_provider! has no body`);
-			const closing = findClosingDelimiter(source, opening, '{', '}');
-			const body = source.slice(opening + 1, closing);
-			searchFrom = closing + 1;
+		for (const marker of ['crate::register_provider!', 'metadata!']) {
+			let searchFrom = 0;
+			while (true) {
+				const markerIndex = source.indexOf(marker, searchFrom);
+				if (markerIndex === -1) break;
+				const opening = source.indexOf('{', markerIndex + marker.length);
+				if (opening === -1) throw new Error(`${filename}: ${marker} has no body`);
+				const closing = findClosingDelimiter(source, opening, '{', '}');
+				const body = source.slice(opening + 1, closing);
+				searchFrom = closing + 1;
 
-			const providerMatch = body.match(/\bname\s*:\s*"([^"]+)"/);
-			if (!providerMatch) throw new Error(`${filename}: register_provider! has no literal name`);
-			const fieldMatch = /\bcredential_names\s*:\s*\[/.exec(body);
-			if (!fieldMatch) continue;
-			const arrayOpening = body.indexOf('[', fieldMatch.index);
-			const arrayClosing = findClosingDelimiter(body, arrayOpening, '[', ']');
-			const tokens = body
-				.slice(arrayOpening + 1, arrayClosing)
-				.split(',')
-				.map((token) => token.trim())
-				.filter(Boolean);
-			const names = tokens.map((token) =>
-				resolveCredentialToken(token, localConstants, globalConstants),
-			);
-			if (providers.has(providerMatch[1])) {
-				throw new Error(`duplicate registered provider: ${providerMatch[1]}`);
+				const providerMatch = body.match(/\bname\s*:\s*"([^"]+)"/);
+				if (!providerMatch) {
+					// Feature-gated implementations reference their catalog entry;
+					// metadata! is the authoritative declaration.
+					if (marker === 'crate::register_provider!' && /\bmetadata\s*:/.test(body)) continue;
+					throw new Error(`${filename}: ${marker} has no literal name`);
+				}
+				const fieldMatch = /\bcredential_names\s*:\s*\[/.exec(body);
+				if (!fieldMatch) continue;
+				const arrayOpening = body.indexOf('[', fieldMatch.index);
+				const arrayClosing = findClosingDelimiter(body, arrayOpening, '[', ']');
+				const tokens = body
+					.slice(arrayOpening + 1, arrayClosing)
+					.split(',')
+					.map((token) => token.trim())
+					.filter(Boolean);
+				const names = tokens.map((token) =>
+					resolveCredentialToken(token, localConstants, globalConstants),
+				);
+				if (providers.has(providerMatch[1])) {
+					throw new Error(`duplicate registered provider: ${providerMatch[1]}`);
+				}
+				providers.set(providerMatch[1], names);
 			}
-			providers.set(providerMatch[1], names);
 		}
 	}
 	return providers;

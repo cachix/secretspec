@@ -1,0 +1,82 @@
+---
+title: Node.js SDK
+description: Resolve SecretSpec secrets from Node.js and TypeScript
+---
+
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+import { Code } from 'astro:components';
+import quickStartExample from '../../../../../secretspec-node/examples/quick_start.js?raw';
+import scopesExample from '../../../../../secretspec-node/examples/scopes.js?raw';
+import typedAccessExample from '../../../../../secretspec-node/examples/typed_access.ts?raw';
+
+The Node.js / TypeScript SDK (`secretspec`) is a thin wrapper over a
+[napi-rs](https://napi.rs/) native addon that embeds the resolver. Resolution
+happens in the Rust core, so the SDK inherits every provider with no JS-side
+logic. npm installs a prebuilt addon for the host platform: Linux x64 and
+arm64 (glibc, and musl for Alpine images in 0.20+), macOS on Apple silicon, and
+Windows x64. TypeScript declarations ship in `index.d.ts`.
+
+## Quick start
+
+<Code code={quickStartExample} lang="js" meta='title="quick_start.js"' />
+
+A missing required secret throws `MissingRequiredError`; any other failure
+throws `SecretSpecError` (with a stable `.kind`).
+
+## Caller context {/* #caller-context-020 */}
+
+<VersionCompatibility version="0.20" />
+
+```js
+const builder = SecretSpec.builder().withCaller({
+  name: 'git',
+  version: '2.51.0',
+  operation: 'credential_get',
+  resource: 'github.com',
+});
+```
+
+Caller context identifies the invoking integration in audit records but never
+satisfies `require_reason`. Do not put credentials or secret values in it.
+
+## Inline specifications {/* #inline-specifications-020 */}
+
+<VersionCompatibility version="0.20" />
+
+Use `.withInlineSpec(spec, baseDir)` (or `loadAsync`/`reportAsync`) to resolve a
+strict inline-spec v2 object (SecretSpec 0.21+). `baseDir` resolves relative
+provider paths; the embedded addon submits the versioned native request directly.
+
+## Scopes {/* #scopes-017 */}
+
+<VersionCompatibility version="0.17" />
+
+Use `.withScope('api')` to resolve only a named `[scopes.api]` subset. The
+selected name is available as `resolved.scope` and `report.scope`:
+
+<Code code={scopesExample} lang="js" meta='title="scopes.js"' />
+
+## Typed access (codegen)
+
+Generate typed interfaces with `secretspec schema` plus
+[quicktype](https://quicktype.io), then convert `resolved.fieldsJson()`:
+
+```bash
+$ secretspec schema | quicktype -s schema --top-level SecretSpec --lang typescript -o secrets_gen.ts
+```
+
+<Code code={typedAccessExample} lang="ts" meta='title="typed_access.ts"' />
+## Files (`as_path`)
+
+<VersionCompatibility version="0.22" kind="changed">
+
+`as_path` uses private temporary files. SDK cleanup releases visible files and
+hidden composition dependencies (0.22+). Files must be explicitly cleaned up;
+they are not removed automatically on process exit. See
+[file delivery and lifetimes](/reference/configuration/#as_path-option).
+
+</VersionCompatibility>
+
+Keep the result alive while consuming its paths, and call the SDK's cleanup
+method afterward. Temporary files remain until explicit cleanup.

@@ -3,12 +3,33 @@ import Foundation
 private let resolveSchemaVersion = 2
 private let reportSchemaVersion = 1
 
+/// Caller-asserted software-integration context (SecretSpec 0.20+).
+public struct CallerContext: Encodable, Sendable {
+    public let name: String
+    public let version: String?
+    public let operation: String?
+    public let resource: String?
+
+    public init(
+        name: String,
+        version: String? = nil,
+        operation: String? = nil,
+        resource: String? = nil
+    ) {
+        self.name = name
+        self.version = version
+        self.operation = operation
+        self.resource = resource
+    }
+}
+
 private struct ResolveRequest: Encodable, Sendable {
     var path: String? = nil
     var provider: String? = nil
     var profile: String? = nil
     var scope: String? = nil
     var reason: String? = nil
+    var caller: CallerContext? = nil
     var noValues: Bool? = nil
     var mode: String? = nil
 
@@ -18,6 +39,7 @@ private struct ResolveRequest: Encodable, Sendable {
         case profile
         case scope
         case reason
+        case caller
         case noValues = "no_values"
         case mode
     }
@@ -35,6 +57,7 @@ private struct Envelope<Response: Decodable>: Decodable {
 }
 
 private struct ResolveResponse: Decodable {
+    let fileLeaseId: String?
     let schemaVersion: Int
     let provider: String
     let profile: String
@@ -44,6 +67,7 @@ private struct ResolveResponse: Decodable {
     let missingOptional: [String]
 
     enum CodingKeys: String, CodingKey {
+        case fileLeaseId = "file_lease_id"
         case schemaVersion = "schema_version"
         case provider
         case profile
@@ -73,11 +97,36 @@ private struct ReportResponse: Decodable {
 /// Configures a SecretSpec resolution.
 public struct SecretSpecBuilder: Sendable {
     private var request = ResolveRequest()
+    private var inline: InlineSpec? = nil
+
+    private struct InlineSpec: Sendable {
+        let declaration: Data
+        let baseDir: String
+    }
 
     public init() {}
 
     public func withPath(_ path: String?) -> Self {
-        setting(\.path, to: path)
+        var copy = setting(\.path, to: path)
+        copy.inline = nil
+        return copy
+    }
+
+    /// Resolves strict inline-spec v2 at `baseDir` (SecretSpec 0.21+).
+    ///
+    /// The declaration is encoded once into the dedicated native wire format.
+    /// An older native library reports a capability error rather than searching
+    /// for a filesystem manifest.
+    public func withInlineSpec<Declaration: Encodable & Sendable>(
+        _ declaration: Declaration,
+        baseDir: String
+    ) throws -> Self {
+        var copy = self
+        copy.request.path = nil
+        copy.inline = InlineSpec(
+            declaration: try JSONEncoder().encode(declaration), baseDir: baseDir
+        )
+        return copy
     }
 
     public func withProvider(_ provider: String?) -> Self {
@@ -95,6 +144,11 @@ public struct SecretSpecBuilder: Sendable {
 
     public func withReason(_ reason: String?) -> Self {
         setting(\.reason, to: reason)
+    }
+
+    /// Identifies the invoking software integration (SecretSpec 0.20+).
+    public func withCaller(_ caller: CallerContext?) -> Self {
+        setting(\.caller, to: caller)
     }
 
     public func withNoValues(_ noValues: Bool = true) -> Self {
@@ -121,7 +175,8 @@ public struct SecretSpecBuilder: Sendable {
             profile: response.profile,
             scope: response.scope,
             secrets: response.secrets,
-            missingOptional: response.missingOptional
+            missingOptional: response.missingOptional,
+            fileLeaseId: response.fileLeaseId
         )
     }
 
@@ -158,7 +213,20 @@ public struct SecretSpecBuilder: Sendable {
 
         let requestData: Data
         do {
-            requestData = try JSONEncoder().encode(configured)
+            if let inline {
+                let declaration = try JSONSerialization.jsonObject(with: inline.declaration)
+                requestData = try JSONSerialization.data(withJSONObject: [
+                    "request_version": 1,
+                    "operation": "resolve",
+                    "source": [
+                        "kind": "inline", "spec_version": 2,
+                        "base_dir": inline.baseDir, "spec": declaration,
+                    ],
+                    "options": try JSONSerialization.jsonObject(with: JSONEncoder().encode(configured)),
+                ])
+            } else {
+                requestData = try JSONEncoder().encode(configured)
+            }
         } catch {
             throw SecretSpecError(kind: "encode", message: error.localizedDescription)
         }
@@ -169,7 +237,12 @@ public struct SecretSpecBuilder: Sendable {
             )
         }
 
-        let responseJSON = try Native.resolve(requestJSON)
+        let responseJSON: String
+        if inline == nil {
+            responseJSON = try Native.resolve(requestJSON)
+        } else {
+            responseJSON = try Native.call(requestJSON)
+        }
         let envelope: Envelope<Response>
         do {
             envelope = try JSONDecoder().decode(
@@ -205,7 +278,7 @@ public struct SecretSpecBuilder: Sendable {
             throw SecretSpecError(
                 kind: "version",
                 message: "unsupported \(kind) schema version \(actual) "
-                    + "(expected \(expected)); the secretspec-ffi library "
+                    + "(expected \(expected)); the libsecretspec library "
                     + "and this SDK are out of sync"
             )
         }
@@ -224,14 +297,16 @@ public enum SecretSpec {
         provider: String? = nil,
         profile: String? = nil,
         scope: String? = nil,
-        reason: String? = nil
+        reason: String? = nil,
+        caller: CallerContext? = nil
     ) throws -> Resolved {
         try configured(
             path: path,
             provider: provider,
             profile: profile,
             scope: scope,
-            reason: reason
+            reason: reason,
+            caller: caller
         ).load()
     }
 
@@ -241,14 +316,16 @@ public enum SecretSpec {
         provider: String? = nil,
         profile: String? = nil,
         scope: String? = nil,
-        reason: String? = nil
+        reason: String? = nil,
+        caller: CallerContext? = nil
     ) throws -> ResolutionReport {
         try configured(
             path: path,
             provider: provider,
             profile: profile,
             scope: scope,
-            reason: reason
+            reason: reason,
+            caller: caller
         ).report()
     }
 
@@ -262,7 +339,8 @@ public enum SecretSpec {
         provider: String?,
         profile: String?,
         scope: String?,
-        reason: String?
+        reason: String?,
+        caller: CallerContext?
     ) -> SecretSpecBuilder {
         builder()
             .withPath(path)
@@ -270,5 +348,6 @@ public enum SecretSpec {
             .withProfile(profile)
             .withScope(scope)
             .withReason(reason)
+            .withCaller(caller)
     }
 }

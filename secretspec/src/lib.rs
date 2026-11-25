@@ -6,6 +6,7 @@
 //! # Features
 //!
 //! - **Declarative Configuration**: Define secrets in `secretspec.toml`
+//! - **Rust-first Declarations**: Build a [`Spec`] directly in Rust (0.20+)
 //! - **Multiple Providers**: Keyring, dotenv, environment variables, Keeper Secrets Manager (0.18+)
 //! - **Profile Support**: Different configurations for development, staging, production
 //! - **Type Safety**: Optional compile-time code generation for strongly-typed access
@@ -43,17 +44,38 @@
 // Internal modules
 mod audit;
 mod cache;
-pub mod codegen;
+mod caller;
+mod codegen;
+mod compiled_spec;
 mod composition;
 mod config;
 mod error;
+#[cfg(all(test, unix))]
+pub(crate) mod fake_executable;
 pub(crate) mod generator;
-mod manifest;
+pub(crate) mod ini_field;
+pub(crate) mod json_field;
+mod native;
 mod plan;
+mod prompt;
+mod redaction;
 mod report;
 mod resolve;
+mod revision;
+mod secret_value;
 mod secrets;
+#[cfg(feature = "cli")]
+mod serve;
+mod spec;
+mod spec_edit;
+pub(crate) mod typed;
 mod validation;
+/// Windows ACL helpers. Public only so the IPC conformance harness can build a
+/// directory the endpoint trust checks accept; not part of the stable API.
+#[cfg(windows)]
+#[doc(hidden)]
+pub mod windows_security;
+mod x509_identity;
 
 pub(crate) mod provider;
 
@@ -61,31 +83,83 @@ pub(crate) mod provider;
 #[cfg(feature = "cli")]
 pub mod cli;
 
+#[cfg(feature = "cli")]
+#[doc(hidden)]
+pub mod integration;
+
 // Re-export only the types needed by users and generated code
+pub use caller::CallerContext;
 pub use config::Resolved;
+pub use secret_value::SecretBytes;
 
-// Re-export config types for CLI usage only - these are marked #[doc(hidden)]
+/// Implementation details shared with `secretspec-derive`.
+///
+/// These document types are not part of the supported Rust SDK. Use [`Spec`]
+/// and its builder API instead.
 #[doc(hidden)]
-pub use config::{
-    AuditConfig, Config, GlobalConfig, GlobalDefaults, Profile, ProfileDefaults, Project,
-};
+pub mod __private {
+    // Generated code uses these re-exports so applications do not need to
+    // depend on the implementation crates just to compile the macro output.
+    pub use ::secrecy;
+    pub use ::serde;
 
-// Re-export Secret and generation types for secretspec-derive
-#[doc(hidden)]
-pub use config::{GenerateConfig, GenerateOptions, Secret, SecretEncoding};
+    pub mod codegen {
+        pub use crate::codegen::{CodegenIr, IrField, IrProfile, build_ir, capitalize};
+    }
+
+    pub use crate::config::{
+        Config, GenerateConfig, GenerateOptions, Profile, ProfileDefaults, Project,
+        ProjectDefaults, Secret,
+    };
+    pub use crate::spec::load_for_codegen;
+}
 
 // Public API exports
+pub use config::{
+    CredentialBinding, CredentialSource, ExtractFormat, NativeAddress, NativeAddressTemplate,
+    ProviderAlias, ProviderCache, RequireReason, SecretEncoding, SecretExtract,
+};
 pub use error::{Result, SecretSpecError};
-pub use provider::{DiscoveryContext, Provider};
+pub use native::{
+    INLINE_SPEC_SCHEMA_VERSION, MIN_INLINE_SPEC_SCHEMA_VERSION, NATIVE_CALL_REQUEST_VERSION,
+    call_json,
+};
+pub use provider::RetryPolicy;
+pub use provider::external::{
+    BASE_ENDPOINT_ENVIRONMENT, EndpointSecurity, ExternalProvider, PlatformEndpointSecurity,
+    ProviderCredentialBroker, ProviderCredentialPrincipal, ProviderCredentialRequest,
+    ProviderDiscovery, ProviderEndpoint, RegistrationScope, set_provider_discovery,
+};
+pub use provider::{
+    Address, AsyncProvider, AsyncProviderAdapter, DiscoveryContext, ProducedValuePersistence,
+    Provider, ProviderBase, ProviderCredentials, ProviderInfo, ProviderValue, RetryOperation,
+    RetryOwnership, SyncProviderAdapter, providers,
+};
+pub use redaction::{RedactionStream, Redactor, TerminalRedactionStream};
 pub use report::{
-    RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus, SecretResolution,
+    Derivation, RESOLUTION_REPORT_SCHEMA_VERSION, ResolutionReport, ResolutionStatus,
+    SecretResolution,
 };
 pub use resolve::{
-    RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource, resolve_json,
+    NamedResolution, RESOLVE_SCHEMA_VERSION, ResolveResponse, ResolvedSecret, ResolvedSource,
+    resolve_json,
 };
 pub use secrets::ExportFormat;
 pub use secrets::Secrets;
+pub use secretspec_ipc::Revision;
+pub use spec::{
+    Generation, JwkKeyAlgorithm, MnemonicAlgorithm, MnemonicLanguage, OpenPgpAlgorithm,
+    OpenPgpCapability, PasswordCharset, Profile, Secret, Spec, SpecBuilder, SshKeyAlgorithm,
+    X509Usage,
+};
+pub use typed::Format;
 pub use validation::{ConstraintKind, ConstraintViolation, ValidatedSecrets, ValidationErrors};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod typed_tests;
+
+/// Process-owned file delivery (0.22+).
+pub mod file_lease;
+pub use file_lease::{FileLease, FileStorageMode};

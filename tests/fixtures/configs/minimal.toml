@@ -1,6 +1,0 @@
-[project]
-name = "minimal"
-revision = "1.0"
-
-[profiles.default]
-API_KEY = { description = "API Key", required = true }

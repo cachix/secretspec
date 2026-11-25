@@ -18,6 +18,9 @@ Node.js / TypeScript, Go, Ruby, and Haskell. Each resolves the exact secrets you
 manifest declares, through the same providers, profiles, fallback chains, and
 generators as the CLI, with no per-language configuration.
 
+> This article uses the original `secretspec-ffi` name. The embedded ABI is
+> named `libsecretspec` in SecretSpec 0.20+.
+
 ## Native bindings over one resolver
 
 Every SDK is a thin client over the same Rust core that powers the CLI. No
@@ -128,7 +131,7 @@ through [quicktype](https://quicktype.io) to generate idiomatic typed classes in
 any language, then populate them from each SDK's `fields()` map:
 
 ```bash
-secretspec schema | quicktype -s schema --top-level SecretSpec --lang python -o secrets_gen.py
+$ secretspec schema | quicktype -s schema --top-level SecretSpec --lang python -o secrets_gen.py
 ```
 
 ```python
@@ -142,17 +145,20 @@ language.
 ## Install
 
 ```bash
-pip install secretspec                              # Python
-npm install secretspec                              # Node.js / TypeScript
-gem install secretspec                              # Ruby
-go get github.com/cachix/secretspec/secretspec-go   # Go
+$ pip install secretspec                              # Python
+
+$ npm install secretspec                              # Node.js / TypeScript
+
+$ gem install secretspec                              # Ruby
+
+$ go get github.com/cachix/secretspec/secretspec-go   # Go
 ```
 
 For Haskell, add `secretspec` from Hackage to your `build-depends`. The CLI and
 Rust SDK upgrade as usual:
 
 ```bash
-cargo install secretspec
+$ cargo install secretspec
 ```
 
 See the [SDK overview](/sdk/overview/) for the per-language guides. Questions or

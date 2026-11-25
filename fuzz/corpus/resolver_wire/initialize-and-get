@@ -1,0 +1,3 @@
+{"jsonrpc":"2.0","id":1,"method":"rpc.initialize","params":{"protocol":"secretspec.resolver","versions":[1],"client":{"name":"resolver-fuzz","version":"1"},"limits":{"max_frame_bytes":4096,"max_in_flight":1},"application":{"manifest":{"kind":"inline","toml":"[profiles.default]","base_dir":"/tmp"},"provider":null,"profile":null,"scope":null,"reason":null}},"_meta":{"deadline_unix_ms":4102444800000}}
+
+{"jsonrpc":"2.0","id":2,"method":"resolver.get","params":{"name":"DATABASE_URL","representation":"auto","purpose":{"consumer":"resolver-fuzz","operation":"resolve"}},"_meta":{"deadline_unix_ms":4102444800000}}

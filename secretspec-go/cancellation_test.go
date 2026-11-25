@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -175,30 +176,18 @@ func TestReadRestrictionsReachNativeResolution(t *testing.T) {
 }
 
 func TestLoadContextCancelsCommandAndRetainsTypedError(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fixture uses a Unix shell")
-	}
 	previous := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(previous)
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "started")
-	// The path is JSON/TOML data, not interpolated into shell syntax.
+	quotedMarker := "'" + strings.ReplaceAll(filepath.ToSlash(marker), "'", "'\\''") + "'"
 	spec := map[string]any{
 		"project": map[string]any{"name": "go-cancel", "require_reason": false},
 		"profiles": map[string]any{"default": map[string]any{"secrets": map[string]any{
 			"VALUE": map[string]any{"description": "cancellable command", "type": "command", "providers": []string{"null://"},
-				"generate": map[string]any{"command": "printf started > started; sleep 60"}},
+				"generate": map[string]any{"command": "printf started > " + quotedMarker + " && sleep 60"}},
 		}}},
 	}
-	// command generators inherit the working directory, as in the legacy API.
-	old, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chdir(old)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -231,13 +220,22 @@ func TestLoadContextCancelsCommandAndRetainsTypedError(t *testing.T) {
 }
 
 func TestLoadContextCancelsSOPSRead(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fixture uses a Unix shell")
-	}
 	dir := os.Getenv("SECRETSPEC_GO_SOPS_FIXTURE")
 	if dir == "" {
 		dir = t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "sops"), []byte("#!/bin/sh\nprintf started > \"$SECRETSPEC_GO_SOPS_FIXTURE/started\"\nsleep 60 &\nwait\n"), 0700); err != nil {
+		self, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		executable, err := os.ReadFile(self)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := "sops"
+		if runtime.GOOS == "windows" {
+			name = "sops.exe"
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), executable, 0700); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(dir, "secrets.yaml"), []byte("sops: {}\n"), 0600); err != nil {
@@ -247,7 +245,7 @@ func TestLoadContextCancelsSOPSRead(t *testing.T) {
 		// os.Setenv does not update the native library's environment.
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestLoadContextCancelsSOPSRead$", "-test.v")
+		child := exec.CommandContext(ctx, self, "-test.run=^TestLoadContextCancelsSOPSRead$", "-test.v")
 		child.Env = append(os.Environ(), "SECRETSPEC_GO_SOPS_FIXTURE="+dir, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 		if output, err := child.CombinedOutput(); err != nil {
 			t.Fatalf("SOPS fixture: %v\n%s", err, output)
@@ -257,7 +255,7 @@ func TestLoadContextCancelsSOPSRead(t *testing.T) {
 	spec := map[string]any{
 		"project": map[string]any{"name": "go-sops", "require_reason": false},
 		"profiles": map[string]any{"default": map[string]any{"secrets": map[string]any{
-			"TOKEN": map[string]any{"description": "SOPS read", "providers": []string{"sops://" + filepath.ToSlash(filepath.Join(dir, "secrets.yaml"))}},
+			"TOKEN": map[string]any{"description": "SOPS read", "providers": []string{"sops:secrets.yaml"}},
 		}}},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -285,6 +283,12 @@ func TestLoadContextCancelsSOPSRead(t *testing.T) {
 		var native *Error
 		if !errors.Is(err, context.Canceled) || !errors.As(err, &native) || native.Kind != "cancelled" {
 			t.Fatalf("SOPS cancellation = %v", err)
+		}
+		// Windows keeps a running executable locked until the process exits.
+		if runtime.GOOS == "windows" {
+			if err := os.Remove(filepath.Join(dir, "sops.exe")); err != nil {
+				t.Fatalf("SOPS executable still in use after cancellation: %v", err)
+			}
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("SOPS cancellation did not finish")

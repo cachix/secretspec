@@ -612,10 +612,13 @@ mod tests {
         provider
             .set(convention("TOKEN"), &SecretBytes::from_utf8("value"))
             .unwrap();
-        let spec = provider.uri();
         let value = crate::request::run(&crate::CancellationHandle::new(), move |request| {
-            let reader =
-                super::super::managed_read::from_spec(&spec, provider.credentials, &request)?;
+            let mut reader = super::super::managed_read::from_spec(
+                "kdbx:./vault.kdbx",
+                provider.credentials,
+                &request,
+            )?;
+            reader.with_base_dir(temp.path());
             reader.get(convention("TOKEN"))
         })
         .await

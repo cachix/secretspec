@@ -27,6 +27,16 @@ secrets = ["DATABASE_URL"]
 // TestMain builds the libsecretspec cdylib and points the SDK at it, unless
 // SECRETSPEC_FFI_LIB is already set.
 func TestMain(m *testing.M) {
+	// The cancellation test also invokes this executable as "sops decrypt".
+	if dir := os.Getenv("SECRETSPEC_GO_SOPS_FIXTURE"); dir != "" && len(os.Args) > 1 && os.Args[1] == "decrypt" {
+		cmd := exec.Command("sh", "-c", "printf started > started && sleep 60")
+		cmd.Dir = dir
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			panic(err)
+		}
+		os.Exit(0)
+	}
 	if err := ensureLib(); err != nil {
 		panic(err)
 	}
@@ -63,8 +73,11 @@ func ensureLib() error {
 		return err
 	}
 	name := "libsecretspec.so"
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		name = "libsecretspec.dylib"
+	case "windows":
+		name = "secretspec.dll"
 	}
 	return os.Setenv("SECRETSPEC_FFI_LIB", filepath.Join(parsed.TargetDirectory, "debug", name))
 }

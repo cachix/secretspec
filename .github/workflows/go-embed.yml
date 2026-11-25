@@ -167,6 +167,14 @@ jobs:
           go build -tags embed_lib -ldflags="-linkmode=external" -o embedsmoke .
           ./embedsmoke
 
+      - name: Test in-flight cancellation on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        working-directory: secretspec-go
+        env:
+          SECRETSPEC_FFI_LIB: ${{ github.workspace }}\secretspec-go\lib\secretspec_windows_amd64.dll
+        run: go test -count=1 -run '^TestLoadContextCancels' .
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: go-embed-${{ matrix.target }}

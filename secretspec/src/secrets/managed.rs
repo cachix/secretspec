@@ -320,8 +320,11 @@ VALUE = { providers = ["cached"] }
     #[tokio::test]
     async fn ephemeral_generation_is_allowed_and_persistent_generation_never_runs() {
         let dir = tempfile::tempdir().unwrap();
-        let marker = dir.path().join("must-not-exist");
-        let command = format!("touch {}; printf value", marker.display());
+        let marker = dir.path().join("generator's marker");
+        let command = format!(
+            ": > {} && printf value",
+            shell_single_quote(&marker.to_string_lossy())
+        );
         let mut secrets = app(&format!(
             r#"
 [profiles.default]

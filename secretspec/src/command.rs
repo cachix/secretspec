@@ -153,8 +153,8 @@ pub(crate) fn output(
         let mut writer = None;
         let mut reader = None;
         let mut error_reader = None;
-        let result =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<ExitStatus> {
+        let supervision_result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
                 let stdout = child
                     .child
                     .stdout
@@ -223,7 +223,7 @@ pub(crate) fn output(
                         ));
                     }
                     if child.has_exited()? {
-                        return Ok(child.finish_after_exit()?);
+                        return Ok(());
                     }
                     if timed_out() {
                         return Err(SecretSpecError::ProviderOperationFailed(
@@ -239,16 +239,16 @@ pub(crate) fn output(
             .unwrap_or(Err(SecretSpecError::ResolutionPanicked));
         // Try all cleanup steps even if termination fails. The direct child
         // remains owned until its wait, independent of pipe worker results.
-        let cleanup_failed = child.stop().is_err();
+        let status = child.stop();
         // Close the Windows kill-on-close Job before pipe joins, including
         // when explicit termination failed. Drop retries incomplete cleanup.
         drop(child);
-        if result.is_err() || cleanup_failed {
+        if supervision_result.is_err() || status.is_err() {
             stop.store(true, Ordering::Release);
         }
         let mut pipes_timed_out = false;
-        while result.is_ok()
-            && !cleanup_failed
+        while supervision_result.is_ok()
+            && status.is_ok()
             && (writer.as_ref().is_some_and(|worker| !worker.is_finished())
                 || reader.as_ref().is_some_and(|worker| !worker.is_finished())
                 || error_reader
@@ -266,16 +266,16 @@ pub(crate) fn output(
         let written = writer.map(|worker| worker.join());
         let read = reader.map(|worker| worker.join());
         let error_read = error_reader.map(|worker| worker.join());
-        if cleanup_failed {
+        let status = status.map_err(|_| {
             if let Some(request) = request {
                 request.cleanup_failed("child_wait");
             }
-            return Err(SecretSpecError::CleanupFailed {
+            SecretSpecError::CleanupFailed {
                 phase: "child_wait",
                 cancelled: request.is_some_and(RequestContext::is_cancelled),
-            });
-        }
-        let status = result?;
+            }
+        })?;
+        supervision_result?;
         checkpoint()?;
         if pipes_timed_out {
             return Err(SecretSpecError::ProviderOperationFailed(
@@ -424,8 +424,6 @@ impl Drop for WindowsJob {
 struct ManagedChild {
     child: Child,
     cleanup_complete: bool,
-    #[cfg(unix)]
-    exit_observed: bool,
     #[cfg(windows)]
     job: WindowsJob,
 }
@@ -452,15 +450,13 @@ impl ManagedChild {
         Ok(Self {
             child,
             cleanup_complete: false,
-            #[cfg(unix)]
-            exit_observed: false,
             #[cfg(windows)]
             job,
         })
     }
 
     #[cfg(unix)]
-    fn has_exited(&mut self) -> std::io::Result<bool> {
+    fn has_exited(&self) -> std::io::Result<bool> {
         loop {
             let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
             // `WNOWAIT` observes exit without reaping the group leader. Its PID
@@ -484,8 +480,7 @@ impl ManagedChild {
             }
             // SAFETY: a successful `waitid` initialized `info`; `si_pid == 0`
             // means the nonblocking observation found no exited child yet.
-            self.exit_observed = unsafe { info.assume_init().si_pid() } != 0;
-            return Ok(self.exit_observed);
+            return Ok(unsafe { info.assume_init().si_pid() } != 0);
         }
     }
 
@@ -494,39 +489,32 @@ impl ManagedChild {
         Ok(self.child.try_wait()?.is_some())
     }
 
+    #[cfg(unix)]
+    fn signal_group(&self, signal: libc::c_int) -> std::io::Result<()> {
+        let group = -(self.child.id() as libc::pid_t);
+        // SAFETY: the child leads its own group. Only signal 0 (an existence
+        // check) is used after reaping, when the numeric ID could be reused.
+        if unsafe { libc::kill(group, signal) } == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
     fn terminate_tree(&self) -> std::io::Result<()> {
         #[cfg(unix)]
+        if let Err(error) = self.signal_group(libc::SIGKILL)
+            && error.raw_os_error() != Some(libc::ESRCH)
         {
-            let process_group = -(self.child.id() as libc::pid_t);
-            // SAFETY: the child starts as leader of its own process group and
-            // remains unreaped until this signal succeeds or reports no group.
-            // macOS reports EPERM when only the unsignalable zombie leader
-            // remains; after exit observation that also means no live member
-            // owned by this process remains to stop.
-            if unsafe { libc::kill(process_group, libc::SIGKILL) } == -1 {
-                let error = std::io::Error::last_os_error();
-                let no_signalable_descendant =
-                    self.exit_observed && error.raw_os_error() == Some(libc::EPERM);
-                if error.raw_os_error() != Some(libc::ESRCH) && !no_signalable_descendant {
-                    return Err(error);
-                }
-            }
+            return Err(error);
         }
         #[cfg(windows)]
         self.job.terminate()?;
         Ok(())
     }
 
-    fn finish_after_exit(&mut self) -> std::io::Result<ExitStatus> {
-        self.terminate_tree()?;
-        let status = self.child.wait()?;
-        self.cleanup_complete = true;
-        Ok(status)
-    }
-
-    fn stop(&mut self) -> std::io::Result<()> {
+    fn stop(&mut self) -> std::io::Result<ExitStatus> {
         if self.cleanup_complete {
-            return Ok(());
+            return self.child.wait();
         }
         let tree_error = self.terminate_tree().err();
         if let Err(error) = self.child.kill()
@@ -534,11 +522,22 @@ impl ManagedChild {
         {
             return Err(tree_error.unwrap_or(error));
         }
-        self.child.wait()?;
-        // Once reaped, never signal this numeric process group again: its ID
-        // may have been reused. Report any tree failure to the supervisor.
+        let status = self.child.wait()?;
         self.cleanup_complete = true;
-        tree_error.map_or(Ok(()), Err)
+        if let Some(error) = tree_error {
+            // macOS reports EPERM when only the zombie leader is left. Once
+            // it is reaped, ESRCH confirms there is no group left to stop.
+            #[cfg(unix)]
+            if error.raw_os_error() == Some(libc::EPERM)
+                && self
+                    .signal_group(0)
+                    .is_err_and(|e| e.raw_os_error() == Some(libc::ESRCH))
+            {
+                return Ok(status);
+            }
+            return Err(error);
+        }
+        Ok(status)
     }
 }
 

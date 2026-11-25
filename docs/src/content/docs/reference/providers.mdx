@@ -832,6 +832,28 @@ k8s+secret://db-credentials@db-postgres
 **Storage**: `secretspec--{project}--{profile}--{key}` key under `.data` in the
 Kubernetes object
 
+## BeyondTrust Password Safe Provider {/* #bt-pws-provider-020 */}
+
+**URI**: `bt-pws://HOST` - Retrieves passwords for BeyondTrust Password Safe
+managed accounts
+
+```text
+bt-pws://passwordsafe.example.com
+```
+
+**Features**: Read-only managed-account retrieval, API key/run-as authentication
+with optional personal access token or interactive MFA, and OAuth client
+credentials
+**Prerequisites**: A Password Safe account authorized to view and request the
+managed account; build with `--features bt-pws`
+**Authentication**: `BTPWS_AUTH_KEY` + `BTPWS_RUNAS`, optionally
+`BTPWS_PERSONAL_ACCESS_TOKEN`; or `BTPWS_CLIENT_ID` +
+`BTPWS_CLIENT_SECRET` for OAuth
+**Storage**: `ref.item` names the managed account and `ref.field` names its
+managed system
+
+
+
 ## Provider Selection
 
 ### Command Line

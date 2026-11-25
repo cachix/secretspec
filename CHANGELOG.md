@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- BeyondTrust Password Safe provider support for managed account password
+  retrieval, including API-key, MFA, personal access token, and OAuth client
+  credential authentication.
 - Rust embedders can use `RedactionStream::end_region()` (0.22+) to reuse a
   redaction stream across text regions identified by their own parser.
 
@@ -859,6 +862,8 @@ as in 0.19.0.
 
 ### Fixed
 
+- BeyondTrust Password Safe now always signs out after a credential retrieval
+  attempt and reports a sign-out failure instead of silently ignoring it.
 - Ruby gems for Apple silicon now use the generic `arm64-darwin` platform
   instead of including the build runner's Darwin version.
 - Windows shared `secretspec-ffi` installs now place the runtime DLL in the

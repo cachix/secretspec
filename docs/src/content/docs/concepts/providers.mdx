@@ -72,6 +72,7 @@ DATABASE_URL = { description = "Production database", providers = ["prod_vault"]
 | [akv](/providers/akv/) | Azure Key Vault (requires the `akv` build feature) | ✓ | ✓ | ✓ | — |
 | [aac](/providers/aac/) (0.20+) | Azure App Configuration, including Key Vault-reference resolution (included by default; `aac` feature for custom builds) | ✓ | ✓ | ✓ | — |
 | [infisical](/providers/infisical/) (0.16+) | Infisical (requires the `infisical` build feature) | ✓ | ✓ | ✓ | — |
+| [bt-pws](/providers/bt-pws/) (0.19+) | BeyondTrust Password Safe managed accounts (requires the `bt-pws` build feature) | ✓ | ✗ | ✓ | — |
 | [age](/providers/age/) (0.17+) | An age-encrypted file (requires the `age` build feature) | ✓ | ✓ | ✓ | — |
 | [sops](/providers/sops/) (0.17+) | SOPS-encrypted files (requires the `sops` build feature and SOPS CLI) | ✓ | ✓ | ✓ | Depends on the configured SOPS key service |
 | [kubernetes](/providers/kubernetes/) (0.20+) | Kubernetes ConfigMaps and Secrets (requires the `kubernetes` build feature) | ✓ | ✓ | [Secrets can be encrypted at rest](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/#ensure-all-secrets-are-encrypted) | — |

@@ -23,7 +23,7 @@
     "rehype-remark": "^10.0.1",
     "remark-gfm": "^4.0.1",
     "remark-stringify": "^11.0.0",
-    "sharp": "^0.34.2",
+    "sharp": "^0.35.5",
     "starlight-blog": "^0.30.2",
     "starlight-llm-actions": "^0.13.0",
     "unified": "^11.0.5",

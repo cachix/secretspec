@@ -17,7 +17,8 @@ and is called only after static capability and credential-source checks.
 The factory must account for constructors, authentication, retries, batch reads,
 background workers and destruction. Use `SyncProviderAdapter::for_request` for
 native async work, `managed_io` for file reads and locks, and `command::output`
-for owned children. Existing CLI parsers can use `CommandOutput::output_for`
+for subprocesses. The command runner requests group termination and waits for
+the direct child and pipe workers. Existing CLI parsers can use `CommandOutput::output_for`
 to retain stdout/stderr and exit-status handling. Use `managed_read::preflight`
 for request-scoped authentication checks and `RetryPolicy::run_cancellable`
 for synchronous retries. Managed async work must not escape through the legacy shared-runtime

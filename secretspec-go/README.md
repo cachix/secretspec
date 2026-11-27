@@ -44,9 +44,11 @@ returns `*Error` (with a stable `.Kind`).
 
 ## Cancellation (0.22+)
 
-`builder.LoadContext(ctx)` uses native cancellation and waits for owned work to
-stop or finish before returning. A deadline does not impose a hard bound on OS
-calls, synchronous cryptography or cleanup. A nil context is rejected.
+`builder.LoadContext(ctx)` uses native cancellation and waits for resolver
+workers and direct children to finish. It requests termination of each process
+group or Windows Job. Descendant exit may complete after the method returns.
+OS calls, synchronous cryptography and cleanup can extend the call past the
+deadline. A nil context is rejected.
 
 Cancellation errors support both `errors.Is(err, context.Canceled)` (or
 `context.DeadlineExceeded`) and `errors.As` for `*secretspec.Error`. A native

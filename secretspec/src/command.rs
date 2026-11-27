@@ -103,8 +103,9 @@ impl CommandOutput for Command {
     }
 }
 
-/// Run one child in an owned process group/Job. All pipes and I/O threads are
-/// joined on success, cancellation, timeout and panic. Diagnostics intentionally
+/// Run one child in an owned process group/Job. Request group termination and
+/// wait for the direct child and pipe workers on success, cancellation, timeout
+/// and panic. Descendant exit can complete after the call returns. Diagnostics
 /// omit argv, stdin, stdout and stderr, which can all carry secret values.
 /// Stderr is captured only for consumers that need CLI diagnostics. Temporary
 /// output buffers are wiped on error as well as when handing off protected bytes.
@@ -726,7 +727,7 @@ mod windows_tests {
     }
 
     #[test]
-    fn windows_suspended_job_stops_a_descendant_holding_stdout() {
+    fn windows_suspended_job_requests_termination_of_a_descendant_holding_stdout() {
         use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
         use windows_sys::Win32::System::Threading::{
             OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
@@ -774,6 +775,7 @@ mod windows_tests {
             WAIT_TIMEOUT
         );
         child.stop().unwrap();
+        // The job requests termination. The test waits separately for descendant exit.
         // SAFETY: the owned handle still identifies the same descendant after stop.
         let wait = unsafe { WaitForSingleObject(handle.handle, 2_000) };
         assert_eq!(wait, WAIT_OBJECT_0, "command descendant {pid} survived");

@@ -5093,8 +5093,9 @@ impl Secrets {
             return Ok(uri);
         }
         let known = if self.request.is_some() {
+            self.request_checkpoint()?;
             let builtin = crate::provider::spec_names_builtin_provider(spec)?;
-            if builtin || spec.contains(':') {
+            if builtin || spec.contains(':') || crate::provider::external::has_candidate(spec)? {
                 crate::provider::managed_read::check(spec)?;
             }
             builtin

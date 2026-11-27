@@ -255,8 +255,11 @@ impl KeeperProvider {
         )
     }
 
-    fn build_client(&self) -> std::result::Result<KeeperClient, String> {
-        let storage = match self.config_value() {
+    fn build_client(
+        &self,
+        config: Option<SecretBytes>,
+    ) -> std::result::Result<KeeperClient, String> {
+        let storage = match config {
             Some(config) => InMemoryKeyValueStorage::new_config_storage(Some(
                 config
                     .try_as_utf8()
@@ -331,8 +334,14 @@ impl KeeperProvider {
         if let Some(client) = self.client.get() {
             return Ok(client);
         }
+        let config = self.config_value();
+        if self.request.is_some() && config.is_none() {
+            return Err(crate::request::unsupported(
+                "file-backed Keeper configuration (supply the config credential or KSM_CONFIG)",
+            ));
+        }
         let client = self
-            .build_client()
+            .build_client(config)
             .map_err(|error| self.operation_error("initialize the SDK client", error))?;
         Ok(self.client.get_or_init(|| client))
     }

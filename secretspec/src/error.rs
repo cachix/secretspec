@@ -37,7 +37,7 @@ pub(crate) fn display_error_chain(error: &(dyn std::error::Error + 'static)) -> 
 #[derive(Error, Debug, Diagnostic)]
 #[non_exhaustive]
 pub enum SecretSpecError {
-    /// A cancellable resolution was stopped and its owned work has finished (0.22+).
+    /// A cancellation request won and supervised cleanup completed (0.22+).
     #[error("Secret resolution was cancelled")]
     Cancelled,
     /// Cancellation handles belong to exactly one resolution (0.22+).

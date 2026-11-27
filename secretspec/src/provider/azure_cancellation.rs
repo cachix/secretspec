@@ -49,7 +49,7 @@ impl azure_identity::Executor for Executor {
         command.args(args);
         let request = self.0.clone();
         // The request runtime joins this worker even when the SDK drops the
-        // awaiting future. The runner kills and reaps the entire child group.
+        // awaiting future. The runner signals the group and reaps the direct child.
         tokio::task::spawn_blocking(move || command.output_for(Some(&request)))
             .await
             .map_err(std::io::Error::other)?

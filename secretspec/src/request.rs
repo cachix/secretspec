@@ -15,9 +15,10 @@ use tokio_util::sync::CancellationToken;
 ///
 /// Clones notify the same request. A handle may be used for exactly one call;
 /// cancelling before the call and repeated cancellation are both supported.
-/// Await the resolution after cancelling: returning means owned work has
-/// stopped or completed, not merely that a notification was sent. Blocking OS
-/// operations and synchronous cryptography can delay that return.
+/// Await the resolution after cancelling to observe cleanup. It waits for
+/// resolver workers, direct children and pipe workers and requests termination
+/// of process groups or Windows Jobs. Descendant exit can complete after return.
+/// Blocking OS operations and synchronous cryptography can delay cleanup.
 #[derive(Clone, Default)]
 pub struct CancellationHandle {
     control: Arc<Control>,

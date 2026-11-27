@@ -2,7 +2,7 @@
 //!
 //! Register only factories whose constructors, credentials, reads and drops
 //! own all their work. Async factories must stay on the supplied runtime;
-//! synchronous factories must join every thread/child they start. Merely
+//! synchronous factories must join every thread and direct child they start. Merely
 //! implementing AsyncProvider does not opt a provider in.
 use super::{Address, Provider, ProviderCredentials, ProviderUrl, ProviderValue};
 use crate::request::RequestContext;

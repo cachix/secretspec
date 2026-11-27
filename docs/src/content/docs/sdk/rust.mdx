@@ -84,10 +84,12 @@ let response = match tokio::time::timeout(Duration::from_secs(10), &mut resoluti
 
 Cancellation stops further resolution work at cancellation checkpoints.
 A synchronous operation or future poll already admitted may finish.
-The call returns after owned work has stopped or completed, including transport
-tasks, DNS workers, child processes and pipe workers. A result committed before
-cancellation remains successful. Dropping the Rust future requests cancellation
-but cannot synchronously wait for cleanup; await it to observe completion.
+The call waits for resolver workers and transport tasks, including blocking DNS.
+For subprocesses it requests termination of the process group or Windows Job
+and waits for the direct child and pipe workers. Descendant exit may complete
+after the call returns. A result committed before cancellation remains
+successful. Keep awaiting the Rust future to observe cleanup. Dropping it
+requests cancellation and leaves cleanup to the supervisor.
 
 | Read path | Cancellation behavior |
 | --- | --- |
@@ -95,8 +97,8 @@ but cannot synchronously wait for cleanup; await it to observe completion.
 | `dotenv`, `file`, `systemd-credential` | Regular files only; check between read chunks |
 | `age` with native identities | Manage file reads and wait for started decryption |
 | `kdbx` | Interrupt lock waits and file reads; wait for started KDF/decryption |
-| `ejson`, `sops`, `lastpass`, `pass`, `gopass`, `dashlane`, `passbolt`, `onepassword` (including `onepassword+token`), `bw`, `bws`, `protonpass` | Stop the owned process group/Windows Job and join the child and pipe workers, including authentication and batch reads |
-| `keeper` | Cancel SDK HTTP and throttle waits; join the SDK worker |
+| `ejson`, `sops`, `lastpass`, `pass`, `gopass`, `dashlane`, `passbolt`, `onepassword` (including `onepassword+token`), `bw`, `bws`, `protonpass` | Signal the process group or terminate the Windows Job, then wait for the direct child and pipe workers |
+| `keeper` with in-memory configuration | Cancel SDK HTTP and throttle waits and join the SDK worker |
 | `akv`, `aac` | Cancel SDK/HTTP work, supervise Azure CLI authentication, and join workload identity token-file reads |
 | `setec`, `doppler`, `scaleway`, `infisical`, `vault`, `openbao` | Cancel HTTP/authentication/retry work and shut down the request's transport runtime |
 
@@ -105,13 +107,15 @@ services, including age and AWS KMS.
 
 Azure supports service principal, CLI, managed identity and workload identity
 authentication. App Configuration also supports connection strings and Key
-Vault references. Keeper supports file and in-memory configuration and SDK
-token binding. The call waits for synchronous SDK work to finish. Completed
-binding and configuration writes persist after cancellation.
+Vault references. For Keeper, supply an in-memory SDK configuration through
+the `config` provider credential or `KSM_CONFIG`. File-backed Keeper
+configuration returns `cancellation_unsupported`.
 
 Credential sources must also use a supported path. Unused fallback entries are
 not constructed. All other providers, including external IPC providers and
-`keyring`, return `cancellation_unsupported` before construction or discovery.
+`keyring`, return `cancellation_unsupported` before construction. Bare external
+provider names are recognized from discovery inputs without opening a
+registration file or launching a provider.
 Age plugin identities are rejected before starting a plugin. Existing synchronous
 APIs retain their provider coverage.
 
@@ -129,8 +133,7 @@ owned process group/Job; detached daemons and WSL Windows executables are outsid
 this contract. For 1Password on WSL, select a native Linux `op` through
 `SECRETSPEC_OPCLI_PATH`; the default Windows `op.exe` is rejected by this API.
 Existing credential-agent and desktop-app services are not owned by the request.
-A cleanup failure is reported as `cleanup_failed`, rather than
-claiming that all work stopped.
+A failure during supervised cleanup is reported as `cleanup_failed`.
 
 ## Describing secrets in Rust {/* #describing-secrets-in-rust-020 */}
 

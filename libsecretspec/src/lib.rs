@@ -18,7 +18,7 @@
 //! - [`secretspec_call`] accepts the versioned operation envelope used by SDKs
 //!   that need an inline declaration source.
 //! - [`secretspec_call_with_cancel`] (0.22+) accepts a resolve request and a
-//!   one-call cancellation handle, and waits for owned work to finish.
+//!   one-call cancellation handle, and waits for resolver and subprocess cleanup.
 //!
 //! ## Request JSON
 //!
@@ -213,7 +213,11 @@ pub unsafe extern "C" fn secretspec_cancel_free(handle: *mut secretspec_cancel_h
     }
 }
 
-/// Execute one managed resolve and wait for owned work to finish (0.22+).
+/// Execute one managed resolve and wait for cleanup (0.22+).
+///
+/// Cleanup waits for resolver workers, direct children and pipe workers. It
+/// requests process group or Windows Job termination. Descendant exit can
+/// complete after this function returns.
 ///
 /// # Safety
 /// Input has the same contract as secretspec_call. `handle` must remain live

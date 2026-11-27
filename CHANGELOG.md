@@ -32,12 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ResolvedSecret::open()` reads file secrets into memory-only streams,
   including Linux memfd paths that PHP's ordinary file functions cannot open.
 
-- Rust, C, and Go callers can cancel a secret resolution and wait for its work
-  to finish (0.22+). Rust adds `Secrets::resolve_cancellable` and
+- Rust, C, and Go callers can cancel a secret resolution and wait for its
+  cleanup (0.22+). Rust adds `Secrets::resolve_cancellable` and
   `resolve_bytes_cancellable`, C exposes a single-use cancellation handle, and
   Go adds `LoadContext`, which preserves cleanup details alongside context
   errors. Go also adds `WithReadOnly` and `WithNoFiles`. Unsupported providers
-  or authentication methods return `cancellation_unsupported`. See the
+  or authentication methods return `cancellation_unsupported`. Cancellable
+  Keeper reads use in-memory configuration. See the
   [provider support table](https://secretspec.dev/sdk/rust/#cancellable-resolution).
 
 - The SOPS provider supports deleting secrets (0.22+). `secretspec delete` and

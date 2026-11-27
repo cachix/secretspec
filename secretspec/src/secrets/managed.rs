@@ -3,13 +3,12 @@ use super::*;
 use crate::request::{CancellationHandle, RequestContext};
 
 impl Secrets {
-    /// Resolve with cancellation and wait for owned I/O to finish (0.22+).
+    /// Resolve with cancellation and wait for cleanup (0.22+).
     ///
-    /// Only explicitly registered read paths are permitted. Unregistered providers
-    /// return `cancellation_unsupported` before construction or discovery. Cancel
-    /// through a clone of the handle and keep awaiting this future. Dropping
-    /// the future requests cancellation but cannot synchronously await cleanup.
-    /// Blocking filesystem calls and cryptography can delay completion.
+    /// Only explicitly registered read paths are permitted. External providers
+    /// return `cancellation_unsupported` before their registration is read or
+    /// executable is launched. Cancel through a clone of the handle and keep
+    /// awaiting this future. See [`CancellationHandle`] for cleanup guarantees.
     pub async fn resolve_cancellable(
         &self,
         cancellation: &CancellationHandle,
@@ -153,6 +152,28 @@ mod tests {
         }
     }
 
+    fn isolated_fixture(test: &str) -> Option<PathBuf> {
+        const FIXTURE: &str = "SECRETSPEC_CANCELLATION_TEST_FIXTURE";
+        if let Some(path) = std::env::var_os(FIXTURE) {
+            return Some(path.into());
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("secrets::managed::tests::{test}")])
+            .env(FIXTURE, dir.path())
+            .env_remove("KSM_CONFIG")
+            .env("KSM_CONFIG_FILE", dir.path().join("from-env.json"))
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr),
+        );
+        None
+    }
+
     #[tokio::test]
     async fn local_resolution_preserves_fallback_scope_composition_and_bytes() {
         let dir = tempfile::tempdir().unwrap();
@@ -199,6 +220,75 @@ secrets = ["URL"]
                 .unwrap_err();
             assert_eq!(error.kind(), "cancellation_unsupported");
         }
+    }
+
+    #[tokio::test]
+    async fn registered_bare_external_provider_stops_fallback() {
+        use crate::provider::external::{ProviderDiscovery, set_provider_discovery};
+
+        let Some(dir) = isolated_fixture("registered_bare_external_provider_stops_fallback") else {
+            return;
+        };
+        let registration = dir.join("cancel-fixture.secretspec.json");
+        std::fs::write(&registration, "registration contents must never be read").unwrap();
+        std::fs::write(dir.join(".env"), "VALUE=fixture\n").unwrap();
+        set_provider_discovery(ProviderDiscovery {
+            user_directory: Some(dir.clone()),
+            ..ProviderDiscovery::default()
+        });
+
+        for spec in [
+            "cancel-fixture",
+            "cancel-fixture://",
+            "cancel-fixture:opaque",
+        ] {
+            let mut secrets = app(&format!(
+                "[profiles.default]\nVALUE = {{ providers = ['null://', '{spec}', 'dotenv:.env'] }}"
+            ));
+            secrets.config_dir = dir.clone();
+            let error = secrets
+                .resolve_cancellable(&CancellationHandle::new())
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), "cancellation_unsupported", "{spec}: {error}");
+        }
+
+        std::fs::remove_file(registration).unwrap();
+        let mut secrets = app(
+            "[profiles.default]\nVALUE = { providers = ['null://', 'cancel-fixture', 'dotenv:.env'] }",
+        );
+        secrets.config_dir = dir;
+        let resolved = secrets
+            .resolve_cancellable(&CancellationHandle::new())
+            .await
+            .unwrap();
+        assert_eq!(resolved.secrets["VALUE"].value.as_deref(), Some("fixture"));
+    }
+
+    #[cfg(feature = "keeper")]
+    #[tokio::test]
+    async fn file_backed_keeper_is_rejected_before_opening_configuration() {
+        let Some(dir) =
+            isolated_fixture("file_backed_keeper_is_rejected_before_opening_configuration")
+        else {
+            return;
+        };
+        for spec in [
+            "keeper://FixtureUID?config_file=from-uri.json",
+            "keeper://FixtureUID",
+        ] {
+            let mut secrets = app(&format!(
+                "[profiles.default]\nVALUE = {{ providers = ['null://', '{spec}'], default = 'fixture' }}"
+            ));
+            secrets.config_dir = dir.clone();
+            let error = secrets
+                .resolve_cancellable(&CancellationHandle::new())
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), "cancellation_unsupported", "{spec}: {error}");
+        }
+        assert!(!dir.join("from-uri.json").exists());
+        assert!(!dir.join("from-env.json").exists());
     }
 
     #[cfg(feature = "vault")]

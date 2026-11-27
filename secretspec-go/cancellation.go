@@ -38,8 +38,10 @@ func callWithContext(ctx context.Context, payload string, native *nativeCancella
 
 // LoadContext resolves with native cancellation (SecretSpec 0.22+).
 //
-// Cancellation stops or finishes owned work before this method returns. OS
-// operations, cryptography and cleanup can delay return beyond the deadline.
+// Cancellation waits for resolver workers, direct children and pipe workers.
+// It requests process group or Windows Job termination. Descendant exit may
+// complete after return. OS operations, cryptography and cleanup can delay
+// return beyond the deadline.
 // Unsupported provider/auth/operation paths return cancellation_unsupported;
 // this method never falls back to Load, even for context.Background().
 func (b *Builder) LoadContext(ctx context.Context) (*Resolved, error) {

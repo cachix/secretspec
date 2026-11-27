@@ -123,6 +123,15 @@ $ unset KSM_TOKEN
 A Keeper one-time token cannot be reused. Remove it after the first successful
 request and retain the generated configuration file securely.
 
+### Cancellable reads
+
+<VersionCompatibility version="0.22" />
+
+Cancellable reads require an in-memory configuration supplied through the
+`config` provider credential or `KSM_CONFIG`. File-backed authentication
+returns `cancellation_unsupported`. See the
+[SDK cancellation contract](/sdk/rust/#cancellable-resolution).
+
 ## Provider credentials
 
 <ProviderCredentials provider="keeper" />

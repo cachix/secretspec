@@ -46,7 +46,11 @@ resolved, err := secretspec.New().WithProvider("dotenv://.env").LoadContext(ctx)
 ```
 
 The method waits for native cleanup before returning, which can take longer than
-the context deadline. When native cancellation wins, `errors.Is(err,
+the context deadline. For subprocesses, cleanup signals the process group or
+terminates the Windows Job and waits for the direct child and pipe workers.
+Descendant exit may complete after the method returns.
+
+When native cancellation wins, `errors.Is(err,
 context.Canceled)` or `errors.Is(err, context.DeadlineExceeded)` works alongside
 `errors.As(err, &nativeError)` for the SecretSpec `*Error`. A successful result
 committed before cancellation is retained.

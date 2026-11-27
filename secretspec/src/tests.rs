@@ -7981,6 +7981,50 @@ fn test_provider_override_resolves_global_alias_when_project_providers_present()
     assert_eq!(resolved, "onepassword://Team");
 }
 
+/// An alias must reach the provider byte-identical, and the ledger it turns on
+/// must stay visible through the decorators every built provider is wrapped in.
+#[cfg(feature = "sqlite")]
+#[test]
+fn an_alias_query_string_reaches_the_provider_and_its_ledger() {
+    use crate::provider::{Address, Provider};
+
+    let _env = scrub_resolution_env();
+    let directory = TempDir::new().unwrap();
+    let database = directory.path().join("secrets.db");
+    let uri = format!("sqlite:{}?history=true", database.display());
+
+    let config =
+        config_with_project_alias_secret("audited", &uri, Some(vec!["audited".to_string()]));
+    let mut spec = Secrets::new(config, None, None, None);
+    spec.set_provider("audited");
+    let provider = spec
+        .get_provider(None, None)
+        .expect("an alias must build a provider");
+
+    // Expanding the alias must not re-serialise the URI: a query string the
+    // store needs in order to record history has to survive expansion.
+    assert!(
+        provider.uri().ends_with("?history=true"),
+        "the alias URI lost its query string: {}",
+        provider.uri()
+    );
+
+    let address = Address::convention("alias-validation", "default", "API_KEY");
+    provider
+        .set(address, &crate::SecretBytes::from_utf8("s3cr3t"))
+        .expect("the write must land in the alias's database");
+
+    // Every provider the CLI builds is wrapped (retry, plus preflight where the
+    // provider has one), so the wrapper has to forward the audit: one left on
+    // the trait default would answer `None` for a ledger that is on disk.
+    let report = provider
+        .verify_history()
+        .expect("reading the ledger must succeed")
+        .expect("a ledger written through the alias is verifiable");
+    assert_eq!(report.entries, 1);
+    assert!(report.is_ok());
+}
+
 #[test]
 fn test_import_source_expands_project_alias() {
     let temp_dir = TempDir::new().unwrap();

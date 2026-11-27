@@ -41,6 +41,7 @@
 
 use super::{Address, Provider, ProviderCredentials, ProviderUrl, credential_or_env};
 use crate::SecretBytes;
+use crate::command::CommandOutput as _;
 use crate::{Result, SecretSpecError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -105,6 +106,7 @@ impl TryFrom<&ProviderUrl> for BwsConfig {
 /// a machine account access token for authentication. Secrets are namespaced by
 /// the BWS project ID specified in the provider URI.
 pub struct BwsProvider {
+    request: Option<crate::request::RequestContext>,
     retry_policy: super::RetryPolicy,
     config: BwsConfig,
     secrets_cache: OnceLock<Vec<BwsSecret>>,
@@ -137,6 +139,7 @@ impl BwsProvider {
     /// Creates a new BwsProvider with the given configuration.
     pub fn new(config: BwsConfig) -> Self {
         Self {
+            request: None,
             config,
             secrets_cache: OnceLock::new(),
             retry_policy: super::RetryPolicy::default(),
@@ -204,15 +207,18 @@ impl BwsProvider {
         let output = self
             .command()?
             .args(args)
-            .output()
-            .map_err(|error| match error.kind() {
-                io::ErrorKind::NotFound => SecretSpecError::ProviderOperationFailed(format!(
-                    "Bitwarden Secrets Manager CLI (bws) is not installed or was not found at \
+            .output_for(self.request.as_ref())
+            .map_err(|error| match error {
+                error if error.is_resolution_terminal() => error,
+                SecretSpecError::Io(error) if error.kind() == io::ErrorKind::NotFound => {
+                    SecretSpecError::ProviderOperationFailed(format!(
+                        "Bitwarden Secrets Manager CLI (bws) is not installed or was not found at \
                      '{}'. Install it from https://bitwarden.com/help/secrets-manager-cli/ \
                      and ensure it is on PATH.",
-                    self.cli_binary_path
-                )),
-                _ => SecretSpecError::ProviderOperationFailed(format!(
+                        self.cli_binary_path
+                    ))
+                }
+                error => SecretSpecError::ProviderOperationFailed(format!(
                     "Failed to start Bitwarden Secrets Manager CLI (bws): {error}"
                 )),
             })?;
@@ -249,12 +255,14 @@ impl BwsProvider {
     /// Fetches all secrets from the BWS project (always invokes the CLI, no caching).
     fn fetch_secrets(&self) -> Result<Vec<BwsSecret>> {
         let project_id = self.config.project_id.to_string();
-        let output = self.retry_policy.run("bws", || {
-            self.run_bws(
-                &["secret", "list", &project_id, "--output", "json"],
-                &format!("list secrets in BWS project '{}'", self.config.project_id),
-            )
-        })?;
+        let output = self
+            .retry_policy
+            .run_cancellable("bws", self.request.as_ref(), || {
+                self.run_bws(
+                    &["secret", "list", &project_id, "--output", "json"],
+                    &format!("list secrets in BWS project '{}'", self.config.project_id),
+                )
+            })?;
 
         serde_json::from_str(&output).map_err(|error| {
             SecretSpecError::ProviderOperationFailed(format!(
@@ -749,3 +757,10 @@ mod tests {
         assert!(err.to_string().contains("`field`"), "{err}");
     }
 }
+
+super::managed_read::register!(["bws"], |url, credentials, request| {
+    let mut provider = BwsProvider::new(BwsConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(Box::new(provider))
+});

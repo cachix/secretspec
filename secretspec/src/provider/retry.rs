@@ -96,13 +96,40 @@ impl RetryPolicy {
         unreachable!("validated policy has at least one attempt")
     }
     pub(crate) fn run<T>(self, provider: &str, call: impl FnMut() -> Result<T>) -> Result<T> {
-        self.run_with(provider, call, std::thread::sleep)
+        self.run_cancellable(provider, None, call)
+    }
+    pub(crate) fn run_cancellable<T>(
+        self,
+        provider: &str,
+        request: Option<&crate::request::RequestContext>,
+        mut call: impl FnMut() -> Result<T>,
+    ) -> Result<T> {
+        self.run_with(
+            provider,
+            || {
+                if let Some(request) = request {
+                    request.checkpoint()?;
+                }
+                let result = call();
+                if let Some(request) = request {
+                    request.checkpoint()?;
+                }
+                result
+            },
+            |delay| match request {
+                Some(request) => request.wait(delay),
+                None => {
+                    std::thread::sleep(delay);
+                    Ok(())
+                }
+            },
+        )
     }
     fn run_with<T>(
         self,
         provider: &str,
         mut call: impl FnMut() -> Result<T>,
-        mut sleep: impl FnMut(Duration),
+        mut sleep: impl FnMut(Duration) -> Result<()>,
     ) -> Result<T> {
         for attempt in 1..=self.max_attempts {
             match call() {
@@ -119,7 +146,7 @@ impl RetryPolicy {
                             exhausted: true,
                         });
                     };
-                    sleep(delay);
+                    sleep(delay)?;
                 }
             }
         }
@@ -280,17 +307,31 @@ fn cli_transient(message: &str) -> bool {
 pub struct RetryingProvider {
     inner: Box<dyn Provider>,
     policy: RetryPolicy,
+    request: Option<crate::request::RequestContext>,
 }
 impl RetryingProvider {
     pub fn new(mut inner: Box<dyn Provider>, policy: RetryPolicy) -> Self {
         inner.set_retry_policy(policy);
-        Self { inner, policy }
+        Self {
+            inner,
+            policy,
+            request: None,
+        }
+    }
+    pub(crate) fn for_request(
+        inner: Box<dyn Provider>,
+        request: crate::request::RequestContext,
+    ) -> Self {
+        let mut provider = Self::new(inner, RetryPolicy::default());
+        provider.request = Some(request);
+        provider
     }
     fn read<T>(&self, mut call: impl FnMut() -> Result<T>) -> Result<T> {
         if self.inner.retry_ownership() == RetryOwnership::Managed {
             return (call)();
         }
-        self.policy.run(self.inner.name(), call)
+        self.policy
+            .run_cancellable(self.inner.name(), self.request.as_ref(), call)
     }
     fn mutate<T>(
         &self,
@@ -521,19 +562,24 @@ impl<T> Default for SuccessCell<T> {
 impl<T> SuccessCell<T> {
     pub(crate) fn get_or_try_init(
         &self,
+        request: Option<&crate::request::RequestContext>,
         build: impl FnOnce() -> std::result::Result<T, String>,
-    ) -> std::result::Result<&T, String> {
+    ) -> Result<&T> {
+        if let Some(request) = request {
+            request.checkpoint()?;
+        }
         if let Some(value) = self.value.get() {
             return Ok(value);
         }
-        let _guard = self
-            .lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = crate::managed_io::lock(&self.lock, request)?;
         if let Some(value) = self.value.get() {
             return Ok(value);
         }
-        let value = build()?;
+        let value = build();
+        if let Some(request) = request {
+            request.checkpoint()?;
+        }
+        let value = value.map_err(SecretSpecError::ProviderOperationFailed)?;
         Ok(self.value.get_or_init(|| value))
     }
     #[cfg(test)]
@@ -568,7 +614,10 @@ mod tests {
                     calls += 1;
                     if calls < 3 { Err(failure()) } else { Ok(42) }
                 },
-                |delay| waits.push(delay),
+                |delay| {
+                    waits.push(delay);
+                    Ok(())
+                },
             )
             .unwrap();
         assert_eq!(value, 42);
@@ -588,6 +637,42 @@ mod tests {
             Some(Duration::from_secs(10))
         );
     }
+    #[tokio::test]
+    async fn cancellation_interrupts_retry_backoff() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let attempts = Arc::clone(&calls);
+        let (started, start) = tokio::sync::oneshot::channel();
+        let handle = crate::CancellationHandle::new();
+        let cancel = handle.clone();
+        let task = tokio::spawn(async move {
+            crate::request::run(&handle, move |request| {
+                let mut started = Some(started);
+                RetryPolicy::default().run_cancellable::<()>("custom", Some(&request), || {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    if let Some(started) = started.take() {
+                        started.send(()).unwrap();
+                    }
+                    Err(transient(failure(), Some(Duration::from_secs(10))))
+                })
+            })
+            .await
+        });
+        start.await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel.cancel();
+        let error = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.kind(), "cancelled");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn exhaustion_preserves_diagnostics_and_cannot_be_retried_again() {
         let mut calls = 0;
@@ -598,7 +683,7 @@ mod tests {
                     calls += 1;
                     Err(failure())
                 },
-                |_| {},
+                |_| Ok(()),
             )
             .unwrap_err();
         assert_eq!(calls, 3);

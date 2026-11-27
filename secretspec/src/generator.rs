@@ -38,13 +38,13 @@ use ssh_key::{
 /// Generate a secret value based on the secret type and generation config.
 pub fn generate(secret_type: &str, config: &GenerateConfig) -> crate::Result<SecretBytes> {
     match secret_type {
-        "password" => generate_password(config),
+        "password" => generate_password(config, None),
         "passphrase" => generate_passphrase(config),
         "mnemonic" => generate_mnemonic(config),
-        "hex" => generate_hex(config),
-        "base64" => generate_base64(config),
+        "hex" => generate_encoded_bytes(config, &HEXLOWER, None),
+        "base64" => generate_encoded_bytes(config, &BASE64, None),
         "uuid" => generate_uuid(),
-        "command" => generate_from_command(config),
+        "command" => generate_from_command(config, None),
         "rsa_private_key" => generate_rsa(config),
         "openpgp_private_key" => generate_openpgp(config),
         "ssh_private_key" => generate_ssh(config),
@@ -56,6 +56,31 @@ pub fn generate(secret_type: &str, config: &GenerateConfig) -> crate::Result<Sec
             unknown
         ))),
     }
+}
+
+pub(crate) fn generate_managed(
+    secret_type: &str,
+    config: &GenerateConfig,
+    request: &crate::request::RequestContext,
+) -> crate::Result<SecretBytes> {
+    request.checkpoint()?;
+    let value = match secret_type {
+        "command" => generate_from_command(config, Some(request))?,
+        "password" => generate_password(config, Some(request))?,
+        "hex" => generate_encoded_bytes(config, &HEXLOWER, Some(request))?,
+        "base64" => generate_encoded_bytes(config, &BASE64, Some(request))?,
+        // These computations have bounded sizes and no background work.
+        "passphrase" | "mnemonic" | "uuid" | "wireguard_private_key" => {
+            generate(secret_type, config)?
+        }
+        _ => {
+            return Err(crate::request::unsupported(format!(
+                "generator '{secret_type}'"
+            )));
+        }
+    };
+    request.checkpoint()?;
+    Ok(value)
 }
 
 fn fill_os_random(bytes: &mut [u8], purpose: &str) -> crate::Result<()> {
@@ -148,7 +173,10 @@ fn generate_mnemonic(config: &GenerateConfig) -> crate::Result<SecretBytes> {
     Ok(protect_generated_string(mnemonic.to_string()))
 }
 
-fn generate_password(config: &GenerateConfig) -> crate::Result<SecretBytes> {
+fn generate_password(
+    config: &GenerateConfig,
+    request: Option<&crate::request::RequestContext>,
+) -> crate::Result<SecretBytes> {
     let (length, charset_name) = match config {
         GenerateConfig::Bool(_) => (32, "alphanumeric"),
         GenerateConfig::Options(opts) => (
@@ -182,37 +210,42 @@ fn generate_password(config: &GenerateConfig) -> crate::Result<SecretBytes> {
 
     let mut rng = rand::rng();
     let password: String = (0..length)
-        .map(|_| {
+        .map(|index| {
+            if index % 4096 == 0
+                && let Some(request) = request
+            {
+                request.checkpoint()?;
+            }
             let idx = rng.random_range(0..charset.len());
-            charset[idx] as char
+            Ok(charset[idx] as char)
         })
-        .collect();
+        .collect::<crate::Result<String>>()?;
 
     Ok(SecretBytes::from_utf8(password))
 }
 
-fn generate_hex(config: &GenerateConfig) -> crate::Result<SecretBytes> {
+fn generate_encoded_bytes(
+    config: &GenerateConfig,
+    encoding: &data_encoding::Encoding,
+    request: Option<&crate::request::RequestContext>,
+) -> crate::Result<SecretBytes> {
     let bytes = match config {
         GenerateConfig::Bool(_) => 32,
         GenerateConfig::Options(opts) => opts.bytes.unwrap_or(32),
     };
 
     let mut rng = rand::rng();
-    let random_bytes: Vec<u8> = (0..bytes).map(|_| rng.random::<u8>()).collect();
-    let hex = HEXLOWER.encode(&random_bytes);
-
-    Ok(SecretBytes::from_utf8(hex))
-}
-
-fn generate_base64(config: &GenerateConfig) -> crate::Result<SecretBytes> {
-    let bytes = match config {
-        GenerateConfig::Bool(_) => 32,
-        GenerateConfig::Options(opts) => opts.bytes.unwrap_or(32),
-    };
-
-    let mut rng = rand::rng();
-    let random_bytes: Vec<u8> = (0..bytes).map(|_| rng.random::<u8>()).collect();
-    let encoded = BASE64.encode(&random_bytes);
+    let random_bytes: Vec<u8> = (0..bytes)
+        .map(|index| {
+            if index % 4096 == 0
+                && let Some(request) = request
+            {
+                request.checkpoint()?;
+            }
+            Ok(rng.random::<u8>())
+        })
+        .collect::<crate::Result<Vec<u8>>>()?;
+    let encoded = encoding.encode(&random_bytes);
 
     Ok(SecretBytes::from_utf8(encoded))
 }
@@ -719,7 +752,10 @@ fn generate_ssh(config: &GenerateConfig) -> crate::Result<SecretBytes> {
     Ok(SecretBytes::from_slice(encoded.as_bytes()))
 }
 
-fn generate_from_command(config: &GenerateConfig) -> crate::Result<SecretBytes> {
+fn generate_from_command(
+    config: &GenerateConfig,
+    request: Option<&crate::request::RequestContext>,
+) -> crate::Result<SecretBytes> {
     let command = match config {
         GenerateConfig::Bool(_) => {
             return Err(SecretSpecError::GenerationFailed(
@@ -732,6 +768,28 @@ fn generate_from_command(config: &GenerateConfig) -> crate::Result<SecretBytes> 
             )
         })?,
     };
+
+    if let Some(request) = request {
+        let output = crate::command::output(
+            std::process::Command::new("sh").arg("-c").arg(command),
+            None,
+            usize::MAX,
+            None,
+            Some(request),
+            false,
+        )?;
+        if !output.status.success() {
+            return Err(SecretSpecError::GenerationFailed("command failed".into()));
+        }
+        if std::str::from_utf8(output.stdout.expose_secret())
+            .is_ok_and(|text| text.trim().is_empty())
+        {
+            return Err(SecretSpecError::GenerationFailed(
+                "command produced empty output".into(),
+            ));
+        }
+        return Ok(output.stdout);
+    }
 
     let output = std::process::Command::new("sh")
         .arg("-c")
@@ -1031,7 +1089,29 @@ mod tests {
                 generate("command", &config).unwrap().expose_secret(),
                 expected
             );
+            let managed = crate::provider::block_on(crate::request::run(
+                &crate::CancellationHandle::new(),
+                move |request| generate_managed("command", &config, &request),
+            ))
+            .unwrap();
+            assert_eq!(managed.expose_secret(), expected);
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_command_does_not_add_an_output_size_limit() {
+        let config = GenerateConfig::Options(GenerateOptions {
+            command: Some("head -c 16777217 /dev/zero".to_string()),
+            ..Default::default()
+        });
+        let value = crate::request::run(&crate::CancellationHandle::new(), move |request| {
+            generate_managed("command", &config, &request)
+        })
+        .await
+        .unwrap();
+        assert_eq!(value.expose_secret().len(), 16 * 1024 * 1024 + 1);
+        assert!(value.expose_secret().iter().all(|byte| *byte == 0));
     }
 
     #[test]

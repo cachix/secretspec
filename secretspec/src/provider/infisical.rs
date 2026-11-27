@@ -2353,3 +2353,14 @@ mod tests {
         assert_eq!(InfisicalConfig::pick_domain(|_| None), None);
     }
 }
+
+// No SDK-owned threads or processes: all transport/auth work stays on the
+// request runtime and its shutdown joins dependency tasks (0.22+).
+super::managed_read::register!(["infisical"], |url, credentials, request| {
+    let mut provider = InfisicalProvider::new(InfisicalConfig::try_from(url)?);
+    super::ProviderBase::with_credentials(&mut provider, credentials);
+    Ok(Box::new(super::SyncProviderAdapter::for_request(
+        provider,
+        request.clone(),
+    )))
+});

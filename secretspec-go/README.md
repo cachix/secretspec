@@ -42,6 +42,30 @@ func main() {
 A missing required secret returns `*MissingRequiredError`; any other failure
 returns `*Error` (with a stable `.Kind`).
 
+## Cancellation (0.22+)
+
+`builder.LoadContext(ctx)` uses native cancellation and waits for resolver
+workers and direct children to finish. It requests termination of each process
+group or Windows Job. Descendant exit may complete after the method returns.
+OS calls, synchronous cryptography and cleanup can extend the call past the
+deadline. A nil context is rejected.
+
+Cancellation errors support both `errors.Is(err, context.Canceled)` (or
+`context.DeadlineExceeded`) and `errors.As` for `*secretspec.Error`. A native
+success committed before cancellation remains successful. Unsupported paths
+return `cancellation_unsupported`, including with `context.Background()`; there
+is no fallback to the legacy `Load` implementation. See the
+[supported paths and limitations](https://secretspec.dev/sdk/rust/#cancellable-resolution).
+
+`Error.Cancelled` records accepted native cancellation; `Error.CleanupPhase`
+identifies the failed cleanup step for `cleanup_failed`. Inspect this error
+kind even when `errors.Is` also reports a cancelled context.
+
+`WithReadOnly(true)` refuses produced values that would be stored, and
+`WithNoFiles(true)` rejects `as_path` declarations, including hidden inputs.
+These options also require a 0.22+ native library. Existing `Load` calls without
+the new options retain compatibility with older libraries.
+
 ## Inline specifications (0.20+)
 
 Use `WithInlineSpec(spec, baseDir)` to resolve a strict JSON declaration held

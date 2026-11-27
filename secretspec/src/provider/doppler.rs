@@ -3346,3 +3346,14 @@ mod tests {
         );
     }
 }
+
+// No SDK-owned threads or processes: all transport/auth work stays on the
+// request runtime and its shutdown joins dependency tasks (0.22+).
+super::managed_read::register!(["doppler"], |url, credentials, request| {
+    let mut provider = DopplerProvider::new(DopplerConfig::try_from(url)?);
+    super::ProviderBase::with_credentials(&mut provider, credentials);
+    Ok(Box::new(super::SyncProviderAdapter::for_request(
+        provider,
+        request.clone(),
+    )))
+});

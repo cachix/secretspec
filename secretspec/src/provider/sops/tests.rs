@@ -238,6 +238,50 @@ fn build_sops_provider(
     Box::<dyn Provider>::try_from(spec.as_str()).expect("Provider init failed")
 }
 
+#[tokio::test]
+async fn cancellable_reads_preserve_sops_decryption_and_batch_lookup() {
+    let directory = TempDir::new().unwrap();
+    let path = directory.path().join("secrets.enc.yaml");
+    let provider = build_sops_provider(path.to_str().unwrap(), None);
+    provider
+        .set(
+            Address::convention("demo", "default", "TOKEN"),
+            &SecretBytes::from_utf8("convention-value"),
+        )
+        .unwrap();
+    let native = NativeAddress {
+        item: "existing".into(),
+        ..Default::default()
+    };
+    provider
+        .set(
+            Address::Native(&native),
+            &SecretBytes::from_utf8("native-value"),
+        )
+        .unwrap();
+    let spec = provider.uri();
+    let expected = provider
+        .get_many(&[
+            ("TOKEN", Address::convention("demo", "default", "TOKEN")),
+            ("EXISTING", Address::Native(&native)),
+        ])
+        .unwrap();
+    let actual = crate::request::run(&crate::CancellationHandle::new(), move |request| {
+        let provider =
+            super::super::managed_read::from_spec(&spec, ProviderCredentials::new(), &request)?;
+        provider.get_many_with_metadata(&[
+            ("TOKEN", Address::convention("demo", "default", "TOKEN")),
+            ("EXISTING", Address::Native(&native)),
+        ])
+    })
+    .await
+    .unwrap();
+    assert_eq!(actual.len(), expected.len());
+    for (name, value) in expected {
+        assert_eq!(actual[&name].value.expose_secret(), value.expose_secret());
+    }
+}
+
 #[test]
 fn test_sops_build_lookup_paths_single_file_vs_directory() {
     let single_file_config = SopsConfig {

@@ -37,6 +37,24 @@ pub(crate) fn display_error_chain(error: &(dyn std::error::Error + 'static)) -> 
 #[derive(Error, Debug, Diagnostic)]
 #[non_exhaustive]
 pub enum SecretSpecError {
+    /// A cancellation request won and supervised cleanup completed (0.22+).
+    #[error("Secret resolution was cancelled")]
+    Cancelled,
+    /// Cancellation handles belong to exactly one resolution (0.22+).
+    #[error("Cancellation handle has already been used")]
+    CancellationHandleUsed,
+    /// This execution path has not opted into managed cancellation (0.22+).
+    #[error("Cancellable resolution does not support {operation}")]
+    CancellationUnsupported { operation: String },
+    /// Some owned resources could not be confirmed stopped (0.22+).
+    #[error("Could not finish resolution cleanup ({phase})")]
+    CleanupFailed {
+        phase: &'static str,
+        cancelled: bool,
+    },
+    /// A provider panicked; cleanup still completed before returning (0.22+).
+    #[error("Secret resolution panicked")]
+    ResolutionPanicked,
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("TOML parsing error: {0}")]
@@ -91,6 +109,8 @@ pub enum SecretSpecError {
         "Secret '{0}' would be produced and stored, and this session may not write to a provider"
     )]
     ProducedValueWriteRefused(String),
+    #[error("Secret '{0}' uses as_path, but this session may not create secret files")]
+    FileValueRefused(String),
     #[error(
         "Composed secret '{0}' is derived from other secrets and has no stored value to change"
     )]
@@ -175,6 +195,31 @@ pub enum SecretSpecError {
 }
 
 impl SecretSpecError {
+    pub(crate) fn is_resolution_terminal(&self) -> bool {
+        match self {
+            Self::Cancelled
+            | Self::CancellationHandleUsed
+            | Self::CancellationUnsupported { .. }
+            | Self::CleanupFailed { .. }
+            | Self::ResolutionPanicked => true,
+            Self::SharedProvider(error) => error.is_resolution_terminal(),
+            Self::ProviderTransient { source, .. } => source.is_resolution_terminal(),
+            _ => false,
+        }
+    }
+
+    /// Whether this error reports an accepted cancellation, including cleanup failure (0.22+).
+    pub fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Cancelled
+            | Self::CleanupFailed {
+                cancelled: true, ..
+            } => true,
+            Self::SharedProvider(error) => error.is_cancelled(),
+            Self::ProviderTransient { source, .. } => source.is_cancelled(),
+            _ => false,
+        }
+    }
     /// A stable, non-sensitive token identifying the error category, for audit
     /// logs and typed handling by other-language SDKs over the FFI boundary.
     ///
@@ -182,6 +227,11 @@ impl SecretSpecError {
     /// secret names, provider URIs, or backend detail that must not reach the log.
     pub fn kind(&self) -> &'static str {
         match self {
+            Self::Cancelled => "cancelled",
+            Self::CancellationHandleUsed => "cancellation_handle_used",
+            Self::CancellationUnsupported { .. } => "cancellation_unsupported",
+            Self::CleanupFailed { .. } => "cleanup_failed",
+            Self::ResolutionPanicked => "resolution_panicked",
             Self::ProviderTransient { source, .. } => source.kind(),
             Self::SharedProvider(source) => source.kind(),
             Self::ProviderBackend { .. } => "provider_operation_failed",
@@ -202,6 +252,7 @@ impl SecretSpecError {
             SecretSpecError::PromptUnavailable(_) => "prompt_unavailable",
             SecretSpecError::PromptValueEmpty(_) => "prompt_value_empty",
             SecretSpecError::ProducedValueWriteRefused(_) => "produced_value_write_refused",
+            SecretSpecError::FileValueRefused(_) => "file_value_refused",
             SecretSpecError::ComposedSecretReadOnly(_) => "composed_secret_read_only",
             SecretSpecError::ExtractedSecretReadOnly(_) => "extracted_secret_read_only",
             SecretSpecError::DerivedSecretReadOnly { .. } => "derived_secret_read_only",
@@ -257,6 +308,18 @@ impl From<ParseError> for SecretSpecError {
     fn from(err: ParseError) -> Self {
         match err {
             ParseError::Io(io_err) => {
+                // Managed manifest reads preserve their terminal category
+                // through the syntax loader's existing I/O error boundary.
+                if io_err
+                    .get_ref()
+                    .is_some_and(|source| source.is::<SecretSpecError>())
+                {
+                    return *io_err
+                        .into_inner()
+                        .unwrap()
+                        .downcast::<SecretSpecError>()
+                        .unwrap();
+                }
                 if io_err.kind() == io::ErrorKind::NotFound {
                     SecretSpecError::NoManifest
                 } else {

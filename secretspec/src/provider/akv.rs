@@ -70,10 +70,7 @@ use crate::SecretBytes;
 use crate::{Result, SecretSpecError};
 use azure_core::credentials::{Secret, TokenCredential};
 use azure_core::http::StatusCode;
-use azure_identity::{
-    ClientSecretCredential, DeveloperToolsCredential, ManagedIdentityCredential,
-    WorkloadIdentityCredential,
-};
+use azure_identity::{ClientSecretCredential, DeveloperToolsCredential, ManagedIdentityCredential};
 use azure_security_keyvault_secrets::{
     SecretClient,
     models::{SecretClientGetSecretOptions, SetSecretParameters},
@@ -274,6 +271,7 @@ impl TryFrom<&ProviderUrl> for AkvConfig {
 ///
 /// Stores and retrieves secrets from an Azure Key Vault instance.
 pub struct AkvProvider {
+    request: Option<crate::request::RequestContext>,
     retry_policy: super::RetryPolicy,
     config: AkvConfig,
     /// Service-principal credentials supplied by the provider alias.
@@ -301,9 +299,13 @@ const AZURE_CLIENT_SECRET_ENV: &str = "AZURE_CLIENT_SECRET";
 pub(crate) fn resolve_azure_credential(
     auth: AuthMethod,
     credentials: &ProviderCredentials,
+    request: Option<&crate::request::RequestContext>,
 ) -> Result<Arc<dyn TokenCredential>> {
     match auth {
-        AuthMethod::Cli => Ok(DeveloperToolsCredential::new(None).map_err(|e| {
+        AuthMethod::Cli => Ok(DeveloperToolsCredential::new(
+            super::azure_cancellation::developer_options(request),
+        )
+        .map_err(|e| {
             SecretSpecError::ProviderOperationFailed(format!(
                 "Failed to create Azure CLI / azd credential: {}",
                 crate::error::display_error_chain(&e)
@@ -315,15 +317,16 @@ pub(crate) fn resolve_azure_credential(
                 crate::error::display_error_chain(&e)
             ))
         })? as Arc<dyn TokenCredential>),
-        AuthMethod::WorkloadIdentity => Ok(WorkloadIdentityCredential::new(None).map_err(|e| {
-            SecretSpecError::ProviderOperationFailed(format!(
-                "Failed to create workload identity credential: {}\n\n\
+        AuthMethod::WorkloadIdentity => Ok(super::azure_cancellation::workload_identity(request)
+            .map_err(|e| {
+                SecretSpecError::ProviderOperationFailed(format!(
+                    "Failed to create workload identity credential: {}\n\n\
                  Requires the AZURE_TENANT_ID, AZURE_CLIENT_ID, and \
                  AZURE_FEDERATED_TOKEN_FILE environment variables that AKS \
                  injects automatically for workload-identity-enabled pods.",
-                crate::error::display_error_chain(&e)
-            ))
-        })? as Arc<dyn TokenCredential>),
+                    crate::error::display_error_chain(&e)
+                ))
+            })? as Arc<dyn TokenCredential>),
         AuthMethod::Env => {
             let (tenant_id, client_id, client_secret) = service_principal_inputs(credentials)?;
 
@@ -342,7 +345,10 @@ pub(crate) fn resolve_azure_credential(
                     ))
                 })?
                     as Arc<dyn TokenCredential>),
-                None => Ok(DeveloperToolsCredential::new(None).map_err(|e| {
+                None => Ok(DeveloperToolsCredential::new(
+                    super::azure_cancellation::developer_options(request),
+                )
+                .map_err(|e| {
                     SecretSpecError::ProviderOperationFailed(format!(
                         "No AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET set, and \
                          failed to fall back to the Azure CLI / azd session: {}\n\n\
@@ -414,6 +420,7 @@ impl AkvProvider {
     /// Creates a new AkvProvider with the given configuration.
     pub fn new(config: AkvConfig) -> Self {
         Self {
+            request: None,
             config,
             credentials: ProviderCredentials::new(),
             credential: None,
@@ -431,6 +438,7 @@ impl AkvProvider {
         credential: Arc<dyn TokenCredential>,
     ) -> Self {
         Self {
+            request: None,
             config,
             credentials: ProviderCredentials::new(),
             credential: Some(credential),
@@ -443,6 +451,7 @@ impl AkvProvider {
     #[cfg(test)]
     pub(crate) fn with_client(config: AkvConfig, client: SecretClient) -> Self {
         Self {
+            request: None,
             config,
             credentials: ProviderCredentials::new(),
             credential: None,
@@ -552,7 +561,9 @@ impl AkvProvider {
     fn resolve_credential(&self) -> Result<Arc<dyn TokenCredential>> {
         match &self.credential {
             Some(credential) => Ok(Arc::clone(credential)),
-            None => resolve_azure_credential(self.config.auth, &self.credentials),
+            None => {
+                resolve_azure_credential(self.config.auth, &self.credentials, self.request.as_ref())
+            }
         }
     }
 
@@ -635,11 +646,10 @@ impl AkvProvider {
                 if Self::is_not_found_error(&e) {
                     Ok(None)
                 } else {
-                    Err(SecretSpecError::ProviderOperationFailed(format!(
-                        "Failed to get secret '{}' from Azure Key Vault: {}",
-                        name,
-                        crate::error::display_error_chain(&e)
-                    )))
+                    Err(super::azure_cancellation::operation_error(
+                        &e,
+                        &format!("Failed to get secret '{name}' from Azure Key Vault"),
+                    ))
                 }
             }
         }
@@ -1462,3 +1472,13 @@ mod name_properties {
         }
     }
 }
+
+super::managed_read::register!(["akv"], |url, credentials, request| {
+    let mut provider = AkvProvider::new(AkvConfig::try_from(url)?);
+    super::ProviderBase::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(Box::new(super::SyncProviderAdapter::for_request(
+        provider,
+        request.clone(),
+    )))
+});

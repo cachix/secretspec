@@ -276,3 +276,11 @@ mod tests {
         assert_eq!(value.expose_secret(), expected);
     }
 }
+
+// Cancellable reads (0.22+). The factory runs on the request's joined worker.
+super::managed_read::register!(["env"], |url, credentials, request| {
+    let mut provider = EnvProvider::new(EnvConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    request.checkpoint()?;
+    Ok(Box::new(provider))
+}, batch: false);

@@ -1,5 +1,6 @@
 use super::{Address, Provider, ProviderUrl};
 use crate::SecretBytes;
+use crate::command::CommandOutput as _;
 use crate::{Result, SecretSpecError};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
@@ -73,6 +74,7 @@ impl TryFrom<&ProviderUrl> for PassConfig {
 /// - GPG must be configured with appropriate keys
 /// - The password store must be initialized (`pass init`)
 pub struct PassProvider {
+    request: Option<crate::request::RequestContext>,
     config: PassConfig,
 }
 
@@ -89,7 +91,10 @@ crate::register_provider! {
 impl PassProvider {
     /// Creates a new PassProvider with the given configuration.
     pub fn new(config: PassConfig) -> Self {
-        Self { config }
+        Self {
+            request: None,
+            config,
+        }
     }
 
     /// Formats the entry name for a secret.
@@ -194,8 +199,11 @@ impl Provider for PassProvider {
             .command()
             .arg("show")
             .arg(&*entry_name)
-            .output()
+            .output_for(self.request.as_ref())
             .map_err(|e| {
+                if e.is_resolution_terminal() {
+                    return e;
+                }
                 SecretSpecError::ProviderOperationFailed(format!(
                     "Failed to execute 'pass' command: {}. Is pass installed?",
                     e
@@ -305,7 +313,7 @@ impl Provider for PassProvider {
         let output = self
             .command()
             .args(["rm", "-f", &entry_name])
-            .output()
+            .output_for(self.request.as_ref())
             .map_err(|error| {
                 SecretSpecError::ProviderOperationFailed(format!(
                     "Failed to execute 'pass' command: {error}. Is pass installed?"
@@ -491,3 +499,10 @@ mod tests {
         assert!(err.to_string().contains("`field`"), "{err}");
     }
 }
+
+super::managed_read::register!(["pass"], |url, credentials, request| {
+    let mut provider = PassProvider::new(PassConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(Box::new(provider))
+});

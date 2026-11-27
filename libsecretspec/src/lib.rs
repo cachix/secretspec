@@ -1,6 +1,6 @@
 //! The SecretSpec C ABI: a deliberately narrow, JSON-in/JSON-out boundary.
 //!
-//! The native surface is four functions. Richness lives in the
+//! Richness lives in the
 //! versioned JSON contract, not in a wide C API, so that every consumer of
 //! this ABI (Go via purego, Ruby via ffi, Haskell via the GHC FFI) stays a
 //! thin shell: marshal a request string in, get a response string out, free it.
@@ -17,6 +17,8 @@
 //! - [`secretspec_abi_version`] returns a static version string (do not free).
 //! - [`secretspec_call`] accepts the versioned operation envelope used by SDKs
 //!   that need an inline declaration source.
+//! - [`secretspec_call_with_cancel`] (0.22+) accepts a resolve request and a
+//!   one-call cancellation handle, and waits for resolver and subprocess cleanup.
 //!
 //! ## Request JSON
 //!
@@ -103,10 +105,11 @@ pub extern "C" fn secretspec_abi_version() -> *const c_char {
     ABI_VERSION.as_ptr().cast()
 }
 
-/// Frees a string previously returned by [`secretspec_resolve`] or [`secretspec_call`].
+/// Frees a string returned by [`secretspec_resolve`], [`secretspec_call`], or
+/// [`secretspec_call_with_cancel`] (0.22+).
 ///
 /// # Safety
-/// `ptr` must be either null or a pointer returned by [`secretspec_resolve`]
+/// `ptr` must be either null or a pointer returned by one of those functions
 /// that has not already been freed. Passing anything else is undefined
 /// behavior. Null is accepted and ignored.
 #[unsafe(no_mangle)]
@@ -171,6 +174,72 @@ fn resolve_inner(request_json: *const c_char) -> String {
 
 fn call_inner(request_json: *const c_char) -> String {
     decode_input(request_json, secretspec_core::call_json)
+}
+
+/// Opaque, Rust-owned cancellation handle (0.22+).
+#[allow(non_camel_case_types)]
+pub struct secretspec_cancel_handle(secretspec_core::CancellationHandle);
+
+/// Allocate a handle for one cancellable call. Release with secretspec_cancel_free.
+#[unsafe(no_mangle)]
+pub extern "C" fn secretspec_cancel_new() -> *mut secretspec_cancel_handle {
+    Box::into_raw(Box::new(secretspec_cancel_handle(
+        secretspec_core::CancellationHandle::new(),
+    )))
+}
+
+/// Notify cancellation, concurrently with the call. NULL is a no-op.
+///
+/// # Safety
+/// Non-null `handle` must be live and must not be freed during this function.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn secretspec_cancel(handle: *const secretspec_cancel_handle) {
+    if let Some(handle) = unsafe { handle.as_ref() } {
+        handle.0.cancel();
+    }
+}
+
+/// Free a cancellation handle. NULL is a no-op.
+///
+/// # Safety
+/// `handle` must be from secretspec_cancel_new and not already freed. The call
+/// AND every concurrent cancellation callback must have returned before free.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn secretspec_cancel_free(handle: *mut secretspec_cancel_handle) {
+    if !handle.is_null() {
+        unsafe {
+            drop(Box::from_raw(handle));
+        }
+    }
+}
+
+/// Execute one managed resolve and wait for cleanup (0.22+).
+///
+/// Cleanup waits for resolver workers, direct children and pipe workers. It
+/// requests process group or Windows Job termination. Descendant exit can
+/// complete after this function returns.
+///
+/// # Safety
+/// Input has the same contract as secretspec_call. `handle` must remain live
+/// throughout the call and concurrent cancellation. It may be called only once.
+/// The result is independent of the handle; release it with secretspec_free.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn secretspec_call_with_cancel(
+    request_json: *const c_char,
+    handle: *const secretspec_cancel_handle,
+) -> *mut c_char {
+    let json = catch_unwind(AssertUnwindSafe(|| {
+        let Some(handle) = (unsafe { handle.as_ref() }) else {
+            return input_error("cancellation handle was null");
+        };
+        decode_input(request_json, |request| {
+            secretspec_core::call_json_with_cancel(request, &handle.0)
+        })
+    }))
+    .unwrap_or_else(|_| input_error("internal panic during cancellable call"));
+    CString::new(json)
+        .map(CString::into_raw)
+        .unwrap_or(std::ptr::null_mut())
 }
 
 fn decode_input(request_json: *const c_char, dispatch: impl FnOnce(&str) -> String) -> String {

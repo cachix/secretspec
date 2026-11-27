@@ -1,6 +1,6 @@
 /*
  * Minimal C smoke test for libsecretspec. Proves the cdylib links, the
- * three entry points are callable from C, and the malloc/free roundtrip works.
+ * entry points are callable from C, and the allocation/free roundtrip works.
  * Run by the ffi-build workflow against the freshly built library.
  */
 #include <stdio.h>
@@ -29,6 +29,22 @@ int main(void) {
     }
     secretspec_free(out);
     secretspec_free(NULL); /* must be a no-op */
+
+    secretspec_cancel_handle *handle = secretspec_cancel_new();
+    if (handle == NULL) return 1;
+    secretspec_cancel(handle);
+    out = secretspec_call_with_cancel(
+        "{\"request_version\":1,\"operation\":\"resolve\",\"source\":{\"kind\":\"search\"}}",
+        handle);
+    if (out == NULL || strstr(out, "\"kind\":\"cancelled\"") == NULL) {
+        secretspec_free(out);
+        secretspec_cancel_free(handle);
+        return 1;
+    }
+    secretspec_cancel_free(handle);
+    secretspec_free(out);
+    secretspec_cancel(NULL);
+    secretspec_cancel_free(NULL);
 
     printf("OK\n");
     return 0;

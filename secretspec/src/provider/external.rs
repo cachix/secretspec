@@ -170,6 +170,12 @@ pub struct ProviderDiscovery {
     pub allow_path: bool,
 }
 
+enum DiscoveryCandidate<'a> {
+    Explicit(&'a ProviderEndpoint),
+    Registration(PathBuf, RegistrationScope),
+    PathExecutable(PathBuf),
+}
+
 /// Scope used by the injectable endpoint security policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegistrationScope {
@@ -238,14 +244,42 @@ impl ProviderDiscovery {
         search_path: Option<&std::ffi::OsStr>,
     ) -> Result<Option<ProviderEndpoint>> {
         validate_scheme(scheme)?;
-        if let Some(endpoint) = self.explicit.get(scheme) {
-            return validate_endpoint(
+        match self.candidate(scheme, security, search_path)? {
+            Some(DiscoveryCandidate::Explicit(endpoint)) => validate_endpoint(
                 endpoint.clone(),
                 scheme,
                 RegistrationScope::Explicit,
                 security,
             )
-            .map(Some);
+            .map(Some),
+            Some(DiscoveryCandidate::Registration(path, scope)) => {
+                load_registration(&path, scheme, scope, security).map(Some)
+            }
+            Some(DiscoveryCandidate::PathExecutable(path)) => validate_endpoint(
+                ProviderEndpoint {
+                    scheme: scheme.to_string(),
+                    executable: path,
+                    arguments: vec!["provider".to_string()],
+                    environment: Vec::new(),
+                },
+                scheme,
+                RegistrationScope::Path,
+                security,
+            )
+            .map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// Check discovery inputs without opening any registration or executable.
+    fn candidate(
+        &self,
+        scheme: &str,
+        security: &dyn EndpointSecurity,
+        search_path: Option<&std::ffi::OsStr>,
+    ) -> Result<Option<DiscoveryCandidate<'_>>> {
+        if let Some(endpoint) = self.explicit.get(scheme) {
+            return Ok(Some(DiscoveryCandidate::Explicit(endpoint)));
         }
         for (directory, scope) in [
             (self.user_directory.as_deref(), RegistrationScope::User),
@@ -254,7 +288,7 @@ impl ProviderDiscovery {
             let Some(directory) = directory else { continue };
             let path = directory.join(format!("{scheme}.secretspec.json"));
             if path.try_exists().map_err(discovery_io)? {
-                return load_registration(&path, scheme, scope, security).map(Some);
+                return Ok(Some(DiscoveryCandidate::Registration(path, scope)));
             }
         }
         if !self.allow_path || security.privileged() {
@@ -265,26 +299,12 @@ impl ProviderDiscovery {
         } else {
             format!("secretspec-provider-{scheme}")
         };
-        let Some(path) = search_path
+        let path = search_path
             .into_iter()
             .flat_map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
             .map(|directory| directory.join(&executable_name))
-            .find(|candidate| candidate.is_file())
-        else {
-            return Ok(None);
-        };
-        validate_endpoint(
-            ProviderEndpoint {
-                scheme: scheme.to_string(),
-                executable: path,
-                arguments: vec!["provider".to_string()],
-                environment: Vec::new(),
-            },
-            scheme,
-            RegistrationScope::Path,
-            security,
-        )
-        .map(Some)
+            .find(|candidate| candidate.is_file());
+        Ok(path.map(DiscoveryCandidate::PathExecutable))
     }
 }
 
@@ -311,6 +331,19 @@ pub(crate) fn discover(scheme: &str) -> Result<Option<ProviderEndpoint>> {
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .resolve(scheme)
+}
+
+pub(crate) fn has_candidate(scheme: &str) -> Result<bool> {
+    if !is_valid_scheme(scheme) {
+        return Ok(false);
+    }
+    let search_path = std::env::var_os("PATH");
+    let discovery = ACTIVE_DISCOVERY
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Ok(discovery
+        .candidate(scheme, &PlatformEndpointSecurity, search_path.as_deref())?
+        .is_some())
 }
 
 fn load_registration(

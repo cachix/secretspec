@@ -119,6 +119,7 @@ impl TryFrom<&ProviderUrl> for KdbxConfig {
 pub struct KdbxProvider {
     config: KdbxConfig,
     credentials: ProviderCredentials,
+    request: Option<crate::request::RequestContext>,
 }
 
 crate::register_provider! {
@@ -132,6 +133,7 @@ impl KdbxProvider {
         Self {
             config,
             credentials: ProviderCredentials::new(),
+            request: None,
         }
     }
 
@@ -141,6 +143,17 @@ impl KdbxProvider {
             &coords.item,
             coords.field.as_deref().unwrap_or(fields::PASSWORD),
         )
+    }
+
+    fn reader(&self, path: &Path) -> Result<Box<dyn io::Read>> {
+        match &self.request {
+            Some(request) => Ok(Box::new(io::Cursor::new(crate::managed_io::read(
+                path,
+                Some(request),
+            )?))),
+            // Preserve streaming and error behavior for the existing API.
+            None => Ok(Box::new(File::open(path)?)),
+        }
     }
 
     fn key(&self) -> Result<DatabaseKey> {
@@ -158,14 +171,17 @@ impl KdbxProvider {
             key = key.with_password(password.try_as_utf8()?);
         }
         if let Some(path) = self.config.keyfile.as_deref() {
-            let mut file = File::open(path).map_err(|error| {
+            let mut reader = self.reader(path).map_err(|error| {
+                if error.is_resolution_terminal() {
+                    return error;
+                }
                 operation_error(format!(
                     "Failed to open KDBX key file '{}': {}",
                     path.display(),
                     crate::error::display_error_chain(&error)
                 ))
             })?;
-            key = key.with_keyfile(&mut file).map_err(|error| {
+            key = key.with_keyfile(&mut reader).map_err(|error| {
                 operation_error(format!(
                     "Failed to read KDBX key file '{}': {}",
                     path.display(),
@@ -177,10 +193,15 @@ impl KdbxProvider {
     }
 
     fn load(&self) -> Result<Option<Database>> {
-        let mut file = match File::open(&self.config.path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        let mut reader = match self.reader(&self.config.path) {
+            Ok(reader) => reader,
+            Err(SecretSpecError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(None);
+            }
             Err(error) => {
+                if error.is_resolution_terminal() {
+                    return Err(error);
+                }
                 return Err(operation_error(format!(
                     "Failed to open KDBX database '{}': {error}",
                     self.config.path.display()
@@ -188,15 +209,19 @@ impl KdbxProvider {
             }
         };
 
-        Database::open(&mut file, self.key()?)
-            .map(Some)
-            .map_err(|error| {
-                operation_error(format!(
-                    "Failed to unlock KDBX database '{}': {}",
-                    self.config.path.display(),
-                    crate::error::display_error_chain(&error)
-                ))
-            })
+        let key = self.key()?;
+        if let Some(request) = &self.request {
+            request.checkpoint()?;
+        }
+        // keepass/Argon2 have no cancellation hook. This computation stays on
+        // the joined request worker; cancellation waits for it to finish.
+        Database::open(&mut reader, key).map(Some).map_err(|error| {
+            operation_error(format!(
+                "Failed to unlock KDBX database '{}': {}",
+                self.config.path.display(),
+                crate::error::display_error_chain(&error)
+            ))
+        })
     }
 
     fn save(&self, database: &mut Database) -> Result<()> {
@@ -295,9 +320,7 @@ impl Provider for KdbxProvider {
     }
 
     fn get(&self, addr: Address<'_>) -> Result<Option<SecretBytes>> {
-        let _guard = KDBX_IO_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = crate::managed_io::lock(&KDBX_IO_LOCK, self.request.as_ref())?;
         match self.load()? {
             Some(database) => self.get_from_database(&database, addr),
             None => Ok(None),
@@ -308,9 +331,7 @@ impl Provider for KdbxProvider {
         self.check_writable(addr)?;
         let value = super::require_utf8("kdbx", value)?;
         let location = self.location(addr)?;
-        let _guard = KDBX_IO_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = crate::managed_io::lock(&KDBX_IO_LOCK, self.request.as_ref())?;
         let mut database = self.load()?.unwrap_or_else(|| {
             let mut database = Database::new();
             database.meta.database_name = Some("SecretSpec".to_string());
@@ -421,9 +442,7 @@ impl Provider for KdbxProvider {
     }
 
     fn get_many(&self, requests: &[(&str, Address<'_>)]) -> Result<HashMap<String, SecretBytes>> {
-        let _guard = KDBX_IO_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = crate::managed_io::lock(&KDBX_IO_LOCK, self.request.as_ref())?;
         let Some(database) = self.load()? else {
             return Ok(HashMap::new());
         };
@@ -584,6 +603,55 @@ mod tests {
 
     fn convention<'a>(key: &'a str) -> Address<'a> {
         Address::convention("project", "production", key)
+    }
+
+    #[tokio::test]
+    async fn managed_database_read_preserves_values() {
+        let temp = TempDir::new().unwrap();
+        let provider = provider(temp.path().join("vault.kdbx"), "test password");
+        provider
+            .set(convention("TOKEN"), &SecretBytes::from_utf8("value"))
+            .unwrap();
+        let value = crate::request::run(&crate::CancellationHandle::new(), move |request| {
+            let mut reader = super::super::managed_read::from_spec(
+                "kdbx:./vault.kdbx",
+                provider.credentials,
+                &request,
+            )?;
+            reader.with_base_dir(temp.path());
+            reader.get(convention("TOKEN"))
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(value.expose_secret(), b"value");
+    }
+
+    #[tokio::test]
+    #[allow(
+        clippy::await_holding_lock,
+        reason = "This test must hold the synchronous provider lock until cancellation returns"
+    )]
+    async fn managed_lock_wait_can_be_cancelled() {
+        let temp = TempDir::new().unwrap();
+        let mut provider = provider(temp.path().join("unused.kdbx"), "test password");
+        let held = KDBX_IO_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let cancellation = crate::CancellationHandle::new();
+        let handle = cancellation.clone();
+        let (started, start) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            crate::request::run(&handle, move |request| {
+                provider.request = Some(request);
+                started.send(()).unwrap();
+                provider.get(convention("TOKEN"))
+            })
+            .await
+        });
+        start.await.unwrap();
+        cancellation.cancel();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
+        drop(held);
+        assert_eq!(result.unwrap().unwrap().unwrap_err().kind(), "cancelled");
     }
 
     #[test]
@@ -1048,3 +1116,11 @@ mod tests {
         assert_eq!(entry.get_password(), Some("new"));
     }
 }
+
+// Cancellable reads (0.22+). The factory runs on the request's joined worker.
+super::managed_read::register!(["kdbx"], |url, credentials, request| {
+    let mut provider = KdbxProvider::new(KdbxConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(Box::new(provider))
+});

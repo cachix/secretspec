@@ -1,4 +1,5 @@
 use crate::SecretBytes;
+use crate::command::CommandOutput as _;
 use crate::provider::{
     Address, DiscoveryContext, Provider, ProviderCredentials, ProviderUrl, credential_env_value,
     credential_or_env,
@@ -493,6 +494,7 @@ impl TryFrom<&ProviderUrl> for BitwardenConfig {
 /// secretspec set API_KEY --provider bw://?server=https://vault.company.com
 /// ```
 pub struct BitwardenProvider {
+    request: Option<crate::request::RequestContext>,
     /// Configuration for the provider including org/collection settings.
     config: BitwardenConfig,
     /// Credentials supplied by the provider alias.
@@ -1213,6 +1215,7 @@ impl BitwardenProvider {
     /// * `config` - The configuration for the provider
     pub fn new(config: BitwardenConfig) -> Self {
         Self {
+            request: None,
             config,
             credentials: ProviderCredentials::new(),
             server_check: super::retry::SuccessCell::default(),
@@ -1285,10 +1288,8 @@ impl BitwardenProvider {
 
     /// Resolves the addressed organization and collection to UUIDs, once.
     fn resolved_scope(&self) -> Result<&VaultScope> {
-        match self.vault_scope.get_or_try_init(|| self.look_up_scope()) {
-            Ok(scope) => Ok(scope),
-            Err(message) => Err(SecretSpecError::ProviderOperationFailed(message)),
-        }
+        self.vault_scope
+            .get_or_try_init(self.request.as_ref(), || self.look_up_scope())
     }
 
     /// The resolved organization UUID, if the address names one (or if the
@@ -1442,13 +1443,9 @@ impl BitwardenProvider {
             return Ok(());
         };
 
-        match self
-            .server_check
-            .get_or_try_init(|| self.check_server(expected))
-        {
-            Ok(()) => Ok(()),
-            Err(message) => Err(SecretSpecError::ProviderOperationFailed(message)),
-        }
+        self.server_check
+            .get_or_try_init(self.request.as_ref(), || self.check_server(expected))
+            .copied()
     }
 
     /// Runs `bw status` and compares its `serverUrl` against `expected`.
@@ -1463,12 +1460,14 @@ impl BitwardenProvider {
             .command()
             .map_err(|error| error.to_string())?
             .args(["--nointeraction", "status"])
-            .output()
+            .output_for(self.request.as_ref())
         {
             Ok(output) => output,
             // Say nothing about a missing CLI here: `execute_bw_command` reports
             // that with installation instructions, and it runs immediately after.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(SecretSpecError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(());
+            }
             Err(e) => {
                 return Err(format!(
                     "could not run `bw status` to verify the configured server: {e}"
@@ -1543,14 +1542,14 @@ impl BitwardenProvider {
         cmd.arg("--nointeraction");
         cmd.args(args);
 
-        let output = match cmd.output() {
+        let output = match cmd.output_for(self.request.as_ref()) {
             Ok(output) => output,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(SecretSpecError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Err(SecretSpecError::ProviderOperationFailed(
                     "Bitwarden CLI (bw) is not installed.\n\nTo install it:\n  - npm: npm install -g @bitwarden/cli\n  - Homebrew: brew install bitwarden-cli\n  - Chocolatey: choco install bitwarden-cli\n  - Download: https://bitwarden.com/help/cli/\n\nAfter installation, run 'bw login' and 'bw unlock' to authenticate.".to_string(),
                 ));
             }
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e),
         };
 
         if !output.status.success() {
@@ -7265,3 +7264,10 @@ mod tests {
         assert!(err.contains("UUID"), "{err}");
     }
 }
+
+super::managed_read::register!(["bw"], |url, credentials, request| {
+    let mut provider = BitwardenProvider::new(BitwardenConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(Box::new(provider))
+});

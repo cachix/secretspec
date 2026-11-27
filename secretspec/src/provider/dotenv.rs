@@ -160,6 +160,7 @@ impl TryFrom<&ProviderUrl> for DotEnvConfig {
 pub struct DotEnvProvider {
     /// Configuration containing the path to the .env file
     config: DotEnvConfig,
+    request: Option<crate::request::RequestContext>,
 }
 
 crate::register_provider! {
@@ -173,6 +174,18 @@ crate::register_provider! {
 }
 
 impl DotEnvProvider {
+    fn load(&self) -> Result<HashMap<String, String>> {
+        if self.request.is_none() {
+            return load_dotenv(&self.config.path);
+        }
+        let bytes = crate::managed_io::read(&self.config.path, self.request.as_ref())?;
+        Ok(dotenv::EnvLoader::with_reader(bytes.as_slice())
+            .sequence(dotenv::EnvSequence::InputOnly)
+            .load()?
+            .into_iter()
+            .collect())
+    }
+
     /// Creates a new DotEnvProvider with the given configuration.
     ///
     /// # Arguments
@@ -189,7 +202,10 @@ impl DotEnvProvider {
     /// ```
     pub fn new(mut config: DotEnvConfig) -> Self {
         config.path = expand_tilde(config.path);
-        Self { config }
+        Self {
+            config,
+            request: None,
+        }
     }
 }
 
@@ -272,7 +288,7 @@ impl Provider for DotEnvProvider {
             return Ok(None);
         }
 
-        let vars = load_dotenv(&self.config.path)?;
+        let vars = self.load()?;
 
         Ok(vars
             .get(&*lookup)
@@ -314,7 +330,7 @@ impl Provider for DotEnvProvider {
         // store no later read can parse.
         validate_env_key(&target, addr)?;
         let mut vars = if self.config.path.exists() {
-            load_dotenv(&self.config.path)?
+            self.load()?
         } else {
             HashMap::new()
         };
@@ -332,7 +348,7 @@ impl Provider for DotEnvProvider {
         if !self.config.path.exists() {
             return Ok(false);
         }
-        let mut vars = load_dotenv(&self.config.path)?;
+        let mut vars = self.load()?;
         if vars.remove(target.as_ref()).is_none() {
             // Nothing to remove, so leave the file — and its comments and
             // formatting — exactly as it is.
@@ -367,7 +383,7 @@ impl Provider for DotEnvProvider {
         }
 
         let mut secrets = HashMap::new();
-        for (key, _value) in load_dotenv(&self.config.path)? {
+        for (key, _value) in self.load()? {
             secrets.insert(
                 key.clone(),
                 crate::Secret::required(format!("{} secret", key)),
@@ -817,3 +833,11 @@ mod tests {
         assert!(!err.contains("s3cr3t-plaintext"), "{err}");
     }
 }
+
+// Cancellable reads (0.22+). The factory runs on the request's joined worker.
+super::managed_read::register!(["dotenv"], |url, credentials, request| {
+    let mut provider = DotEnvProvider::new(DotEnvConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    provider.request = Some(request.clone());
+    Ok(Box::new(provider))
+});

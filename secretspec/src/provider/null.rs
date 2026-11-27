@@ -281,3 +281,11 @@ mod tests {
         assert!(error.to_string().contains("takes no authority"), "{error}");
     }
 }
+
+// Cancellable reads (0.22+). The factory runs on the request's joined worker.
+super::managed_read::register!(["null"], |url, credentials, request| {
+    let mut provider = NullProvider::new(NullConfig::try_from(url)?);
+    Provider::with_credentials(&mut provider, credentials);
+    request.checkpoint()?;
+    Ok(Box::new(provider))
+}, batch: false);

@@ -105,6 +105,16 @@ pub(super) fn registration_for_scheme(scheme: &str) -> Option<&'static ProviderR
 /// The common `1password` misspelling of `onepassword` errors with its
 /// corrective message here, regardless of which parsing path sees it first.
 pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
+    if spec_names_builtin_provider(spec)? {
+        return Ok(true);
+    }
+    let (scheme, _) = split_spec(spec);
+    Ok(super::external::discover(scheme)?.is_some())
+}
+
+/// Static counterpart used before admitting cancellable work. Never probes an
+/// executable while deciding whether a bare token is an undefined alias.
+pub(crate) fn spec_names_builtin_provider(spec: &str) -> Result<bool> {
     let (scheme, rest) = split_spec(spec);
     if scheme == "1password" {
         return Err(SecretSpecError::ProviderOperationFailed(
@@ -119,10 +129,7 @@ pub(crate) fn spec_names_known_provider(spec: &str) -> Result<bool> {
             file::MISSING_DIRECTORY_ERROR.to_string(),
         ));
     }
-    if registration_for_scheme(scheme).is_some() {
-        return Ok(true);
-    }
-    Ok(super::external::discover(scheme)?.is_some())
+    Ok(registration_for_scheme(scheme).is_some())
 }
 
 /// The semantic credential names accepted by the provider named by `spec`, or

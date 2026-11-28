@@ -328,10 +328,10 @@ pub fn refresh(
 
 /// Runs a command with the installed plan's manifest, provider credentials,
 /// and provider tool paths.
-pub fn exec(plan_path: &Path, command: &[String]) -> Result<()> {
+pub fn exec(plan_path: &Path, command: &[String], reason: Option<&str>) -> Result<()> {
     ensure_root()?;
     let plan = Plan::load(plan_path)?;
-    platform::exec(&plan, command)
+    platform::exec(&plan, command, reason)
 }
 
 /// Runs `nixos link`: prompts for provider credentials declared with a

@@ -66,6 +66,44 @@ fn plan_rejects_duplicate_names() {
 }
 
 #[test]
+fn nixos_exec_passes_plan_environment_and_reason_to_child() {
+    let temp = tempfile::tempdir().unwrap();
+    let manifest = temp.path().join("secretspec.toml");
+    let output = temp.path().join("child-env");
+    let plan = Plan {
+        schema: PLAN_SCHEMA,
+        manifest: manifest.clone(),
+        profile: "production".to_string(),
+        runtime_dir: temp.path().join("run"),
+        cache_dir: temp.path().join("cache"),
+        credentials_dir: temp.path().join("credentials"),
+        systemd_creds: None,
+        systemctl: None,
+        path: String::new(),
+        restart_units: false,
+        secrets: Vec::new(),
+        templates: Vec::new(),
+    };
+    let command = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "printf '%s\\n%s\\n%s' \"$SECRETSPEC_FILE\" \"$SECRETSPEC_PROFILE\" \"$SECRETSPEC_REASON\" > \"$1\"".to_string(),
+        "sh".to_string(),
+        output.to_string_lossy().into_owned(),
+    ];
+
+    exec(&plan, &command, Some("rotate production credential")).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(output).unwrap(),
+        format!(
+            "{}\nproduction\nrotate production credential",
+            manifest.display()
+        )
+    );
+}
+
+#[test]
 fn provider_credentials_are_decrypted_into_a_private_directory() {
     let temp = tempfile::tempdir().unwrap();
     let runtime = temp.path().join("run");

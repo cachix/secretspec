@@ -94,7 +94,7 @@ pub(super) fn run(
             print_refresh_report(&report, check);
             Ok(())
         }
-        NixosAction::Exec { plan, command } => nixos::exec(&plan, &command)
+        NixosAction::Exec { plan, command } => nixos::exec(&plan, &command, reason.as_deref())
             .into_diagnostic()
             .wrap_err("Failed to run command with NixOS secrets"),
     }

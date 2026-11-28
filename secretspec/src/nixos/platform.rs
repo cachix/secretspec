@@ -339,7 +339,7 @@ impl Drop for PlanPath {
 /// Runs a command with the plan manifest, provider credentials, and provider
 /// tool paths. This is how interactive operations use the same configuration
 /// as `secretspec.service` without installing `bws` or exporting its token.
-pub(super) fn exec(plan: &Plan, command: &[String]) -> Result<()> {
+pub(super) fn exec(plan: &Plan, command: &[String], reason: Option<&str>) -> Result<()> {
     let (program, args) = command.split_first().ok_or_else(|| {
         SecretSpecError::ProviderOperationFailed("nixos exec requires a command".to_string())
     })?;
@@ -351,6 +351,9 @@ pub(super) fn exec(plan: &Plan, command: &[String]) -> Result<()> {
     child.args(args);
     child.env("SECRETSPEC_FILE", &plan.manifest);
     child.env("SECRETSPEC_PROFILE", &plan.profile);
+    if let Some(reason) = reason {
+        child.env("SECRETSPEC_REASON", reason);
+    }
 
     // Make `secretspec` inside the child resolve to the same binary the user
     // invoked, even when it came from `nix run`.

@@ -314,13 +314,17 @@ globally.
 
 ```bash
 $ sudo secretspec nixos exec -- secretspec set API_TOKEN --from-file -
-$ sudo secretspec nixos exec -- bws secret list <project-id>
 ```
 
-This is the supported way to run provider operations on the machine without
+This is the supported way to run SecretSpec operations on the machine without
 exporting `BWS_ACCESS_TOKEN` or installing the provider CLI system-wide. The
-child process gets `SECRETSPEC_FILE` pointing at the installed plan manifest, so
-the provider aliases from the host configuration are available.
+child process gets `SECRETSPEC_FILE` pointing at the installed plan manifest,
+so provider aliases from the host configuration are available.
+
+`extraPackages` makes provider executables available on `PATH`; it does not
+translate SecretSpec credentials into each provider CLI's environment variables.
+For example, a direct `bws` command may still need `BWS_ACCESS_TOKEN` supplied
+using the Bitwarden CLI's own supported mechanism.
 
 ## Offline and cache behavior
 

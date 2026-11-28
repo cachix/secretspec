@@ -235,6 +235,8 @@ sufficient.
 
 - `secretspec.toml`: Project secrets configuration
 - `secretspec/src/provider/mod.rs`: Provider trait definition and documentation
+- `secretspec/src/nixos.rs`: NixOS plan refresh, provider credential linking, offline cache
+- `nix/nixos.nix`: NixOS module and value-free deployment plan
 - `secretspec/src/cli/mod.rs`: CLI command definitions
 - `secretspec/src/bin/secretspec.rs`: CLI entry point
 - `secretspec/src/lib.rs`: Core SecretSpec implementation

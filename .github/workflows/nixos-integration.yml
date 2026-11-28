@@ -1,0 +1,60 @@
+name: "NixOS integration"
+
+# NixOS VM tests for the SecretSpec module. Kept separate from the main test
+# job so a VM/runtime failure is attributable and does not hide ordinary unit
+# test results. The systemd-creds test uses the host credential key, not TPM2.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "nix/**"
+      - "secretspec/src/nixos.rs"
+      - "secretspec/src/nixos/**"
+      - "secretspec/src/cli/nixos.rs"
+      - "secretspec/src/cli/mod.rs"
+      - "secretspec/src/lib.rs"
+      - "secretspec/src/secrets.rs"
+      - ".github/workflows/nixos-integration.yml"
+  push:
+    branches: [ main ]
+    paths:
+      - "nix/**"
+      - "secretspec/src/nixos.rs"
+      - "secretspec/src/nixos/**"
+      - "secretspec/src/cli/nixos.rs"
+      - "secretspec/src/cli/mod.rs"
+      - "secretspec/src/lib.rs"
+      - "secretspec/src/secrets.rs"
+      - ".github/workflows/nixos-integration.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vm:
+    name: NixOS VM tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            sandbox = false
+
+      - name: Build CLI package
+        run: nix-build --no-out-link --max-jobs 2 -E 'with import <nixpkgs> {}; callPackage ./nix/package.nix {}'
+
+      - name: systemd-creds host-key roundtrip
+        run: nix-build nix/tests -A systemd-creds --no-out-link --max-jobs 2
+
+      - name: Module activation
+        run: nix-build nix/tests -A module-activation --no-out-link --max-jobs 2

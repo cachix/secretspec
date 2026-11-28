@@ -141,6 +141,11 @@ This example assumes the project does not have a `.env` file. If one exists,
 declarations it created. Review those declarations instead of replacing them
 in the next step. See [Migration](/migration/) for details.
 
+For NixOS hosts, the [NixOS integration](/integrations/nixos/) (0.22+) provisions
+declared secrets into `/run`, systemd credentials, and templates without putting
+values in the Nix store. Provider aliases used by the system service must be
+declared in the project `secretspec.toml`, not only in a user-global config.
+
 ### 2. Declare your secrets
 
 Edit `secretspec.toml` so it describes what your application expects:

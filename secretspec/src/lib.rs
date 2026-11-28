@@ -56,6 +56,8 @@ pub(crate) mod generator;
 pub(crate) mod ini_field;
 pub(crate) mod json_field;
 mod native;
+#[cfg(feature = "cli")]
+mod nixos;
 mod plan;
 mod prompt;
 mod redaction;

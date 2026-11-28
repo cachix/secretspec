@@ -24,6 +24,7 @@ mod completion;
 mod config_show;
 mod docker;
 mod git;
+mod nixos;
 
 use git::GitAction;
 
@@ -440,6 +441,11 @@ enum Commands {
         /// Delete a source value only after the destination contains the same value (0.18+)
         #[arg(long)]
         delete_source: bool,
+    },
+    /// Provision NixOS secrets from a value-free plan (0.22+)
+    Nixos {
+        #[command(subcommand)]
+        action: nixos::NixosAction,
     },
     /// Manage cached provider values (0.17+)
     Cache {
@@ -1884,6 +1890,7 @@ pub fn main() -> Result<()> {
             }
             Ok(())
         }
+        Commands::Nixos { action } => nixos::run(action, &cli.file, &cli.reason, &caller, typed),
         Commands::Cache { action } => match action {
             CacheAction::Clear { name, profile } => {
                 let mut app = load_secrets(&cli.file, &cli.reason, &caller)?;
@@ -3137,6 +3144,47 @@ API_KEY = { description = "Existing" }
                 assert_eq!(name, "bws");
             }
             _ => panic!("expected config provider login"),
+        }
+    }
+
+    #[test]
+    fn nixos_commands_parse() {
+        let cli = Cli::try_parse_from([
+            "secretspec",
+            "nixos",
+            "link",
+            "--store",
+            "/tmp/credentials",
+            "--force",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Nixos {
+                action: nixos::NixosAction::Link { store, force, .. },
+            } => {
+                assert_eq!(store, std::path::PathBuf::from("/tmp/credentials"));
+                assert!(force);
+            }
+            _ => panic!("expected nixos link"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "secretspec",
+            "nixos",
+            "refresh",
+            "--plan",
+            "/tmp/plan.json",
+            "--check",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Nixos {
+                action: nixos::NixosAction::Refresh { plan, check, .. },
+            } => {
+                assert_eq!(plan, std::path::PathBuf::from("/tmp/plan.json"));
+                assert!(check);
+            }
+            _ => panic!("expected nixos refresh"),
         }
     }
 

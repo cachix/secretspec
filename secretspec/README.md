@@ -69,6 +69,7 @@ SecretSpec fixes this by separating secret **declaration** from secret **storage
 - **[Docker credential helper](https://secretspec.dev/integrations/docker/)** (0.20+): Authenticate registry pulls and pushes through any SecretSpec provider
 - **[Git credential helper](https://secretspec.dev/integrations/git/)** (0.20+): Authenticate Git HTTPS and
   `git send-email` SMTP operations through any SecretSpec provider
+- **[NixOS integration](https://secretspec.dev/integrations/nixos/)** (0.22+): Provision declared secrets into `/run`, systemd credentials, templates, and Nix access-token config without putting values in the Nix store
 - **[Discovery](https://secretspec.dev/reference/cli#init)**: `secretspec init` to discover secrets from existing `.env` files
 - **[Claude Code credential integration](https://secretspec.dev/integrations/claude-code/)** (0.21+): Configure, store, and remove API or gateway credentials through Claude Code's native `apiKeyHelper`
 
@@ -164,6 +165,27 @@ curl -fsSL https://github.com/cachix/secretspec/releases/download/v0.21.1/secret
 Running `secretspec-update` still updates to the latest release.
 
 See the [installation guide](https://secretspec.dev/quick-start#installation) for more options including Nix and Devenv.
+
+### NixOS (0.22+)
+
+Import `github:cachix/secretspec` as a flake input and use
+`nixosModules.default`. Declare the secrets in `secretspec.toml`, link the host's
+provider credentials once with `secretspec nixos link`, and enable the module:
+
+```nix
+services.secretspec = {
+  enable = true;
+  manifest = ./secretspec.toml;
+  profile = "production";
+  secrets.GITHUB_TOKEN.units = [ "github-sync.service" ];
+};
+```
+
+Values are written to `/run/secretspec`, never to the Nix store. Use
+`secretspec nixos exec -- COMMAND` (0.22+) to run provider commands with the
+installed plan's sealed credentials and `extraPackages` `PATH`. See the
+[NixOS integration guide](https://secretspec.dev/integrations/nixos/) for
+templates, systemd credentials, offline caching, and fresh-install bootstrap.
 
 ### Docker (0.22+)
 
@@ -373,6 +395,9 @@ Common commands:
 # Initialize and configure
 secretspec init                    # Create secretspec.toml
 secretspec config global init    # Set up user defaults (0.17+)
+secretspec nixos link           # Seal NixOS provider credentials (0.22+)
+secretspec nixos refresh        # Provision the installed NixOS plan (0.22+)
+secretspec nixos exec -- COMMAND # Run with the plan's credentials and PATH (0.22+)
 
 # Manage secrets
 secretspec check                  # Verify all secrets are set

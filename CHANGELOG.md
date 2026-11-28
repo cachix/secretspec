@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- NixOS integration (0.22+). `secretspec nixos link` seals the provider
+  credentials declared with a `systemd-credential` source, and
+  `secretspec nixos refresh` installs selected values into atomically switched
+  `/run/secretspec` generations. A new `services.secretspec` NixOS module
+  supports runtime files, systemd credentials, templates with placeholders, an
+  offline `systemd-creds` cache, and an optional refresh timer. Activation
+  scripts provision the initial generation by default, automatically switching
+  to a systemd oneshot when `systemd-sysusers` or `userborn` manages users;
+  activation installs files only and systemd mode performs restarts after the
+  generation is published. No secret value enters Nix evaluation or the Nix
+  store. `secretspec nixos exec -- COMMAND` (0.22+) runs a command with the
+  installed plan's manifest, sealed provider credentials, and `extraPackages`
+  `PATH`, so provider operations use the same environment as the service
+  without exporting tokens globally.
+
+- The flake package exposes a `buildFeatures` argument (0.22+) so deployments
+  can compile only the providers they use. The default remains the CLI and the
+  BWS provider; for example,
+  `secretspec.packages.${system}.default.override { buildFeatures = [ "cli" "sops" "openbao" ]; }`.
+
+- The NixOS integration creates `/var/lib/secretspec` with mode 0755 so setup
+  tools can read the non-secret provider alias file. The credentials and cache
+  subdirectories remain mode 0700.
+
 - Rust embedders can use `RedactionStream::end_region()` (0.22+) to reuse a
   redaction stream across text regions identified by their own parser.
 
@@ -115,6 +139,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a compatible SecretSpec executable.
 
 ### Fixed
+
+- NixOS integration: manual `secretspec nixos refresh` now uses the provider
+  CLI paths recorded in the plan from `services.secretspec.extraPackages`, so
+  `bws` is found without installing it system-wide.
+
+- NixOS integration: `nix-daemon` is started as a weak dependency of
+  `secretspec.service`, so a failed provider refresh no longer leaves the
+  machine without working Nix. Nix commands keep their flake settings while the
+  credential is repaired.
+
+- NixOS integration: sealed provider credentials and cached secrets now
+  decrypt on systemd 262. Decryption tries the item name and the full file
+  name, so credentials sealed either way keep working. New credentials still
+  embed the item name, keeping the cache compatible with
+  `LoadCredentialEncrypted=`.
+
+- NixOS integration: `secretspec nixos link` now prompts once per host-sealed
+  credential item, even when several provider aliases reference the same
+  `systemd-credential` item. The NixOS setup flow no longer asks for the same
+  token twice.
+
+- NixOS integration: `secretspec nixos refresh` reports that the plan is
+  installed by `nixos-rebuild switch` when `/etc/secretspec/plan.json` is
+  missing, instead of only returning a bare file-not-found error.
 
 - Commands now finish and forward termination signals in restricted Unix
   sandboxes that block socket wake-ups.

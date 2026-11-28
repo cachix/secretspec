@@ -1,0 +1,392 @@
+---
+title: NixOS
+description: Provision NixOS secrets from SecretSpec providers
+---
+
+import VersionCompatibility from '@cachix/site-kit/ui/VersionCompatibility.astro';
+
+<VersionCompatibility version="0.22" />
+
+The NixOS integration resolves declared secrets **on the target**, writes them
+to a tmpfs generation under `/run/secretspec`, and keeps an encrypted
+last-known-good copy for offline boots. The value-free `secretspec.toml` is the
+only SecretSpec file that enters the Nix store.
+
+It is intentionally not an evaluation-time secret loader. Nix expressions see
+names, paths, and placeholders, never values. Use the runtime paths below in
+NixOS options that accept files or systemd credentials.
+
+The integration has three goals:
+
+- **Declarative provisioning** — declare the secrets, runtime paths,
+  permissions, and consumers next to the rest of the host configuration.
+- **Two delivery mechanisms** — ordinary runtime files for programs that expect
+  paths, and systemd credentials for programs that support native credential
+  delivery.
+- **Operational independence** — provisioning does not depend on the invoking
+  user's session or user-global SecretSpec configuration.
+
+## At a glance
+
+1. Add the flake input and `secretspec.nixosModules.default`.
+2. Declare provider aliases and secrets in `secretspec.toml`.
+3. Run `secretspec nixos link` once to seal the provider credential.
+4. Enable `services.secretspec` and list the secrets the host needs.
+5. Switch; consume `config.services.secretspec.secrets.<name>.path` or the
+   matching systemd credential.
+
+The rest of this page explains the pieces and the operational behavior.
+
+## Installation
+
+Add the flake input and module:
+
+```nix
+{
+  inputs.secretspec.url = "github:cachix/secretspec";
+
+  outputs = { self, nixpkgs, secretspec, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      modules = [
+        secretspec.nixosModules.default
+        ./configuration.nix
+      ];
+    };
+  };
+}
+```
+
+The module defaults to the `secretspec` package from nixpkgs. Pin or override
+`services.secretspec.package` when the required release is newer than the
+channel. The flake also exposes `packages.<system>.default`, built from this
+checkout, for testing unreleased changes.
+
+The flake package compiles the CLI and the BWS provider by default. Override
+`buildFeatures` when a host uses another provider, so the refresh service does
+not start without that provider compiled in:
+
+```nix
+services.secretspec.package =
+  secretspec.packages.${pkgs.stdenv.hostPlatform.system}.default.override {
+    buildFeatures = [
+      "cli"
+      "sops"
+      "openbao"
+    ];
+  };
+```
+
+Provider CLIs still belong in `services.secretspec.extraPackages`. The plan
+records their `PATH`, so the refresh service, manual refresh, and
+`secretspec nixos exec` use the same tools.
+
+## Bootstrap a host
+
+Provider credentials must exist on the target before the first switch. Declare
+a host-sealed source in `secretspec.toml`:
+
+```toml title="secretspec.toml"
+[project]
+name = "myhost"
+revision = "1.0"
+
+[providers]
+bootstrap = "systemd-credential://"
+
+[providers.vault]
+uri = "openbao://bao.example.com:8200/secret"
+credentials = { token = { provider = "bootstrap", ref = { item = "vault.token" } } }
+
+[profiles.production]
+GITHUB_TOKEN = { description = "GitHub token", providers = ["vault"] }
+DATABASE_PASSWORD = { description = "Database password", providers = ["vault"] }
+```
+
+From the cloned configuration, run:
+
+```bash
+$ nix run nixpkgs#secretspec -- nixos link
+```
+
+Use the release pinned by the configuration when the channel package is older.
+`link` finds aliases whose credential source is `systemd-credential://`, prompts
+with hidden input, and seals each credential with `systemd-creds`. Aliases that
+share the same credential item are prompted and sealed once, so a global and a
+project alias for the same token do not ask twice. It escalates through `sudo`
+before prompting, so no secret is part of the command line or shell history.
+`--with-key=auto` prefers TPM2 and falls back to systemd's host credential key.
+Re-run with `--force` to rotate a linked credential.
+
+The command is available in SecretSpec 0.22+. If the nixpkgs package is older,
+run the same binary version that the configuration pins.
+
+## Configuration
+
+```nix
+services.secretspec = {
+  enable = true;
+  manifest = ./secretspec.toml;
+  profile = "production";
+
+  # Provider CLIs used by refresh, e.g. Bitwarden Secrets Manager.
+  extraPackages = [ pkgs.bws ];
+
+  # Optional background refresh; the initial refresh runs at activation.
+  refreshInterval = "6h";
+
+  secrets = {
+    GITHUB_TOKEN = {
+      mode = "0400";
+      units = [ "github-sync.service" ];
+    };
+
+    DATABASE_PASSWORD = { };
+
+    # Optional secrets do not abort the refresh when absent.
+    SENTRY_DSN = { required = false; };
+
+    GIT_TOKEN = {
+      # User-owned tmpfs file for interactive tools.
+      owner = "alice";
+      group = "users";
+      mode = "0400";
+    };
+  };
+};
+```
+
+Each secret produces a runtime path:
+
+```nix
+config.services.secretspec.secrets.GITHUB_TOKEN.path
+# /run/secretspec/current/secrets/GITHUB_TOKEN
+```
+
+The path is stable across refreshes because
+`/run/secretspec/current` is switched atomically to a new generation.
+
+### File-based options
+
+Use the path anywhere a NixOS option accepts a file:
+
+```nix
+services.foo.passwordFile =
+  config.services.secretspec.secrets.DATABASE_PASSWORD.path;
+```
+
+### systemd credentials
+
+`LoadCredential` copies the runtime file into the service's private credential
+directory:
+
+```nix
+systemd.services.github-sync = {
+  serviceConfig.LoadCredential = [
+    "github-token:${config.services.secretspec.secrets.GITHUB_TOKEN.path}"
+  ];
+};
+```
+
+The program reads `$CREDENTIALS_DIRECTORY/github-token`.
+
+For at-rest encryption, use the cached systemd-creds blob instead:
+
+```nix
+systemd.services.github-sync.serviceConfig.LoadCredentialEncrypted = [
+  "GITHUB_TOKEN:${config.services.secretspec.secrets.GITHUB_TOKEN.cachePath}"
+];
+```
+
+The credential identifier must match the secret name used when the cache was
+written.
+
+### Templates
+
+Templates are rendered into `/run` with placeholders replaced only at refresh
+time. The template text in the Nix store contains no values.
+
+```nix
+services.secretspec.templates.nix-access-tokens = {
+  content = ''
+    access-tokens = github.com=${config.services.secretspec.secrets.GITHUB_TOKEN.placeholder}
+  '';
+  owner = "root";
+  mode = "0400";
+  # Restart the daemon when the token changes.
+  units = [ "nix-daemon.service" ];
+};
+```
+
+Point the Nix **daemon** at the rendered file through its own `NIX_CONFIG`:
+
+```nix
+systemd.services.nix-daemon.environment.NIX_CONFIG =
+  "!include ${config.services.secretspec.templates.nix-access-tokens.path}";
+```
+
+:::caution
+Do not put the token in `nix.settings.access-tokens` directly. NixOS writes
+`nix.settings` to a world-readable file in the Nix store; the integration above
+keeps only the include path there.
+
+Do not put the root-only template in `nix.extraOptions` either. User Nix
+clients also parse `/etc/nix/nix.conf`; a `0400 root` include makes their config
+parse fail, which disables flakes and other settings. The daemon-only
+`NIX_CONFIG` above gives the daemon the token without exposing it to clients.
+:::
+
+### User-owned files
+
+Set `owner`, `group`, and `mode` on a secret to make it readable by a user
+service or interactive tool. The file lives in tmpfs; the encrypted copy remains
+root-only in `/var/lib/secretspec/cache`.
+
+## Activation vs systemd
+
+By default the initial refresh runs from a NixOS activation script. When
+`systemd.sysusers.enable` or `services.userborn.enable` is active, the default
+switches to the systemd oneshot automatically because the ordinary `users`
+activation script no longer creates accounts. Override explicitly with:
+
+```nix
+services.secretspec.useSystemdActivation = true;
+```
+
+Activation mode **installs secrets only**. It does not restart consumers,
+because restarting units from activation scripts is deprecated in NixOS 26.05
+and removed in 26.11. Use the systemd mode (or `secretspec nixos refresh`) when
+a changed secret must restart a running service immediately.
+
+In systemd mode the module orders the aggregate `secretspec.service` after
+`local-fs.target`, `systemd-sysusers.service`, and `userborn.service` when those
+are enabled. Units listed in `secrets.*.units` are ordered after it. After the
+new generation is published, the service calls
+`systemctl try-restart --no-block`; it does not use the deprecated activation
+restart lists. This is explicit unit status and ordering, not per-service
+provisioning: one failed provider affects the aggregate refresh.
+
+`refreshInterval` adds a systemd timer in either mode. The timer invokes the
+same oneshot refresh and can restart changed consumers; only changed units are
+requested.
+
+Activation runs on every boot and every switch, so it may contact the provider
+each time. A reachable provider is used first; an unreachable provider falls
+back to the encrypted cache. Activation is synchronous: a slow provider can
+delay boot or switch, while a cache hit avoids the network. Enable systemd mode
+when activation-time latency or failure handling must be supervised. The
+refresh report shows cached values separately, so stale-cache use is observable
+rather than silent.
+
+| Mode | Installs secrets | Automatic restart on switch |
+|---|---|---|
+| Activation script | Yes | No |
+| Systemd oneshot | Yes | Yes, via `try-restart` |
+
+The module emits an evaluation warning when units are configured while
+activation mode is selected, because those units will not be restarted by the
+switch.
+
+## Refresh manually
+
+```bash
+$ sudo secretspec nixos refresh
+$ sudo secretspec nixos refresh --check
+$ sudo secretspec nixos refresh --no-restart
+```
+
+`--check` resolves values and reports what would change without writing or
+restarting anything. The default plan is `/etc/secretspec/plan.json`, installed
+by the module. If the plan does not exist yet, refresh reports that
+`nixos-rebuild switch` installs it; pass `--plan <path>` to use a plan that has
+not been installed.
+
+When testing this checkout, run `nix run .#secretspec -- nixos refresh` so the
+new binary and its plan format are used.
+
+Provider CLIs listed in `services.secretspec.extraPackages` are added to
+`PATH` from the plan, so a manual refresh finds `bws` without installing it
+globally.
+
+## Run commands with the installed plan
+
+`nixos exec` uses the same plan, sealed provider credentials, and provider tool
+`PATH` as `secretspec.service`:
+
+```bash
+$ sudo secretspec nixos exec -- secretspec set API_TOKEN --from-file -
+$ sudo secretspec nixos exec -- bws secret list <project-id>
+```
+
+This is the supported way to run provider operations on the machine without
+exporting `BWS_ACCESS_TOKEN` or installing the provider CLI system-wide. The
+child process gets `SECRETSPEC_FILE` pointing at the installed plan manifest, so
+the provider aliases from the host configuration are available.
+
+## Offline and cache behavior
+
+The refresh tries the provider first. If a required secret cannot be resolved,
+it falls back to the encrypted cache under `/var/lib/secretspec/cache`. The
+cache is written with `systemd-creds`, so the available protection depends on
+the host:
+
+- With a usable TPM2, `--with-key=auto` seals to TPM-derived material.
+- Without TPM, systemd uses its host credential key, normally
+  `/var/lib/systemd/credential.secret`.
+- The cache is host-bound. Copying it to another machine, reinstalling the OS,
+  or losing the host key makes it unreadable; run `nixos link` and refresh again.
+- Encryption at rest is not permanent: `LoadCredentialEncrypted` and the
+  refresh process decrypt the value before the consumer or `/run` sees it.
+- A successful online refresh updates the cache.
+- An offline boot rehydrates `/run` from the cache without contacting the vault.
+- A missing required secret with no cache aborts the generation; the previous
+  `/run` generation stays in place.
+- A cache write failure never discards a successful online refresh; it is
+  reported as a warning.
+
+Provider credentials created by `nixos link` are stored under
+`/var/lib/secretspec/credentials` and decrypted into a private temporary
+directory for the refresh process.
+
+## Security model
+
+- No value enters Nix evaluation, the Nix store, a unit file, or argv.
+- Provider credentials are sealed with `systemd-creds`; plaintext exists only in
+  the refresh process and the private credentials directory.
+- Runtime values live in tmpfs under `/run/secretspec`.
+- Templates are placeholder-only in the store and are rendered in `/run`.
+- The refresh runs as root. A same-user process can read user-owned runtime
+  files by design; at-rest encryption does not protect against a compromised
+  interactive session.
+- `nixos exec` runs its child command as root with the provider credentials;
+  only run trusted commands with it.
+- `nixos link` prompts only after `sudo` escalation and does not accept a
+  secret through argv, environment variables, or shell substitution.
+
+## Limitations
+
+- Nix evaluation cannot consume secret values. Use runtime paths, templates, or
+  a wrapper such as `secretspec run` for evaluation-time tools.
+- `neededForUsers` and initrd secrets are not handled; those still need a
+  separate early-boot mechanism.
+- Home Manager has no dedicated module yet. The system module can write
+  user-owned `/run` files, which covers many interactive cases.
+- The manifest must be self-contained. Relative `extends` and provider paths
+  that depend on files outside the store are not resolved by the module.
+- Put provider aliases and their `credentials` wiring in `secretspec.toml`.
+  User-global aliases are not read by the root activation/service process.
+- A brand-new host still needs one provider-authentication step (`nixos link`);
+  that is the trust anchor replacing a sops age key.
+
+## Migrating from sops-nix
+
+| sops-nix | SecretSpec |
+|---|---|
+| `sops.secrets.<name>` | `services.secretspec.secrets.<name>` |
+| `.path` | `config.services.secretspec.secrets.<name>.path` |
+| `.owner` / `.group` / `.mode` | same |
+| `.restartUnits` / `.reloadUnits` | `.units` (restart) |
+| `sops.templates.<name>` | `services.secretspec.templates.<name>` |
+| `config.sops.placeholder.<name>` | `config.services.secretspec.secrets.<name>.placeholder` |
+| `sops.age.keyFile` | `secretspec nixos link` |
+| `sops.validateSopsFiles` | `secretspec nixos refresh --check` |
+| `.neededForUsers` | not supported |

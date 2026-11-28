@@ -19,5 +19,17 @@
       packages = forAllSystems (pkgs: {
         default = pkgs.callPackage ./nix/package.nix { };
       });
+
+      checks = forAllSystems (
+        pkgs:
+        let
+          tests = import ./nix/tests { inherit pkgs; };
+        in
+        {
+          nixos-systemd-creds = tests.systemd-creds;
+          nixos-module-activation = tests.module-activation;
+          nixos-module-refresh = tests.module-refresh;
+        }
+      );
     };
 }

@@ -8,6 +8,9 @@ on:
   pull_request:
     paths:
       - "nix/**"
+      - "flake.nix"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "secretspec/src/nixos.rs"
       - "secretspec/src/nixos/**"
       - "secretspec/src/cli/nixos.rs"
@@ -19,6 +22,9 @@ on:
     branches: [ main ]
     paths:
       - "nix/**"
+      - "flake.nix"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "secretspec/src/nixos.rs"
       - "secretspec/src/nixos/**"
       - "secretspec/src/cli/nixos.rs"
@@ -48,13 +54,15 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
-            sandbox = false
 
       - name: Build CLI package
-        run: nix-build --no-out-link --max-jobs 2 -E 'with import <nixpkgs> {}; callPackage ./nix/package.nix {}'
+        run: nix build .#packages.x86_64-linux.default --no-link --max-jobs 2 -L
 
       - name: systemd-creds host-key roundtrip
-        run: nix-build nix/tests -A systemd-creds --no-out-link --max-jobs 2
+        run: nix build .#checks.x86_64-linux.nixos-systemd-creds --no-link --max-jobs 2 -L
 
       - name: Module activation
-        run: nix-build nix/tests -A module-activation --no-out-link --max-jobs 2
+        run: nix build .#checks.x86_64-linux.nixos-module-activation --no-link --max-jobs 2 -L
+
+      - name: Module refresh with the real CLI
+        run: nix build .#checks.x86_64-linux.nixos-module-refresh --no-link --max-jobs 2 -L

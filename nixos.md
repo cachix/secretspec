@@ -1,9 +1,9 @@
 # NixOS integration plan
 
-> **Status:** design proposal for SecretSpec 0.17. The integration described
-> here is not available in the current SecretSpec 0.16 release. The target
-> version must be reconfirmed before implementation, and every user-facing
-> reference must retain a `0.17+` compatibility label until 0.17 is released.
+> **Status:** historical design proposal. The implemented 0.22+ integration is
+> documented in `docs/src/content/docs/integrations/nixos.mdx` and
+> `nix/nixos.nix`. This document targets an earlier 0.17 plan and is retained
+> for context; do not use it as the current user-facing specification.
 
 ## Outcome
 

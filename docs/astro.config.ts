@@ -375,6 +375,11 @@ Values can be resolved from: keyring (default), KeePass KDBX (0.17+), dotenv fil
               badge: { text: "0.21+", variant: "note" },
             },
             {
+              label: "NixOS",
+              slug: "integrations/nixos",
+              badge: { text: "0.22+", variant: "note" },
+            },
+            {
               label: "Adding an Integration",
               slug: "integrations/adding",
             },

@@ -283,6 +283,60 @@ A read-only source provider is rejected. A built-in alias that declares no
 credentials reports that there is nothing to store. An external alias with no
 mappings may still request credentials dynamically (0.21+).
 
+### nixos link {/* #nixos-link-022 */}
+
+<VersionCompatibility version="0.22" />
+
+Seal the provider credentials declared by a NixOS manifest on this host. It
+finds aliases whose credential source resolves to `systemd-credential://`,
+prompts with hidden input, and encrypts each credential with `systemd-creds`
+under `/var/lib/secretspec/credentials`.
+
+```bash
+$ secretspec nixos link [--store <DIR>] [--force] [--systemd-creds <FILE>]
+```
+
+The command escalates through `sudo` before prompting, so the secret is never
+part of argv or shell history. `--force` rotates credentials that are already
+linked. Run this once on a fresh machine before the first
+`nixos-rebuild switch`; see the [NixOS integration](/integrations/nixos/).
+
+### nixos refresh {/* #nixos-refresh-022 */}
+
+<VersionCompatibility version="0.22" />
+
+Resolve the value-free plan installed by the NixOS module into
+`/run/secretspec`. This is the same operation used by the activation script and
+the optional timer.
+
+```bash
+$ secretspec nixos refresh [--plan <FILE>] [--check] [--no-restart]
+```
+
+- `--plan` defaults to `/etc/secretspec/plan.json`.
+- `--check` resolves and reports without writing or restarting anything.
+- `--no-restart` writes the new generation without restarting consumer units.
+
+If a provider is unreachable, the command uses the encrypted last-known-good
+cache. The plan contains names, paths, modes, and template placeholders only;
+values are never read from the Nix store.
+
+### nixos exec {/* #nixos-exec-022 */}
+
+<VersionCompatibility version="0.22" />
+
+Run a command with the installed plan’s manifest, sealed provider credentials,
+and provider CLI `PATH`.
+
+```bash
+$ secretspec nixos exec -- secretspec set API_TOKEN --from-file -
+```
+
+The child process inherits `SECRETSPEC_FILE` pointing at the plan manifest and
+`SECRETSPEC_PROFILE` from the plan. This lets provider operations use the same
+environment as `secretspec.service` without exporting `BWS_ACCESS_TOKEN` or
+installing `bws` globally. `--plan` defaults to `/etc/secretspec/plan.json`.
+
 ### docker configure {/* #docker-configure-020 */}
 
 <VersionCompatibility version="0.20" />

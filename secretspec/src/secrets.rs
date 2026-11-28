@@ -4944,8 +4944,11 @@ impl Secrets {
         self.lookup_provider_alias(&spec).unwrap_or(spec)
     }
 
-    /// Returns the union of alias names known across all sources, sorted.
-    fn known_provider_aliases(&self) -> Vec<String> {
+    /// Provider aliases available to this session, sorted by name.
+    ///
+    /// Used by the NixOS `link` flow to find aliases whose credentials should
+    /// be sealed on this host. It is read-only and never builds a provider.
+    pub(crate) fn known_provider_aliases(&self) -> Vec<String> {
         let mut names: Vec<String> = self
             .provider_alias_sources()
             .flat_map(|m| m.keys().cloned())
